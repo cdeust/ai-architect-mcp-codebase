@@ -1,6 +1,6 @@
 # ADR-0055: Table-Driven Language Specs — Scale Extraction Beyond the Core Grammars
 
-**Status:** Proposed — awaiting maintainer approval; no implementation until approved.
+**Status:** Accepted — maintainer approval 2026-07-25; implementation tracked in #60.
 **Date:** 2026-07-25
 **Decision-makers:** cdeust
 **Related:** issue #60 (arch: table-driven language specs); reference design `cbm/internal/cbm/lang_specs.h` (CBM `CBMLangSpec`); existing house pattern `src/language_provider/mod.rs` (trait+registry) and `src/macro_expansion.rs` (`get_macro_table`); accuracy gate `tests/graph_accuracy.rs`; fidelity gate `tests/parser_fidelity.rs`. Coding standards `~/.claude/rules/coding-standards.md` §1 (SOLID), §2 (Clean Architecture), §5 (reverse DI / factory), §7 (local reasoning), §8 (sources).
@@ -229,4 +229,4 @@ Rejected. It pulls a C dependency and a 170 KB C data artifact into a pure-Rust 
 
 ## Decision status
 
-**Proposed — awaiting maintainer approval. No implementation until this ADR is Accepted.** On acceptance, the first work item is the `src/parser/spec/` scaffold + the spec-validation guard, then the Python (or Go) migration proven at parity before any walker is deleted.
+**Accepted — maintainer approval 2026-07-25.** Approval condition, recorded verbatim in intent: language coverage must remain unbounded — "if it permits to have as much language as we want" — which the Tier-2 data-row model satisfies; document formats (Confluence wiki, docx) are outside this ADR's scope (they are ingestion adapters, not grammars) and are tracked as separate work items so the condition is not silently dropped. First work item: the `src/parser/spec/` scaffold + the spec-validation guard, then the Python (or Go) migration proven at parity before any walker is deleted.
