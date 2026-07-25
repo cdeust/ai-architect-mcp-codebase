@@ -366,4 +366,121 @@ mod tests {
         assert!(looks_like_manifest("apiVersion: v1\nkind: Pod\n"));
         assert!(!looks_like_manifest("name: x\nversion: 1\n"));
     }
+
+    #[test]
+    fn manifest_shape_requires_both_apiversion_and_kind() {
+        // BOTH markers are required — a document with only one is not treated as
+        // IaC (guards the `has_api && has_kind`).
+        assert!(
+            !looks_like_manifest("kind: Pod\n"),
+            "kind alone is not enough"
+        );
+        assert!(
+            !looks_like_manifest("apiVersion: v1\n"),
+            "apiVersion alone is not enough"
+        );
+    }
+
+    #[test]
+    fn top_level_fields_are_read_only_at_indent_zero() {
+        // apiVersion/kind/metadata are top-level keys; a nested key of the same
+        // name inside the pod spec must NOT overwrite them (guards the three
+        // `indent == 0` match guards).
+        let m = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: prod\nspec:\n  template:\n    apiVersion: nested/v9\n    kind: Nested\n    metadata:\n      name: pod-name\n";
+        let d = &scan(m).docs[0];
+        assert_eq!(d.kind, "Deployment", "nested kind must not overwrite");
+        assert_eq!(
+            d.api_version, "apps/v1",
+            "nested apiVersion must not overwrite"
+        );
+        assert_eq!(d.name, "web", "metadata.name wins over a nested name");
+        assert_eq!(d.namespace, "prod");
+    }
+
+    #[test]
+    fn first_top_level_kind_wins() {
+        // A document's `kind` is the FIRST top-level `kind:`; a later one must
+        // not overwrite it (guards the `indent == 0 && kind.is_empty()` guard's
+        // conjunction).
+        let m = "apiVersion: v1\nkind: First\nkind: Second\nmetadata:\n  name: x\n";
+        assert_eq!(scan(m).docs[0].kind, "First");
+    }
+
+    #[test]
+    fn first_metadata_name_and_namespace_win() {
+        // A duplicate name/namespace inside metadata must NOT overwrite the first
+        // (guards the `name.is_empty()` / `namespace.is_empty()` `&&` conjuncts).
+        let m = "apiVersion: v1\nkind: Pod\nmetadata:\n  name: first\n  name: second\n  namespace: nsone\n  namespace: nstwo\n";
+        let d = &scan(m).docs[0];
+        assert_eq!(d.name, "first");
+        assert_eq!(d.namespace, "nsone");
+    }
+
+    #[test]
+    fn a_new_top_level_key_closes_the_metadata_block() {
+        // When metadata has no name and a sibling top-level key (`spec`) begins,
+        // the metadata block closes, so a `name:` deep in the spec is NOT taken
+        // as the manifest name (guards the `key != "metadata"` close condition).
+        let m = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  labels:\n    app: x\nspec:\n  template:\n    name: not-the-name\n";
+        let d = &scan(m).docs[0];
+        assert_eq!(
+            d.name, "",
+            "a spec-level name must not fill an empty metadata name"
+        );
+    }
+
+    #[test]
+    fn a_dedented_comment_does_not_drop_the_metadata_name() {
+        // A comment dedented to the metadata key's own column must be SKIPPED,
+        // not treated as a sibling key that closes metadata early (which would
+        // lose the name). Guards the comment/blank-line skip.
+        let m = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n# a dedented comment: with a colon\n  name: real-name\n";
+        let d = &scan(m).docs[0];
+        assert_eq!(d.name, "real-name");
+    }
+
+    #[test]
+    fn scalar_quoting_dedup_and_empty_guards() {
+        // Pins the helper contracts that only surface through scan():
+        //  * unquote strips a fully-quoted scalar but leaves a half-quoted one
+        //    verbatim (guards unquote's len/`&&`/slice logic);
+        //  * push_image dedups repeats and drops empties;
+        //  * push_ref drops an empty-named reference.
+        let m = "apiVersion: v1\nkind: Deployment\nmetadata:\n  name: \"quoted-name\"\n  namespace: 'half\nspec:\n  template:\n    spec:\n      containers:\n        - name: a\n          image: app:1\n        - name: b\n          image: app:1\n        - name: c\n          image: \"\"\n        - name: d\n          image: other:2\n          envFrom:\n            - configMapRef:\n                name: \"\"\n            - secretRef:\n                name: real-secret\n";
+        let d = &scan(m).docs[0];
+        assert_eq!(d.name, "quoted-name", "a fully-quoted name is unwrapped");
+        assert_eq!(
+            d.namespace, "'half",
+            "a half-quoted scalar is left verbatim"
+        );
+        assert_eq!(
+            d.images,
+            vec!["app:1", "other:2"],
+            "repeated images dedup and an empty image is dropped"
+        );
+        assert_eq!(
+            d.config_refs,
+            vec![ConfigRef {
+                kind: "Secret".into(),
+                name: "real-secret".into()
+            }],
+            "an empty-named configMapRef is not a reference"
+        );
+    }
+
+    #[test]
+    fn service_backend_reference_is_captured() {
+        // An Ingress-style `service:\n  name: X` block is a Service reference
+        // (guards the `service` arm of ref_kind_of).
+        let m = "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: ing\nspec:\n  rules:\n    - http:\n        paths:\n          - backend:\n              service:\n                name: web-svc\n";
+        let d = &scan(m).docs[0];
+        assert!(
+            d.config_refs.contains(&ConfigRef {
+                kind: "Service".into(),
+                name: "web-svc".into()
+            }),
+            "the Ingress backend service must be a Service ref, got {:?}",
+            d.config_refs
+        );
+    }
 }

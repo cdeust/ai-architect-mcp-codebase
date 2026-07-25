@@ -1687,6 +1687,51 @@ mod tests {
     }
 
     #[test]
+    fn label_has_qualified_name_matches_the_schema() {
+        // Contract: true for exactly the labels whose node table declares a
+        // `qualified_name` column (mirrors node_column_types). A read-side
+        // traversal binds `n.qualified_name` only when this is true, so a wrong
+        // answer either drops rows (false-for-a-qn-label) or crashes the query
+        // with a Binder exception (true-for-a-non-qn-label). Assert both arms.
+        for yes in [
+            NODE_MODULE,
+            NODE_FUNCTION,
+            NODE_METHOD,
+            NODE_STRUCT,
+            NODE_ENUM,
+            NODE_VARIANT,
+            NODE_TRAIT,
+            NODE_CONSTANT,
+            NODE_TYPE_ALIAS,
+            NODE_VERSION,
+            NODE_IAC_RESOURCE,
+            NODE_IAC_MODULE,
+        ] {
+            assert!(
+                label_has_qualified_name(yes),
+                "{yes} declares qualified_name in its DDL"
+            );
+        }
+        for no in [
+            NODE_FILE,
+            NODE_DIRECTORY,
+            NODE_FIELD,
+            NODE_IMPORT,
+            NODE_CALL_SITE,
+            NODE_COMMUNITY,
+            NODE_PROCESS,
+            NODE_STDLIB_SYMBOL,
+            NODE_COMMIT,
+            NODE_IAC_IMAGE,
+        ] {
+            assert!(
+                !label_has_qualified_name(no),
+                "{no} has no qualified_name column"
+            );
+        }
+    }
+
+    #[test]
     fn test_cypher_str_escape_rules() {
         // Backslash must be escaped FIRST, then quote.
         // Input: `foo'bar`  → literal should contain `\'`.

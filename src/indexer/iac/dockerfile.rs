@@ -209,4 +209,42 @@ mod tests {
         assert_eq!(info.base_image, "ubuntu:22.04");
         assert_eq!(info.exposed_ports, vec!["80"]);
     }
+
+    #[test]
+    fn cmd_after_entrypoint_does_not_override_it() {
+        // ENTRYPOINT wins even when CMD comes AFTER it — the `!have_entrypoint`
+        // guard must suppress the later CMD. (The reverse order is covered by
+        // `entrypoint_wins_over_cmd`.)
+        let df = "FROM x\nENTRYPOINT [\"b\"]\nCMD [\"a\"]\n";
+        assert_eq!(parse(df).unwrap().entrypoint, "b");
+    }
+
+    #[test]
+    fn copy_with_many_sources_keeps_all_but_the_destination() {
+        // `COPY a b c /dest` has three sources and one destination — all three
+        // sources are kept (guards the `sources.len() < 2` and the source/dest
+        // split).
+        let df = "FROM x\nCOPY a.txt b.txt c.txt /dest/\n";
+        assert_eq!(
+            parse(df).unwrap().copy_sources,
+            vec!["a.txt", "b.txt", "c.txt"]
+        );
+    }
+
+    #[test]
+    fn copy_url_sources_are_not_local_files() {
+        // A remote COPY source (http/https) is NOT a repo file and must be
+        // dropped (guards the URL filter's `||`).
+        let df = "FROM x\nCOPY https://example.com/pkg.tar /opt/pkg.tar\n";
+        assert!(parse(df).unwrap().copy_sources.is_empty());
+    }
+
+    #[test]
+    fn malformed_exec_bracket_is_left_verbatim() {
+        // A value that opens `[` but never closes `]` is NOT valid JSON-exec
+        // form and must pass through unchanged, not be half-stripped (guards the
+        // `&&` in clean_exec's bracket test).
+        let df = "FROM x\nENTRYPOINT [unclosed\n";
+        assert_eq!(parse(df).unwrap().entrypoint, "[unclosed");
+    }
 }

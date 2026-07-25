@@ -195,4 +195,33 @@ mod tests {
         let out = parse(k);
         assert_eq!(out.refs, vec!["a.yaml", "b.yaml"]);
     }
+
+    #[test]
+    fn blank_and_comment_lines_inside_a_list_do_not_close_it() {
+        // A blank line or a comment between list items must be SKIPPED, not
+        // treated as a dedent that closes the resources block (which would drop
+        // every ref after it). Guards the `is_empty() || starts_with('#')` skip.
+        let k = "resources:\n  - a.yaml\n\n  # a comment\n  - b.yaml\n";
+        let out = parse(k);
+        assert_eq!(out.refs, vec!["a.yaml", "b.yaml"]);
+    }
+
+    #[test]
+    fn half_quoted_scalars_are_not_stripped() {
+        // `unquote` must strip a quote ONLY when the scalar is wrapped on BOTH
+        // sides. A trailing-only quote is content and must survive verbatim —
+        // guards the two `&&` in the quote-pair predicate.
+        let k = "resources:\n  - value\"\n  - value'\n";
+        let out = parse(k);
+        assert_eq!(out.refs, vec!["value\"", "value'"]);
+    }
+
+    #[test]
+    fn empty_scalar_is_not_pushed_as_a_reference() {
+        // An empty list item (`- ""`) must not become an empty reference —
+        // guards the `p.is_empty() ||` short-circuit in push_ref.
+        let k = "resources:\n  - \"\"\n  - a.yaml\n";
+        let out = parse(k);
+        assert_eq!(out.refs, vec!["a.yaml"]);
+    }
 }

@@ -18,3 +18,7 @@ benches/runs/
 # running them locally emits __pycache__ into a repo that is otherwise Rust.
 __pycache__/
 *.py[cod]
+
+# cargo-mutants output (local mutation runs, not committed)
+mutants.out*/
+mutants.out*.log

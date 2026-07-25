@@ -171,6 +171,14 @@ fn full_index_extracts_exact_iac_nodes_and_edges() {
         2
     );
 
+    // Source span is recorded (the `int` start_line column): the single-document
+    // deployment starts at line 1. Asserting the value guards start_line emission.
+    let start_line = ids(
+        &store,
+        "MATCH (r:IacResource) WHERE r.path = 'k8s/base/deployment.yaml' RETURN r.start_line",
+    );
+    assert_eq!(start_line, vec!["1"], "deployment doc start_line must be 1");
+
     // -- Reference edges ---------------------------------------------------
     // Deployment (web:latest) → Dockerfile File via directory image-build match.
     let img_build = ids(
@@ -404,6 +412,61 @@ fn get_impact_traverses_iac_edges_both_directions() {
     assert!(
         !fwd.rows.is_empty(),
         "Deployment must reference the ConfigMap manifest"
+    );
+}
+
+#[test]
+fn iac_heuristic_edges_surface_as_lower_bound_confident_edges_as_exact() {
+    // The honesty contract (issue #63 criterion 3 / #57): a manifest reference
+    // resolved heuristically (confidence < 1.0) must make get_impact report a
+    // LOWER BOUND, while a directly-declared (1.0) reference is EXACT. This
+    // proves the new IaC edges plug into the epistemic-boundary machinery.
+    use ai_architect_mcp::epistemic::Boundary;
+    let tmp = tempfile::Builder::new()
+        .prefix("iac_epi_")
+        .tempdir()
+        .unwrap();
+    let repo = tmp.path().join("repo");
+    write_fixture(&repo);
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let graph = out.join("graph");
+    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None).unwrap();
+    let store = GraphStore::open_or_create(&graph).unwrap();
+
+    // configmap.yaml is reached ONLY through the 0.7 name-match edge → heuristic
+    // dependents present → lower bound.
+    let heuristic = get_impact(&store, "k8s/base/configmap.yaml").expect("impact");
+    assert!(
+        !heuristic.importers.is_empty(),
+        "the ConfigMap must have the Deployment as a heuristic importer"
+    );
+    assert_eq!(
+        heuristic.epistemic,
+        Boundary::LowerBound,
+        "a 0.7 name-match dependent must report a lower bound, not exact"
+    );
+
+    // An image node is reached ONLY through the 1.0 declared edge → no heuristic
+    // carriers → exact.
+    let image_id = {
+        let q = store
+            .execute_query(
+                "MATCH (r:IacResource)-[:Imports_IacResource_IacImage]->(i:IacImage) \
+                 WHERE r.resource_kind = 'Dockerfile' RETURN i.id LIMIT 1",
+            )
+            .unwrap();
+        q.rows[0][0].clone()
+    };
+    let confident = get_impact(&store, &image_id).expect("impact");
+    assert!(
+        !confident.importers.is_empty(),
+        "the base image must have the Dockerfile as an importer"
+    );
+    assert_eq!(
+        confident.epistemic,
+        Boundary::Exact,
+        "a dependent reached only through 1.0 edges must be exact"
     );
 }
 

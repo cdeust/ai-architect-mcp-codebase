@@ -123,6 +123,7 @@ pub(super) fn run_iac_pass_for(
 // File classification
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, PartialEq, Eq)]
 enum IacKind {
     Dockerfile,
     Kustomization,
@@ -763,5 +764,58 @@ mod tests {
     fn namespace_defaulting() {
         assert_eq!(norm_ns(""), "default");
         assert_eq!(norm_ns("prod"), "prod");
+    }
+
+    #[test]
+    fn classify_recognizes_every_naming_variant() {
+        use std::path::PathBuf;
+        let c = |p: &str| classify(&PathBuf::from(p));
+        // Dockerfile: bare, `Dockerfile.<tag>` prefix, and `<name>.dockerfile`
+        // suffix — each of the three alternatives, case-insensitive.
+        assert_eq!(c("services/Dockerfile"), IacKind::Dockerfile);
+        assert_eq!(c("services/Dockerfile.prod"), IacKind::Dockerfile);
+        assert_eq!(c("services/web.dockerfile"), IacKind::Dockerfile);
+        // Kustomization: .yaml, .yml, and extension-less.
+        assert_eq!(c("base/kustomization.yaml"), IacKind::Kustomization);
+        assert_eq!(c("base/kustomization.yml"), IacKind::Kustomization);
+        assert_eq!(c("base/Kustomization"), IacKind::Kustomization);
+        // Generic manifest candidates: BOTH .yaml and .yml.
+        assert_eq!(c("k8s/deploy.yaml"), IacKind::MaybeManifest);
+        assert_eq!(c("k8s/deploy.yml"), IacKind::MaybeManifest);
+        // Non-IaC files are ignored.
+        assert_eq!(c("src/main.rs"), IacKind::Other);
+        assert_eq!(c("README.md"), IacKind::Other);
+    }
+
+    #[test]
+    fn read_text_enforces_the_parse_byte_cap_at_the_boundary() {
+        use std::io::Write;
+        let dir = tempfile::Builder::new()
+            .prefix("iac_read_cap_")
+            .tempdir()
+            .unwrap();
+        let cap = super::super::MAX_PARSE_BYTES as usize;
+
+        // Exactly at the cap → accepted (the boundary is inclusive).
+        let at = dir.path().join("at.yaml");
+        std::fs::File::create(&at)
+            .unwrap()
+            .write_all(&vec![b'a'; cap])
+            .unwrap();
+        assert!(
+            read_text(&at).is_some(),
+            "a file of exactly MAX_PARSE_BYTES must be read"
+        );
+
+        // One byte over the cap → rejected (None).
+        let over = dir.path().join("over.yaml");
+        std::fs::File::create(&over)
+            .unwrap()
+            .write_all(&vec![b'a'; cap + 1])
+            .unwrap();
+        assert!(
+            read_text(&over).is_none(),
+            "a file one byte over MAX_PARSE_BYTES must be skipped"
+        );
     }
 }
