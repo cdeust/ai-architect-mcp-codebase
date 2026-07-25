@@ -60,6 +60,28 @@ pub const NODE_STDLIB_SYMBOL: &str = "StdlibSymbol"; // source: stages/stage-3b-
 pub const NODE_COMMIT: &str = "Commit";
 pub const NODE_VERSION: &str = "Version";
 
+// Infrastructure-as-code layer (issue #63) — deployment surface as first-class
+// graph material, mirroring DeusData/codebase-memory-mcp's pass_k8s.c (Resource
+// nodes per K8s kind, Module nodes per Kustomize overlay) and pass_infrascan.c
+// (Dockerfile base image / stages / ports). AP adds these ALONGSIDE the existing
+// File node for each manifest (the File already exists post-index); the IaC pass
+// enriches, never replaces. source: issue #63 acceptance criteria 1-3.
+//
+// IacResource — one node per K8s manifest document (Deployment/Service/ConfigMap/
+// …) AND per Dockerfile build target. `resource_kind` discriminates the concrete
+// kind ("Deployment", "Dockerfile", …); `source` is "k8s" | "dockerfile". The id
+// is `<file-rel>::<discriminator>` so the incremental pass's per-file symbol
+// purge (`starts_with(id, "<rel>::")`) reclaims it on reparse with zero new purge
+// code (issue #62 integration).
+pub const NODE_IAC_RESOURCE: &str = "IacResource";
+// IacModule — one node per Kustomize overlay (kustomization.yaml). Mirrors CBM's
+// "Module" node; renamed to avoid colliding with the code `Module` label.
+pub const NODE_IAC_MODULE: &str = "IacModule";
+// IacImage — a container image reference (Dockerfile `FROM`, K8s container
+// `image:`). Shared/deduplicated external-ref node (like StdlibSymbol): keyed by
+// the normalized reference string, never per-file, so it is not purged per file.
+pub const NODE_IAC_IMAGE: &str = "IacImage";
+
 // ---------------------------------------------------------------------------
 // Edge kinds — source: stages/stage-3.md §schema (Shannon spec, 3a subset)
 // ---------------------------------------------------------------------------
@@ -584,6 +606,10 @@ const NODE_LABELS: &[&str] = &[
     NODE_STDLIB_SYMBOL,
     NODE_COMMIT,
     NODE_VERSION,
+    // Infrastructure-as-code layer (issue #63).
+    NODE_IAC_RESOURCE,
+    NODE_IAC_MODULE,
+    NODE_IAC_IMAGE,
 ];
 
 /// Single source of truth for all relationship tables: (name, from, to).
@@ -766,6 +792,33 @@ pub const REL_TABLES: &[(&str, &str, &str)] = &[
     ("OBSERVED_CALLS_Function_Method", NODE_FUNCTION, NODE_METHOD),
     ("OBSERVED_CALLS_Method_Function", NODE_METHOD, NODE_FUNCTION),
     ("OBSERVED_CALLS_Method_Method", NODE_METHOD, NODE_METHOD),
+    // Infrastructure-as-code layer (issue #63).
+    //
+    // Defines_File_Iac* are structural facts (the file literally contains this
+    // manifest) — the `Defines_` prefix routes them through the structural-
+    // provenance shape (confidence 1.0, "iac-direct"), exactly like File→symbol.
+    ("Defines_File_IacResource", NODE_FILE, NODE_IAC_RESOURCE),
+    ("Defines_File_IacModule", NODE_FILE, NODE_IAC_MODULE),
+    // Imports_* are the reference edges. The `Imports_` prefix is deliberate:
+    // `clustering::get_impact` reverse-traverses every `Imports_*` table, so a
+    // manifest that references a File/image/base-overlay is reported as a
+    // reverse-dependent with zero changes to the impact walker (issue #63
+    // criterion 5). All carry (confidence, resolution_method): confidence < 1.0
+    // marks the heuristic cross-file name/path resolutions (misses reported, not
+    // faked — issue #63 criterion 3); `resolution_method` carries the provenance
+    // (e.g. "iac-name-match:ConfigMap/app-config").
+    (
+        "Imports_IacResource_IacImage",
+        NODE_IAC_RESOURCE,
+        NODE_IAC_IMAGE,
+    ),
+    ("Imports_IacResource_File", NODE_IAC_RESOURCE, NODE_FILE),
+    ("Imports_IacModule_File", NODE_IAC_MODULE, NODE_FILE),
+    (
+        "Imports_IacModule_IacModule",
+        NODE_IAC_MODULE,
+        NODE_IAC_MODULE,
+    ),
 ];
 
 fn node_table_ddl() -> Vec<String> {
@@ -873,6 +926,28 @@ fn node_table_ddl() -> Vec<String> {
             "id STRING, entity_id STRING, entity_kind STRING, \
              qualified_name STRING, change_type STRING, commit_sha STRING, \
              committed_at INT64, lines_changed INT64"),
+        // Infrastructure-as-code layer (issue #63). One wide IacResource shape
+        // covers both K8s documents and Dockerfile build targets; a bulk insert
+        // binds only the columns actually present per row (see node_prop_order),
+        // so k8s-only columns (api_version/namespace) and dockerfile-only columns
+        // (ports/entrypoint/workdir) coexist without null-padding.
+        // source: issue #63 criteria 1-2; column set mirrors pass_k8s.c manifest
+        // fields + pass_infrascan.c cbm_dockerfile_result_t.
+        // `qualified_name` mirrors `id` here — it exists so the shared read-side
+        // reverse-dependency walker (`clustering::get_impact`, which binds
+        // `a.qualified_name` on every Imports_* `from` node) does not fail its
+        // binder check on an IaC source node. Without it, lbug rejects the query
+        // for the IaC rel tables and the edges are silently dropped from impact.
+        ddl_node(NODE_IAC_RESOURCE,
+            "id STRING, name STRING, qualified_name STRING, resource_kind STRING, \
+             api_version STRING, namespace STRING, image STRING, ports STRING, \
+             entrypoint STRING, workdir STRING, source STRING, path STRING, \
+             start_line INT64"),
+        ddl_node(NODE_IAC_MODULE,
+            "id STRING, name STRING, qualified_name STRING, resource_kind STRING, \
+             source STRING, path STRING, start_line INT64"),
+        ddl_node(NODE_IAC_IMAGE,
+            "id STRING, reference STRING, name STRING, tag STRING, registry STRING"),
     ]
 }
 
@@ -1020,6 +1095,33 @@ fn parse_rel_endpoints(rel_type: &str) -> Result<(&str, &str), String> {
 /// validate against this before insertion to avoid schema-mismatch aborts.
 pub fn is_known_rel_table(name: &str) -> bool {
     REL_TABLES.iter().any(|(n, _, _)| *n == name)
+}
+
+/// Single source of truth for "does this node label declare a `qualified_name`
+/// column?" — mirrors `node_column_types`. A read-side traversal that binds
+/// `n.qualified_name` MUST gate on this: lbug raises a hard Binder exception
+/// (not a NULL) when a query references a property the matched label's table
+/// does not declare, which silently drops the whole query's results. Labels
+/// without it (File/Directory/Field/Import/CallSite/Community/Process/
+/// StdlibSymbol/Commit/IacImage) are matched by `id` alone.
+// source: node_table_ddl() — these are exactly the labels whose DDL lists a
+// `qualified_name STRING` column.
+pub fn label_has_qualified_name(label: &str) -> bool {
+    matches!(
+        label,
+        NODE_MODULE
+            | NODE_FUNCTION
+            | NODE_METHOD
+            | NODE_STRUCT
+            | NODE_ENUM
+            | NODE_VARIANT
+            | NODE_TRAIT
+            | NODE_CONSTANT
+            | NODE_TYPE_ALIAS
+            | NODE_VERSION
+            | NODE_IAC_RESOURCE
+            | NODE_IAC_MODULE
+    )
 }
 
 fn format_props(properties: &[(&str, &str)]) -> String {
@@ -1192,6 +1294,38 @@ const COLS_VERSION: ColTypes = &[
     ("committed_at", LogicalType::Int64),
     ("lines_changed", LogicalType::Int64),
 ];
+// Infrastructure-as-code layer (issue #63) — mirror the NODE_IAC_* DDL exactly.
+const COLS_IAC_RESOURCE: ColTypes = &[
+    ("id", LogicalType::String),
+    ("name", LogicalType::String),
+    ("qualified_name", LogicalType::String),
+    ("resource_kind", LogicalType::String),
+    ("api_version", LogicalType::String),
+    ("namespace", LogicalType::String),
+    ("image", LogicalType::String),
+    ("ports", LogicalType::String),
+    ("entrypoint", LogicalType::String),
+    ("workdir", LogicalType::String),
+    ("source", LogicalType::String),
+    ("path", LogicalType::String),
+    ("start_line", LogicalType::Int64),
+];
+const COLS_IAC_MODULE: ColTypes = &[
+    ("id", LogicalType::String),
+    ("name", LogicalType::String),
+    ("qualified_name", LogicalType::String),
+    ("resource_kind", LogicalType::String),
+    ("source", LogicalType::String),
+    ("path", LogicalType::String),
+    ("start_line", LogicalType::Int64),
+];
+const COLS_IAC_IMAGE: ColTypes = &[
+    ("id", LogicalType::String),
+    ("reference", LogicalType::String),
+    ("name", LogicalType::String),
+    ("tag", LogicalType::String),
+    ("registry", LogicalType::String),
+];
 
 fn node_column_types(label: &str) -> Result<ColTypes, String> {
     match label {
@@ -1211,6 +1345,9 @@ fn node_column_types(label: &str) -> Result<ColTypes, String> {
         NODE_PROCESS => Ok(COLS_PROCESS),
         NODE_COMMIT => Ok(COLS_COMMIT),
         NODE_VERSION => Ok(COLS_VERSION),
+        NODE_IAC_RESOURCE => Ok(COLS_IAC_RESOURCE),
+        NODE_IAC_MODULE => Ok(COLS_IAC_MODULE),
+        NODE_IAC_IMAGE => Ok(COLS_IAC_IMAGE),
         other => Err(format!("unknown node label for bulk insert: {other}")),
     }
 }

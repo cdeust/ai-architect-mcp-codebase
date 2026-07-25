@@ -292,6 +292,21 @@ fn apply_changes(
         }
     }
 
+    // ---- 4b. Re-derive IaC nodes/edges OUT of the re-parsed files -----------
+    // (issue #63 incremental integration). The changed files' stale `<rel>::`
+    // IaC nodes were already reclaimed by `purge_file_symbols` above (they share
+    // the symbol id-prefix), so this re-emits from the current text and resolves
+    // references against every File node — exactly like the light-link step. IaC
+    // reference edges target stable File nodes, so an unchanged referencer's edge
+    // into a reparsed file is not disturbed. Parse gaps fold into the collector
+    // so the coverage sidecar carries the IaC honesty signal too.
+    if !reparsed_files.is_empty() {
+        match super::iac::run_iac_pass_for(store, codebase, &reparsed_files, &all_files) {
+            Ok(gaps) => super::fold_iac_gaps(&mut collector, gaps),
+            Err(e) => eprintln!("incremental: IaC pass skipped: {e}"),
+        }
+    }
+
     // ---- 5. Re-link the snapshotted inbound cross-file edges -----------------
     relink_inbound_edges(store, &saved_edges)?;
 

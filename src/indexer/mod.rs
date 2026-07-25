@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod coverage;
+mod iac;
 mod incremental;
 mod light_link;
 pub mod manifest;
@@ -254,6 +255,14 @@ pub fn index_codebase_with_language(
         Err(e) => eprintln!("indexer: light-link pass skipped: {e}"),
     }
 
+    // Infrastructure-as-code pass (issue #63): enrich the deployment surface with
+    // IacResource/IacModule/IacImage nodes and their reference edges. Runs after
+    // every File node exists (like light_link), so a manifest can point at
+    // another file's node. Parse gaps flow into the same coverage sidecar as code
+    // (issue #57 integration). A pass error is logged, never fatal — the code
+    // graph is already complete.
+    record_iac_gaps(&mut collector, &store, codebase_path, &source_files);
+
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -273,6 +282,36 @@ pub fn index_codebase_with_language(
 
 fn relative_path(root: &Path, file: &Path) -> PathBuf {
     file.strip_prefix(root).unwrap_or(file).to_path_buf()
+}
+
+/// Runs the IaC pass over every source file and folds its parse gaps into the
+/// coverage collector. The files it touches already have a File node and were
+/// already `note_indexed` by the main loop; the IaC pass only ADDS gap records
+/// for IaC files it could not fully interpret (templated/malformed manifests,
+/// FROM-less Dockerfiles). Best-effort: a pass-level error is logged, not
+/// propagated, so IaC parsing can never fail a completed code index.
+fn record_iac_gaps(
+    collector: &mut CoverageCollector,
+    store: &GraphStore,
+    codebase_path: &Path,
+    source_files: &[PathBuf],
+) {
+    match iac::run_iac_pass(store, codebase_path, source_files) {
+        Ok(gaps) => fold_iac_gaps(collector, gaps),
+        Err(e) => eprintln!("indexer: IaC pass skipped: {e}"),
+    }
+}
+
+/// Records each IaC parse gap into the collector: incomplete parses become
+/// ParsePartial (with line ranges), unreadable IaC files become Skipped. Shared
+/// by the full and incremental callers so both surface IaC gaps identically.
+fn fold_iac_gaps(collector: &mut CoverageCollector, gaps: iac::IacGaps) {
+    for (rel, ranges) in gaps.partial {
+        collector.record_partial(&rel, ranges);
+    }
+    for (rel, reason) in gaps.skipped {
+        collector.record_skipped(&rel, reason);
+    }
 }
 
 /// Feeds one file's `ParseOutcome` into the coverage collector, logging the

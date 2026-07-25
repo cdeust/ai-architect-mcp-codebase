@@ -8,6 +8,40 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Infrastructure-as-code indexing (issue #63).** The indexer now maps a
+  repository's deployment surface into the graph as first-class material, in a
+  post-pass that mirrors `light_link` (runs after every File node exists; never
+  touches File nodes). New `src/indexer/iac/` module (dependency-free parsers —
+  no new YAML crate; a hand scan gives precise parse-gap control, matching
+  DeusData/codebase-memory-mcp `pass_infrascan.c` / `pass_k8s.c`):
+  - **Dockerfiles** → an `IacResource` (kind `Dockerfile`) carrying base image,
+    stages, exposed ports, entrypoint/cmd, workdir; `IacImage` nodes per `FROM`
+    image; `COPY`/`ADD` local sources linked to their `File`.
+  - **Kubernetes manifests** → one `IacResource` per `---`-separated document
+    (`apiVersion`/`kind`/`name`/`namespace`), container `image:` as `IacImage`,
+    and heuristic `ConfigMap`/`Secret`/`Service` name-matches + image→Dockerfile
+    directory matches as reference edges.
+  - **Kustomize overlays** → an `IacModule` per `kustomization.yaml`, with
+    `IMPORTS` edges to referenced resources/bases/patches (overlay→base as
+    module→module, resource paths as module→File).
+  - All reference edges carry `(confidence, resolution_method)`: heuristic
+    resolutions are `< 1.0` and unresolved references produce no edge (misses
+    reported, not faked). `get_impact`/`change_impact` traverse them (the
+    `Imports_*` naming plugs into the existing reverse-dependency walker).
+  - Multi-document YAML is enumerated; Helm-templated (`{{ }}`) and malformed
+    manifests are recorded as `parse_incomplete` gaps in the `#57` coverage
+    sidecar (visible in `query_graph(graph="missed")`), never silently dropped.
+  - Integrated with incremental re-indexing (`#62`): IaC nodes are
+    `<file-rel>::`-prefixed, so editing one manifest re-processes only that file
+    via the existing per-file symbol purge; cross-file edges target stable File
+    nodes so an unchanged referencer's edge is never collaterally dropped.
+  - Fixed a latent `get_impact` bug surfaced by this work: the reverse walker
+    bound `qualified_name` on every edge endpoint, which raised a hard lbug
+    Binder exception (silently dropping the whole query) for labels lacking that
+    column — so File-targeted/-sourced dependents, including plain
+    `Imports_File_File` light-links, never surfaced. The walker now gates the
+    `qualified_name` reference on `graph_store::label_has_qualified_name`.
+
 - **Team-shared graph artifact (issue #55).** `index_codebase` gains three
   optional booleans (all default `false`, so existing behavior and the
   `core`/`core8` profiles are unchanged):

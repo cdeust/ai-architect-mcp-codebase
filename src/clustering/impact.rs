@@ -191,10 +191,31 @@ fn reverse_dependents(store: &GraphStore, esc: &str, prefix: &str) -> Vec<Impact
         // Bind the edge as `r` so its stored `confidence` property surfaces; a
         // resolution/provenance edge carries it, structural edges do not (then
         // `r.confidence` is empty and we fall back to the relation floor).
+        //
+        // Gate every `qualified_name` reference on whether the label declares
+        // that column. lbug raises a hard Binder exception (not NULL) when a
+        // query binds a property the matched label lacks, which silently drops
+        // the ENTIRE query's rows. Before this gate, any Imports_/Uses_/… table
+        // whose `to`-label (e.g. File) or `from`-label lacked `qualified_name`
+        // errored out, so File-targeted and File-sourced dependents never
+        // surfaced — the exact gap that made IaC manifest→File edges (issue #63)
+        // invisible to get_impact, and that already dropped plain
+        // Imports_File_File light-links. source: graph_store::label_has_qualified_name.
+        let b_pred = if crate::graph_store::label_has_qualified_name(to_label) {
+            format!("b.id = {esc} OR b.qualified_name = {esc}")
+        } else {
+            format!("b.id = {esc}")
+        };
+        let a_qn = if crate::graph_store::label_has_qualified_name(from_label) {
+            "a.qualified_name"
+        } else {
+            // No qualified_name column — the id is the traversal handle.
+            "a.id"
+        };
         let cypher = format!(
             "MATCH (a:{from_label})-[r:{rel}]->(b:{to_label}) \
-             WHERE b.id = {esc} OR b.qualified_name = {esc} \
-             RETURN a.id, a.qualified_name, r.confidence"
+             WHERE {b_pred} \
+             RETURN a.id, {a_qn}, r.confidence"
         );
         if let Ok(qr) = store.execute_query(&cypher) {
             for row in &qr.rows {

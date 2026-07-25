@@ -1,0 +1,433 @@
+// iac_indexing — issue #63 end-to-end gate.
+//
+// External proof (§13 G3) that the infrastructure-as-code pass turns a realistic
+// deployment surface into graph material and that every acceptance path is
+// asserted against a concrete fixture:
+//   1. Full index of a realistic k8s app → EXACT expected IaC nodes/edges.
+//   2. A broken (Helm-templated) manifest → coverage-flagged, index survives.
+//   3. Incremental edit of one manifest → only it re-processed; the others'
+//      IaC nodes are untouched.
+//   4. get_impact traverses the new edges in both directions across the
+//      IaC/code boundary.
+//   5. query_graph reaches the new labels.
+
+use ai_architect_mcp::clustering::get_impact;
+use ai_architect_mcp::graph_store::GraphStore;
+use ai_architect_mcp::indexer::coverage::{self, CoverageKind};
+use ai_architect_mcp::indexer::{self, manifest, DependencyScope};
+use std::fs;
+use std::path::Path;
+
+/// Writes a realistic single-service k8s app: a Dockerfile that builds `web`,
+/// a base overlay (Deployment + Service + ConfigMap + kustomization), a prod
+/// overlay that patches the base, and one Helm-templated file that must be
+/// reported as a parse gap.
+fn write_fixture(root: &Path) {
+    fs::create_dir_all(root.join("services/web")).unwrap();
+    fs::create_dir_all(root.join("k8s/base")).unwrap();
+    fs::create_dir_all(root.join("k8s/overlays/prod")).unwrap();
+    fs::create_dir_all(root.join("broken")).unwrap();
+
+    // A source file the Dockerfile COPYs — proves the COPY-source edge.
+    fs::write(
+        root.join("services/web/app.js"),
+        "export const run = () => 1;\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("services/web/Dockerfile"),
+        "FROM node:18\nWORKDIR /app\nCOPY app.js /app/app.js\nEXPOSE 8080\nCMD [\"node\", \"/app/app.js\"]\n",
+    )
+    .unwrap();
+
+    // Base: Deployment (image web:latest, envFrom app-config), Service, ConfigMap.
+    fs::write(
+        root.join("k8s/base/deployment.yaml"),
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  template:\n    spec:\n      containers:\n        - name: web\n          image: web:latest\n          envFrom:\n            - configMapRef:\n                name: app-config\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("k8s/base/service.yaml"),
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  selector:\n    app: web\n  ports:\n    - port: 80\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("k8s/base/configmap.yaml"),
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: app-config\ndata:\n  LOG_LEVEL: info\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("k8s/base/kustomization.yaml"),
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - deployment.yaml\n  - service.yaml\n  - configmap.yaml\n",
+    )
+    .unwrap();
+
+    // Prod overlay: composes the base overlay + patches it.
+    fs::write(
+        root.join("k8s/overlays/prod/kustomization.yaml"),
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../../base\npatches:\n  - path: patch.yaml\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("k8s/overlays/prod/patch.yaml"),
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: 3\n",
+    )
+    .unwrap();
+
+    // A Helm-templated manifest: looks like k8s but is unresolved — a parse gap.
+    fs::write(
+        root.join("broken/templated.yaml"),
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ .Values.name }}\nspec:\n  replicas: {{ .Values.replicas }}\n",
+    )
+    .unwrap();
+}
+
+fn count(store: &GraphStore, q: &str) -> u64 {
+    let qr = store
+        .execute_query(q)
+        .unwrap_or_else(|e| panic!("[{q}]: {e}"));
+    qr.rows
+        .first()
+        .and_then(|r| r.first())
+        .and_then(|c| c.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+fn ids(store: &GraphStore, q: &str) -> Vec<String> {
+    let qr = store
+        .execute_query(q)
+        .unwrap_or_else(|e| panic!("[{q}]: {e}"));
+    let mut v: Vec<String> = qr
+        .rows
+        .into_iter()
+        .filter_map(|r| r.into_iter().next())
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn full_index_extracts_exact_iac_nodes_and_edges() {
+    let tmp = tempfile::Builder::new()
+        .prefix("iac_full_")
+        .tempdir()
+        .unwrap();
+    let repo = tmp.path().join("repo");
+    write_fixture(&repo);
+
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let graph = out.join("graph");
+    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None)
+        .expect("full index");
+
+    let store = GraphStore::open_or_create(&graph).unwrap();
+
+    // -- Nodes -------------------------------------------------------------
+    // 6 IacResource: 1 Dockerfile + 3 base manifests (Deployment/Service/
+    // ConfigMap) + 1 prod patch.yaml (also a valid Deployment manifest) + 1
+    // templated Deployment (best-effort, still a resource).
+    assert_eq!(
+        count(&store, "MATCH (r:IacResource) RETURN count(r)"),
+        6,
+        "1 Dockerfile + 3 base manifests + patch.yaml + 1 templated"
+    );
+    assert_eq!(
+        count(
+            &store,
+            "MATCH (r:IacResource) WHERE r.resource_kind = 'Dockerfile' RETURN count(r)"
+        ),
+        1
+    );
+    assert_eq!(
+        count(&store, "MATCH (m:IacModule) RETURN count(m)"),
+        2,
+        "base + prod kustomizations"
+    );
+    // IacImage: node:18 (dockerfile) + web:latest (deployment) + the templated
+    // Deployment declares no image → 2 images total.
+    assert_eq!(count(&store, "MATCH (i:IacImage) RETURN count(i)"), 2);
+
+    // -- Structural edges --------------------------------------------------
+    assert_eq!(
+        count(
+            &store,
+            "MATCH (:File)-[:Defines_File_IacResource]->(:IacResource) RETURN count(*)"
+        ),
+        6
+    );
+    assert_eq!(
+        count(
+            &store,
+            "MATCH (:File)-[:Defines_File_IacModule]->(:IacModule) RETURN count(*)"
+        ),
+        2
+    );
+    assert_eq!(
+        count(
+            &store,
+            "MATCH (:IacResource)-[:Imports_IacResource_IacImage]->(:IacImage) RETURN count(*)"
+        ),
+        2
+    );
+
+    // -- Reference edges ---------------------------------------------------
+    // Deployment (web:latest) → Dockerfile File via directory image-build match.
+    let img_build = ids(
+        &store,
+        "MATCH (r:IacResource)-[e:Imports_IacResource_File]->(f:File) \
+         WHERE e.resolution_method = 'iac-image-build' RETURN f.id",
+    );
+    assert_eq!(img_build, vec!["services/web/Dockerfile"]);
+
+    // Deployment configMapRef app-config → configmap.yaml File (name-match).
+    let name_match = ids(
+        &store,
+        "MATCH (r:IacResource)-[e:Imports_IacResource_File]->(f:File) \
+         WHERE e.resolution_method = 'iac-name-match:ConfigMap/app-config' RETURN f.id",
+    );
+    assert_eq!(name_match, vec!["k8s/base/configmap.yaml"]);
+
+    // Dockerfile COPY app.js → the app.js File.
+    let copy_src = ids(
+        &store,
+        "MATCH (r:IacResource)-[e:Imports_IacResource_File]->(f:File) \
+         WHERE e.resolution_method = 'iac-copy-source' RETURN f.id",
+    );
+    assert_eq!(copy_src, vec!["services/web/app.js"]);
+
+    // Kustomize base overlay → its 3 resource files.
+    let base_refs = ids(
+        &store,
+        "MATCH (m:IacModule)-[:Imports_IacModule_File]->(f:File) \
+         WHERE m.id = 'k8s/base/kustomization.yaml::kustomize' RETURN f.id",
+    );
+    assert_eq!(
+        base_refs,
+        vec![
+            "k8s/base/configmap.yaml",
+            "k8s/base/deployment.yaml",
+            "k8s/base/service.yaml"
+        ]
+    );
+
+    // Prod overlay → base overlay (IMPORTS module→module) + the patch file.
+    assert_eq!(
+        count(
+            &store,
+            "MATCH (a:IacModule)-[:Imports_IacModule_IacModule]->(b:IacModule) \
+             WHERE a.id = 'k8s/overlays/prod/kustomization.yaml::kustomize' \
+             AND b.id = 'k8s/base/kustomization.yaml::kustomize' RETURN count(*)"
+        ),
+        1,
+        "prod overlay IMPORTS the base overlay"
+    );
+    let prod_files = ids(
+        &store,
+        "MATCH (m:IacModule)-[:Imports_IacModule_File]->(f:File) \
+         WHERE m.id = 'k8s/overlays/prod/kustomization.yaml::kustomize' RETURN f.id",
+    );
+    assert_eq!(prod_files, vec!["k8s/overlays/prod/patch.yaml"]);
+}
+
+#[test]
+fn broken_manifest_is_coverage_flagged_and_index_survives() {
+    let tmp = tempfile::Builder::new()
+        .prefix("iac_broken_")
+        .tempdir()
+        .unwrap();
+    let repo = tmp.path().join("repo");
+    write_fixture(&repo);
+
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let graph = out.join("graph");
+    // The index must COMPLETE despite the templated manifest.
+    let result = indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None)
+        .expect("index survives a broken manifest");
+    assert!(result.node_count > 0);
+
+    // The templated file is recorded as a parse gap in the coverage sidecar.
+    let cov = &result.coverage;
+    let gap = cov
+        .files
+        .get("broken/templated.yaml")
+        .expect("templated manifest must be a recorded coverage gap");
+    assert_eq!(gap.kind, CoverageKind::ParsePartial);
+    assert!(
+        !gap.error_ranges.is_empty(),
+        "the gap must carry the templated line range"
+    );
+
+    // And it is persisted (issue #57 mechanism) — a fresh reader sees it too.
+    coverage::save(&coverage::coverage_path(&out), cov).unwrap();
+    let loaded = coverage::load(&coverage::coverage_path(&out)).expect("coverage loads");
+    assert!(loaded.files.contains_key("broken/templated.yaml"));
+
+    // A clean manifest is NOT flagged.
+    assert!(!cov.files.contains_key("k8s/base/deployment.yaml"));
+}
+
+#[test]
+fn incremental_reprocesses_only_the_changed_manifest() {
+    let tmp = tempfile::Builder::new()
+        .prefix("iac_incr_")
+        .tempdir()
+        .unwrap();
+    let repo = tmp.path().join("repo");
+    write_fixture(&repo);
+
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let graph = out.join("graph");
+    let manifest_p = manifest::manifest_path(&out);
+    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None).unwrap();
+    indexer::write_full_manifest(&repo, &manifest_p, None, DependencyScope::None).unwrap();
+
+    // Snapshot the deployment resource's identity BEFORE the edit — it must not
+    // be touched when we edit an unrelated manifest.
+    let deploy_before = {
+        let store = GraphStore::open_or_create(&graph).unwrap();
+        ids(
+            &store,
+            "MATCH (r:IacResource) WHERE r.resource_kind = 'Deployment' AND r.name = 'web' \
+             RETURN r.id",
+        )
+    };
+
+    // Edit ONLY service.yaml (add a port — changes size, so it re-classifies).
+    fs::write(
+        repo.join("k8s/base/service.yaml"),
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  selector:\n    app: web\n  ports:\n    - port: 80\n    - port: 443\n",
+    )
+    .unwrap();
+
+    let prior = manifest::load(&manifest_p).unwrap();
+    let inc = indexer::index_incremental(
+        &repo,
+        &graph,
+        &manifest_p,
+        None,
+        DependencyScope::None,
+        &prior,
+    )
+    .expect("incremental");
+    assert_eq!(inc.changed, 1, "only service.yaml changed");
+    assert_eq!(inc.files_reparsed, 1);
+
+    let store = GraphStore::open_or_create(&graph).unwrap();
+    // The service resource still exists (re-derived).
+    assert_eq!(
+        count(
+            &store,
+            "MATCH (r:IacResource) WHERE r.resource_kind = 'Service' AND r.name = 'web' \
+             RETURN count(r)"
+        ),
+        1
+    );
+    // The untouched deployment resource is byte-for-byte the same node.
+    let deploy_after = ids(
+        &store,
+        "MATCH (r:IacResource) WHERE r.resource_kind = 'Deployment' AND r.name = 'web' RETURN r.id",
+    );
+    assert_eq!(deploy_before, deploy_after, "unrelated manifest untouched");
+    // Total resource count unchanged (no duplicates, no losses).
+    assert_eq!(count(&store, "MATCH (r:IacResource) RETURN count(r)"), 6);
+    // The deployment's unrelated name-match edge to the configmap survived.
+    assert_eq!(
+        count(
+            &store,
+            "MATCH (:IacResource)-[e:Imports_IacResource_File]->(:File) \
+             WHERE e.resolution_method = 'iac-name-match:ConfigMap/app-config' RETURN count(*)"
+        ),
+        1
+    );
+}
+
+#[test]
+fn get_impact_traverses_iac_edges_both_directions() {
+    let tmp = tempfile::Builder::new()
+        .prefix("iac_impact_")
+        .tempdir()
+        .unwrap();
+    let repo = tmp.path().join("repo");
+    write_fixture(&repo);
+
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let graph = out.join("graph");
+    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None).unwrap();
+    let store = GraphStore::open_or_create(&graph).unwrap();
+
+    // Direction 1 — a change to a code artifact a manifest references reports the
+    // manifest: get_impact on the Dockerfile File surfaces the Deployment
+    // resource that builds from it (image-build edge).
+    let impact_df = get_impact(&store, "services/web/Dockerfile").expect("impact");
+    assert!(
+        impact_df
+            .importers
+            .iter()
+            .any(|n| n.id.starts_with("k8s/base/deployment.yaml::k8s")),
+        "get_impact(Dockerfile) must report the Deployment manifest, got {:?}",
+        impact_df
+            .importers
+            .iter()
+            .map(|n| &n.id)
+            .collect::<Vec<_>>()
+    );
+
+    // Direction 2 — a change to a source file the IaC references reports the IaC:
+    // get_impact on app.js surfaces the Dockerfile resource that COPYs it.
+    let impact_src = get_impact(&store, "services/web/app.js").expect("impact");
+    assert!(
+        impact_src
+            .importers
+            .iter()
+            .any(|n| n.id == "services/web/Dockerfile::dockerfile"),
+        "get_impact(app.js) must report the Dockerfile that COPYs it, got {:?}",
+        impact_src
+            .importers
+            .iter()
+            .map(|n| &n.id)
+            .collect::<Vec<_>>()
+    );
+
+    // Forward direction (manifest → code): the Deployment resource's outbound
+    // reference reaches the ConfigMap manifest it injects.
+    let fwd = store
+        .execute_query(
+            "MATCH (r:IacResource)-[:Imports_IacResource_File]->(f:File) \
+             WHERE r.resource_kind = 'Deployment' AND f.id = 'k8s/base/configmap.yaml' \
+             RETURN f.id",
+        )
+        .unwrap();
+    assert!(
+        !fwd.rows.is_empty(),
+        "Deployment must reference the ConfigMap manifest"
+    );
+}
+
+#[test]
+fn query_graph_reaches_iac_labels() {
+    let tmp = tempfile::Builder::new()
+        .prefix("iac_query_")
+        .tempdir()
+        .unwrap();
+    let repo = tmp.path().join("repo");
+    write_fixture(&repo);
+
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let graph = out.join("graph");
+    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None).unwrap();
+    let store = GraphStore::open_or_create(&graph).unwrap();
+
+    // Every new label is reachable by an ordinary read query (what query_graph
+    // executes) — the acceptance that the deployment surface is now queryable.
+    for label in ["IacResource", "IacModule", "IacImage"] {
+        let qr = store
+            .execute_query(&format!("MATCH (n:{label}) RETURN n.id LIMIT 1"))
+            .unwrap_or_else(|e| panic!("query for {label} failed: {e}"));
+        assert!(!qr.rows.is_empty(), "query_graph must reach {label} nodes");
+    }
+}
