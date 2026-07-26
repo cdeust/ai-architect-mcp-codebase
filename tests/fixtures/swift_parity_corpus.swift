@@ -75,7 +75,7 @@ protocol Serializable {
     func serialize() -> String
 }
 
-extension Animal {
+extension Animal: Equatable {
     func describe() -> String {
         return render(name)
     }

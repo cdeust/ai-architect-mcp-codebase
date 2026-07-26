@@ -6,7 +6,7 @@
 use tree_sitter::Node;
 
 use super::super::lang_spec::LangSpec;
-use super::{end_line_of, kind_in, line_of, WalkCtx};
+use super::{calls, end_line_of, kind_in, line_of, WalkCtx};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_VARIANT,
 };
@@ -20,6 +20,12 @@ use crate::parser::{
 pub(super) fn emit_member_constant(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     let start_line = line_of(node);
     let end_line = end_line_of(node);
+    // The QN keying the property's accessor-body calls (issue #100). A member
+    // node binds one constant for the languages that scan a body (Swift's single
+    // `property_declaration`); the first bound name owns the call scan. `None`
+    // when the member emits nothing (empty name), so a skipped member scans
+    // nothing.
+    let mut caller_qn: Option<String> = None;
     for mc in spec.conventions.member_constants(ctx.source, node) {
         // mutation note (§12): the `mc.name.is_empty()` skip guard is a defensive
         // generic-walker invariant; its removal is EQUIVALENT for the migrated
@@ -31,6 +37,9 @@ pub(super) fn emit_member_constant(spec: &LangSpec, ctx: &mut WalkCtx, node: Nod
             continue;
         }
         let qn = qual(scope, &mc.name);
+        if caller_qn.is_none() {
+            caller_qn = Some(qn.clone());
+        }
         ctx.nodes.push(ExtractedNode {
             label: LABEL_CONSTANT.to_string(),
             name: mc.name,
@@ -45,6 +54,15 @@ pub(super) fn emit_member_constant(spec: &LangSpec, ctx: &mut WalkCtx, node: Nod
             from_qualified_name: scope.to_string(),
             to_qualified_name: qn,
         });
+    }
+    // #100: a computed property (Swift `var x: T { get { f() } }`) scans its
+    // accessor body for calls, keyed by the property's QN. `member_constant_call_body`
+    // is `None` for stored properties, typealiases, protocol requirements, and
+    // every Kotlin member — so those scan nothing (unchanged), confining the new
+    // behavior to Swift computed accessors.
+    if let (Some(owner), Some(body)) = (caller_qn, spec.conventions.member_constant_call_body(node))
+    {
+        calls::walk_calls(spec, ctx, body, &owner);
     }
 }
 

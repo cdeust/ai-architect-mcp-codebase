@@ -7,11 +7,12 @@
 //     `class`, `struct`, `actor`, `enum` and `extension`, disambiguated by the
 //     `declaration_kind` FIELD (values: class | struct | actor | enum |
 //     extension), not by node kind. `enum` → `Enum`; everything else → `Struct`.
-//     That is the `refine_class_label` override. An `extension` additionally
-//     carries an `is_extension=true` property and (like every Swift type here)
-//     declares NO inheritance/conformance edges — the hand-written walker never
-//     parsed `inheritance_specifier`, so parity means emitting none. That is the
-//     `class_inheritance` override (property only, no refs).
+//     That is the `refine_class_label` override. Superclass + protocol
+//     conformances are `inheritance_specifier` children (each naming its
+//     supertype in an `inherits_from` field); Swift, like Kotlin, does not split
+//     the superclass from the conformance list at parse time, so every entry is
+//     an `Extends` ref (issue #97). That is the `class_inheritance` override; an
+//     `extension` additionally carries an `is_extension=true` property.
 //   - `init` / `deinit` / `subscript` are their OWN declaration kinds with no
 //     usable `name` field; the graph names them synthetically (`init`/`deinit`/
 //     `subscript`) and marks them with a `member_kind` property. They route
@@ -19,14 +20,21 @@
 //     def) with the `def_name` + `function_props` overrides supplying the name
 //     and the marker. `subscript_declaration` has no `body` field — its body is
 //     a `computed_property` child — so `function_body_kinds` names that fallback.
-//   - Enum cases are `enum_entry` nodes → `Variant`s, but modelled with a
-//     `Defines` edge and `internal` visibility (the hand-written walker's
-//     choice), and one node may bind several names (`case green, blue`). That is
-//     `variant_edge_kind`/`variant_visibility` + the generic multi-name emit.
+//   - Protocol requirements use DISTINCT node kinds inside a `protocol_body`:
+//     `protocol_function_declaration` (→ `Method`/`HasMethod` via
+//     `function_node_kinds`, bodiless so no calls scanned) and
+//     `protocol_property_declaration` (→ `Constant`/`Defines` via
+//     `member_constant_kinds`). Both are extracted (issue #98).
+//   - Enum cases are `enum_entry` nodes → `Variant`s edged `HasVariant` with
+//     `public` visibility (the canonical model, aligned with Java's
+//     `enum_constant`; issue #99), and one node may bind several names
+//     (`case green, blue`) via the generic multi-name emit.
 //   - Properties and typealiases are `Constant`s (Swift has no separate constant
 //     concept in this graph). They route through `member_constant_kinds` with a
-//     `member_constant` override reading the declaration's name and modifier
-//     visibility (typealiases additionally carry `typealias=true`).
+//     `member_constants` override reading the declaration's name and modifier
+//     visibility (typealiases additionally carry `typealias=true`). A COMPUTED
+//     property's getter/setter/observer body is scanned for calls, keyed by the
+//     property's QN — the `member_constant_call_body` override (issue #100).
 //   - Visibility is a modifier keyword (`public`/`private`/`internal`/
 //     `fileprivate`/`open`, default `internal`) read off the node head — the
 //     `node_visibility` override.
@@ -55,10 +63,24 @@ const SW_INIT_DECL: &str = "init_declaration";
 const SW_DEINIT_DECL: &str = "deinit_declaration";
 const SW_SUBSCRIPT_DECL: &str = "subscript_declaration";
 const SW_PROPERTY_DECL: &str = "property_declaration";
+const SW_PROTOCOL_PROPERTY_DECL: &str = "protocol_property_declaration";
 const SW_TYPEALIAS_DECL: &str = "typealias_declaration";
 const SW_DECLARATION_KIND: &str = "declaration_kind";
 const SW_EXTENSION: &str = "extension";
 const SW_ENUM: &str = "enum";
+// Conformance/inheritance: `class_declaration`/`protocol_declaration` carry
+// zero-or-more `inheritance_specifier` children, each naming its supertype in an
+// `inherits_from` field (a `user_type`). Computed-accessor bodies: a
+// `property_declaration`'s getter/setter live under its `computed_value` field
+// (a `computed_property`), and stored-property observers in a
+// `willset_didset_block` child.
+// source: alex-pinkus/tree-sitter-swift 0.7.3 node-types.json.
+const SW_INHERITANCE_SPECIFIER: &str = "inheritance_specifier";
+const SW_INHERITS_FROM: &str = "inherits_from";
+const SW_COMPUTED_VALUE: &str = "computed_value";
+const SW_WILLSET_DIDSET: &str = "willset_didset_block";
+const SW_NAME: &str = "name";
+const SW_BOUND_IDENTIFIER: &str = "bound_identifier";
 
 /// Swift behavioral conventions — the ADR Risk-1 watch surface for phase 5.
 pub(super) struct SwiftConventions;
@@ -79,6 +101,19 @@ impl SwiftConventions {
             }
         }
         "internal".to_string()
+    }
+
+    /// The clean bound name of a declaration whose `name` field is a `pattern`
+    /// that embeds its `var`/`let` binding (a `protocol_property_declaration`):
+    /// the pattern's `bound_identifier` field (`var id` → `id`). Empty when the
+    /// pattern or its `bound_identifier` is absent.
+    /// source: alex-pinkus/tree-sitter-swift 0.7.3 node-types.json
+    /// (`pattern.bound_identifier: simple_identifier`).
+    fn pattern_bound_identifier(source: &str, node: Node) -> String {
+        match node.child_by_field_name(SW_NAME) {
+            Some(pattern) => node_field_text(source, pattern, SW_BOUND_IDENTIFIER),
+            None => String::new(),
+        }
     }
 
     /// The `declaration_kind` field's text (`class`/`struct`/`actor`/`enum`/
@@ -184,17 +219,12 @@ impl LanguageConventions for SwiftConventions {
         Self::visibility_modifier(source, node)
     }
 
-    fn variant_edge_kind(&self) -> &'static str {
-        // The hand-written walker edged enum cases with `Defines`, not
-        // `HasVariant` (a pre-existing modelling choice preserved for parity;
-        // tracked for reconciliation with the Java `HasVariant` model).
-        "Defines"
-    }
-
-    fn variant_visibility(&self) -> String {
-        // The hand-written walker gave enum cases `internal` visibility.
-        "internal".to_string()
-    }
+    // #99: enum cases use the canonical `HasVariant`/`public` model — Swift no
+    // longer overrides `variant_edge_kind`/`variant_visibility`, so it inherits
+    // the trait defaults, aligning `enum_entry` variants with Java's
+    // `enum_constant` (conventions.rs defaults; java.rs `variant_node_kinds`).
+    // The old `Defines`/`internal` overrides (the hand-written walker's choice,
+    // preserved by #102) are removed.
 
     fn refine_class_label(
         &self,
@@ -215,41 +245,88 @@ impl LanguageConventions for SwiftConventions {
     }
 
     fn class_inheritance(&self, source: &str, _spec: &LangSpec, node: Node) -> ClassInheritance {
-        // Swift declares NO inheritance/conformance edges here — the hand-written
-        // walker never parsed `inheritance_specifier` (a pre-existing gap
-        // preserved for parity). An `extension` additionally carries an
-        // `is_extension=true` property so downstream tooling can merge it into the
-        // extended type.
+        // #97: superclass + protocol conformances are `inheritance_specifier`
+        // children (a `class`/`struct`/`enum`/`actor`/`extension`/`protocol` may
+        // carry several), each naming its supertype in an `inherits_from` field.
+        // Swift, like Kotlin, does NOT split the superclass from the protocol
+        // list at parse time — the grammar gives one undifferentiated
+        // `inheritance_specifier` sequence — so every entry is an `Extends` ref,
+        // matching KotlinConventions::class_inheritance (kotlin.rs). No `bases`
+        // property is recorded (Kotlin parity; targets kept verbatim, the
+        // resolver normalizes on lookup — java.rs/kotlin.rs precedent). An
+        // `extension` additionally carries an `is_extension=true` property so
+        // downstream tooling can merge it into the extended type.
+        let mut refs: Vec<(&'static str, String)> = Vec::new();
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == SW_INHERITANCE_SPECIFIER {
+                let name = node_field_text(source, child, SW_INHERITS_FROM);
+                let name = name.trim();
+                if !name.is_empty() {
+                    refs.push(("Extends", name.to_string()));
+                }
+            }
+        }
         let properties = if Self::declaration_kind(source, node) == SW_EXTENSION {
             vec![("is_extension".to_string(), "true".to_string())]
         } else {
             Vec::new()
         };
-        ClassInheritance {
-            properties,
-            refs: Vec::new(),
-        }
+        ClassInheritance { properties, refs }
     }
 
     fn member_constants(&self, source: &str, node: Node) -> Vec<MemberConstant> {
         // Routed for `property_declaration` (a `let`/`var`, computed or stored →
-        // `Constant`) and `typealias_declaration` (→ `Constant` marked
-        // `typealias=true`). Both take modifier visibility; the name is the
-        // declaration's `name` field — the hand-written walker read a SINGLE name
+        // `Constant`), `typealias_declaration` (→ `Constant` marked
+        // `typealias=true`), and `protocol_property_declaration` (a protocol
+        // property requirement `var x: T { get }` → `Constant`, issue #98). All
+        // take modifier visibility. The hand-written walker read a SINGLE name
         // (its `find_name`, the pattern's first name), so a Swift property binds
         // exactly one `Constant` (parity), never several (unlike Kotlin's
         // destructuring `val (a, b)`). An empty name is skipped by
         // `emit_member_constant`.
-        let properties = match node.kind() {
-            SW_PROPERTY_DECL => Vec::new(),
-            SW_TYPEALIAS_DECL => vec![("typealias".to_string(), "true".to_string())],
+        let (name, properties) = match node.kind() {
+            // A class property's `name` field is a bare `pattern` (its `var`/`let`
+            // is a separate `value_binding_pattern` child), so its text IS the
+            // name. A protocol property requirement embeds the binding INSIDE the
+            // pattern (`var id` — no separate child), so its clean name is the
+            // pattern's `bound_identifier` field.
+            SW_PROPERTY_DECL => (node_field_text(source, node, SW_NAME), Vec::new()),
+            SW_PROTOCOL_PROPERTY_DECL => (Self::pattern_bound_identifier(source, node), Vec::new()),
+            SW_TYPEALIAS_DECL => (
+                node_field_text(source, node, SW_NAME),
+                vec![("typealias".to_string(), "true".to_string())],
+            ),
             _ => return Vec::new(),
         };
         vec![MemberConstant {
-            name: node_field_text(source, node, "name"),
+            name,
             visibility: Self::visibility_modifier(source, node),
             properties,
         }]
+    }
+
+    fn member_constant_call_body<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+        // #100: a computed `property_declaration` scans its accessor body for
+        // calls (keyed by the property's QN in `emit_member_constant`). The
+        // getter/setter live under the `computed_value` field (a
+        // `computed_property`); a stored property with observers carries a
+        // `willset_didset_block` child. A STORED property (no accessor) has
+        // neither → `None` → nothing scanned, closing the asymmetry with
+        // `subscript` (whose `computed_property` body is already scanned via
+        // `function_body_kinds`). Typealiases and protocol property requirements
+        // are not `property_declaration`s, so they scan nothing.
+        if node.kind() != SW_PROPERTY_DECL {
+            return None;
+        }
+        if let Some(computed) = node.child_by_field_name(SW_COMPUTED_VALUE) {
+            return Some(computed);
+        }
+        let mut cursor = node.walk();
+        let observers = node
+            .children(&mut cursor)
+            .find(|c| c.kind() == SW_WILLSET_DIDSET);
+        observers
     }
 
     fn call_callee(&self, source: &str, call_node: Node) -> Option<String> {
@@ -327,6 +404,7 @@ pub(crate) static SWIFT_SPEC: LangSpec = LangSpec {
     skip_node_kinds: &[],
     function_node_kinds: &[
         "function_declaration",
+        "protocol_function_declaration",
         "init_declaration",
         "deinit_declaration",
         "subscript_declaration",
@@ -336,7 +414,11 @@ pub(crate) static SWIFT_SPEC: LangSpec = LangSpec {
     interface_node_kinds: &["protocol_declaration"],
     enum_node_kinds: &[],
     variant_node_kinds: &["enum_entry"],
-    member_constant_kinds: &["property_declaration", "typealias_declaration"],
+    member_constant_kinds: &[
+        "property_declaration",
+        "protocol_property_declaration",
+        "typealias_declaration",
+    ],
     decorated_def_kinds: &[],
     decorator_node_kind: None,
     base_node_kinds: &[],

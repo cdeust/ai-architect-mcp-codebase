@@ -252,6 +252,25 @@ pub(crate) trait LanguageConventions: Sync {
         Vec::new()
     }
 
+    /// The accessor body of a `member_constant_kinds` node to scan for calls,
+    /// or `None` when the member has no scannable body. Default: `None` — a
+    /// member constant is a leaf (Kotlin `val`/`var` and `enum_entry`, whose
+    /// initializer the graph does not scan). Swift overrides for a computed
+    /// `property_declaration` (issue #100): its getter/setter/observer body
+    /// (`computed_property` / `willset_didset_block`) IS scanned, keyed by the
+    /// property's own QN, matching the call-scan a `subscript`'s
+    /// `computed_property` already receives via `function_body_kinds`. A stored
+    /// property (no accessor body) yields `None`, so it scans nothing — the
+    /// asymmetry issue #100 closes.
+    // mutation note (§12): the default `None` is an unreachable-for-Kotlin path
+    // (only Swift populates a computed `property_declaration` body); returning
+    // `Some` here for the migrated set is impossible, so the default is not test-
+    // observable for Kotlin — EQUIVALENT (§9). Swift's override is exercised by
+    // the parity corpus (`magnitude`) and the #100 fidelity test.
+    fn member_constant_call_body<'t>(&self, _node: Node<'t>) -> Option<Node<'t>> {
+        None
+    }
+
     /// The inheritance a class-like node declares. Default: the single-list
     /// model driven by `spec.extends_field` + `spec.base_node_kinds` (Python),
     /// emitting an always-present `bases` property and one `.`-normalized
