@@ -12,7 +12,7 @@
 
 use super::registry::SHALLOW_SPECS;
 use super::ruby::RUBY_SPEC;
-use super::shallow::{parse_shallow, ShallowSpec};
+use super::shallow::{last_segment, parse_shallow, ShallowSpec};
 use crate::parser::{
     ExtractedNode, Language, ParseResult, LABEL_CALL_SITE, LABEL_FUNCTION, LABEL_IMPORT,
     LABEL_METHOD, LABEL_STRUCT,
@@ -126,6 +126,44 @@ fn shallow_nodes_carry_exact_source_line_spans() {
         (11, 11),
         "formatter.format"
     );
+}
+
+#[test]
+fn last_segment_handles_every_separator_and_a_trailing_one() {
+    // Direct unit tests for the callee reduction. Mutation testing left three
+    // survivors here that no parsed fixture could kill, because the interesting
+    // cases need a MULTI-BYTE separator or text ending in one:
+    //
+    //   `idx + sep.len()` -> `idx - sep.len()` / `idx * sep.len()`
+    //        Invisible for `.` at some offsets, but decisive for `::`/`->`
+    //        (len 2). For "Foo::Bar": idx=3, so `+` slices "Bar" while `-`
+    //        slices "oo::Bar" and `*` slices "ar".
+    //   `delete !` in the empty-candidate guard
+    //        Only observable when a separator is LAST, where dropping the `!`
+    //        would return "" instead of leaving the text alone.
+
+    // Single-byte separator.
+    assert_eq!(last_segment("Utils.parse"), "parse");
+    // Multi-byte `::` — kills the +/-/* arithmetic mutants.
+    assert_eq!(last_segment("Foo::Bar"), "Bar");
+    assert_eq!(last_segment("a::b::c"), "c");
+    // Multi-byte `->`.
+    assert_eq!(last_segment("ptr->method"), "method");
+    // Mixed separators: the last one wins whichever it is.
+    assert_eq!(last_segment("a::b.c"), "c");
+    assert_eq!(last_segment("mod::obj->call"), "call");
+    // No separator at all.
+    assert_eq!(last_segment("plain"), "plain");
+    // Trailing separator — kills `delete !`. The guard must refuse to advance
+    // onto an empty segment, leaving the text as-is rather than returning "".
+    assert_eq!(last_segment("foo."), "foo.");
+    assert_eq!(last_segment("foo::"), "foo::");
+    assert_eq!(last_segment("foo->"), "foo->");
+    // Whitespace is trimmed, not treated as content.
+    assert_eq!(last_segment("  Utils.parse  "), "parse");
+    // Degenerate input must not panic (the slice indices are byte offsets).
+    assert_eq!(last_segment(""), "");
+    assert_eq!(last_segment("."), ".");
 }
 
 #[test]

@@ -161,7 +161,15 @@ fn named_children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
 
 /// Trailing segment of a possibly-qualified callee (`Utils.parse` -> `parse`,
 /// `a::b::c` -> `c`), with surrounding whitespace removed.
-fn last_segment(text: &str) -> String {
+///
+/// `pub(super)` for direct unit testing: the separator arithmetic
+/// (`idx + sep.len()`) and the empty-candidate guard are only observable for
+/// multi-byte separators (`::`, `->`) and for text ENDING in a separator,
+/// neither of which a realistic parsed fixture reaches. Mutation testing
+/// showed exactly that — three survivors here that no end-to-end fixture
+/// could kill (§12.1), so the honest fix is to test the function head-on
+/// rather than contort a fixture to reach it.
+pub(super) fn last_segment(text: &str) -> String {
     let mut tail = text.trim();
     for sep in CALLEE_SEPARATORS {
         if let Some(idx) = tail.rfind(sep) {
