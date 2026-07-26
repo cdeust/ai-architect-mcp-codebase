@@ -8,6 +8,20 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Generic walker split under the §4.1 size cap (issue #101, ADR-0055).**
+  `src/parser/spec/walkers.rs` had grown to 880 lines across the
+  Go/Python/Java/Kotlin/Swift migrations, over the 500-line hard cap. Split
+  along concern boundaries into `src/parser/spec/walkers/`: `mod.rs` (WalkCtx,
+  `parse_with_spec`, shared helpers, wiring), `defs.rs` (the `walk_defs`
+  dispatcher + `emit_class`/`emit_def`/`emit_method_recv`/`emit_decorated`),
+  `calls.rs`, `imports.rs`, `embedded.rs`, `types.rs` and `constants.rs`.
+  Largest file is now 265 lines. Pure move — all 29 function bodies are
+  byte-identical to the pre-split source modulo the visibility markers the
+  module boundary requires and module-qualified call sites; no logic change,
+  no public-contract change. Proven by the unchanged gates: five language
+  exact-parity + per-EdgeKind F1 suites, `graph_accuracy` 41/41,
+  `parser_fidelity`, 761 tests green.
+
 - **Table-driven language specs — Swift migration (issue #60 phase 5,
   ADR-0055).** Migrated Swift off its hand-written walker onto the
   `src/parser/spec/` seam at exact parity, deleting `src/parser/swift/`
