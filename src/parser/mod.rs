@@ -7,7 +7,6 @@
 
 pub mod c;
 pub mod cpp;
-pub mod go;
 pub mod java;
 pub mod kotlin;
 pub mod objc;
@@ -15,6 +14,10 @@ pub mod python;
 pub mod rust;
 pub mod swift;
 pub mod typescript;
+
+// Table-driven extraction (ADR-0055). Migrated languages route through the
+// generic spec walkers; the rest stay on the hand-written modules above.
+mod spec;
 
 // source: H2 fix — per-file tree-sitter parse timeout. 5 seconds is ~100x
 // the typical parse time for a 1 MB source file on an M-series Mac (measured
@@ -103,7 +106,8 @@ pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<Parse
         Language::ObjC => objc::parse_objc_file(source, file_path),
         Language::C => c::parse_c_file(source, file_path),
         Language::Cpp => cpp::parse_cpp_file(source, file_path),
-        Language::Go => go::parse_go_file(source, file_path),
+        // Migrated to the table-driven spec walkers (ADR-0055 phase 1).
+        Language::Go => spec::parse_with_spec(&spec::GO_SPEC, source, file_path),
     }
 }
 

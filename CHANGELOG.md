@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Table-driven language specs — scaffold + Go migration (issue #60 phase 1,
+  ADR-0055).** Introduced `src/parser/spec/`: a `LangSpec` data row (structural
+  node kinds per concern + grammar factory + embedded list), a
+  `LanguageConventions` behavioral trait, a registry, and generic walkers
+  (`walk_defs`/`walk_calls`/`walk_imports`/`walk_embedded`) that produce the
+  unchanged `ParseResult`/`ExtractedNode`/`ExtractedRef` contract. Go is the
+  first language migrated: its hand-written `src/parser/go/extract/*.rs` walkers
+  are deleted and replaced by one spec row plus two Go-specific predicates, at
+  exact per-EdgeKind parity (Defines/HasMethod/HasField/Imports/Calls F1 =
+  1.000, unchanged). A spec-validation guard loads each grammar's
+  `node-types.json` and asserts every node-kind string in every spec is real,
+  turning a stale row from a silent symbol-drop into a loud test failure. No
+  graph-schema, MCP-API, or consumer change; the other nine languages stay on
+  their hand-written walkers (strangler-fig, one language per step).
+
 ### Added
 
 - **Team-shared graph artifact (issue #55).** `index_codebase` gains three
