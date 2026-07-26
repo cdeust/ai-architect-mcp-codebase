@@ -71,7 +71,7 @@ tree-sitter-swift = "0.7"
 tree-sitter-objc = "3.0"
 tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
-tree-sitter-go = "0.23"
+tree-sitter-go = "0.25"
 tree-sitter-ruby = "0.23"
 # source: stages/stage-3-research.md §2 — Tantivy for BM25 full-text search.
 # In-process search engine, MIT licensed (quickwit-oss).
