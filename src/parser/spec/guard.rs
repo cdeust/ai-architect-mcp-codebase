@@ -27,6 +27,7 @@ fn node_types_json(language: Language) -> &'static str {
         Language::Go => tree_sitter_go::NODE_TYPES,
         Language::Python => tree_sitter_python::NODE_TYPES,
         Language::Java => tree_sitter_java::NODE_TYPES,
+        Language::Kotlin => tree_sitter_kotlin_ng::NODE_TYPES,
         // A spec row for a not-yet-wired language would fail loudly here rather
         // than silently skip validation.
         other => panic!(
@@ -76,6 +77,7 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
         ("interface_node_kinds", spec.interface_node_kinds),
         ("enum_node_kinds", spec.enum_node_kinds),
         ("variant_node_kinds", spec.variant_node_kinds),
+        ("member_constant_kinds", spec.member_constant_kinds),
         ("decorated_def_kinds", spec.decorated_def_kinds),
         ("base_node_kinds", spec.base_node_kinds),
         ("type_decl_node_kinds", spec.type_decl_node_kinds),
@@ -84,6 +86,8 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
         ("field_node_kinds", spec.field_node_kinds),
         ("variable_field_kinds", spec.variable_field_kinds),
         ("body_wrapper_kinds", spec.body_wrapper_kinds),
+        ("class_body_kinds", spec.class_body_kinds),
+        ("function_body_kinds", spec.function_body_kinds),
         ("value_decl_node_kinds", spec.value_decl_node_kinds),
         ("value_spec_node_kinds", spec.value_spec_node_kinds),
         ("import_node_kinds", spec.import_node_kinds),
@@ -128,10 +132,10 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
 fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
     let mut out = vec![
         ("name_field", spec.name_field.to_string()),
-        ("body_field", spec.body_field.to_string()),
         ("type_field", spec.type_field.to_string()),
     ];
     let optional: &[(&'static str, Option<&'static str>)] = &[
+        ("body_field", spec.body_field),
         ("receiver_field", spec.receiver_field),
         ("import_path_field", spec.import_path_field),
         ("extends_field", spec.extends_field),

@@ -5,19 +5,21 @@
 
 use super::go::GO_SPEC;
 use super::java::JAVA_SPEC;
+use super::kotlin::KOTLIN_SPEC;
 use super::lang_spec::LangSpec;
 use super::python::PYTHON_SPEC;
 use crate::parser::Language;
 
 /// Returns the spec row for a migrated language, or `None` if the language is
 /// still served by its hand-written walker. Migrated so far (ADR-0055):
-/// Go (phase 1), Python (phase 2), Java (phase 3).
+/// Go (phase 1), Python (phase 2), Java (phase 3), Kotlin (phase 4).
 pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
     match language {
         Language::Go => Some(&GO_SPEC),
         Language::Python => Some(&PYTHON_SPEC),
         Language::Java => Some(&JAVA_SPEC),
-        // The remaining seven stay on their hand-written walkers until each is
+        Language::Kotlin => Some(&KOTLIN_SPEC),
+        // The remaining six stay on their hand-written walkers until each is
         // migrated at parity behind the accuracy gate (ADR-0055 §5).
         _ => None,
     }
@@ -27,7 +29,7 @@ pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
 /// guard (a `#[cfg(test)]` consumer) reads this, so it is test-only — gating it
 /// keeps production builds free of an otherwise-unused const (§9).
 #[cfg(test)]
-pub(crate) const MIGRATED_SPECS: &[&LangSpec] = &[&GO_SPEC, &PYTHON_SPEC, &JAVA_SPEC];
+pub(crate) const MIGRATED_SPECS: &[&LangSpec] = &[&GO_SPEC, &PYTHON_SPEC, &JAVA_SPEC, &KOTLIN_SPEC];
 
 #[cfg(test)]
 mod tests {
@@ -52,6 +54,10 @@ mod tests {
         assert!(
             lang_spec(Language::Java).is_some(),
             "Java is migrated (phase 3)"
+        );
+        assert!(
+            lang_spec(Language::Kotlin).is_some(),
+            "Kotlin is migrated (phase 4)"
         );
         // Rust is not migrated yet — must stay on its hand-written walker.
         assert!(

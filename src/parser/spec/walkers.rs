@@ -106,6 +106,40 @@ fn kind_in(kinds: &[&str], k: &str) -> bool {
     kinds.contains(&k)
 }
 
+/// First direct child of `node` whose kind is in `kinds`, or `None`. The
+/// cursor temporary is bound before the return so it drops before the cursor
+/// (E0597), matching the hand-written parsers' `child_of_kind` helper.
+fn first_child_in<'t>(node: Node<'t>, kinds: &[&str]) -> Option<Node<'t>> {
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .find(|c| kind_in(kinds, c.kind()));
+    found
+}
+
+/// The class-like body to recurse into: the first `class_body_kinds` child when
+/// the grammar exposes bodies as child nodes (Kotlin), else the `body_field`
+/// child (Go/Python/Java). `None` when neither is present (bodiless class).
+fn class_body_of<'t>(spec: &LangSpec, node: Node<'t>) -> Option<Node<'t>> {
+    if !spec.class_body_kinds.is_empty() {
+        return first_child_in(node, spec.class_body_kinds);
+    }
+    spec.body_field.and_then(|f| node.child_by_field_name(f))
+}
+
+/// The node to scan for calls in a function/method: the first
+/// `function_body_kinds` child (falling back to the whole declaration node so an
+/// expression-bodied `fun f() = g()` still yields its call) when the grammar
+/// exposes bodies as child nodes (Kotlin), else the `body_field` child
+/// (Go/Python/Java — `None` for a bodiless abstract method, which scans
+/// nothing).
+fn call_scan_of<'t>(spec: &LangSpec, node: Node<'t>) -> Option<Node<'t>> {
+    if !spec.function_body_kinds.is_empty() {
+        return first_child_in(node, spec.function_body_kinds).or(Some(node));
+    }
+    spec.body_field.and_then(|f| node.child_by_field_name(f))
+}
+
 fn line_of(node: Node) -> u64 {
     node.start_position().row as u64 + 1
 }
@@ -145,6 +179,8 @@ pub(crate) fn walk_defs(
             emit_method_recv(spec, ctx, child, scope);
         } else if kind_in(spec.variant_node_kinds, k) {
             emit_variant(spec, ctx, child, scope);
+        } else if kind_in(spec.member_constant_kinds, k) {
+            emit_member_constant(spec, ctx, child, scope);
         } else if kind_in(spec.variable_field_kinds, k) {
             emit_variable_fields(spec, ctx, child, scope);
         } else if kind_in(spec.body_wrapper_kinds, k) {
@@ -236,7 +272,7 @@ fn emit_def(
         }
     }
 
-    if let Some(body) = node.child_by_field_name(spec.body_field) {
+    if let Some(body) = call_scan_of(spec, node) {
         walk_calls(spec, ctx, body, &qn);
     }
 }
@@ -276,7 +312,7 @@ fn emit_method_recv(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str)
         from_qualified_name: scope_qn.clone(),
         to_qualified_name: qn.clone(),
     });
-    if let Some(body) = node.child_by_field_name(spec.body_field) {
+    if let Some(body) = call_scan_of(spec, node) {
         walk_calls(spec, ctx, body, &qn);
     }
 }
@@ -286,11 +322,15 @@ fn emit_method_recv(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str)
 /// plus `implements`/`Implements` for Java), then recurses into its body with
 /// the class as the enclosing scope so member functions become methods.
 /// `label` is `Struct`/`Trait`/`Enum` as selected by `class_like_label`.
-fn emit_class(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, label: &str) {
+fn emit_class(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, label: &'static str) {
     let name = node_field_text(ctx.source, node, spec.name_field);
     if name.is_empty() {
         return;
     }
+    // Grammars that use one node kind (`class_declaration`) for struct/trait/enum
+    // (Kotlin) refine the label by content here; distinct-kind grammars
+    // (Go/Python/Java) keep the label `class_like_label` already chose.
+    let label = spec.conventions.refine_class_label(ctx.source, node, label);
     let qn = qual(scope, &name);
     let inheritance = spec.conventions.class_inheritance(ctx.source, spec, node);
     ctx.nodes.push(ExtractedNode {
@@ -314,9 +354,40 @@ fn emit_class(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, label
             to_qualified_name: to,
         });
     }
-    if let Some(body) = node.child_by_field_name(spec.body_field) {
+    if let Some(body) = class_body_of(spec, node) {
         walk_defs(spec, ctx, body, &qn, Some(&qn));
     }
+}
+
+/// Emits one `member_constant_kinds` node as a `Constant` + `Defines` under the
+/// current scope, its name/visibility/properties shaped by the conventions
+/// (Kotlin `enum_entry`). A `None` from the conventions (empty name) is skipped.
+fn emit_member_constant(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    // mutation note (§12): the `!mc.name.is_empty()` match guard is a defensive
+    // generic-walker invariant; its `→ true` mutant is EQUIVALENT for the
+    // migrated set, because the sole `member_constant` impl (Kotlin) already
+    // returns `None` for an empty name, so a `Some(mc)` here always carries a
+    // non-empty name. The guard remains as the walker's own gate for any future
+    // language whose `member_constant` returns `Some` with an empty name.
+    let mc = match spec.conventions.member_constant(ctx.source, node) {
+        Some(mc) if !mc.name.is_empty() => mc,
+        _ => return,
+    };
+    let qn = qual(scope, &mc.name);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_CONSTANT.to_string(),
+        name: mc.name,
+        qualified_name: qn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: mc.visibility,
+        properties: mc.properties,
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "Defines".to_string(),
+        from_qualified_name: scope.to_string(),
+        to_qualified_name: qn,
+    });
 }
 
 /// Emits one enum member as a `Variant` + `HasVariant` under the enclosing

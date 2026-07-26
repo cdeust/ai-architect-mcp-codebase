@@ -85,6 +85,21 @@ pub(crate) struct ClassInheritance {
     pub refs: Vec<(&'static str, String)>,
 }
 
+/// One extracted member constant: the `Constant` node's shape. Produced by
+/// `LanguageConventions::member_constant`; consumed by `walk_defs`' member-
+/// constant emitter for `member_constant_kinds` nodes (Kotlin `enum_entry` →
+/// `Constant` with an `enum_entry=true` property and implicit `public`
+/// visibility, its name read from the entry's identifier child rather than a
+/// `name` field). The emitter attaches the enclosing-scope `Defines` edge.
+pub(crate) struct MemberConstant {
+    /// The `Constant` node's display name (empty ⇒ the node is skipped).
+    pub name: String,
+    /// Node visibility.
+    pub visibility: String,
+    /// Node properties, in emission order.
+    pub properties: Vec<(String, String)>,
+}
+
 /// Behavioral predicates and shaping for one language. Object-safe and `Sync`
 /// so a `&'static dyn LanguageConventions` can live in a `static LangSpec`.
 pub(crate) trait LanguageConventions: Sync {
@@ -172,6 +187,29 @@ pub(crate) trait LanguageConventions: Sync {
     /// cannot carry.
     fn node_visibility(&self, _source: &str, _node: Node, name: &str) -> String {
         self.visibility_of(name)
+    }
+
+    /// Refines the label for a class-like node whose grammar uses ONE node kind
+    /// (`class_declaration`) for several concepts, disambiguated by content
+    /// rather than by node kind. Default: the label `class_like_label` already
+    /// picked from the spec slices (Go/Python/Java, whose grammars use distinct
+    /// kinds). Kotlin overrides to inspect the node (`interface` keyword →
+    /// `Trait`, `enum` / `enum_class_body` → `Enum`, else `Struct`).
+    fn refine_class_label(
+        &self,
+        _source: &str,
+        _node: Node,
+        default_label: &'static str,
+    ) -> &'static str {
+        default_label
+    }
+
+    /// Shapes one `member_constant_kinds` node into a `MemberConstant`, or
+    /// `None` to skip it. Default: `None` — only languages that populate
+    /// `member_constant_kinds` (Kotlin) reach this, so the default is never
+    /// called for Go/Python/Java (§9: no test for an unreachable path).
+    fn member_constant(&self, _source: &str, _node: Node) -> Option<MemberConstant> {
+        None
     }
 
     /// The inheritance a class-like node declares. Default: the single-list

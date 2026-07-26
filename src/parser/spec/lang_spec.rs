@@ -80,6 +80,14 @@ pub(crate) struct LangSpec {
     /// Enum-member kinds inside an enum body → `Variant` + `HasVariant`
     /// (Java `enum_constant`). Empty for languages without enum variants.
     pub variant_node_kinds: &'static [&'static str],
+    /// Member kinds emitted as a `Constant` + `Defines` under the current
+    /// scope, whose name/visibility/properties are shaped by the conventions'
+    /// `member_constant` (Kotlin `enum_entry` → `Constant` with an
+    /// `enum_entry=true` property, NOT a `Variant`). Distinct from
+    /// `variant_node_kinds` (which emits `Variant`/`HasVariant`) and from
+    /// `variable_field_kinds` (Java class fields). Empty for languages whose
+    /// enum members are `Variant`s or which have no such member (Go/Python/Java).
+    pub member_constant_kinds: &'static [&'static str],
     /// Wrapper kinds carrying decorators plus a single inner def
     /// (Python `decorated_definition`). Empty for languages without decorators.
     pub decorated_def_kinds: &'static [&'static str],
@@ -128,6 +136,21 @@ pub(crate) struct LangSpec {
     /// (Java `enum_body_declarations`, which holds the methods/fields after an
     /// enum's constants). Empty for languages without such wrappers.
     pub body_wrapper_kinds: &'static [&'static str],
+    /// Child node kinds that hold a class-like body to recurse into, for
+    /// grammars whose body is a CHILD node rather than a named `body_field`
+    /// (Kotlin `class_body`/`enum_class_body`; tree-sitter-kotlin-ng exposes no
+    /// `body` field). When non-empty, `emit_class` recurses into the first child
+    /// of one of these kinds instead of `body_field`. Empty for languages whose
+    /// class body is a named field (Go/Python/Java).
+    pub class_body_kinds: &'static [&'static str],
+    /// Child node kinds that hold a function/method body to scan for calls, for
+    /// grammars whose body is a CHILD node rather than a named `body_field`
+    /// (Kotlin `function_body`). When non-empty, `emit_def` scans the first
+    /// child of one of these kinds, falling back to the whole declaration node
+    /// (so expression-bodied `fun f() = g()` still yields its call). Empty for
+    /// languages whose function body is a named field (Go/Python/Java), which
+    /// scan `body_field` and nothing when it is absent (abstract methods).
+    pub function_body_kinds: &'static [&'static str],
     /// Import statement kinds (Go `import_declaration`; Python
     /// `import_statement`/`import_from_statement`/`future_import_statement`;
     /// Java `import_declaration`).
@@ -141,8 +164,11 @@ pub(crate) struct LangSpec {
     // --- field names the walkers read (validated against node-types fields) ---
     /// Field carrying a declaration's name (usually `name`).
     pub name_field: &'static str,
-    /// Field carrying a function/method/class body (usually `body`).
-    pub body_field: &'static str,
+    /// Field carrying a function/method/class body (usually `body`). `None` for
+    /// grammars that expose bodies as child NODES rather than a named field
+    /// (Kotlin — see `class_body_kinds` / `function_body_kinds`), which have no
+    /// `body` field to validate against `node-types.json`.
+    pub body_field: Option<&'static str>,
     /// Field carrying a type / type-annotation (Go/Python `type`).
     pub type_field: &'static str,
     /// Field carrying a method receiver (Go `receiver`). `None` when the
