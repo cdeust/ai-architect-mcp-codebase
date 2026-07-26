@@ -718,6 +718,16 @@ struct Vec2 {
         calls_from("observed", "recompute"),
         "didSet observer call unscanned"
     );
+    // Negative control: the `prop` filter must DISCRIMINATE. `sqrt` is called
+    // from `magnitude`, so if the closure ignored its `prop` argument this
+    // would be true and every assertion above would be vacuous. (CodeQL's
+    // rust/unused-variable reports `prop` unused because its extractor does
+    // not model Rust inline format-args capture — `format!("::{prop}")`. This
+    // assertion is the executable proof that it IS used.)
+    assert!(
+        !calls_from("stored", "sqrt"),
+        "prop filter is not discriminating — the call assertions are vacuous"
+    );
     // A plain stored property (no accessor) scans nothing — the asymmetry #100
     // closes must not over-correct into scanning stored initializers.
     assert!(
