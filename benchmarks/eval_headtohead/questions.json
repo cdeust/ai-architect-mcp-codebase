@@ -1,0 +1,37 @@
+{
+  "_comment": "Pre-registered question set for issue #64 (see PRE_REGISTRATION.md). 5 capability dimensions x 4 languages = 20 questions, symmetric across languages so the dimensions aggregate. ground_truth_files is the TRUE answer by construction of the committed corpus, independent of what either condition returns. graph_op selects the AP tool for the GRAPH condition; explorer_keywords are the substrings the baseline greps (case-insensitive). Nothing here is edited in response to results (§Move 1).",
+  "blinding_seed": 64,
+  "token_proxy_chars_per_token": 4,
+  "dimensions": {
+    "D1": "Definition / API discovery",
+    "D2": "Reference / impact",
+    "D3": "Structure / processes (program entry points)",
+    "D4": "Dependency / usage",
+    "D5": "Search / navigation"
+  },
+  "questions": [
+    { "id": "py-D1", "language": "python", "dimension": "D1", "question": "Where is the function `process_order` defined?", "graph_op": "define", "target": "process_order", "explorer_keywords": ["process_order"], "ground_truth_files": ["core.py"] },
+    { "id": "py-D2", "language": "python", "dimension": "D2", "question": "Which functions call `process_order`?", "graph_op": "impact_callers", "target": "process_order", "explorer_keywords": ["process_order"], "ground_truth_files": ["gateway.py", "worker.py"] },
+    { "id": "py-D3", "language": "python", "dimension": "D3", "question": "What are the program entry points (execution processes)?", "graph_op": "processes_main", "target": "", "explorer_keywords": ["main"], "ground_truth_files": ["main.py"] },
+    { "id": "py-D4", "language": "python", "dimension": "D4", "question": "What uses the `OrderConfig` type?", "graph_op": "impact_users", "target": "OrderConfig", "explorer_keywords": ["OrderConfig"], "ground_truth_files": ["core.py", "api.py"] },
+    { "id": "py-D5", "language": "python", "dimension": "D5", "question": "Find the symbols matching `config`.", "graph_op": "search", "target": "config", "explorer_keywords": ["config"], "ground_truth_files": ["core.py", "api.py"] },
+
+    { "id": "ts-D1", "language": "typescript", "dimension": "D1", "question": "Where is the function `processOrder` defined?", "graph_op": "define", "target": "processOrder", "explorer_keywords": ["processOrder"], "ground_truth_files": ["core.ts"] },
+    { "id": "ts-D2", "language": "typescript", "dimension": "D2", "question": "Which functions call `processOrder`?", "graph_op": "impact_callers", "target": "processOrder", "explorer_keywords": ["processOrder"], "ground_truth_files": ["gateway.ts", "worker.ts"] },
+    { "id": "ts-D3", "language": "typescript", "dimension": "D3", "question": "What are the program entry points (execution processes)?", "graph_op": "processes_main", "target": "", "explorer_keywords": ["main"], "ground_truth_files": ["main.ts"] },
+    { "id": "ts-D4", "language": "typescript", "dimension": "D4", "question": "What uses the `OrderConfig` type?", "graph_op": "impact_users", "target": "OrderConfig", "explorer_keywords": ["OrderConfig"], "ground_truth_files": ["core.ts", "api.ts"] },
+    { "id": "ts-D5", "language": "typescript", "dimension": "D5", "question": "Find the symbols matching `config`.", "graph_op": "search", "target": "config", "explorer_keywords": ["config"], "ground_truth_files": ["core.ts", "api.ts"] },
+
+    { "id": "go-D1", "language": "go", "dimension": "D1", "question": "Where is the function `ProcessOrder` defined?", "graph_op": "define", "target": "ProcessOrder", "explorer_keywords": ["ProcessOrder"], "ground_truth_files": ["core.go"] },
+    { "id": "go-D2", "language": "go", "dimension": "D2", "question": "Which functions call `ProcessOrder`?", "graph_op": "impact_callers", "target": "ProcessOrder", "explorer_keywords": ["ProcessOrder"], "ground_truth_files": ["gateway.go", "worker.go"] },
+    { "id": "go-D3", "language": "go", "dimension": "D3", "question": "What are the program entry points (execution processes)?", "graph_op": "processes_main", "target": "", "explorer_keywords": ["main"], "ground_truth_files": ["main.go"] },
+    { "id": "go-D4", "language": "go", "dimension": "D4", "question": "What uses the `OrderConfig` type?", "graph_op": "impact_users", "target": "OrderConfig", "explorer_keywords": ["OrderConfig"], "ground_truth_files": ["core.go", "api.go"] },
+    { "id": "go-D5", "language": "go", "dimension": "D5", "question": "Find the symbols matching `config`.", "graph_op": "search", "target": "config", "explorer_keywords": ["config"], "ground_truth_files": ["core.go", "api.go"] },
+
+    { "id": "rs-D1", "language": "rust", "dimension": "D1", "question": "Where is the function `process_order` defined?", "graph_op": "define", "target": "process_order", "explorer_keywords": ["process_order"], "ground_truth_files": ["core.rs"] },
+    { "id": "rs-D2", "language": "rust", "dimension": "D2", "question": "Which functions call `process_order`?", "graph_op": "impact_callers", "target": "process_order", "explorer_keywords": ["process_order"], "ground_truth_files": ["gateway.rs", "worker.rs"] },
+    { "id": "rs-D3", "language": "rust", "dimension": "D3", "question": "What are the program entry points (execution processes)?", "graph_op": "processes_main", "target": "", "explorer_keywords": ["main"], "ground_truth_files": ["main.rs"] },
+    { "id": "rs-D4", "language": "rust", "dimension": "D4", "question": "What uses the `OrderConfig` type?", "graph_op": "impact_users", "target": "OrderConfig", "explorer_keywords": ["OrderConfig"], "ground_truth_files": ["core.rs", "api.rs"] },
+    { "id": "rs-D5", "language": "rust", "dimension": "D5", "question": "Find the symbols matching `config`.", "graph_op": "search", "target": "config", "explorer_keywords": ["config"], "ground_truth_files": ["core.rs", "api.rs"] }
+  ]
+}

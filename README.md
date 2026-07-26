@@ -470,6 +470,37 @@ The bulk-insert path uses UNWIND with a typed struct schema (the engineer who wr
 
 ---
 
+## Falsifiable evidence — graph tools vs a Grep/Glob/Read baseline
+
+The core proposition — a graph query beats file-by-file exploration — is
+**measured, not asserted**. `benchmarks/eval_headtohead/` is a **pre-registered**
+(`PRE_REGISTRATION.md`, committed before execution), two-condition, head-to-head
+evaluation over a committed 4-language corpus (Python, TypeScript, Go, Rust), 20
+questions across 5 capability dimensions. Every number below is a field in
+`benchmarks/eval_headtohead/results.json`, regenerable by
+`benchmarks/eval_headtohead/reproduce.sh` (no network, no API key). Provenance and
+the honest negative are in that folder's `MANIFEST.md`.
+
+| metric (mean ± stdev, n=20) | AP graph tools | Grep/Glob/Read baseline | source field |
+|---|---:|---:|---|
+| retrieval precision | **1.00 ± 0.00** | 0.65 ± 0.33 | `aggregate.{graph,explorer}.precision` |
+| tokens consumed (est.) | **36.7 ± 19.8** | 550.4 ± 330.3 | `aggregate.*.tokens` |
+| tool calls | **1.0 ± 0.0** | 5.2 ± 1.6 | `aggregate.*.tool_calls` |
+| token ratio (baseline / graph) | **17.4×** | — | `aggregate.token_ratio_explorer_over_graph` |
+| tool-call ratio | **5.2×** | — | `aggregate.toolcall_ratio_explorer_over_graph` |
+
+Pre-registered hypotheses H1 (tokens), H2 (tool calls), H3 (precision on impact
+queries) are **SUPPORTED**; H4 (recall no-regression) is **FALSIFIED** and we say
+so: the graph's recall is 0.83 vs the substring baseline's 1.00, because AP misses
+a Go program entry (`get_processes` classification), some cross-language
+type-usage edges, and a Rust higher-order call. Those four lost questions are in
+`raw_results.json` — a sweep that reports only wins is not evidence. The
+blinded LLM-as-a-Judge answer-quality leg is config-gated (`AP_EVAL_JUDGE_CMD`)
+and was budget-gated off for the published run; the deterministic
+precision/recall/token/tool-call numbers above stand on their own.
+
+---
+
 ## Integration with the rest of the stack
 
 ```

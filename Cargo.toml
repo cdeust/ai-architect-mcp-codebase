@@ -5,7 +5,7 @@
 # crates/zera: ZERA protocol reference implementation. Workspace member so
 # its deps (blake3) stay isolated from the main crate; spec at
 # docs/protocols/ZERA-spec.md.
-members = [".", "benches/harness", "benchmarks/token_surface", "benchmarks/incremental_speed", "crates/zera"]
+members = [".", "benches/harness", "benchmarks/token_surface", "benchmarks/incremental_speed", "benchmarks/eval_headtohead", "crates/zera"]
 
 [package]
 # Published as `ai-architect-mcp` (both this and `automatised-pipeline`

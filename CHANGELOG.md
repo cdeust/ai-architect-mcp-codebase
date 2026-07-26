@@ -8,6 +8,28 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Falsifiable head-to-head evaluation — graph tools vs Grep/Glob/Read baseline
+  (issue #64).** New `benchmarks/eval_headtohead/` benchmark crate: a
+  **pre-registered** (`PRE_REGISTRATION.md`, committed before execution),
+  two-condition evaluation answering the same 20 questions (5 capability
+  dimensions × 4 languages: Python, TypeScript, Go, Rust) with (a) AP graph tools
+  and (b) a competent `Grep`/`Glob`/`Read` baseline, over a committed,
+  content-hashed corpus. Drives the real library (index → resolve → cluster →
+  search / impact / processes / query). Reports precision / recall / F1 (vs a
+  ground truth authored into the corpus), token proxy, and tool-call count —
+  **each with dispersion** (mean ± sample stdev), aggregate and per-dimension /
+  per-language. Published numbers (`results.json`, `raw_results.json`,
+  regenerable by `reproduce.sh`, no network / no API key): graph precision
+  **1.00 ± 0.00** vs baseline 0.65; **17.4×** fewer tokens; **5.2×** fewer tool
+  calls. Pre-registered H1/H2/H3 **SUPPORTED**; **H4 (recall) FALSIFIED** and
+  reported as such (graph recall 0.83 vs 1.00 — AP misses a Go entry point, some
+  cross-language type-usage edges, and a Rust higher-order call; the four lost
+  questions are in `raw_results.json`). The blinded LLM-as-a-Judge answer-quality
+  leg is **config-gated** (`AP_EVAL_JUDGE_CMD`); its absence is reported loudly,
+  never silently stubbed, and its blinding + un-blinding are unit-tested with a
+  mock judge. README gains a "Falsifiable evidence" section tracing every claim
+  to a `results.json` field (§8). Timing stays out of CI (issue #74 lesson);
+  `cargo test` gates only harness correctness + determinism.
 - **Infrastructure-as-code indexing (issue #63).** The indexer now maps a
   repository's deployment surface into the graph as first-class material, in a
   post-pass that mirrors `light_link` (runs after every File node exists; never

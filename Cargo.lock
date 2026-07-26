@@ -554,6 +554,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "eval-headtohead-bench"
+version = "0.0.1"
+dependencies = [
+ "ai-architect-mcp",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "fastdivide"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

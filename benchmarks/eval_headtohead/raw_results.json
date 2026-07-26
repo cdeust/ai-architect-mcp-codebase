@@ -1,0 +1,705 @@
+{
+  "note": "Raw per-question data, including every question GRAPH does not win. graph_*_minus_explorer < 0 marks a GRAPH loss on that metric.",
+  "rows": [
+    {
+      "dimension": "D1",
+      "explorer": {
+        "f1": 0.33,
+        "precision": 0.2,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.go",
+          "gateway.go",
+          "legacy.go",
+          "reporting.go",
+          "worker.go"
+        ],
+        "tokens_est": 871.0,
+        "tool_calls": 7
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.go"
+        ],
+        "tokens_est": 27.75,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.8,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.go"
+      ],
+      "id": "go-D1",
+      "judge": null,
+      "language": "go",
+      "question": "Where is the function `ProcessOrder` defined?"
+    },
+    {
+      "dimension": "D2",
+      "explorer": {
+        "f1": 0.57,
+        "precision": 0.4,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.go",
+          "gateway.go",
+          "legacy.go",
+          "reporting.go",
+          "worker.go"
+        ],
+        "tokens_est": 871.0,
+        "tool_calls": 7
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "gateway.go",
+          "worker.go"
+        ],
+        "tokens_est": 45.75,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.6,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "gateway.go",
+        "worker.go"
+      ],
+      "id": "go-D2",
+      "judge": null,
+      "language": "go",
+      "question": "Which functions call `ProcessOrder`?"
+    },
+    {
+      "dimension": "D3",
+      "explorer": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "main.go"
+        ],
+        "tokens_est": 58.5,
+        "tool_calls": 3
+      },
+      "graph": {
+        "f1": 0.0,
+        "precision": 1.0,
+        "recall": 0.0,
+        "retrieved_files": [],
+        "tokens_est": 11.25,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": -1.0,
+      "ground_truth_files": [
+        "main.go"
+      ],
+      "id": "go-D3",
+      "judge": null,
+      "language": "go",
+      "question": "What are the program entry points (execution processes)?"
+    },
+    {
+      "dimension": "D4",
+      "explorer": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.go",
+          "core.go"
+        ],
+        "tokens_est": 359.5,
+        "tool_calls": 4
+      },
+      "graph": {
+        "f1": 0.0,
+        "precision": 1.0,
+        "recall": 0.0,
+        "retrieved_files": [],
+        "tokens_est": 10.5,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": -1.0,
+      "ground_truth_files": [
+        "core.go",
+        "api.go"
+      ],
+      "id": "go-D4",
+      "judge": null,
+      "language": "go",
+      "question": "What uses the `OrderConfig` type?"
+    },
+    {
+      "dimension": "D5",
+      "explorer": {
+        "f1": 0.8,
+        "precision": 0.67,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.go",
+          "core.go",
+          "main.go"
+        ],
+        "tokens_est": 428.25,
+        "tool_calls": 5
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.go",
+          "core.go"
+        ],
+        "tokens_est": 60.75,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.33,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.go",
+        "api.go"
+      ],
+      "id": "go-D5",
+      "judge": null,
+      "language": "go",
+      "question": "Find the symbols matching `config`."
+    },
+    {
+      "dimension": "D1",
+      "explorer": {
+        "f1": 0.33,
+        "precision": 0.2,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.py",
+          "gateway.py",
+          "legacy.py",
+          "reporting.py",
+          "worker.py"
+        ],
+        "tokens_est": 894.0,
+        "tool_calls": 7
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.py"
+        ],
+        "tokens_est": 27.5,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.8,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.py"
+      ],
+      "id": "py-D1",
+      "judge": null,
+      "language": "python",
+      "question": "Where is the function `process_order` defined?"
+    },
+    {
+      "dimension": "D2",
+      "explorer": {
+        "f1": 0.57,
+        "precision": 0.4,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.py",
+          "gateway.py",
+          "legacy.py",
+          "reporting.py",
+          "worker.py"
+        ],
+        "tokens_est": 894.0,
+        "tool_calls": 7
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "gateway.py",
+          "worker.py"
+        ],
+        "tokens_est": 45.0,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.6,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "gateway.py",
+        "worker.py"
+      ],
+      "id": "py-D2",
+      "judge": null,
+      "language": "python",
+      "question": "Which functions call `process_order`?"
+    },
+    {
+      "dimension": "D3",
+      "explorer": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "main.py"
+        ],
+        "tokens_est": 81.0,
+        "tool_calls": 3
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "main.py"
+        ],
+        "tokens_est": 25.5,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "main.py"
+      ],
+      "id": "py-D3",
+      "judge": null,
+      "language": "python",
+      "question": "What are the program entry points (execution processes)?"
+    },
+    {
+      "dimension": "D4",
+      "explorer": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.py",
+          "core.py"
+        ],
+        "tokens_est": 362.75,
+        "tool_calls": 4
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.py",
+          "core.py"
+        ],
+        "tokens_est": 38.5,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.py",
+        "api.py"
+      ],
+      "id": "py-D4",
+      "judge": null,
+      "language": "python",
+      "question": "What uses the `OrderConfig` type?"
+    },
+    {
+      "dimension": "D5",
+      "explorer": {
+        "f1": 0.8,
+        "precision": 0.67,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.py",
+          "core.py",
+          "main.py"
+        ],
+        "tokens_est": 487.75,
+        "tool_calls": 5
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.py",
+          "core.py"
+        ],
+        "tokens_est": 78.75,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.33,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.py",
+        "api.py"
+      ],
+      "id": "py-D5",
+      "judge": null,
+      "language": "python",
+      "question": "Find the symbols matching `config`."
+    },
+    {
+      "dimension": "D1",
+      "explorer": {
+        "f1": 0.33,
+        "precision": 0.2,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.rs",
+          "gateway.rs",
+          "legacy.rs",
+          "reporting.rs",
+          "worker.rs"
+        ],
+        "tokens_est": 1002.25,
+        "tool_calls": 7
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.rs"
+        ],
+        "tokens_est": 27.5,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.8,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.rs"
+      ],
+      "id": "rs-D1",
+      "judge": null,
+      "language": "rust",
+      "question": "Where is the function `process_order` defined?"
+    },
+    {
+      "dimension": "D2",
+      "explorer": {
+        "f1": 0.57,
+        "precision": 0.4,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.rs",
+          "gateway.rs",
+          "legacy.rs",
+          "reporting.rs",
+          "worker.rs"
+        ],
+        "tokens_est": 1002.25,
+        "tool_calls": 7
+      },
+      "graph": {
+        "f1": 0.67,
+        "precision": 1.0,
+        "recall": 0.5,
+        "retrieved_files": [
+          "gateway.rs"
+        ],
+        "tokens_est": 29.0,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.6,
+      "graph_recall_minus_explorer": -0.5,
+      "ground_truth_files": [
+        "gateway.rs",
+        "worker.rs"
+      ],
+      "id": "rs-D2",
+      "judge": null,
+      "language": "rust",
+      "question": "Which functions call `process_order`?"
+    },
+    {
+      "dimension": "D3",
+      "explorer": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "main.rs"
+        ],
+        "tokens_est": 105.5,
+        "tool_calls": 3
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "main.rs"
+        ],
+        "tokens_est": 25.5,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "main.rs"
+      ],
+      "id": "rs-D3",
+      "judge": null,
+      "language": "rust",
+      "question": "What are the program entry points (execution processes)?"
+    },
+    {
+      "dimension": "D4",
+      "explorer": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.rs",
+          "core.rs"
+        ],
+        "tokens_est": 455.75,
+        "tool_calls": 4
+      },
+      "graph": {
+        "f1": 0.67,
+        "precision": 1.0,
+        "recall": 0.5,
+        "retrieved_files": [
+          "api.rs"
+        ],
+        "tokens_est": 22.0,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": -0.5,
+      "ground_truth_files": [
+        "core.rs",
+        "api.rs"
+      ],
+      "id": "rs-D4",
+      "judge": null,
+      "language": "rust",
+      "question": "What uses the `OrderConfig` type?"
+    },
+    {
+      "dimension": "D5",
+      "explorer": {
+        "f1": 0.8,
+        "precision": 0.67,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.rs",
+          "core.rs",
+          "main.rs"
+        ],
+        "tokens_est": 582.5,
+        "tool_calls": 5
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.rs",
+          "core.rs"
+        ],
+        "tokens_est": 60.25,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.33,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.rs",
+        "api.rs"
+      ],
+      "id": "rs-D5",
+      "judge": null,
+      "language": "rust",
+      "question": "Find the symbols matching `config`."
+    },
+    {
+      "dimension": "D1",
+      "explorer": {
+        "f1": 0.33,
+        "precision": 0.2,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.ts",
+          "gateway.ts",
+          "legacy.ts",
+          "reporting.ts",
+          "worker.ts"
+        ],
+        "tokens_est": 853.0,
+        "tool_calls": 7
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.ts"
+        ],
+        "tokens_est": 27.25,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.8,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.ts"
+      ],
+      "id": "ts-D1",
+      "judge": null,
+      "language": "typescript",
+      "question": "Where is the function `processOrder` defined?"
+    },
+    {
+      "dimension": "D2",
+      "explorer": {
+        "f1": 0.57,
+        "precision": 0.4,
+        "recall": 1.0,
+        "retrieved_files": [
+          "core.ts",
+          "gateway.ts",
+          "legacy.ts",
+          "reporting.ts",
+          "worker.ts"
+        ],
+        "tokens_est": 853.0,
+        "tool_calls": 7
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "gateway.ts",
+          "worker.ts"
+        ],
+        "tokens_est": 44.75,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.6,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "gateway.ts",
+        "worker.ts"
+      ],
+      "id": "ts-D2",
+      "judge": null,
+      "language": "typescript",
+      "question": "Which functions call `processOrder`?"
+    },
+    {
+      "dimension": "D3",
+      "explorer": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "main.ts"
+        ],
+        "tokens_est": 84.25,
+        "tool_calls": 3
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "main.ts"
+        ],
+        "tokens_est": 25.5,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "main.ts"
+      ],
+      "id": "ts-D3",
+      "judge": null,
+      "language": "typescript",
+      "question": "What are the program entry points (execution processes)?"
+    },
+    {
+      "dimension": "D4",
+      "explorer": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.ts",
+          "core.ts"
+        ],
+        "tokens_est": 337.25,
+        "tool_calls": 4
+      },
+      "graph": {
+        "f1": 0.67,
+        "precision": 1.0,
+        "recall": 0.5,
+        "retrieved_files": [
+          "api.ts"
+        ],
+        "tokens_est": 22.0,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": -0.5,
+      "ground_truth_files": [
+        "core.ts",
+        "api.ts"
+      ],
+      "id": "ts-D4",
+      "judge": null,
+      "language": "typescript",
+      "question": "What uses the `OrderConfig` type?"
+    },
+    {
+      "dimension": "D5",
+      "explorer": {
+        "f1": 0.8,
+        "precision": 0.67,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.ts",
+          "core.ts",
+          "main.ts"
+        ],
+        "tokens_est": 423.75,
+        "tool_calls": 5
+      },
+      "graph": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "retrieved_files": [
+          "api.ts",
+          "core.ts"
+        ],
+        "tokens_est": 79.0,
+        "tool_calls": 1
+      },
+      "graph_precision_minus_explorer": 0.33,
+      "graph_recall_minus_explorer": 0.0,
+      "ground_truth_files": [
+        "core.ts",
+        "api.ts"
+      ],
+      "id": "ts-D5",
+      "judge": null,
+      "language": "typescript",
+      "question": "Find the symbols matching `config`."
+    }
+  ]
+}

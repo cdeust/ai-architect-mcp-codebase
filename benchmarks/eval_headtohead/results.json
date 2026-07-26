@@ -1,0 +1,517 @@
+{
+  "aggregate": {
+    "explorer": {
+      "f1": {
+        "mean": 0.74,
+        "stdev": 0.26
+      },
+      "precision": {
+        "mean": 0.65,
+        "stdev": 0.33
+      },
+      "recall": {
+        "mean": 1.0,
+        "stdev": 0.0
+      },
+      "tokens": {
+        "mean": 550.36,
+        "stdev": 330.28
+      },
+      "tool_calls": {
+        "mean": 5.2,
+        "stdev": 1.64
+      }
+    },
+    "graph": {
+      "f1": {
+        "mean": 0.85,
+        "stdev": 0.31
+      },
+      "precision": {
+        "mean": 1.0,
+        "stdev": 0.0
+      },
+      "recall": {
+        "mean": 0.83,
+        "stdev": 0.34
+      },
+      "tokens": {
+        "mean": 36.7,
+        "stdev": 19.8
+      },
+      "tool_calls": {
+        "mean": 1.0,
+        "stdev": 0.0
+      }
+    },
+    "token_ratio_explorer_over_graph": {
+      "mean": 17.4,
+      "stdev": 12.16
+    },
+    "toolcall_ratio_explorer_over_graph": {
+      "mean": 5.2,
+      "stdev": 1.64
+    }
+  },
+  "answer_quality_judge": {
+    "note": "answer-quality judge not run (no AP_EVAL_JUDGE_CMD). Deterministic retrieval precision/recall/F1 vs ground truth stand as the offline answer-quality evidence. See PRE_REGISTRATION.md §7.",
+    "status": "SKIPPED_BUDGET_GATED"
+  },
+  "experiment": "issue #64 head-to-head — AP graph tools vs Grep/Glob/Read baseline",
+  "hypotheses": {
+    "H1_tokens": {
+      "claim": "GRAPH uses fewer tokens; mean explorer/graph ratio > 1.5x",
+      "evidence": {
+        "mean_token_ratio_explorer_over_graph": 17.4,
+        "threshold": 1.5
+      },
+      "result": "SUPPORTED"
+    },
+    "H2_tool_calls": {
+      "claim": "GRAPH issues fewer tool calls; mean ratio > 2x",
+      "evidence": {
+        "mean_toolcall_ratio_explorer_over_graph": 5.2,
+        "threshold": 2.0
+      },
+      "result": "SUPPORTED"
+    },
+    "H3_precision_D2": {
+      "claim": "GRAPH precision >= EXPLORER on D2 by >= 0.15",
+      "evidence": {
+        "explorer_D2_precision": 0.4,
+        "graph_D2_precision": 1.0,
+        "margin": 0.15
+      },
+      "result": "SUPPORTED"
+    },
+    "H4_recall_no_regression": {
+      "claim": "GRAPH recall not worse than EXPLORER by more than 0.10",
+      "evidence": {
+        "explorer_recall": 1.0,
+        "graph_recall": 0.83,
+        "max_regression": 0.1
+      },
+      "result": "FALSIFIED"
+    }
+  },
+  "n_questions": 20,
+  "per_dimension": {
+    "D1": {
+      "explorer": {
+        "f1": {
+          "mean": 0.33,
+          "stdev": 0.0
+        },
+        "precision": {
+          "mean": 0.2,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 905.06,
+          "stdev": 66.93
+        },
+        "tool_calls": {
+          "mean": 7.0,
+          "stdev": 0.0
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 27.5,
+          "stdev": 0.2
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    },
+    "D2": {
+      "explorer": {
+        "f1": {
+          "mean": 0.57,
+          "stdev": 0.0
+        },
+        "precision": {
+          "mean": 0.4,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 905.06,
+          "stdev": 66.93
+        },
+        "tool_calls": {
+          "mean": 7.0,
+          "stdev": 0.0
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 0.92,
+          "stdev": 0.17
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 0.88,
+          "stdev": 0.25
+        },
+        "tokens": {
+          "mean": 41.13,
+          "stdev": 8.09
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    },
+    "D3": {
+      "explorer": {
+        "f1": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 82.31,
+          "stdev": 19.24
+        },
+        "tool_calls": {
+          "mean": 3.0,
+          "stdev": 0.0
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 0.75,
+          "stdev": 0.5
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 0.75,
+          "stdev": 0.5
+        },
+        "tokens": {
+          "mean": 21.94,
+          "stdev": 7.13
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    },
+    "D4": {
+      "explorer": {
+        "f1": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 378.81,
+          "stdev": 52.53
+        },
+        "tool_calls": {
+          "mean": 4.0,
+          "stdev": 0.0
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 0.58,
+          "stdev": 0.42
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 0.5,
+          "stdev": 0.41
+        },
+        "tokens": {
+          "mean": 23.25,
+          "stdev": 11.52
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    },
+    "D5": {
+      "explorer": {
+        "f1": {
+          "mean": 0.8,
+          "stdev": 0.0
+        },
+        "precision": {
+          "mean": 0.67,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 480.56,
+          "stdev": 73.95
+        },
+        "tool_calls": {
+          "mean": 5.0,
+          "stdev": 0.0
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 69.69,
+          "stdev": 10.61
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    }
+  },
+  "per_language": {
+    "go": {
+      "explorer": {
+        "f1": {
+          "mean": 0.74,
+          "stdev": 0.29
+        },
+        "precision": {
+          "mean": 0.65,
+          "stdev": 0.36
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 517.65,
+          "stdev": 351.26
+        },
+        "tool_calls": {
+          "mean": 5.2,
+          "stdev": 1.79
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 0.6,
+          "stdev": 0.55
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 0.6,
+          "stdev": 0.55
+        },
+        "tokens": {
+          "mean": 31.2,
+          "stdev": 21.93
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    },
+    "python": {
+      "explorer": {
+        "f1": {
+          "mean": 0.74,
+          "stdev": 0.29
+        },
+        "precision": {
+          "mean": 0.65,
+          "stdev": 0.36
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 543.9,
+          "stdev": 351.92
+        },
+        "tool_calls": {
+          "mean": 5.2,
+          "stdev": 1.79
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 43.05,
+          "stdev": 21.5
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    },
+    "rust": {
+      "explorer": {
+        "f1": {
+          "mean": 0.74,
+          "stdev": 0.29
+        },
+        "precision": {
+          "mean": 0.65,
+          "stdev": 0.36
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 629.65,
+          "stdev": 382.38
+        },
+        "tool_calls": {
+          "mean": 5.2,
+          "stdev": 1.79
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 0.87,
+          "stdev": 0.18
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 0.8,
+          "stdev": 0.27
+        },
+        "tokens": {
+          "mean": 32.85,
+          "stdev": 15.54
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    },
+    "typescript": {
+      "explorer": {
+        "f1": {
+          "mean": 0.74,
+          "stdev": 0.29
+        },
+        "precision": {
+          "mean": 0.65,
+          "stdev": 0.36
+        },
+        "recall": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "tokens": {
+          "mean": 510.25,
+          "stdev": 336.84
+        },
+        "tool_calls": {
+          "mean": 5.2,
+          "stdev": 1.79
+        }
+      },
+      "graph": {
+        "f1": {
+          "mean": 0.93,
+          "stdev": 0.15
+        },
+        "precision": {
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "recall": {
+          "mean": 0.9,
+          "stdev": 0.22
+        },
+        "tokens": {
+          "mean": 39.7,
+          "stdev": 23.66
+        },
+        "tool_calls": {
+          "mean": 1.0,
+          "stdev": 0.0
+        }
+      }
+    }
+  },
+  "pre_registration": "PRE_REGISTRATION.md"
+}
