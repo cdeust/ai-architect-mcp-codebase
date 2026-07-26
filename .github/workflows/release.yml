@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
@@ -185,12 +185,12 @@ jobs:
       # digest to this workflow, commit and runner. Verify with
       #   gh attestation verify <file> --repo cdeust/automatised-pipeline
       - name: Attest build provenance (tarball)
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: automatised-pipeline-${{ matrix.target_tag }}.tar.gz
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           # Release was pre-created by the create_release job; we only
           # upload here. tag_name pins the upload to that release so
@@ -238,12 +238,12 @@ jobs:
           sha256sum automatised-pipeline.cdx.json | tee automatised-pipeline.cdx.json.sha256
 
       - name: Attest build provenance (SBOM)
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: automatised-pipeline.cdx.json
 
       - name: Upload SBOM to release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           files: |
@@ -316,12 +316,12 @@ jobs:
           ls -la automatised-pipeline.mcpb automatised-pipeline.mcpb.sha256
 
       - name: Attest build provenance (.mcpb)
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: automatised-pipeline.mcpb
 
       - name: Upload .mcpb to release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           files: |
