@@ -20,8 +20,13 @@
 //     the hand-written walker).
 //   - Enum members are `enum_entry` nodes emitted as `Constant`s carrying an
 //     `enum_entry=true` marker (NOT `Variant`s), their name read from the
-//     entry's identifier child. That is `member_constant_kinds` +
-//     `member_constant`.
+//     entry's identifier child. Properties (`val`/`var`, class-member and
+//     top-level) are `property_declaration` nodes emitted as `Constant`s with
+//     modifier-derived visibility and no marker (Java's field-as-`Constant`
+//     shape), their name(s) descended through the `variable_declaration`
+//     child — the fix for issue #93, which the hand-written walker dropped
+//     because its `first_identifier` scanned only direct children. Both route
+//     through `member_constant_kinds` + `member_constants`.
 //   - Visibility is a modifier keyword (`public`/`private`/`protected`/
 //     `internal`, default `public`), read off the node — the `node_visibility`
 //     override.
@@ -53,6 +58,10 @@ const KT_INTERFACE_KW: &str = "interface";
 const KT_IDENTIFIER: &str = "identifier";
 const KT_DELEGATION_SPECIFIERS: &str = "delegation_specifiers";
 const KT_NAVIGATION_EXPRESSION: &str = "navigation_expression";
+const KT_ENUM_ENTRY: &str = "enum_entry";
+const KT_PROPERTY_DECLARATION: &str = "property_declaration";
+const KT_VARIABLE_DECLARATION: &str = "variable_declaration";
+const KT_MULTI_VARIABLE_DECLARATION: &str = "multi_variable_declaration";
 
 /// Decides whether a call's receiver/qualifier text is safe disambiguating
 /// evidence to preserve, or must be discarded down to the bare tail name.
@@ -127,6 +136,49 @@ impl KotlinConventions {
             Some(id) => node_text(source, id),
             None => String::new(),
         }
+    }
+
+    /// The declared name(s) of a `property_declaration`, descended one level
+    /// below the direct-child `identifier` scan that `first_identifier` (and the
+    /// hand-written walker's `first_identifier`) stops at — the defect #93.
+    ///
+    /// In tree-sitter-kotlin-ng 1.1.0 a property's name lives inside a
+    /// `variable_declaration` child (`property_declaration → variable_declaration
+    /// → identifier`), and a destructuring `val (a, b) = …` nests each name a
+    /// further level down inside a `multi_variable_declaration`
+    /// (`property_declaration → multi_variable_declaration → variable_declaration
+    /// → identifier`). The `variable_declaration`'s FIRST direct `identifier` is
+    /// the bound name; the property's TYPE (`: Int`) is an `identifier` nested
+    /// under a `user_type` grandchild, so `first_identifier`'s direct-child scan
+    /// never mistakes it for the name.
+    /// source: tree-sitter-kotlin-ng 1.1.0 node-types.json (verified against the
+    /// parsed tree of `val x: Int`, `private val breed: String`, `val (a, b)`).
+    ///
+    /// precondition: `node` is a `property_declaration`. postcondition: one name
+    /// per bound identifier, in source order, each non-empty; empty when the
+    /// grammar produced no `variable_declaration` (a malformed property).
+    fn property_names(source: &str, node: Node) -> Vec<String> {
+        // Single binding: `val x = …` / `val x: T = …`.
+        if let Some(var_decl) = Self::child_of_kind(node, KT_VARIABLE_DECLARATION) {
+            let name = Self::first_identifier(source, var_decl);
+            return if name.is_empty() {
+                Vec::new()
+            } else {
+                vec![name]
+            };
+        }
+        // Destructuring: `val (a, b) = …` — each component is its own
+        // `variable_declaration` under the `multi_variable_declaration`.
+        if let Some(multi) = Self::child_of_kind(node, KT_MULTI_VARIABLE_DECLARATION) {
+            let mut cursor = multi.walk();
+            return multi
+                .children(&mut cursor)
+                .filter(|c| c.kind() == KT_VARIABLE_DECLARATION)
+                .map(|c| Self::first_identifier(source, c))
+                .filter(|n| !n.is_empty())
+                .collect();
+        }
+        Vec::new()
     }
 
     /// Labels a `class_declaration`/`object_declaration` by content: an
@@ -320,19 +372,47 @@ impl LanguageConventions for KotlinConventions {
         Self::classify_class(source, node)
     }
 
-    fn member_constant(&self, source: &str, node: Node) -> Option<MemberConstant> {
-        // Only `enum_entry` is routed here (`member_constant_kinds`). Its name is
-        // an identifier child; it is an implicitly-public enum member the graph
-        // models as a `Constant` marked `enum_entry=true`.
-        let name = Self::first_identifier(source, node);
-        if name.is_empty() {
-            return None;
+    fn member_constants(&self, source: &str, node: Node) -> Vec<MemberConstant> {
+        // Two node kinds route here (`member_constant_kinds`), dispatched by kind:
+        match node.kind() {
+            // `enum_entry`: an implicitly-public enum member the graph models as a
+            // `Constant` marked `enum_entry=true`; its name is a direct identifier
+            // child.
+            KT_ENUM_ENTRY => {
+                let name = Self::first_identifier(source, node);
+                if name.is_empty() {
+                    return Vec::new();
+                }
+                vec![MemberConstant {
+                    name,
+                    visibility: "public".to_string(),
+                    properties: vec![("enum_entry".to_string(), "true".to_string())],
+                }]
+            }
+            // `property_declaration` (issue #93): a class-member or top-level
+            // `val`/`var`, modelled as a `Constant` with modifier-derived
+            // visibility and NO marker property — matching Java's field-as-
+            // `Constant` shape (`java.rs`: `field_declaration` → `Constant`,
+            // visibility from `modifiers`, empty properties). The name(s) live one
+            // level below the direct-child identifier scan, inside a
+            // `variable_declaration` (or, for destructuring, each
+            // `variable_declaration` under a `multi_variable_declaration`) —
+            // `property_names`. All names of one property share its visibility.
+            KT_PROPERTY_DECLARATION => {
+                let visibility = Self::visibility_from_modifiers(source, node);
+                Self::property_names(source, node)
+                    .into_iter()
+                    .map(|name| MemberConstant {
+                        name,
+                        visibility: visibility.clone(),
+                        properties: Vec::new(),
+                    })
+                    .collect()
+            }
+            // Not in `member_constant_kinds`; unreachable via the walker. Returns
+            // empty for total-match safety.
+            _ => Vec::new(),
         }
-        Some(MemberConstant {
-            name,
-            visibility: "public".to_string(),
-            properties: vec![("enum_entry".to_string(), "true".to_string())],
-        })
     }
 
     fn class_inheritance(&self, source: &str, _spec: &LangSpec, node: Node) -> ClassInheritance {
@@ -380,7 +460,7 @@ pub(crate) static KOTLIN_SPEC: LangSpec = LangSpec {
     interface_node_kinds: &[],
     enum_node_kinds: &[],
     variant_node_kinds: &[],
-    member_constant_kinds: &["enum_entry"],
+    member_constant_kinds: &["enum_entry", "property_declaration"],
     decorated_def_kinds: &[],
     decorator_node_kind: None,
     base_node_kinds: &[],

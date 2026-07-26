@@ -359,35 +359,41 @@ fn emit_class(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, label
     }
 }
 
-/// Emits one `member_constant_kinds` node as a `Constant` + `Defines` under the
-/// current scope, its name/visibility/properties shaped by the conventions
-/// (Kotlin `enum_entry`). A `None` from the conventions (empty name) is skipped.
+/// Emits each `Constant` + `Defines` a `member_constant_kinds` node binds,
+/// under the current scope, name/visibility/properties shaped by the conventions
+/// (Kotlin `enum_entry` → one; a `property_declaration` `val`/`var` → one, a
+/// destructuring `val (a, b)` → several). A member yielding no `MemberConstant`
+/// (empty/malformed name) emits nothing. Every emitted node shares the property
+/// node's own line span (Kotlin binds all destructured names on one statement).
 fn emit_member_constant(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
-    // mutation note (§12): the `!mc.name.is_empty()` match guard is a defensive
-    // generic-walker invariant; its `→ true` mutant is EQUIVALENT for the
-    // migrated set, because the sole `member_constant` impl (Kotlin) already
-    // returns `None` for an empty name, so a `Some(mc)` here always carries a
-    // non-empty name. The guard remains as the walker's own gate for any future
-    // language whose `member_constant` returns `Some` with an empty name.
-    let mc = match spec.conventions.member_constant(ctx.source, node) {
-        Some(mc) if !mc.name.is_empty() => mc,
-        _ => return,
-    };
-    let qn = qual(scope, &mc.name);
-    ctx.nodes.push(ExtractedNode {
-        label: LABEL_CONSTANT.to_string(),
-        name: mc.name,
-        qualified_name: qn.clone(),
-        start_line: line_of(node),
-        end_line: end_line_of(node),
-        visibility: mc.visibility,
-        properties: mc.properties,
-    });
-    ctx.refs.push(ExtractedRef {
-        kind: "Defines".to_string(),
-        from_qualified_name: scope.to_string(),
-        to_qualified_name: qn,
-    });
+    let start_line = line_of(node);
+    let end_line = end_line_of(node);
+    for mc in spec.conventions.member_constants(ctx.source, node) {
+        // mutation note (§12): the `mc.name.is_empty()` skip guard is a defensive
+        // generic-walker invariant; its removal is EQUIVALENT for the migrated
+        // set, because the sole `member_constants` impl (Kotlin) already filters
+        // empty names out of its `Vec`. The guard remains as the walker's own
+        // gate for any future language whose `member_constants` yields an empty
+        // name.
+        if mc.name.is_empty() {
+            continue;
+        }
+        let qn = qual(scope, &mc.name);
+        ctx.nodes.push(ExtractedNode {
+            label: LABEL_CONSTANT.to_string(),
+            name: mc.name,
+            qualified_name: qn.clone(),
+            start_line,
+            end_line,
+            visibility: mc.visibility,
+            properties: mc.properties,
+        });
+        ctx.refs.push(ExtractedRef {
+            kind: "Defines".to_string(),
+            from_qualified_name: scope.to_string(),
+            to_qualified_name: qn,
+        });
+    }
 }
 
 /// Emits one enum member as a `Variant` + `HasVariant` under the enclosing

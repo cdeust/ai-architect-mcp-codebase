@@ -86,11 +86,15 @@ pub(crate) struct ClassInheritance {
 }
 
 /// One extracted member constant: the `Constant` node's shape. Produced by
-/// `LanguageConventions::member_constant`; consumed by `walk_defs`' member-
-/// constant emitter for `member_constant_kinds` nodes (Kotlin `enum_entry` →
-/// `Constant` with an `enum_entry=true` property and implicit `public`
-/// visibility, its name read from the entry's identifier child rather than a
-/// `name` field). The emitter attaches the enclosing-scope `Defines` edge.
+/// `LanguageConventions::member_constants`; consumed by `walk_defs`' member-
+/// constant emitter for `member_constant_kinds` nodes. Two Kotlin shapes route
+/// here: an `enum_entry` → `Constant` with an `enum_entry=true` property and
+/// implicit `public` visibility (name from the entry's identifier child), and a
+/// `property_declaration` (`val`/`var`, class-member or top-level) → `Constant`
+/// with modifier-derived visibility and no marker property, matching Java's
+/// field-as-`Constant` model — its name read one level below the direct-child
+/// identifier scan, from the `variable_declaration` child (issue #93). The
+/// emitter attaches the enclosing-scope `Defines` edge.
 pub(crate) struct MemberConstant {
     /// The `Constant` node's display name (empty ⇒ the node is skipped).
     pub name: String,
@@ -204,12 +208,22 @@ pub(crate) trait LanguageConventions: Sync {
         default_label
     }
 
-    /// Shapes one `member_constant_kinds` node into a `MemberConstant`, or
-    /// `None` to skip it. Default: `None` — only languages that populate
+    /// Shapes one `member_constant_kinds` node into zero or more
+    /// `MemberConstant`s. A single grammar node can bind several names — Kotlin's
+    /// destructuring `property_declaration` `val (a, b) = …` yields two — so the
+    /// return is a `Vec`: empty skips the node (an empty/malformed name), one
+    /// entry is the common case (an `enum_entry` or a single `val`/`var`), many
+    /// is a destructuring binding. Default: empty — only languages that populate
     /// `member_constant_kinds` (Kotlin) reach this, so the default is never
     /// called for Go/Python/Java (§9: no test for an unreachable path).
-    fn member_constant(&self, _source: &str, _node: Node) -> Option<MemberConstant> {
-        None
+    // mutation note (§12): the `Vec::new()` → `vec![]` mutant here is a proven
+    // EQUIVALENT mutant — both construct the same empty `Vec`, so no test can
+    // observe a difference (same precedent as `function_props` above). It is also
+    // an unreachable path for the migrated set (only Kotlin populates
+    // `member_constant_kinds`, and Kotlin overrides this method). Not a coverage
+    // gap.
+    fn member_constants(&self, _source: &str, _node: Node) -> Vec<MemberConstant> {
+        Vec::new()
     }
 
     /// The inheritance a class-like node declares. Default: the single-list

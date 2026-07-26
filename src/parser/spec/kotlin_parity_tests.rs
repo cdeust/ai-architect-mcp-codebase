@@ -1,15 +1,25 @@
 // parser::spec::kotlin_parity_tests — pins the Kotlin migration to the
-// table-driven walkers at EXACT parity with the hand-written walker it replaced
-// (ADR-0055 phase 4, §5 step 3).
+// table-driven walkers (ADR-0055 phase 4, §5 step 3).
 //
 // Before the old walker (`src/parser/kotlin/`) was deleted, a temporary
 // equivalence check (tests/zzz_kotlin_capture.rs) recorded `parse_kotlin_file`'s
 // output on this corpus node-for-node and ref-for-ref. That scaffold is gone
 // with the old walker; this committed test is the durable ground-truth pin.
-// The expected records below ARE the hand-written walker's exact output (full
+// The expected records below WERE the hand-written walker's exact output (full
 // 7-tuple per node — label, name, qn, start/end line, visibility, ordered
 // properties — and full ref triples), so per-EdgeKind F1(new-vs-groundtruth) =
-// 1.0 == F1(old-vs-groundtruth).
+// 1.0 == F1(old-vs-groundtruth) at migration time (PR #95).
+//
+// DELIBERATE DEVIATION FROM THE #95 CAPTURE (issue #93): the ground truth now
+// ADDS the four `Constant`s + `Defines` that `property_declaration` names
+// produce (top-level `VERSION`; members `Registry::instances`, `Animal::species`,
+// `Dog::breed`). The hand-written walker dropped these — its `first_identifier`
+// scanned only DIRECT `identifier` children, and a property's name lives one
+// level down under `variable_declaration`. #95 preserved that drop for exact
+// parity; this PR fixes it, so the pin is #95-parity **superseded for
+// `property_declaration`**, not raw parity. Every other node/ref is unchanged
+// from #95, and the diff to this file shows exactly those four nodes + four
+// refs and nothing else.
 //
 // It parses through the crate's public `parse_file`, so it also covers the
 // Kotlin dispatch arm and prints the per-EdgeKind precision/recall/F1 the PR
@@ -29,17 +39,22 @@ use crate::parser::{parse_file, ExtractedNode, ExtractedRef, Language, ParseResu
 //     `Constant` with `enum_entry=true`, reached via the `enum_class_body`.
 //   - a `sealed class` (`Shape`) → `Struct` with a nested `class Circle : Shape()`
 //     → `Struct` + `Extends`, and its method's call.
-//   - a `data class` (`Point`) → `Struct` (its ctor params are not properties —
-//     the name is one level below `first_identifier`, dropped by the walker).
-//   - an `object` (`Registry`) → `Struct` with a method + a call; its `val`
-//     property is dropped (name nested under `variable_declaration`).
+//   - a `data class` (`Point`) → `Struct`; its ctor params (`val x`, `val y`)
+//     are `class_parameter` nodes inside `primary_constructor`, NOT
+//     `property_declaration`, so they remain dropped (issue #93 is scoped to
+//     `property_declaration`; constructor-property params are out of scope).
+//   - an `object` (`Registry`) → `Struct` with a method + a call; its `val
+//     instances` property → `Constant` + `Defines` (#93, name descended through
+//     `variable_declaration`).
 //   - classes (`Animal`, `Dog`); `Dog : Animal(), Greeter` → two `Extends`
 //     refs; `public` modifier visibility; a member extension `fun String.wag()`
-//     and an override method.
+//     and an override method; member properties `Animal::species` (public) and
+//     `Dog::breed` (`private` modifier) → `Constant` + `Defines` (#93).
 //   - top-level functions (`topLevel`, extension `fun String.shout()`,
-//     `useLambda`) → `Function`/`Defines`, keyed `name#seq`; a top-level `val`
-//     (dropped); and calls incl. a chained `listOf(...).map { it * 2 }` and a
-//     `this.uppercase()` navigation call reduced to its tail.
+//     `useLambda`) → `Function`/`Defines`, keyed `name#seq`; a top-level `val
+//     VERSION` → `Constant` + `Defines` from the file scope (#93); and calls
+//     incl. a chained `listOf(...).map { it * 2 }` and a `this.uppercase()`
+//     navigation call reduced to its tail.
 const CORPUS: &str = r#"package com.example.app
 
 import kotlin.collections.List
@@ -137,6 +152,13 @@ fn expected_node_records() -> Vec<&'static str> {
         "Constant|BLUE|com/example/app/Demo.kt::Color::BLUE|16|16|public|[(\"enum_entry\", \"true\")]",
         "Constant|GREEN|com/example/app/Demo.kt::Color::GREEN|15|15|public|[(\"enum_entry\", \"true\")]",
         "Constant|RED|com/example/app/Demo.kt::Color::RED|14|14|public|[(\"enum_entry\", \"true\")]",
+        // #93: `property_declaration` names, previously dropped (name nested
+        // under `variable_declaration`). Now emitted as `Constant`s with
+        // modifier-derived visibility and no marker (Java field-parity).
+        "Constant|VERSION|com/example/app/Demo.kt::VERSION|61|61|public|[]",
+        "Constant|breed|com/example/app/Demo.kt::Dog::breed|44|44|private|[]",
+        "Constant|instances|com/example/app/Demo.kt::Registry::instances|30|30|public|[]",
+        "Constant|species|com/example/app/Demo.kt::Animal::species|37|37|public|[]",
         "Enum|Color|com/example/app/Demo.kt::Color|13|17|public|[]",
         "Function|shout|com/example/app/Demo.kt::shout#13|57|59|public|[]",
         "Function|topLevel|com/example/app/Demo.kt::topLevel#11|53|55|public|[]",
@@ -238,6 +260,18 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
             "com/example/app/Demo.kt",
             "com/example/app/Demo.kt::useLambda#15",
         ),
+        // #93: top-level `val VERSION` defined by the file.
+        (
+            "Defines",
+            "com/example/app/Demo.kt",
+            "com/example/app/Demo.kt::VERSION",
+        ),
+        // #93: class-member properties defined by their enclosing class/object.
+        (
+            "Defines",
+            "com/example/app/Demo.kt::Animal",
+            "com/example/app/Demo.kt::Animal::species",
+        ),
         (
             "Defines",
             "com/example/app/Demo.kt::Color",
@@ -252,6 +286,17 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
             "Defines",
             "com/example/app/Demo.kt::Color",
             "com/example/app/Demo.kt::Color::RED",
+        ),
+        // #93: private property on `Dog`, public property on `Registry`.
+        (
+            "Defines",
+            "com/example/app/Demo.kt::Dog",
+            "com/example/app/Demo.kt::Dog::breed",
+        ),
+        (
+            "Defines",
+            "com/example/app/Demo.kt::Registry",
+            "com/example/app/Demo.kt::Registry::instances",
         ),
         (
             "Defines",
@@ -452,5 +497,115 @@ fn kotlin_expression_body_and_edgecase_callees() {
     assert!(
         has_call_to(&r, "com.foo.Helper.build"),
         "package-qualified callee preserved"
+    );
+}
+
+// issue #93 fidelity: `property_declaration` names — silently dropped by the
+// hand-written walker (and by #95, which preserved it) because the name is
+// nested under a `variable_declaration` below `first_identifier`'s direct-child
+// scan — now extract as `Constant` + `Defines`, for BOTH scopes (top-level and
+// class member), with modifier-derived visibility, plus destructuring; while
+// constructs that MUST stay dropped (constructor-property params, function-local
+// `val`s) do stay dropped.
+const PROPERTY_CORPUS: &str = r#"package com.props
+
+const val TOP_LEVEL: Int = 1
+var mutableTop = 2
+
+class Holder {
+    val publicField: String = "x"
+    private val privateField: Int = 0
+    var counter: Int = 0
+}
+
+object Config {
+    val setting: Boolean = true
+}
+
+data class Pair2(val a: Int, val b: Int)
+
+val (first, second) = makePair()
+
+fun body() {
+    val localOnly = 42
+    localOnly.toString()
+}
+"#;
+
+fn find_constant<'a>(r: &'a ParseResult, name: &str) -> Option<&'a ExtractedNode> {
+    r.nodes
+        .iter()
+        .find(|n| n.label == "Constant" && n.name == name)
+}
+
+fn has_defines(r: &ParseResult, from: &str, to: &str) -> bool {
+    r.refs
+        .iter()
+        .any(|e| e.kind == "Defines" && e.from_qualified_name == from && e.to_qualified_name == to)
+}
+
+#[test]
+fn kotlin_property_declaration_names_extract() {
+    let path = "com/props/Props.kt";
+    let r = parse_file(PROPERTY_CORPUS, path, Language::Kotlin)
+        .expect("kotlin property corpus must not hard-fail");
+    assert_eq!(r.parse_errors, 0, "property corpus must parse clean");
+
+    // --- top-level properties: name descended from `variable_declaration`, ---
+    // --- defined by the FILE scope, visibility public (Kotlin default). ---
+    let top = find_constant(&r, "TOP_LEVEL").expect("top-level `val` must emit a Constant (#93)");
+    assert_eq!(top.qualified_name, format!("{path}::TOP_LEVEL"));
+    assert_eq!(top.visibility, "public");
+    assert!(top.properties.is_empty(), "property carries no enum marker");
+    assert!(has_defines(&r, path, &format!("{path}::TOP_LEVEL")));
+    // `var` is a property too.
+    assert!(
+        find_constant(&r, "mutableTop").is_some(),
+        "top-level `var` must emit a Constant (#93)"
+    );
+
+    // --- class members: defined by the enclosing class, visibility from the ---
+    // --- modifier (default public; `private` honored). ---
+    let pubf =
+        find_constant(&r, "publicField").expect("class-member `val` must emit a Constant (#93)");
+    assert_eq!(pubf.qualified_name, format!("{path}::Holder::publicField"));
+    assert_eq!(pubf.visibility, "public");
+    assert!(has_defines(
+        &r,
+        &format!("{path}::Holder"),
+        &format!("{path}::Holder::publicField")
+    ));
+    let privf = find_constant(&r, "privateField").expect("private member `val` must emit");
+    assert_eq!(
+        privf.visibility, "private",
+        "private modifier must drive visibility (not the public default)"
+    );
+    assert!(
+        find_constant(&r, "counter").is_some(),
+        "class-member `var` must emit a Constant (#93)"
+    );
+    // Inside an `object` too.
+    let setting = find_constant(&r, "setting").expect("object member `val` must emit");
+    assert_eq!(setting.qualified_name, format!("{path}::Config::setting"));
+
+    // --- destructuring `val (first, second) = …` → one Constant per name. ---
+    assert!(
+        find_constant(&r, "first").is_some() && find_constant(&r, "second").is_some(),
+        "destructuring property must emit a Constant for EACH bound name (#93)"
+    );
+    assert!(has_defines(&r, path, &format!("{path}::first")));
+    assert!(has_defines(&r, path, &format!("{path}::second")));
+
+    // --- OUT OF SCOPE, must stay dropped: constructor-property params are ---
+    // --- `class_parameter` nodes, not `property_declaration`. ---
+    assert!(
+        find_constant(&r, "a").is_none() && find_constant(&r, "b").is_none(),
+        "data-class ctor params (`class_parameter`, not `property_declaration`) stay out of scope"
+    );
+    // --- function-local `val` is not a member/top-level property: `walk_defs` ---
+    // --- never descends into function bodies, so it emits no Constant. ---
+    assert!(
+        find_constant(&r, "localOnly").is_none(),
+        "function-local `val` must not become a Constant"
     );
 }
