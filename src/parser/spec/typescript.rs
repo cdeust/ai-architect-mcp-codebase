@@ -177,7 +177,14 @@ impl LanguageConventions for TypeScriptConventions {
             // keeps a misconfigured row a silent no-op the guard would catch.
             None => return Vec::new(),
         };
-        let module = module_path(source, tf, import_stmt);
+        let ctx = ImportCtx {
+            source,
+            tf,
+            name_field: spec.name_field,
+            scope,
+            module: module_path(source, tf, import_stmt),
+            import_stmt,
+        };
         let mut out: Vec<ImportEntry> = Vec::new();
         let mut cursor = import_stmt.walk();
         let mut saw_clause = false;
@@ -186,23 +193,39 @@ impl LanguageConventions for TypeScriptConventions {
                 continue;
             }
             saw_clause = true;
-            clause_entries(
-                source,
-                tf,
-                spec.name_field,
-                child,
-                scope,
-                &module,
-                import_stmt,
-                &mut out,
-            );
+            clause_entries(&ctx, child, &mut out);
         }
-        if !saw_clause && !module.is_empty() {
+        if !saw_clause && !ctx.module.is_empty() {
             // Side-effect import (`import 'reflect-metadata'`): the module path
             // itself is the display name.
-            push_import(&mut out, scope, &module, "", false, import_stmt);
+            ctx.push(&mut out, &ctx.module, "", false);
         }
         out
+    }
+}
+
+/// Everything the import shaping needs that is the same for every entry one
+/// import STATEMENT yields: the source text, the sub-table, the spec's name
+/// field, the enclosing scope, the resolved module path, and the statement node
+/// (which supplies every entry's line span).
+///
+/// A parameter object rather than eight positional arguments (§4.4): the helpers
+/// below thread all of it unchanged and only vary in which clause node they
+/// read.
+struct ImportCtx<'a> {
+    source: &'a str,
+    tf: &'a TsFamilySpec,
+    name_field: &'a str,
+    scope: &'a str,
+    module: String,
+    import_stmt: Node<'a>,
+}
+
+impl ImportCtx<'_> {
+    /// Appends one `Import` entry for `path`, with this statement's scope and
+    /// line span. See `push_import` for the display-name rule.
+    fn push(&self, out: &mut Vec<ImportEntry>, path: &str, alias: &str, is_glob: bool) {
+        push_import(out, self.scope, path, alias, is_glob, self.import_stmt);
     }
 }
 
@@ -231,37 +254,18 @@ fn module_path(source: &str, tf: &TsFamilySpec, import_stmt: Node) -> String {
 /// Interprets one import clause into its entries: a bare identifier is the
 /// default import, a namespace import is a glob alias, and a named-import
 /// container contributes one entry per specifier.
-#[allow(clippy::too_many_arguments)]
-fn clause_entries(
-    source: &str,
-    tf: &TsFamilySpec,
-    name_field: &str,
-    clause: Node,
-    scope: &str,
-    module: &str,
-    import_stmt: Node,
-    out: &mut Vec<ImportEntry>,
-) {
+fn clause_entries(ctx: &ImportCtx, clause: Node, out: &mut Vec<ImportEntry>) {
     let mut cursor = clause.walk();
     for child in clause.children(&mut cursor) {
         let k = child.kind();
-        if kind_in(tf.default_import_kinds, k) {
+        if kind_in(ctx.tf.default_import_kinds, k) {
             // `import Foo from 'bar'` → path `bar::default`, aliased `Foo`.
-            let alias = node_text(source, child);
-            let path = format!("{module}::{TS_DEFAULT_IMPORT_SEGMENT}");
-            push_import(out, scope, &path, &alias, false, import_stmt);
-        } else if kind_in(tf.named_imports_kinds, k) {
-            named_import_entries(
-                source,
-                tf,
-                name_field,
-                child,
-                scope,
-                module,
-                import_stmt,
-                out,
-            );
-        } else if kind_in(tf.namespace_import_kinds, k) {
+            let alias = node_text(ctx.source, child);
+            let path = format!("{}::{TS_DEFAULT_IMPORT_SEGMENT}", ctx.module);
+            ctx.push(out, &path, &alias, false);
+        } else if kind_in(ctx.tf.named_imports_kinds, k) {
+            named_import_entries(ctx, child, out);
+        } else if kind_in(ctx.tf.namespace_import_kinds, k) {
             // `import * as utils from 'bar'` → the module path itself, glob,
             // aliased by the clause's identifier child. tree-sitter-typescript
             // 0.23.2 gives `namespace_import` NO fields, so the identifier child
@@ -269,36 +273,27 @@ fn clause_entries(
             let mut inner = child.walk();
             let alias = child
                 .children(&mut inner)
-                .find(|n| kind_in(tf.default_import_kinds, n.kind()))
-                .map(|n| node_text(source, n))
+                .find(|n| kind_in(ctx.tf.default_import_kinds, n.kind()))
+                .map(|n| node_text(ctx.source, n))
                 .unwrap_or_default();
-            push_import(out, scope, module, &alias, true, import_stmt);
+            let module = ctx.module.clone();
+            ctx.push(out, &module, &alias, true);
         }
     }
 }
 
 /// One entry per `import_specifier`: path `{module}::{name}`, alias from the
 /// specifier's `alias` field (empty when the name is imported unaliased).
-#[allow(clippy::too_many_arguments)]
-fn named_import_entries(
-    source: &str,
-    tf: &TsFamilySpec,
-    name_field: &str,
-    container: Node,
-    scope: &str,
-    module: &str,
-    import_stmt: Node,
-    out: &mut Vec<ImportEntry>,
-) {
+fn named_import_entries(ctx: &ImportCtx, container: Node, out: &mut Vec<ImportEntry>) {
     let mut cursor = container.walk();
     for child in container.children(&mut cursor) {
-        if !kind_in(tf.import_specifier_kinds, child.kind()) {
+        if !kind_in(ctx.tf.import_specifier_kinds, child.kind()) {
             continue;
         }
-        let name = node_field_text(source, child, name_field);
-        let alias = node_field_text(source, child, tf.alias_field);
-        let path = format!("{module}::{name}");
-        push_import(out, scope, &path, &alias, false, import_stmt);
+        let name = node_field_text(ctx.source, child, ctx.name_field);
+        let alias = node_field_text(ctx.source, child, ctx.tf.alias_field);
+        let path = format!("{}::{name}", ctx.module);
+        ctx.push(out, &path, &alias, false);
     }
 }
 
