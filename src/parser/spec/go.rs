@@ -197,4 +197,5 @@ pub(crate) static GO_SPEC: LangSpec = LangSpec {
     embedded: &[],
     conventions: &GO_CONVENTIONS,
     c_family: None,
+    cpp_family: None,
 };

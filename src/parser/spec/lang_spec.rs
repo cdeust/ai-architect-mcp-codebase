@@ -111,6 +111,81 @@ pub(crate) struct CFamilySpec {
     pub macro_function_kinds: &'static [&'static str],
 }
 
+/// The node kinds a **hybrid C-family class-model** grammar (C++, and later
+/// ObjC) uses.
+///
+/// C++ is neither the flat C family (`CFamilySpec`, whose structs carry
+/// *fields* and whose enums emit members) nor the pure class-model
+/// (`walk_defs`, whose classes recurse with `class_inheritance`/dedup). Its
+/// hand-written walker (`parser::cpp::extract`) is a single class-recursive DFS
+/// with semantics that match neither: a namespace is a `Struct` whose body
+/// recurses as a NON-class scope (inner functions stay `Function`s, not
+/// methods); a class/struct/union is a `Struct` whose body recurses as a class
+/// scope; a member `field_declaration` becomes a `Constant` (a data member) OR
+/// a `Method` (`is_prototype`, when it carries a function declarator), NOT a
+/// `Field`/`HasField`; an enum emits NO members; a typedef is a `Constant`; a
+/// `using`/`#include` is an `Import`; and a single per-file `seq` counter keys
+/// functions, prototypes, AND call sites in one DFS order. That last property
+/// makes exact parity possible only by reproducing the DFS itself, so C++ gets
+/// a dedicated `walkers/cpp` walker driven by this sub-table (the #109 precedent
+/// that added `walkers/clike` for C), leaving `walk_defs`/`clike` — and the six
+/// languages that ride them — untouched.
+///
+/// When a `LangSpec` carries `cpp_family: Some(_)`, `walk_defs` delegates the
+/// whole file to the `cpp` walker. Every string traces to tree-sitter-cpp's
+/// `node-types.json` and is validated by the spec guard. Import/call/QN
+/// behavior lives in the companion `CppConventions` (ADR-0055 §4).
+pub(crate) struct CppFamilySpec {
+    /// Namespace declaration kinds → `Struct` (`is_namespace=true`) + `Defines`,
+    /// recursing into `body_field` as a NON-class scope (C++
+    /// `namespace_definition`). An anonymous namespace emits no node but still
+    /// recurses its body under the unchanged scope.
+    pub namespace_kinds: &'static [&'static str],
+    /// Class declaration kinds → `Struct` (`is_class=true`) + `Defines`, base
+    /// clause → `Extends`, body recursed as a CLASS scope (C++ `class_specifier`).
+    pub class_kinds: &'static [&'static str],
+    /// Struct/union declaration kinds → `Struct` (no `is_class`) + `Defines`,
+    /// same base-clause + class-scope-recursion as `class_kinds` (C++
+    /// `struct_specifier`/`union_specifier`).
+    pub struct_kinds: &'static [&'static str],
+    /// Enum declaration kinds → `Enum` + `Defines`, with NO body recursion —
+    /// the hand-written walker never emitted enum members (C++ `enum_specifier`,
+    /// which also covers `enum class`). Preserved for parity.
+    pub enum_kinds: &'static [&'static str],
+    /// Wrapper kinds walked transparently (same scope + enclosing type, no node
+    /// emitted) because they wrap a class/function (C++ `template_declaration`).
+    pub template_kinds: &'static [&'static str],
+    /// Function-definition kinds → `Function` + `Defines` (at file/namespace
+    /// scope) or `Method` + `HasMethod` (inside a class body, receiver-scoped),
+    /// scanning `body_field` for calls (C++ `function_definition`).
+    pub func_def_kinds: &'static [&'static str],
+    /// Member-declaration kinds inside a class/struct body: a `Method`
+    /// (`is_prototype`) when a function declarator is present, else a data-member
+    /// `Constant` (C++ `field_declaration`). Ignored outside a class body.
+    pub field_decl_kinds: &'static [&'static str],
+    /// Typedef kinds → `Constant` (`typedef=true`) + `Defines` (C++
+    /// `type_definition`).
+    pub typedef_kinds: &'static [&'static str],
+    /// The declarator kind that marks a `field_decl_kinds` member as a method
+    /// prototype rather than a data member (C++ `function_declarator`).
+    pub func_declarator_kind: &'static str,
+    /// The field naming a `func_def_kinds` node's declarator, searched for the
+    /// function/method name (C++ `declarator`).
+    pub declarator_field: &'static str,
+    /// The base-class clause kind, a direct child of a class/struct node whose
+    /// `base_type_kinds` children each name a superclass (C++ `base_class_clause`).
+    pub base_clause_kind: &'static str,
+    /// Child kinds of a `base_clause_kind` naming a base type → `Extends`
+    /// (C++ `type_identifier`/`qualified_identifier`/`template_type`; access
+    /// specifiers and virtual/attribute tokens are skipped).
+    pub base_type_kinds: &'static [&'static str],
+    /// Leaf identifier kinds a name search unwraps to, in a right-to-left DFS
+    /// (C++ `identifier`/`type_identifier`/`field_identifier`). The DFS order is
+    /// load-bearing: for a declarator with named parameters it lands on the LAST
+    /// parameter name, a pre-existing naming defect the migration preserves.
+    pub identifier_kinds: &'static [&'static str],
+}
+
 /// Table-driven description of one language's structural node kinds.
 ///
 /// Consumed by the generic walkers (`walk_defs` / `walk_calls` /
@@ -274,4 +349,10 @@ pub(crate) struct LangSpec {
     /// instead of the class-model arms. `None` for the class-model languages
     /// (Go/Python/Java/Kotlin/Swift), which leave the C-family walker untouched.
     pub c_family: Option<&'static CFamilySpec>,
+    /// When `Some`, this language is a hybrid C-family class-model grammar (C++,
+    /// later ObjC): `walk_defs` delegates the whole file to the `cpp` walker
+    /// (consuming this sub-table) instead of the flat `clike` walker or the
+    /// class-model arms. `None` for every other language. At most one of
+    /// `c_family` / `cpp_family` is `Some` on a given row.
+    pub cpp_family: Option<&'static CppFamilySpec>,
 }

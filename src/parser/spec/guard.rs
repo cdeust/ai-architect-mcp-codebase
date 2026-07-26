@@ -31,6 +31,7 @@ fn node_types_json(language: Language) -> &'static str {
         Language::Kotlin => tree_sitter_kotlin_ng::NODE_TYPES,
         Language::Swift => tree_sitter_swift::NODE_TYPES,
         Language::C => tree_sitter_c::NODE_TYPES,
+        Language::Cpp => tree_sitter_cpp::NODE_TYPES,
         // Shallow-path languages (ADR-0056) are validated by the same guard:
         // a stale node kind in a shallow row drops symbols exactly as silently
         // as in a deep row, so breadth must not come with weaker validation.
@@ -149,6 +150,34 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             cf.field_identifier_kind.to_string(),
         ));
     }
+    // The hybrid C++ sub-table's node kinds (validated only when present).
+    if let Some(cf) = spec.cpp_family {
+        let cpp_slices: &[(&'static str, &[&'static str])] = &[
+            ("cpp_family.namespace_kinds", cf.namespace_kinds),
+            ("cpp_family.class_kinds", cf.class_kinds),
+            ("cpp_family.struct_kinds", cf.struct_kinds),
+            ("cpp_family.enum_kinds", cf.enum_kinds),
+            ("cpp_family.template_kinds", cf.template_kinds),
+            ("cpp_family.func_def_kinds", cf.func_def_kinds),
+            ("cpp_family.field_decl_kinds", cf.field_decl_kinds),
+            ("cpp_family.typedef_kinds", cf.typedef_kinds),
+            ("cpp_family.base_type_kinds", cf.base_type_kinds),
+            ("cpp_family.identifier_kinds", cf.identifier_kinds),
+        ];
+        for (field, kinds) in cpp_slices {
+            for k in *kinds {
+                out.push((field, (*k).to_string()));
+            }
+        }
+        out.push((
+            "cpp_family.func_declarator_kind",
+            cf.func_declarator_kind.to_string(),
+        ));
+        out.push((
+            "cpp_family.base_clause_kind",
+            cf.base_clause_kind.to_string(),
+        ));
+    }
     for emb in spec.embedded {
         out.push((
             "embedded.script_node_kind",
@@ -187,6 +216,13 @@ fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
     // The C-family declarator field (the struct/function name lives under it).
     if let Some(cf) = spec.c_family {
         out.push(("c_family.declarator_field", cf.declarator_field.to_string()));
+    }
+    // The C++ declarator field (the function/method name lives under it).
+    if let Some(cf) = spec.cpp_family {
+        out.push((
+            "cpp_family.declarator_field",
+            cf.declarator_field.to_string(),
+        ));
     }
     out
 }

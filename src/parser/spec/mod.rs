@@ -13,6 +13,7 @@
 
 mod c;
 mod conventions;
+mod cpp;
 mod go;
 mod java;
 mod kotlin;
@@ -26,6 +27,8 @@ mod walkers;
 
 #[cfg(test)]
 mod c_parity_tests;
+#[cfg(test)]
+mod cpp_parity_tests;
 #[cfg(test)]
 mod embedded_tests;
 #[cfg(test)]
@@ -44,6 +47,7 @@ mod shallow_tests;
 mod swift_parity_tests;
 
 pub(crate) use c::C_SPEC;
+pub(crate) use cpp::CPP_SPEC;
 pub(crate) use go::GO_SPEC;
 pub(crate) use java::JAVA_SPEC;
 pub(crate) use kotlin::KOTLIN_SPEC;

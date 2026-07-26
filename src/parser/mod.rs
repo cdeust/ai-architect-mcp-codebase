@@ -1,13 +1,12 @@
 // parser — Multi-language tree-sitter parser module.
 //
-// Dispatches per language: the migrated set (Go/Python/Java/Kotlin/Swift/C)
+// Dispatches per language: the migrated set (Go/Python/Java/Kotlin/Swift/C/C++)
 // routes through the table-driven spec walkers (`spec`, ADR-0055); the rest
-// (Rust/TypeScript/ObjC/C++) stay on their hand-written modules. All paths
+// (Rust/TypeScript/ObjC) stay on their hand-written modules. All paths
 // produce the same ParseResult/ExtractedNode/ExtractedRef types, so the indexer
 // calls `parse_file(source, file_path, language)` and gets a uniform result
 // regardless of language.
 
-pub mod cpp;
 pub mod objc;
 pub mod rust;
 pub mod typescript;
@@ -98,16 +97,17 @@ pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<Parse
         Language::Rust => rust::parse_rust_file(source, file_path),
         Language::TypeScript => typescript::parse_typescript_file(source, file_path),
         Language::ObjC => objc::parse_objc_file(source, file_path),
-        Language::Cpp => cpp::parse_cpp_file(source, file_path),
         // Migrated to the table-driven spec walkers (ADR-0055).
         // Go: phase 1 (#85). Python: phase 2 (#89). Java: phase 3 (#91).
-        // Kotlin: phase 4 (#95). Swift: phase 5 (#102). C: phase 6 (#60).
+        // Kotlin: phase 4 (#95). Swift: phase 5 (#102). C: phase 6 (#109).
+        // C++: phase 7 (#60).
         Language::Go => spec::parse_with_spec(&spec::GO_SPEC, source, file_path),
         Language::Python => spec::parse_with_spec(&spec::PYTHON_SPEC, source, file_path),
         Language::Java => spec::parse_with_spec(&spec::JAVA_SPEC, source, file_path),
         Language::Kotlin => spec::parse_with_spec(&spec::KOTLIN_SPEC, source, file_path),
         Language::Swift => spec::parse_with_spec(&spec::SWIFT_SPEC, source, file_path),
         Language::C => spec::parse_with_spec(&spec::C_SPEC, source, file_path),
+        Language::Cpp => spec::parse_with_spec(&spec::CPP_SPEC, source, file_path),
         // Shallow path (ADR-0056): a node-kind row only. Emits definitions,
         // calls and the Defines/HasMethod structure, with no visibility and no
         // inheritance — see `spec::shallow` for what that deliberately omits.

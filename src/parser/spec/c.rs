@@ -209,4 +209,5 @@ pub(crate) static C_SPEC: LangSpec = LangSpec {
     embedded: &[],
     conventions: &C_CONVENTIONS,
     c_family: Some(&C_FAMILY),
+    cpp_family: None,
 };

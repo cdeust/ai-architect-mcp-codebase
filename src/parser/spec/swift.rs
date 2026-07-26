@@ -451,4 +451,5 @@ pub(crate) static SWIFT_SPEC: LangSpec = LangSpec {
     embedded: &[],
     conventions: &SWIFT_CONVENTIONS,
     c_family: None,
+    cpp_family: None,
 };

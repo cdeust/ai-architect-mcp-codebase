@@ -10,8 +10,8 @@ use tree_sitter::Node;
 
 use super::super::lang_spec::LangSpec;
 use super::{
-    call_scan_of, calls, class_body_of, clike, constants, embedded, end_line_of, imports, kind_in,
-    line_of, types, WalkCtx,
+    call_scan_of, calls, class_body_of, clike, constants, cpp, embedded, end_line_of, imports,
+    kind_in, line_of, types, WalkCtx,
 };
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_ENUM, LABEL_FUNCTION,
@@ -36,6 +36,15 @@ pub(crate) fn walk_defs(
     // class dispatch and the (empty-for-C) embedded pass.
     if let Some(cf) = spec.c_family {
         clike::walk_c_defs(spec, cf, ctx, parent, scope);
+        return;
+    }
+    // Hybrid C-family class-model grammars (C++ now, ObjC later) route to the
+    // dedicated `cpp` walker: a class-recursive DFS whose single `seq` counter
+    // and namespace/member semantics fit neither the flat `clike` walker nor
+    // the class-model arms below. `enclosing_class` is the enclosing type
+    // (`None` at file scope), threaded through the recursion.
+    if let Some(cf) = spec.cpp_family {
+        cpp::walk_cpp_defs(spec, cf, ctx, parent, scope, enclosing_class);
         return;
     }
     let mut cursor = parent.walk();
