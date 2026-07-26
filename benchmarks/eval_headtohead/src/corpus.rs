@@ -66,12 +66,56 @@ pub fn corpus_hash(corpus_root: &Path) -> String {
         hasher.update([0u8]);
         hasher.update(bytes);
     }
-    format!("{:x}", hasher.finalize())
+    hex_lower(&hasher.finalize())
+}
+
+/// Lowercase hex, two digits per byte, no separators or `0x` prefix.
+///
+/// Replaces `format!("{:x}", digest)`. sha2 0.11 returns `hybrid_array::Array`
+/// instead of 0.10's `GenericArray`, and `Array` does not implement
+/// `LowerHex`, so the old formatting no longer compiles.
+///
+/// The output is byte-for-byte what `{:x}` produced — `GenericArray`'s
+/// `LowerHex` impl also emitted exactly two lowercase hex digits per byte with
+/// no separator. That equality is load-bearing, not cosmetic:
+/// `corpus_hash` is a REPRODUCIBILITY IDENTIFIER recorded alongside benchmark
+/// results, so a changed representation would silently invalidate every
+/// previously recorded run rather than fail loudly. Pinned by
+/// `hex_lower_matches_the_previous_format` against a published SHA-256 vector.
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins the digest STRING FORMAT across the sha2 0.10 -> 0.11 move.
+    ///
+    /// `corpus_hash` is recorded next to benchmark results, so if `hex_lower`
+    /// ever formatted differently from the `{:x}` it replaced (a missing
+    /// zero-pad, uppercase, a separator), previously recorded corpus hashes
+    /// would stop matching and the benchmarks would look like they ran on a
+    /// different corpus. A published vector makes that falsifiable rather than
+    /// assumed.
+    ///
+    /// source: NIST FIPS 180-4 / RFC 6234 SHA-256 test vector for "abc".
+    #[test]
+    fn hex_lower_matches_the_previous_format() {
+        let mut hasher = Sha256::new();
+        hasher.update(b"abc");
+        assert_eq!(
+            hex_lower(&hasher.finalize()),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // Zero-padding: a byte below 0x10 must still occupy two digits.
+        assert_eq!(hex_lower(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
+        assert_eq!(hex_lower(&[]), "");
+    }
 
     fn corpus_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
