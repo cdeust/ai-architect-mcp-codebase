@@ -797,7 +797,8 @@ fn stage_call_edge(
 ///
 /// precondition: `callee` is the raw callee spelling as parsed (for Kotlin,
 /// per issue #29, this preserves a package/object qualifier — see
-/// parser/kotlin/extract/g2.rs::qualifier_or_tail — but never a value-receiver, which the parser strips
+/// src/parser/spec/kotlin_conventions.rs::qualifier_or_tail — but never a
+/// value-receiver, which the parser strips
 /// back to a bare name before it reaches here); `file_id` is the caller's
 /// file path.
 /// postcondition: the returned `Resolution` depends only on the candidate

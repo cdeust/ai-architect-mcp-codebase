@@ -259,8 +259,9 @@ impl LanguageProvider for TypeScriptProvider {
     }
     fn import_separator(&self) -> &'static str {
         // The TS parser normalizes source `/` to `::` in stored import paths
-        // (parser/typescript.rs `path.replace('/', "::")`), so the resolver
-        // sees `::`-separated paths. source: parser/typescript.rs emit_ts_import.
+        // (`replace('/', "::")`), so the resolver sees `::`-separated paths.
+        // source: src/parser/spec/typescript.rs `module_path` / `push_import`
+        // (formerly parser/typescript emit_ts_import, migrated in #60 phase 7).
         "::"
     }
     fn external_prefixes(&self) -> &'static [&'static str] {
@@ -339,7 +340,9 @@ impl LanguageProvider for KotlinProvider {
         "kotlin"
     }
     fn import_separator(&self) -> &'static str {
-        "." // `kotlin.collections.List` — parser/kotlin/extract/g2.rs rsplit('.')
+        // `kotlin.collections.List` — src/parser/spec/kotlin_conventions.rs
+        // `qualifier_or_tail` rsplit('.') (migrated in #60 phase 4).
+        "."
     }
     fn external_prefixes(&self) -> &'static [&'static str] {
         kotlin_prefixes::KOTLIN_JVM_ANDROID_EXTERNAL_PREFIXES

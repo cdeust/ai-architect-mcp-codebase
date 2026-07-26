@@ -321,7 +321,9 @@ fn keep_under_public_api<'a>(
 /// excluded — see `keep_under_public_api`.
 /// source: src/parser/rust/extract/g2.rs,g3.rs (Function/Method/Struct/Enum/
 /// Trait/Field/Constant/TypeAlias all call extract_visibility()) and
-/// src/parser/typescript/extract/g1.rs:47,79 (export-keyword check).
+/// src/parser/spec/walkers/ts.rs `decl_visibility` / `member_visibility`
+/// (the export-keyword and accessibility-modifier checks; formerly
+/// src/parser/typescript/extract/g1.rs, migrated in #60 phase 7).
 fn is_visibility_declaring_label(label: &str) -> bool {
     matches!(
         label,
@@ -332,8 +334,9 @@ fn is_visibility_declaring_label(label: &str) -> bool {
 /// True when `visibility` denotes a publicly visible symbol for `language`.
 ///
 /// Python's parser convention has the OPPOSITE polarity of every other
-/// supported language: `python_visibility` (src/parser/python/mod.rs:105-116,
-/// tested at lines 205-211) emits "" for a PUBLIC name and "private" for an
+/// supported language: `python_visibility` (now
+/// `PythonConventions::visibility_of` in src/parser/spec/python.rs, migrated
+/// from src/parser/python/ in #60 phase 2) emits "" for a PUBLIC name and "private" for an
 /// underscore-prefixed one. Rust/TypeScript/JVM/Go/Swift emit "" when no
 /// visibility keyword is present (module-private by default) and a keyword
 /// token ("pub"/"export"/"public"/"open") when the symbol is public.
