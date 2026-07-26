@@ -89,6 +89,11 @@ pub(crate) struct CFamilySpec {
     /// The field naming a declaration's declarator, walked for field names and
     /// function names (C `declarator`).
     pub declarator_field: &'static str,
+    /// The field holding a function declarator's parameter list (C
+    /// `parameters`). A name search must SKIP this subtree: the parameters of
+    /// `int add(int a, int b)` contain identifiers too, and descending into
+    /// them is what made the function resolve to its last parameter (#106).
+    pub parameters_field: &'static str,
     /// Leaf identifier kinds a name search unwraps to (C `identifier`,
     /// `type_identifier`) — the function/typedef/enum-member name is the first
     /// such leaf in a right-to-left DFS of the declarator.

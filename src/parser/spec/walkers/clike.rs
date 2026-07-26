@@ -93,6 +93,53 @@ fn find_identifier(cf: &CFamilySpec, source: &str, node: Node) -> String {
     String::new()
 }
 
+/// The DECLARED name of a declarator: the identifier the declarator actually
+/// binds, never a parameter name (issue #106).
+///
+/// C declarators nest the name inside wrappers — `int *f(void)` is
+/// `pointer_declarator > function_declarator > identifier`, and `int (*h)(int)`
+/// adds a `parenthesized_declarator` — so the name is reached by following the
+/// `declarator_field` chain down to the identifier leaf.
+///
+/// The load-bearing part is what it does NOT do: it never descends into
+/// `parameters_field`. `find_identifier`'s LIFO DFS visited the parameter list
+/// before the declarator's own name, so `int add(int a, int b)` resolved to
+/// `b`. A function whose last parameter is unnamed (`int f(void)`) resolved
+/// correctly, which is why the defect survived — it is invisible on exactly the
+/// signatures a minimal fixture uses.
+///
+/// `parenthesized_declarator` carries no fields at all (verified against
+/// tree-sitter-c 0.23.4 node-types.json), so the field chain is followed first
+/// and a named-children scan is the fallback — still skipping `parameters`.
+fn declarator_name(cf: &CFamilySpec, source: &str, node: Node) -> String {
+    if kind_in(cf.identifier_kinds, node.kind()) {
+        return node_text(source, node);
+    }
+    if let Some(inner) = node.child_by_field_name(cf.declarator_field) {
+        let name = declarator_name(cf, source, inner);
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    // Fieldless wrappers (parenthesized_declarator): scan named children, but
+    // never the parameter list.
+    let params_id = node
+        .child_by_field_name(cf.parameters_field)
+        .map(|p| p.id());
+    let mut cursor = node.walk();
+    let children: Vec<Node> = node.named_children(&mut cursor).collect();
+    for child in children {
+        if Some(child.id()) == params_id {
+            continue;
+        }
+        let name = declarator_name(cf, source, child);
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    String::new()
+}
+
 /// The first `field_identifier` leaf found in a right-to-left DFS of `node`,
 /// unwrapping pointer/array/function declarators to the bare field name
 /// (`int *p` → `p`, `char buf[8]` → `buf`, `int (*h)(int)` → `h`). Same LIFO-DFS
@@ -328,11 +375,12 @@ fn emit_typedef(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node
 
 /// Emits a function definition (`Function` + `Defines`, `{scope}::{name}#{seq}`)
 /// and scans its `body_field` for calls via the shared generic call walker. The
-/// name is the first identifier leaf of the `declarator_field` child.
+/// name is the identifier the `declarator_field` chain binds — NOT a parameter
+/// name (issue #106).
 fn emit_function(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     let name = node
         .child_by_field_name(cf.declarator_field)
-        .map(|d| find_identifier(cf, ctx.source, d))
+        .map(|d| declarator_name(cf, ctx.source, d))
         .unwrap_or_default();
     if name.is_empty() {
         return;
@@ -359,12 +407,14 @@ fn emit_function(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Nod
 }
 
 /// Emits a function prototype (`Function` with `is_prototype=true` + `Defines`,
-/// `{scope}::{name}#{seq}`). No body ⇒ no calls. The name is the first
-/// identifier leaf of the WHOLE declaration node (matching the hand-written
-/// `find_identifier(node)`, which — like the definition — lands on the last
-/// parameter name when parameters are named).
+/// `{scope}::{name}#{seq}`). No body ⇒ no calls. The name is resolved through
+/// the declarator chain, skipping the parameter list, exactly as for a
+/// definition — so `int add(int a, int b);` is `add`, not `b` (issue #106).
 fn emit_prototype(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
-    let name = find_identifier(cf, ctx.source, node);
+    let name = node
+        .child_by_field_name(cf.declarator_field)
+        .map(|d| declarator_name(cf, ctx.source, d))
+        .unwrap_or_default();
     if name.is_empty() {
         return;
     }

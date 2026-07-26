@@ -12,9 +12,13 @@
 // cases that pin specific behaviors (each preserved for parity, some documenting
 // a pre-existing defect filed separately: naming #106, macros/inline-struct #107):
 //   - `int add(int a, int b)` (def) and `int add(int a, int b);` (prototype):
-//     the hand-written `find_identifier`'s LIFO-DFS names BOTH `b` (the last
-//     parameter), NOT `add` — the name-resolution defect the migration preserves
-//     (issue #106).
+//     both are named `add`. This is the ONE place this ground truth deliberately
+//     DIVERGES from the deleted hand-written walker: its `find_identifier` LIFO-DFS
+//     reached the parameter list before the declarator's own name and produced `b`
+//     (the last parameter) for both. Issue #106 fixed that, so the expected values
+//     below were updated by intent, not by rebaselining a failure. Every other row
+//     is byte-identical to the pre-fix ground truth — the diff is exactly the two
+//     Function rows plus the five CallSite/Calls QNs re-scoped under `add#3`.
 //   - `int width, height;` — one field_declaration with TWO names; both surface.
 //   - `char *name;` / `char buf[8];` / `int (*handler)(int, void *)` — pointer,
 //     array, and function-pointer declarators all unwrap to the bare field name.
@@ -132,12 +136,12 @@ fn ref_triple(e: &ExtractedRef) -> (String, String, String) {
 
 fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|_internal|app/main.c::b#3::call@46:5#4|46|46|public|[(\"callee_name\", \"_internal\")]",
-        "CallSite|call|app/main.c::b#3::call@45:5#5|45|45|public|[(\"callee_name\", \"call\")]",
+        "CallSite|_internal|app/main.c::add#3::call@46:5#4|46|46|public|[(\"callee_name\", \"_internal\")]",
+        "CallSite|call|app/main.c::add#3::call@45:5#5|45|45|public|[(\"callee_name\", \"call\")]",
         "CallSite|dbg|app/main.c::gated#11::call@62:5#12|62|62|public|[(\"callee_name\", \"dbg\")]",
-        "CallSite|helper|app/main.c::b#3::call@42:13#8|42|42|public|[(\"callee_name\", \"helper\")]",
-        "CallSite|method|app/main.c::b#3::call@44:5#6|44|44|public|[(\"callee_name\", \"method\")]",
-        "CallSite|printf|app/main.c::b#3::call@43:5#7|43|43|public|[(\"callee_name\", \"printf\")]",
+        "CallSite|helper|app/main.c::add#3::call@42:13#8|42|42|public|[(\"callee_name\", \"helper\")]",
+        "CallSite|method|app/main.c::add#3::call@44:5#6|44|44|public|[(\"callee_name\", \"method\")]",
+        "CallSite|printf|app/main.c::add#3::call@43:5#7|43|43|public|[(\"callee_name\", \"printf\")]",
         "Constant|BLUE|app/main.c::Color::BLUE|26|26|public|[(\"enum_entry\", \"true\")]",
         "Constant|Callback|app/main.c::Callback|31|31|public|[(\"typedef\", \"true\")]",
         "Constant|GREEN|app/main.c::Color::GREEN|25|25|public|[(\"enum_entry\", \"true\")]",
@@ -156,8 +160,8 @@ fn expected_node_records() -> Vec<&'static str> {
         "Field|width|app/main.c::Point::width|11|11|public|[(\"type_annotation\", \"int\")]",
         "Field|x|app/main.c::Point::x|9|9|public|[(\"type_annotation\", \"int\")]",
         "Field|y|app/main.c::Point::y|10|10|public|[(\"type_annotation\", \"int\")]",
-        "Function|b|app/main.c::b#1|35|35|public|[(\"is_prototype\", \"true\")]",
-        "Function|b|app/main.c::b#3|41|49|public|[]",
+        "Function|add|app/main.c::add#1|35|35|public|[(\"is_prototype\", \"true\")]",
+        "Function|add|app/main.c::add#3|41|49|public|[]",
         "Function|dbg|app/main.c::dbg#10|54|54|public|[(\"is_prototype\", \"true\")]",
         "Function|empty|app/main.c::empty#9|51|51|public|[]",
         "Function|gated|app/main.c::gated#11|61|63|public|[]",
@@ -174,11 +178,11 @@ fn expected_node_records() -> Vec<&'static str> {
 
 fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        ("Calls", "app/main.c::b#3", "_internal"),
-        ("Calls", "app/main.c::b#3", "call"),
-        ("Calls", "app/main.c::b#3", "helper"),
-        ("Calls", "app/main.c::b#3", "method"),
-        ("Calls", "app/main.c::b#3", "printf"),
+        ("Calls", "app/main.c::add#3", "_internal"),
+        ("Calls", "app/main.c::add#3", "call"),
+        ("Calls", "app/main.c::add#3", "helper"),
+        ("Calls", "app/main.c::add#3", "method"),
+        ("Calls", "app/main.c::add#3", "printf"),
         ("Calls", "app/main.c::gated#11", "dbg"),
         ("Defines", "app/main.c::Color", "app/main.c::Color::BLUE"),
         ("Defines", "app/main.c::Color", "app/main.c::Color::GREEN"),
@@ -189,8 +193,8 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         ("Defines", "app/main.c", "app/main.c::Point"),
         ("Defines", "app/main.c", "app/main.c::PointT"),
         ("Defines", "app/main.c", "app/main.c::Value"),
-        ("Defines", "app/main.c", "app/main.c::b#1"),
-        ("Defines", "app/main.c", "app/main.c::b#3"),
+        ("Defines", "app/main.c", "app/main.c::add#1"),
+        ("Defines", "app/main.c", "app/main.c::add#3"),
         ("Defines", "app/main.c", "app/main.c::dbg#10"),
         ("Defines", "app/main.c", "app/main.c::empty#9"),
         ("Defines", "app/main.c", "app/main.c::gated#11"),
@@ -292,6 +296,108 @@ fn c_per_edge_kind_f1_is_at_parity() {
         assert!(
             (f1 - 1.0).abs() < f64::EPSILON,
             "C {kind} F1 {f1:.3} is below parity 1.000"
+        );
+    }
+}
+
+/// Issue #106 regression: a C function is named by its DECLARATOR, never by a
+/// parameter.
+///
+/// The parity corpus above covers the reported symptom, but only through one
+/// signature shape. C hides the function name under several declarator
+/// wrappers, and each is a distinct way for a name search to go wrong — so each
+/// is pinned here rather than assumed to follow.
+///
+/// The `int f(void)` case is deliberately included even though it was always
+/// correct: it is *why* the defect survived review. A fixture built from
+/// parameterless functions cannot observe the bug at all.
+#[test]
+fn c_function_names_come_from_the_declarator_not_a_parameter() {
+    let cases: &[(&str, &str, &str)] = &[
+        // (source, expected function name, what it pins)
+        (
+            "int add(int a, int b) { return a + b; }",
+            "add",
+            "named parameters — the reported defect (returned `b`)",
+        ),
+        (
+            "int add(int a, int b);",
+            "add",
+            "prototype with named parameters",
+        ),
+        (
+            "int *make(int count) { return 0; }",
+            "make",
+            "pointer_declarator wrapper",
+        ),
+        (
+            "char *dup(const char *src, int len) { return 0; }",
+            "dup",
+            "pointer return + multiple named parameters",
+        ),
+        (
+            "int f(void) { return 0; }",
+            "f",
+            "no parameters — always worked, which masked the defect",
+        ),
+        (
+            "static int scaled(int value) { return value; }",
+            "scaled",
+            "storage-class specifier before the declarator",
+        ),
+    ];
+
+    for (src, expected, why) in cases {
+        let r = parse_file(src, "t.c", Language::C).expect("c parse");
+        let names: Vec<&str> = r
+            .nodes
+            .iter()
+            .filter(|n| n.label == "Function")
+            .map(|n| n.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![*expected],
+            "{why}: expected function named {expected:?} for {src:?}, got {names:?}"
+        );
+        // The QN must carry the same corrected name — a resolver looks the
+        // symbol up by it, so a right name on a wrong QN would still be broken.
+        let qns: Vec<&str> = r
+            .nodes
+            .iter()
+            .filter(|n| n.label == "Function")
+            .map(|n| n.qualified_name.as_str())
+            .collect();
+        assert!(
+            qns.iter().all(|q| q.contains(&format!("::{expected}#"))),
+            "{why}: QN must contain ::{expected}#, got {qns:?}"
+        );
+    }
+}
+
+/// Negative control for the test above: a parameter name must NOT become a
+/// function name. Without this, a resolver that returned the FIRST identifier
+/// anywhere would still pass the positive assertions whenever the function name
+/// happens to sort first.
+#[test]
+fn c_parameter_names_never_become_function_names() {
+    let r = parse_file(
+        "int compute(int alpha, int omega) { return alpha; }",
+        "t.c",
+        Language::C,
+    )
+    .expect("c parse");
+    let fn_names: Vec<&str> = r
+        .nodes
+        .iter()
+        .filter(|n| n.label == "Function")
+        .map(|n| n.name.as_str())
+        .collect();
+    assert_eq!(fn_names, vec!["compute"]);
+    for param in ["alpha", "omega"] {
+        assert!(
+            !fn_names.contains(&param),
+            "parameter {param:?} must never be emitted as a function name"
         );
     }
 }

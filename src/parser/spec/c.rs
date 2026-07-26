@@ -155,6 +155,7 @@ static C_FAMILY: CFamilySpec = CFamilySpec {
     func_declarator_kind: "function_declarator",
     init_declarator_kind: "init_declarator",
     declarator_field: "declarator",
+    parameters_field: "parameters",
     identifier_kinds: &["identifier", "type_identifier"],
     field_identifier_kind: "field_identifier",
 };
