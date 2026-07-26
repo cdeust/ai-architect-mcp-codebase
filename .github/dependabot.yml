@@ -1,0 +1,52 @@
+# Dependency update automation (Scorecard Dependency-Update-Tool).
+#
+# Two ecosystems are in play and they fail differently, so both are covered:
+#
+#   cargo          — the crate graph. The concrete motivation is RUSTSEC-2026-0202
+#                    (`cxx` 1.0.138, unsound `let_cxx_string!`), which AP cannot
+#                    fix directly because `lbug` pins `cxx =1.0.138` exactly.
+#                    Watching `lbug` is what surfaces the fix the moment upstream
+#                    relaxes that pin, instead of waiting for the next manual audit.
+#
+#   github-actions — every action in .github/workflows is pinned to a full commit
+#                    SHA (issue #66/#67). SHA pinning is correct for supply-chain
+#                    integrity but it freezes security fixes too: a pinned action
+#                    never updates itself. Dependabot is what keeps a pinned SHA
+#                    from silently becoming a stale, vulnerable one, and it
+#                    rewrites the SHA + version comment together.
+#
+# Grouped so a routine bump is one reviewable PR rather than a queue of
+# single-crate PRs competing for CI, and capped so automation cannot flood the
+# review surface — the report-only / bounded-automation posture this repo
+# already applies to Scorecard itself.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Patch/minor bumps carry no API change by semver, so they are safe to
+      # review as one batch. Majors stay separate: each needs its own reading.
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "deps"
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+      include: scope

@@ -22,3 +22,9 @@ __pycache__/
 # cargo-mutants output (local mutation runs, not committed)
 mutants.out*/
 mutants.out*.log
+
+# actionlint is a developer tool installed locally (brew/go install), never
+# committed: a tracked 5.8 MB executable is what Scorecard's Binary-Artifacts
+# check flags, because a checked-in binary cannot be reviewed and nobody can
+# prove it matches upstream.
+/actionlint

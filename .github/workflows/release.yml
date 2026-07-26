@@ -26,14 +26,17 @@ on:
     tags:
       - "v*"
 
-# Least privilege, expanded only for what provenance needs (issue #66):
-#   contents: write       upload release assets (pre-existing)
+# Least privilege (Scorecard Token-Permissions). The top level is READ-ONLY;
+# each job escalates to exactly what it needs, so a job that only builds can
+# never be handed a token that can publish. Previously these three writes were
+# declared here and inherited by every job.
+#
+# Per-job escalations below use:
+#   contents: write       upload release assets
 #   id-token: write       OIDC token Sigstore exchanges for a short-lived cert
 #   attestations: write   record the signed provenance statement on the repo
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   # Pre-create the release exactly once before the matrix fans out.
@@ -47,6 +50,9 @@ jobs:
   create_release:
     name: create release (${{ github.ref_name }})
     runs-on: ubuntu-latest
+    # Creates the release and uploads notes; no attestation here.
+    permissions:
+      contents: write
     steps:
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
@@ -84,6 +90,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Only the experimental windows leg is allowed to fail (see matrix).
     continue-on-error: ${{ matrix.experimental == true }}
+
+    # Uploads the platform tarball + sha256 and records signed provenance.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
 
     # Git Bash on the windows runner — keeps every run step (mktemp, tar,
     # shasum) identical across all four platforms. No-op on macOS/Linux
@@ -198,6 +210,11 @@ jobs:
     name: SBOM (CycloneDX)
     needs: create_release
     runs-on: ubuntu-latest
+    # Uploads the SBOM asset and records signed provenance for it.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -242,6 +259,11 @@ jobs:
     name: package .mcpb bundle
     needs: build
     runs-on: ubuntu-latest
+    # Uploads the .mcpb asset and records signed provenance for it.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

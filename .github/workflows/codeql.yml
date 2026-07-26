@@ -1,0 +1,77 @@
+name: CodeQL
+
+# Static analysis (Scorecard SAST). This repo had NO SAST configured: CodeQL
+# default setup reported `state: not-configured`, so the "0 open CodeQL alerts"
+# figure meant "nothing ran", not "nothing found" — the most expensive kind of
+# green. Scorecard measured the same thing from outside: "0 commits out of 30
+# are checked with a SAST tool".
+#
+# An in-repo workflow rather than GitHub's default setup, matching the
+# convention the rest of this repo already follows (issue #66): every action is
+# pinned to a full commit SHA, and the policy is reviewable in the diff instead
+# of living in repository settings where it cannot be code-reviewed.
+#
+# Language scope is deliberately narrow — `rust` (the product) and `actions`
+# (the workflows, which hold the release/publish credentials and are exactly
+# where a supply-chain defect would land). The repository also contains Go,
+# Python, Java, Kotlin, Swift and TypeScript files, but those are PARSER
+# FIXTURES: intentionally small, sometimes intentionally malformed, and not
+# code this project ships. Analysing them would generate findings about test
+# data, and a backlog of irrelevant alerts is how a security tool gets ignored.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so a newly published query rule reaches this repo even during a
+    # quiet period with no pushes.
+    - cron: "27 4 * * 1"
+
+# Least privilege (Scorecard Token-Permissions): read the code, write only the
+# analysis results.
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # build-mode: none — CodeQL analyses Rust from source without
+          # invoking cargo. This repo's build compiles lbug's C++ core through
+          # CMake and takes minutes; making every PR pay that twice would buy
+          # nothing, since the Rust queries do not need build artifacts.
+          - language: rust
+            build-mode: none
+          - language: actions
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-and-quality is the suite the sibling repos were driven to
+          # zero against; matching it keeps one bar across the ecosystem.
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+        with:
+          category: "/language:${{ matrix.language }}"

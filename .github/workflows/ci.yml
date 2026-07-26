@@ -12,6 +12,14 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege for GITHUB_TOKEN (Scorecard Token-Permissions). CI only
+# reads the repository: it checks out, builds and tests. Nothing here writes
+# to the repo, publishes a package, or comments on a PR, so a read-only token
+# is the whole requirement — an undeclared top-level block would otherwise
+# inherit the repository default, which can be read/write.
+permissions:
+  contents: read
+
 # Cancel in-flight runs when a new commit lands on the same ref.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
