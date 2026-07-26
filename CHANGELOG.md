@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **C functions are named by their declarator, not their last parameter
+  (issue #106).** `int add(int a, int b)` extracted a `Function` named `b` —
+  and so did its prototype. The old `find_identifier` was a LIFO stack-DFS that
+  reached the parameter list before the declarator's own name and returned the
+  deepest-rightmost identifier; the #60 phase-6 migration preserved it
+  byte-for-byte to hold parity. Name resolution now follows the `declarator`
+  field chain (pointer/array/parenthesized/function wrappers) to the identifier
+  leaf and never descends into `parameters`, which is added to `CFamilySpec` as
+  `parameters_field` so the skip is spec DATA that C++/ObjC inherit when they
+  migrate onto the same sub-table.
+
+  **Consumer-visible:** C `Function` names and their qualified names change
+  (`app/main.c::b#3` → `app/main.c::add#3`), and call sites re-scope under the
+  corrected QN. Resolver name-based lookups for C symbols were previously keyed
+  on a parameter name. An already-indexed C repository keeps the old names until
+  it is re-indexed; the graph is derived, so no migration exists or is needed.
+
+  The defect was invisible on parameterless signatures (`int f(void)` always
+  resolved correctly), so the regression tests pin the shapes that can observe
+  it — named parameters, prototypes, pointer returns, storage-class specifiers —
+  and keep `int f(void)` documented as the case that masked it. The C parity
+  ground truth was updated by intent: exactly two `Function` rows and five
+  `CallSite`/`Calls` QNs, every other row byte-identical.
+
+
 ### Added
 
 - **Ruby support, and the shallow spec path that makes language count
