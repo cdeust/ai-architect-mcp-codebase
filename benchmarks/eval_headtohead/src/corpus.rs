@@ -68,3 +68,39 @@ pub fn corpus_hash(corpus_root: &Path) -> String {
     }
     format!("{:x}", hasher.finalize())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn corpus_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
+    }
+
+    /// `source_map` returns the language's real source files keyed by relative
+    /// path, with their true contents. Kills the `source_map` return mutants
+    /// (empty map + the `("xyzzy"…)` / `("")` dummy singletons): the real map
+    /// contains `core.py` whose body defines `process_order`, which no dummy
+    /// reproduces.
+    #[test]
+    fn source_map_carries_real_files_and_contents() {
+        let map = source_map(&corpus_root(), "python");
+        assert!(
+            map.len() >= 2,
+            "python corpus has multiple files, got {}",
+            map.len()
+        );
+        let core = map
+            .get("core.py")
+            .expect("source_map must key files by their relative path (core.py)");
+        assert!(
+            core.contains("process_order"),
+            "core.py content must be the real source (defines process_order)"
+        );
+        // No dummy key leaked in place of the real relative paths.
+        assert!(
+            !map.contains_key("xyzzy") && !map.contains_key(""),
+            "source_map must not contain placeholder keys"
+        );
+    }
+}

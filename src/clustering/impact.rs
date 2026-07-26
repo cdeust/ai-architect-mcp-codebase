@@ -236,3 +236,7 @@ fn reverse_dependents(store: &GraphStore, esc: &str, prefix: &str) -> Vec<Impact
     }
     out
 }
+
+#[cfg(test)]
+#[path = "impact_tests.rs"]
+mod tests;
