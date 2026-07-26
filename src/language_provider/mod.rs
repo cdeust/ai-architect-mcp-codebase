@@ -610,7 +610,7 @@ pub fn provider_for(language: &str) -> &'static dyn LanguageProvider {
 /// originating file. source: parser::Language::from_extension (authoritative).
 pub const ALL_EXTENSIONS: &[&str] = &[
     "rs", "py", "ts", "tsx", "java", "kt", "kts", "swift", "m", "mm", "c", "h", "cc", "cpp", "cxx",
-    "hh", "hpp", "hxx", "go", "js", "jsx", "mjs", "cjs",
+    "hh", "hpp", "hxx", "go", "js", "jsx", "mjs", "cjs", "rb",
 ];
 
 /// Extract the file-path prefix from a node id or qualified name of the form

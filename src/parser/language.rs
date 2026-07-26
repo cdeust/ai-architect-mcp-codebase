@@ -17,6 +17,9 @@ pub enum Language {
     C,
     Cpp,
     Go,
+    /// Shallow-path language (ADR-0056): node-kind rows only, no deep
+    /// extraction. See `spec::ruby`.
+    Ruby,
 }
 
 impl Language {
@@ -54,6 +57,7 @@ impl Language {
             "c" | "h" => Some(Language::C),
             "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" => Some(Language::Cpp),
             "go" => Some(Language::Go),
+            "rb" => Some(Language::Ruby),
             "js" | "jsx" | "mjs" | "cjs" => Some(Language::TypeScript),
             _ => None,
         }
@@ -72,6 +76,7 @@ impl Language {
             Language::C => "c",
             Language::Cpp => "cpp",
             Language::Go => "go",
+            Language::Ruby => "ruby",
         }
     }
 
@@ -88,6 +93,7 @@ impl Language {
             "c" => Some(Language::C),
             "cpp" | "c++" => Some(Language::Cpp),
             "go" => Some(Language::Go),
+            "ruby" => Some(Language::Ruby),
             _ => None,
         }
     }

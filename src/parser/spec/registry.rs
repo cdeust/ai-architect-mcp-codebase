@@ -9,6 +9,12 @@ use super::java::JAVA_SPEC;
 use super::kotlin::KOTLIN_SPEC;
 use super::lang_spec::LangSpec;
 use super::python::PYTHON_SPEC;
+// Only the (test-only) SHALLOW_SPECS table reads these, so they are gated with
+// it — an ungated import would be an unused-import warning in release builds.
+#[cfg(test)]
+use super::ruby::RUBY_SPEC;
+#[cfg(test)]
+use super::shallow::ShallowSpec;
 use super::swift::SWIFT_SPEC;
 use crate::parser::Language;
 
@@ -42,6 +48,12 @@ pub(crate) const MIGRATED_SPECS: &[&LangSpec] = &[
     &SWIFT_SPEC,
     &C_SPEC,
 ];
+
+/// All shallow spec rows (ADR-0056), for the guard to iterate. A shallow row
+/// gets the same node-kind validation as a deep one: breadth must not come
+/// with weaker §8 enforcement.
+#[cfg(test)]
+pub(crate) const SHALLOW_SPECS: &[&ShallowSpec] = &[&RUBY_SPEC];
 
 #[cfg(test)]
 mod tests {

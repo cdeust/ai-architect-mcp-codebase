@@ -6,6 +6,52 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Ruby support, and the shallow spec path that makes language count
+  unbounded (issue #60, ADR-0056).** Adds `ShallowSpec` — a language described
+  by node-kind lists and a grammar factory, nothing else — plus one generic
+  walker that interprets it. Ruby is the first language added this way and the
+  proof of the model: `src/parser/spec/ruby.rs` is a **data literal with no
+  Rust logic at all** (no walker, no conventions impl, no trait, and no
+  conditional anywhere in the extraction path that mentions Ruby), against
+  143–265 lines of per-language Rust for each deep-path language. `.rb` files
+  now index, yielding `Function`/`Method`/`Struct`/`CallSite` nodes and
+  `Defines`/`HasMethod`/`Calls` edges.
+
+  This closes #60's Done criterion ("one NEW language added purely via spec
+  entry"), which the five ADR-0055 migrations did not: `LanguageConventions`
+  declares six **required** methods, so an eleventh language could not compile
+  without Rust. It also builds ADR-0055 §2's specified-but-unbuilt Tier 2.
+
+  Two deliberate design choices, both asserted by negative tests:
+  - **Shallow rows carry no visibility and no inheritance edges.** A name-case
+    guess (uppercase ⇒ public) is right for Go and *wrong* for
+    Java/Swift/Kotlin/C#, which carry visibility in modifier keywords; a
+    plausible-but-false property is worse than an absent one (§13.1 F2).
+  - **Ruby's `require` surfaces as a `Calls` edge, not a synthesised import.**
+    Ruby has no import statement node — `require` is an ordinary call — so the
+    graph reports what the grammar supports instead of inventing an edge.
+
+  The walker stays free of per-language conditionals by two devices: import
+  keywords are stripped by reading only **named** children (tree-sitter marks
+  keywords unnamed, so no per-language keyword list is needed), and a
+  grammar's callee position is named in the row (`callee_field`) rather than
+  branched on — Ruby models `foo.bar` as `receiver` + `method`, so "first named
+  child" would have recorded the receiver. That invariant is machine-checked:
+  `shallow_walker_has_no_language_conditionals` fails if the module ever
+  mentions a `Language` variant, with a companion test proving the check is not
+  vacuous. This is the discipline the reference implementation lacks — measured
+  at HEAD `97ce23f`, **126 of its 163 languages (77%) appear in `lang ==
+  CBM_LANG_*` conditionals**, 176 sites across ~12,130 lines of extractor.
+
+  Shallow rows get the **same** executable §8 validation as deep ones: the spec
+  guard checks every Ruby node kind and field against
+  tree-sitter-ruby 0.23.1's `node-types.json`, with a non-vacuity test so an
+  empty registry cannot make it pass silently. No existing gate moved — five
+  language parity suites, `graph_accuracy` 41/41, and `parser_fidelity` are
+  unchanged, since the change is purely additive.
+
 ### Changed
 
 - **Generic walker split under the §4.1 size cap (issue #101, ADR-0055).**

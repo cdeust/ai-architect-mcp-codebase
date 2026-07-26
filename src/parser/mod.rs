@@ -107,6 +107,10 @@ pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<Parse
         Language::Kotlin => spec::parse_with_spec(&spec::KOTLIN_SPEC, source, file_path),
         Language::Swift => spec::parse_with_spec(&spec::SWIFT_SPEC, source, file_path),
         Language::C => spec::parse_with_spec(&spec::C_SPEC, source, file_path),
+        // Shallow path (ADR-0056): a node-kind row only. Emits definitions,
+        // calls and the Defines/HasMethod structure, with no visibility and no
+        // inheritance — see `spec::shallow` for what that deliberately omits.
+        Language::Ruby => spec::parse_shallow(&spec::RUBY_SPEC, source, file_path),
     }
 }
 
