@@ -21,6 +21,7 @@
 use tree_sitter::Node;
 
 use super::lang_spec::LangSpec;
+use crate::parser::node_field_text;
 
 /// One extracted import: the `Import` node's shape plus its outgoing edge.
 /// Produced by `LanguageConventions::imports_of`; consumed by `walk_imports`.
@@ -155,6 +156,31 @@ pub(crate) trait LanguageConventions: Sync {
     ) -> Vec<ImportEntry>;
 
     // --- defaults: trivial, grammar-independent ---
+
+    /// The name of a function/method-like definition, given its node and the
+    /// spec's `name_field`. Default: the `name_field` child's text (Go/Python/
+    /// Java/Kotlin — every function-like node names itself through one field).
+    /// Swift overrides for `init`/`deinit`/`subscript` declarations, which the
+    /// grammar gives no usable `name` field and which the graph names
+    /// synthetically (`init`/`deinit`/`subscript`) — the same names the hand-
+    /// written walker synthesized.
+    fn def_name(&self, source: &str, node: Node, name_field: &str) -> String {
+        node_field_text(source, node, name_field)
+    }
+
+    /// The outgoing edge kind for an enum member (`variant_node_kinds`).
+    /// Default: `HasVariant` (Java `enum_constant`). Swift overrides to `Defines`
+    /// (its hand-written walker modelled enum cases as `Defines`-edged variants).
+    fn variant_edge_kind(&self) -> &'static str {
+        "HasVariant"
+    }
+
+    /// The visibility for an enum member node. Default: `public` (Java enum
+    /// constants are implicitly public). Swift overrides to `internal` (its
+    /// hand-written walker's enum-case default).
+    fn variant_visibility(&self) -> String {
+        "public".to_string()
+    }
 
     /// Whether a value-declaration name is a constant. Default: yes. Python
     /// overrides (only `UPPER_SNAKE` module assignments are constants).

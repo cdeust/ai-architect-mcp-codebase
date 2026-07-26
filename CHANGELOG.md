@@ -8,6 +8,48 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Table-driven language specs — Swift migration (issue #60 phase 5,
+  ADR-0055).** Migrated Swift off its hand-written walker onto the
+  `src/parser/spec/` seam at exact parity, deleting `src/parser/swift/`
+  (`mod.rs` + `extract/g1..g2.rs`, 523 LOC) — full 7-tuple node parity and
+  per-EdgeKind `F1 = 1.000` (durable pin `swift_parity_tests.rs`: 51 nodes,
+  51 refs). Swift's grammar diverges structurally from the JVM family and is
+  handled by gated spec data plus a `SwiftConventions` override (184 code LOC,
+  the recorded Risk-1 watch signal — between Kotlin's 173 and Python's 228):
+  the `class_declaration` umbrella (class/struct/actor/enum/extension) refined
+  by the `declaration_kind` field (`refine_class_label`), extensions marked
+  `is_extension` with no conformance edges (`class_inheritance`);
+  `init`/`deinit`/`subscript` routed through `function_node_kinds` with
+  synthetic names + `member_kind` (`def_name`/`function_props`), the
+  field-less subscript body reached via `function_body_kinds:
+  ["computed_property"]`; `enum_entry` → `Variant` with `Defines`/`internal`
+  and multi-name binding (`variant_edge_kind`/`variant_visibility`);
+  `property`/`typealias` → `Constant` (`member_constants`). The generic walkers
+  gained backward-compatible hooks (`def_name`, `variant_edge_kind`,
+  `variant_visibility`), a multi-name `emit_variant`, and a body-field-first
+  `call_scan_of` that confines the whole-node call-scan fallback to grammars
+  with no named body field. The spec-validation guard now covers
+  tree-sitter-swift 0.7.3 (ABI-15, unbumped). Pre-existing extraction gaps in
+  the deleted walker are preserved for parity and tracked separately: no
+  conformance/inheritance edges (#97), dropped protocol requirements (#98), the
+  `Defines`/`internal` enum-member model (#99), and unscanned computed-property
+  getter calls (#100).
+- **Table-driven language specs — Kotlin migration (issue #60 phase 4,
+  ADR-0055; PR #95).** Migrated Kotlin off its hand-written walker
+  (`src/parser/kotlin/`) onto the spec seam at exact parity. Kotlin's
+  ground-up `tree-sitter-kotlin-ng` grammar diverges from Java: one
+  `class_declaration` kind for interface/enum/class disambiguated by content
+  (`refine_class_label`), child-node bodies rather than a `body` field
+  (`class_body_kinds`/`function_body_kinds`), a single supertype list →
+  `Extends` (`class_inheritance`), `enum_entry` → `Constant` marked
+  `enum_entry=true` (`member_constant`/`member_constants`), node-based
+  visibility (`node_visibility`), and navigation-tail call callees (#29).
+- **Kotlin `property_declaration` names extracted (issue #93, PR #96).** Class
+  `val`/`var` and top-level vals — whose name is nested under a
+  `variable_declaration` child below the direct-child identifier scan — are now
+  emitted as `Constant`s. `member_constant` became `member_constants` (returns
+  a `Vec`, supporting destructuring `val (a, b)`); the generic
+  `emit_member_constant` iterates it.
 - **Table-driven language specs — Java migration (issue #60 phase 3,
   ADR-0055).** Migrated Java off its hand-written walker onto the
   `src/parser/spec/` seam at exact parity, deleting `src/parser/java/`

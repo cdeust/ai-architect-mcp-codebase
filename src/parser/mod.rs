@@ -9,7 +9,6 @@ pub mod c;
 pub mod cpp;
 pub mod objc;
 pub mod rust;
-pub mod swift;
 pub mod typescript;
 
 // Table-driven extraction (ADR-0055). Migrated languages route through the
@@ -96,17 +95,17 @@ pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<Parse
     match lang {
         Language::Rust => rust::parse_rust_file(source, file_path),
         Language::TypeScript => typescript::parse_typescript_file(source, file_path),
-        Language::Swift => swift::parse_swift_file(source, file_path),
         Language::ObjC => objc::parse_objc_file(source, file_path),
         Language::C => c::parse_c_file(source, file_path),
         Language::Cpp => cpp::parse_cpp_file(source, file_path),
         // Migrated to the table-driven spec walkers (ADR-0055).
         // Go: phase 1 (#85). Python: phase 2 (#89). Java: phase 3 (#91).
-        // Kotlin: phase 4 (#60).
+        // Kotlin: phase 4 (#95). Swift: phase 5 (#60).
         Language::Go => spec::parse_with_spec(&spec::GO_SPEC, source, file_path),
         Language::Python => spec::parse_with_spec(&spec::PYTHON_SPEC, source, file_path),
         Language::Java => spec::parse_with_spec(&spec::JAVA_SPEC, source, file_path),
         Language::Kotlin => spec::parse_with_spec(&spec::KOTLIN_SPEC, source, file_path),
+        Language::Swift => spec::parse_with_spec(&spec::SWIFT_SPEC, source, file_path),
     }
 }
 

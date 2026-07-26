@@ -28,6 +28,7 @@ fn node_types_json(language: Language) -> &'static str {
         Language::Python => tree_sitter_python::NODE_TYPES,
         Language::Java => tree_sitter_java::NODE_TYPES,
         Language::Kotlin => tree_sitter_kotlin_ng::NODE_TYPES,
+        Language::Swift => tree_sitter_swift::NODE_TYPES,
         // A spec row for a not-yet-wired language would fail loudly here rather
         // than silently skip validation.
         other => panic!(

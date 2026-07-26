@@ -127,17 +127,32 @@ fn class_body_of<'t>(spec: &LangSpec, node: Node<'t>) -> Option<Node<'t>> {
     spec.body_field.and_then(|f| node.child_by_field_name(f))
 }
 
-/// The node to scan for calls in a function/method: the first
-/// `function_body_kinds` child (falling back to the whole declaration node so an
-/// expression-bodied `fun f() = g()` still yields its call) when the grammar
-/// exposes bodies as child nodes (Kotlin), else the `body_field` child
-/// (Go/Python/Java — `None` for a bodiless abstract method, which scans
-/// nothing).
+/// The node to scan for calls in a function/method, selected by whether the
+/// grammar names a body field:
+///   - `body_field` set (Go/Python/Java/Swift): use the named body child; if the
+///     grammar omits it on this node (Swift `subscript_declaration`, which has no
+///     `body` field), fall back to the first `function_body_kinds` child (Swift
+///     `computed_property`) — and to nothing when neither is present (a bodiless
+///     abstract method), so no unrelated sub-expression is scanned.
+///   - `body_field` unset (Kotlin): the body IS a child node
+///     (`function_body_kinds`); an expression-bodied `fun f() = g()` has no such
+///     child, so the whole declaration node is the fallback scan target.
+///
+/// This split keeps the risky whole-node fallback confined to grammars with no
+/// named body field (Kotlin), where it is the only way to reach an expression
+/// body; a named-field grammar (Swift) never scans a whole declaration, so a
+/// call inside a parameter default value is not spuriously collected.
 fn call_scan_of<'t>(spec: &LangSpec, node: Node<'t>) -> Option<Node<'t>> {
+    if let Some(field) = spec.body_field {
+        if let Some(body) = node.child_by_field_name(field) {
+            return Some(body);
+        }
+        return first_child_in(node, spec.function_body_kinds);
+    }
     if !spec.function_body_kinds.is_empty() {
         return first_child_in(node, spec.function_body_kinds).or(Some(node));
     }
-    spec.body_field.and_then(|f| node.child_by_field_name(f))
+    None
 }
 
 fn line_of(node: Node) -> u64 {
@@ -222,7 +237,7 @@ fn emit_def(
     enclosing_class: Option<&str>,
     decorators: &[String],
 ) {
-    let name = node_field_text(ctx.source, node, spec.name_field);
+    let name = spec.conventions.def_name(ctx.source, node, spec.name_field);
     if name.is_empty() {
         return;
     }
@@ -396,28 +411,55 @@ fn emit_member_constant(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &
     }
 }
 
-/// Emits one enum member as a `Variant` + `HasVariant` under the enclosing
-/// enum's scope (Java `enum_constant`). Enum constants are implicitly public.
+/// Emits one `Variant` per name a member declaration carries, under the
+/// enclosing enum's scope. The edge kind and visibility come from the
+/// conventions (Java `enum_constant` → `HasVariant`/`public`; Swift `enum_entry`
+/// → `Defines`/`internal`). A single declaration may bind several names
+/// (Swift `case green, blue` is ONE `enum_entry` node with two `name` fields),
+/// so every `name_field` child is emitted — a grammar with a single-name enum
+/// member (Java) yields exactly one, unchanged. Each variant carries the
+/// declaration node's line span (matching both hand-written walkers), not the
+/// individual name's.
 fn emit_variant(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
-    let name = node_field_text(ctx.source, node, spec.name_field);
-    if name.is_empty() {
-        return;
+    // mutation note (§12): collecting ALL `name_field` children (rather than the
+    // first via `node_field_text`) is a strict generalization — Java's
+    // single-name `enum_constant` still yields one variant, so the Java parity
+    // corpus is unchanged; Swift's `case green, blue` yields two, killing the
+    // "first-name-only" regression (asserted by the Swift parity corpus).
+    let mut names: Vec<String> = Vec::new();
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            if cursor.field_name() == Some(spec.name_field) {
+                let t = node_text(ctx.source, cursor.node());
+                if !t.is_empty() {
+                    names.push(t);
+                }
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
     }
-    let qn = qual(scope, &name);
-    ctx.nodes.push(ExtractedNode {
-        label: LABEL_VARIANT.to_string(),
-        name: name.clone(),
-        qualified_name: qn.clone(),
-        start_line: line_of(node),
-        end_line: end_line_of(node),
-        visibility: "public".to_string(),
-        properties: Vec::new(),
-    });
-    ctx.refs.push(ExtractedRef {
-        kind: "HasVariant".to_string(),
-        from_qualified_name: scope.to_string(),
-        to_qualified_name: qn,
-    });
+    let visibility = spec.conventions.variant_visibility();
+    let edge_kind = spec.conventions.variant_edge_kind();
+    for name in names {
+        let qn = qual(scope, &name);
+        ctx.nodes.push(ExtractedNode {
+            label: LABEL_VARIANT.to_string(),
+            name: name.clone(),
+            qualified_name: qn.clone(),
+            start_line: line_of(node),
+            end_line: end_line_of(node),
+            visibility: visibility.clone(),
+            properties: Vec::new(),
+        });
+        ctx.refs.push(ExtractedRef {
+            kind: edge_kind.to_string(),
+            from_qualified_name: scope.to_string(),
+            to_qualified_name: qn,
+        });
+    }
 }
 
 /// Emits one `Constant` + `Defines` per declared name in a member-field
