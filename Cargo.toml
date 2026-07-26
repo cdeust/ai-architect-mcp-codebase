@@ -59,7 +59,7 @@ tree-sitter = "0.25"
 tree-sitter-rust = "0.23"
 # source: multi-language parser support — Python and TypeScript grammars.
 # MIT licensed. Used by parser/python.rs and parser/typescript.rs.
-tree-sitter-python = "0.23"
+tree-sitter-python = "0.25"
 tree-sitter-typescript = "0.23"
 # source: multi-language parser expansion — JVM + Apple + systems + Go.
 # Each grammar crate is an official tree-sitter parser published on crates.io,
