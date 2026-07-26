@@ -38,6 +38,66 @@ pub(crate) struct EmbeddedSpec {
     pub embedded_language: Language,
 }
 
+/// The node kinds a **flat C-family** grammar (C, and later C++/ObjC) uses.
+///
+/// C-family languages do not fit the class-body-recursion model the generic
+/// `walk_defs` was built around (Python/Java/Kotlin/Swift): they are flat
+/// (structs carry *fields*, not methods), name their declarations through
+/// wrapped declarators (`int (*handler)(int)` → the name is a `field_identifier`
+/// buried under a `function_declarator`), model enum members and typedefs as
+/// `Constant`s, filter function *declarations* (a prototype) apart from
+/// variable declarations that share the `declaration` node kind, and recurse
+/// transparently through preprocessor wrappers (`#ifdef … #endif`). When a
+/// `LangSpec` carries `c_family: Some(_)`, `walk_defs` delegates the whole file
+/// to the flat `clike` walker instead of the class-model arms.
+///
+/// This sub-table is the *shared* structural abstraction for the C family: the
+/// dedup win ADR-0055 promises (`extract_function`×8, `extract_struct`×7) is
+/// realized as C, C++, and ObjC migrate onto this one walker with three data
+/// rows. Every string traces to tree-sitter-c's `node-types.json` and is
+/// validated by the spec guard.
+pub(crate) struct CFamilySpec {
+    /// Struct/union declaration kinds → `Struct` + `Defines`, recursing into the
+    /// `body_field` for `field_decl_kinds` (C `struct_specifier`/`union_specifier`).
+    pub struct_like_kinds: &'static [&'static str],
+    /// Enum declaration kinds → `Enum` + `Defines`, whose `enum_member_kinds`
+    /// body children become `Constant`s (C `enum_specifier`).
+    pub enum_like_kinds: &'static [&'static str],
+    /// Enum-member kinds inside an enum body → `Constant` (`enum_entry=true`) +
+    /// `Defines` under the enum's scope (C `enumerator`).
+    pub enum_member_kinds: &'static [&'static str],
+    /// Typedef kinds → `Constant` (`typedef=true`) + `Defines` (C `type_definition`).
+    pub typedef_kinds: &'static [&'static str],
+    /// Function-definition kinds → `Function` + `Defines`, scanning the body for
+    /// calls (C `function_definition`).
+    pub func_def_kinds: &'static [&'static str],
+    /// Declaration kinds that MAY be a function prototype → `Function`
+    /// (`is_prototype=true`) + `Defines`, only when a function declarator is
+    /// present (`is_c_function_prototype`); a plain `int x;` variable declaration
+    /// shares this kind and is skipped (C `declaration`).
+    pub func_decl_kinds: &'static [&'static str],
+    /// Member-declaration kinds inside a struct/union body → `Field` + `HasField`,
+    /// one per declared name (C `field_declaration`; `int a, b;` is one node with
+    /// two declarators).
+    pub field_decl_kinds: &'static [&'static str],
+    /// The declarator kind that marks a `func_decl_kinds` node as a function
+    /// prototype (C `function_declarator`).
+    pub func_declarator_kind: &'static str,
+    /// The declarator wrapper that may itself hold a `func_declarator_kind`
+    /// (`int f(void) = …`, rare — C `init_declarator`).
+    pub init_declarator_kind: &'static str,
+    /// The field naming a declaration's declarator, walked for field names and
+    /// function names (C `declarator`).
+    pub declarator_field: &'static str,
+    /// Leaf identifier kinds a name search unwraps to (C `identifier`,
+    /// `type_identifier`) — the function/typedef/enum-member name is the first
+    /// such leaf in a right-to-left DFS of the declarator.
+    pub identifier_kinds: &'static [&'static str],
+    /// Leaf kind naming a struct field, unwrapped from pointer/array/function
+    /// declarators (C `field_identifier`).
+    pub field_identifier_kind: &'static str,
+}
+
 /// Table-driven description of one language's structural node kinds.
 ///
 /// Consumed by the generic walkers (`walk_defs` / `walk_calls` /
@@ -196,4 +256,9 @@ pub(crate) struct LangSpec {
     pub embedded: &'static [EmbeddedSpec],
     /// Behavioral predicates and QN/entry shaping (ADR-0055 §4).
     pub conventions: &'static dyn LanguageConventions,
+    /// When `Some`, this language is a flat C-family grammar: `walk_defs`
+    /// delegates the whole file to the `clike` walker (consuming this sub-table)
+    /// instead of the class-model arms. `None` for the class-model languages
+    /// (Go/Python/Java/Kotlin/Swift), which leave the C-family walker untouched.
+    pub c_family: Option<&'static CFamilySpec>,
 }

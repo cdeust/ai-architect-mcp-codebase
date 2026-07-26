@@ -21,7 +21,30 @@ adheres to [Semantic Versioning](https://semver.org/).
   no public-contract change. Proven by the unchanged gates: five language
   exact-parity + per-EdgeKind F1 suites, `graph_accuracy` 41/41,
   `parser_fidelity`, 761 tests green.
-
+- **Table-driven language specs — C migration (issue #60 phase 6,
+  ADR-0055).** Migrated C off its hand-written walker onto the
+  `src/parser/spec/` seam at exact parity, deleting `src/parser/c/`
+  (`mod.rs` + `extract/g1..g2.rs` + `extract/mod.rs`, 465 LOC) — full 7-tuple
+  node parity and per-EdgeKind `F1 = 1.000` (durable pin `c_parity_tests.rs`:
+  37 nodes, 37 refs). C is the first **flat C-family** language: it does not fit
+  the class-body-recursion model the generic walkers were built around (structs
+  carry *fields*, not methods; names hide under wrapped declarators; enum members
+  and typedefs are `Constant`s; prototypes are filtered `declaration`s;
+  preprocessor conditionals wrap declarations). Rather than shoehorn it, C
+  introduces a shared flat walker `walkers/clike.rs` driven by a new
+  `CFamilySpec` sub-table (`c_family: Some(_)` routes `walk_defs` to it) — the
+  reusable abstraction the future C++/ObjC migrations land on as two more data
+  rows. The C-specific behavior lives in a `CConventions` override (147 code LOC,
+  the recorded Risk-1 watch signal — in the Go–Java band): `#include` shaping,
+  member-access callee extraction (`a->b`/`a.b` → `b`), and the `#{seq}` QN.
+  `clike.rs` itself (≈290 code LOC) is **shared C-family infrastructure**, not a
+  per-language override, and is the honest ADR Risk-#1 signal that C-family
+  grammars need a structural (not just behavioral) escape hatch. The
+  spec-validation guard now covers tree-sitter-c 0.23.4, including the
+  `CFamilySpec` node kinds. Pre-existing defects in the deleted walker are
+  preserved for parity and tracked separately: function/prototype names resolving
+  to the last parameter (#106) and unextracted `#define` macros / inline struct
+  bodies (#107).
 - **Table-driven language specs — Swift migration (issue #60 phase 5,
   ADR-0055).** Migrated Swift off its hand-written walker onto the
   `src/parser/spec/` seam at exact parity, deleting `src/parser/swift/`

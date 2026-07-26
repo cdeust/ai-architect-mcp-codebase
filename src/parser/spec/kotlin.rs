@@ -492,6 +492,7 @@ pub(crate) static KOTLIN_SPEC: LangSpec = LangSpec {
     ts_language: || tree_sitter_kotlin_ng::LANGUAGE.into(),
     embedded: &[],
     conventions: &KOTLIN_CONVENTIONS,
+    c_family: None,
 };
 
 #[cfg(test)]

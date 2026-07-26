@@ -368,4 +368,5 @@ pub(crate) static SWIFT_SPEC: LangSpec = LangSpec {
     ts_language: || tree_sitter_swift::LANGUAGE.into(),
     embedded: &[],
     conventions: &SWIFT_CONVENTIONS,
+    c_family: None,
 };

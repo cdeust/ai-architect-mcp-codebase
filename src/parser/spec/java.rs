@@ -292,4 +292,5 @@ pub(crate) static JAVA_SPEC: LangSpec = LangSpec {
     ts_language: || tree_sitter_java::LANGUAGE.into(),
     embedded: &[],
     conventions: &JAVA_CONVENTIONS,
+    c_family: None,
 };

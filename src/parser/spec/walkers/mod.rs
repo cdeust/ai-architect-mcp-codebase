@@ -20,6 +20,7 @@
 // OCP: adding a language is data, not a new walker (ADR-0055 §1.2).
 
 mod calls;
+mod clike;
 mod constants;
 mod defs;
 mod embedded;

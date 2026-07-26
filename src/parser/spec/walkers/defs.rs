@@ -10,7 +10,7 @@ use tree_sitter::Node;
 
 use super::super::lang_spec::LangSpec;
 use super::{
-    call_scan_of, calls, class_body_of, constants, embedded, end_line_of, imports, kind_in,
+    call_scan_of, calls, class_body_of, clike, constants, embedded, end_line_of, imports, kind_in,
     line_of, types, WalkCtx,
 };
 use crate::parser::{
@@ -30,6 +30,14 @@ pub(crate) fn walk_defs(
     scope: &str,
     enclosing_class: Option<&str>,
 ) {
+    // Flat C-family grammars (C now, C++/ObjC later) do not use the class-model
+    // arms below; the whole file routes to the `clike` walker instead. Its own
+    // recursion handles preprocessor wrappers, so this returns before the
+    // class dispatch and the (empty-for-C) embedded pass.
+    if let Some(cf) = spec.c_family {
+        clike::walk_c_defs(spec, cf, ctx, parent, scope);
+        return;
+    }
     let mut cursor = parent.walk();
     for child in parent.children(&mut cursor) {
         let k = child.kind();

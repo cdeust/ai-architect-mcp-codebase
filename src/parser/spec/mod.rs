@@ -11,6 +11,7 @@
 // `parse_with_spec` and leaves the rest on their hand-written walkers until
 // each is migrated at parity behind the accuracy gate (ADR-0055 §5).
 
+mod c;
 mod conventions;
 mod go;
 mod java;
@@ -21,6 +22,8 @@ mod registry;
 mod swift;
 mod walkers;
 
+#[cfg(test)]
+mod c_parity_tests;
 #[cfg(test)]
 mod embedded_tests;
 #[cfg(test)]
@@ -36,6 +39,7 @@ mod python_parity_tests;
 #[cfg(test)]
 mod swift_parity_tests;
 
+pub(crate) use c::C_SPEC;
 pub(crate) use go::GO_SPEC;
 pub(crate) use java::JAVA_SPEC;
 pub(crate) use kotlin::KOTLIN_SPEC;

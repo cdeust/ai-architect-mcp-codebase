@@ -3,6 +3,7 @@
 // `Language` to its `&'static LangSpec`, or `None` for a language not yet
 // migrated off its hand-written walker (strangler-fig: one language at a time).
 
+use super::c::C_SPEC;
 use super::go::GO_SPEC;
 use super::java::JAVA_SPEC;
 use super::kotlin::KOTLIN_SPEC;
@@ -14,7 +15,7 @@ use crate::parser::Language;
 /// Returns the spec row for a migrated language, or `None` if the language is
 /// still served by its hand-written walker. Migrated so far (ADR-0055):
 /// Go (phase 1), Python (phase 2), Java (phase 3), Kotlin (phase 4),
-/// Swift (phase 5).
+/// Swift (phase 5), C (phase 6).
 pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
     match language {
         Language::Go => Some(&GO_SPEC),
@@ -22,7 +23,8 @@ pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
         Language::Java => Some(&JAVA_SPEC),
         Language::Kotlin => Some(&KOTLIN_SPEC),
         Language::Swift => Some(&SWIFT_SPEC),
-        // The remaining five stay on their hand-written walkers until each is
+        Language::C => Some(&C_SPEC),
+        // The remaining four stay on their hand-written walkers until each is
         // migrated at parity behind the accuracy gate (ADR-0055 §5).
         _ => None,
     }
@@ -38,6 +40,7 @@ pub(crate) const MIGRATED_SPECS: &[&LangSpec] = &[
     &JAVA_SPEC,
     &KOTLIN_SPEC,
     &SWIFT_SPEC,
+    &C_SPEC,
 ];
 
 #[cfg(test)]
@@ -72,6 +75,7 @@ mod tests {
             lang_spec(Language::Swift).is_some(),
             "Swift is migrated (phase 5)"
         );
+        assert!(lang_spec(Language::C).is_some(), "C is migrated (phase 6)");
         // Rust is not migrated yet — must stay on its hand-written walker.
         assert!(
             lang_spec(Language::Rust).is_none(),

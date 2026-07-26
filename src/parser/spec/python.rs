@@ -405,6 +405,7 @@ pub(crate) static PYTHON_SPEC: LangSpec = LangSpec {
     ts_language: || tree_sitter_python::LANGUAGE.into(),
     embedded: &[],
     conventions: &PYTHON_CONVENTIONS,
+    c_family: None,
 };
 
 #[cfg(test)]

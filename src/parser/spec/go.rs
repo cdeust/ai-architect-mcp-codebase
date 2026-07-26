@@ -196,4 +196,5 @@ pub(crate) static GO_SPEC: LangSpec = LangSpec {
     ts_language: || tree_sitter_go::LANGUAGE.into(),
     embedded: &[],
     conventions: &GO_CONVENTIONS,
+    c_family: None,
 };
