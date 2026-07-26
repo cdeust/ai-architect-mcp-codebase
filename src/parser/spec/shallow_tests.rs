@@ -93,6 +93,62 @@ fn ruby_shallow_extracts_classes_methods_and_functions() {
 }
 
 #[test]
+fn shallow_nodes_carry_exact_source_line_spans() {
+    // Line spans are the graph's link back to source: a wrong span sends a
+    // reader to the wrong code, silently. Asserting them by EXACT value (not
+    // ">0") is what kills the `line_of -> 0` / `-> 1` and `end_line_of`
+    // mutants — a range check would let a constant through.
+    //
+    // RUBY_FIXTURE opens with a newline (the one after `r#"`), so line 1 is
+    // empty, `require 'json'` is line 2 and `module Billing` is line 4.
+    let r = ruby();
+    let span = |name: &str, label: &str| -> (u64, u64) {
+        let n = r
+            .nodes
+            .iter()
+            .find(|n| n.name == name && n.label == label)
+            .unwrap_or_else(|| panic!("no {label} named {name}"));
+        (n.start_line, n.end_line)
+    };
+    assert_eq!(span("Billing", LABEL_STRUCT), (4, 18), "module Billing");
+    assert_eq!(span("Invoice", LABEL_STRUCT), (5, 17), "class Invoice");
+    assert_eq!(span("initialize", LABEL_METHOD), (6, 8), "def initialize");
+    assert_eq!(span("render", LABEL_METHOD), (10, 12), "def render");
+    assert_eq!(
+        span("standalone", LABEL_FUNCTION),
+        (20, 22),
+        "top-level def"
+    );
+    // A call site's span is the call expression itself, not its enclosing def.
+    assert_eq!(span("require", LABEL_CALL_SITE), (2, 2), "require 'json'");
+    assert_eq!(
+        span("format", LABEL_CALL_SITE),
+        (11, 11),
+        "formatter.format"
+    );
+}
+
+#[test]
+fn shallow_call_qualified_names_encode_their_position() {
+    // The call-site QN is `{caller}::call@{line}:{col}`; two calls in one
+    // caller must therefore get distinct primary keys. This pins the column
+    // component, which no other assertion reaches.
+    let r = parse_shallow(&RUBY_SPEC, "def go\n  a()\n  b()\nend\n", "c.rb").expect("parse");
+    let mut call_qns: Vec<&str> = r
+        .nodes
+        .iter()
+        .filter(|n| n.label == LABEL_CALL_SITE)
+        .map(|n| n.qualified_name.as_str())
+        .collect();
+    call_qns.sort_unstable();
+    assert_eq!(call_qns.len(), 2, "two calls expected, got {call_qns:?}");
+    assert!(
+        call_qns[0].ends_with("::call@2:3") && call_qns[1].ends_with("::call@3:3"),
+        "call QNs must encode line:col, got {call_qns:?}"
+    );
+}
+
+#[test]
 fn ruby_methods_are_scoped_to_their_enclosing_class() {
     let r = ruby();
     let has_method = edges_of(&r, "HasMethod");
