@@ -19,6 +19,8 @@
 // a language selects the arms it needs by populating (or emptying) its slices —
 // OCP: adding a language is data, not a new walker (ADR-0055 §1.2).
 
+mod calls;
+
 use std::collections::HashSet;
 
 use tree_sitter::{Node, Parser};
@@ -26,9 +28,9 @@ use tree_sitter::{Node, Parser};
 use super::lang_spec::LangSpec;
 use crate::parser::{
     collect_error_ranges, count_parse_errors, node_field_text, node_text, parse_with_timeout, qual,
-    ExtractedNode, ExtractedRef, ParseResult, LABEL_CALL_SITE, LABEL_CONSTANT, LABEL_ENUM,
-    LABEL_FIELD, LABEL_FUNCTION, LABEL_IMPORT, LABEL_METHOD, LABEL_STRUCT, LABEL_TRAIT,
-    LABEL_TYPE_ALIAS, LABEL_VARIANT,
+    ExtractedNode, ExtractedRef, ParseResult, LABEL_CONSTANT, LABEL_ENUM, LABEL_FIELD,
+    LABEL_FUNCTION, LABEL_IMPORT, LABEL_METHOD, LABEL_STRUCT, LABEL_TRAIT, LABEL_TYPE_ALIAS,
+    LABEL_VARIANT,
 };
 
 /// Mutable state threaded through a single file's walk. `next_seq` is the
@@ -37,15 +39,15 @@ use crate::parser::{
 /// def-QN collision dedup (Python's `@property`/`@setter` case); it is inert
 /// for languages whose `def_qn` is already unique (Go's `#seq`).
 pub(crate) struct WalkCtx<'a> {
-    source: &'a str,
-    nodes: Vec<ExtractedNode>,
-    refs: Vec<ExtractedRef>,
-    next_seq: u64,
-    emitted_qns: HashSet<String>,
+    pub(super) source: &'a str,
+    pub(super) nodes: Vec<ExtractedNode>,
+    pub(super) refs: Vec<ExtractedRef>,
+    pub(super) next_seq: u64,
+    pub(super) emitted_qns: HashSet<String>,
 }
 
 impl WalkCtx<'_> {
-    fn next_seq(&mut self) -> u64 {
+    pub(super) fn next_seq(&mut self) -> u64 {
         self.next_seq += 1;
         self.next_seq
     }
@@ -54,7 +56,7 @@ impl WalkCtx<'_> {
     /// definition has a unique primary key while preserving the readable name
     /// for resolver name-based lookups. A no-op for `def_qn`s that are already
     /// unique (Go appends `#seq`), the mechanism for Python overload pairs.
-    fn dedup(&mut self, qn: String, start_line: u64) -> String {
+    pub(super) fn dedup(&mut self, qn: String, start_line: u64) -> String {
         if self.emitted_qns.insert(qn.clone()) {
             return qn;
         }
@@ -102,7 +104,7 @@ pub(crate) fn parse_with_spec(
     })
 }
 
-fn kind_in(kinds: &[&str], k: &str) -> bool {
+pub(super) fn kind_in(kinds: &[&str], k: &str) -> bool {
     kinds.contains(&k)
 }
 
@@ -288,7 +290,7 @@ fn emit_def(
     }
 
     if let Some(body) = call_scan_of(spec, node) {
-        walk_calls(spec, ctx, body, &qn);
+        calls::walk_calls(spec, ctx, body, &qn);
     }
 }
 
@@ -328,7 +330,7 @@ fn emit_method_recv(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str)
         to_qualified_name: qn.clone(),
     });
     if let Some(body) = call_scan_of(spec, node) {
-        walk_calls(spec, ctx, body, &qn);
+        calls::walk_calls(spec, ctx, body, &qn);
     }
 }
 
@@ -775,43 +777,6 @@ pub(crate) fn walk_imports(spec: &LangSpec, ctx: &mut WalkCtx, import_node: Node
             from_qualified_name: scope.to_string(),
             to_qualified_name: entry.ref_to,
         });
-    }
-}
-
-/// Call walker: emits one `CallSite` node + edge per call expression the
-/// conventions accept. Stack DFS matches the hand-written walker so the `seq`
-/// counter (which keys Go call-site QNs) is assigned in identical order. `seq`
-/// is consumed only when the callee is accepted, so a dropped call (Go's
-/// non-identifier callee) does not perturb the counter.
-pub(crate) fn walk_calls(spec: &LangSpec, ctx: &mut WalkCtx, root: Node, caller_qn: &str) {
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
-        if kind_in(spec.call_node_kinds, n.kind()) {
-            if let Some(callee) = spec.conventions.call_callee(ctx.source, n) {
-                let seq = ctx.next_seq();
-                let entry = spec
-                    .conventions
-                    .call_entry(ctx.source, n, caller_qn, &callee, seq);
-                ctx.nodes.push(ExtractedNode {
-                    label: LABEL_CALL_SITE.to_string(),
-                    name: entry.name,
-                    qualified_name: entry.qualified_name,
-                    start_line: entry.start_line,
-                    end_line: entry.end_line,
-                    visibility: entry.visibility,
-                    properties: entry.properties,
-                });
-                ctx.refs.push(ExtractedRef {
-                    kind: entry.ref_kind.to_string(),
-                    from_qualified_name: caller_qn.to_string(),
-                    to_qualified_name: entry.ref_to,
-                });
-            }
-        }
-        let mut cursor = n.walk();
-        for c in n.children(&mut cursor) {
-            stack.push(c);
-        }
     }
 }
 
