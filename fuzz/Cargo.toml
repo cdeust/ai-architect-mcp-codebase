@@ -1,0 +1,52 @@
+# Fuzzing harness (Scorecard Fuzzing).
+#
+# Deliberately OUTSIDE the workspace (`[workspace]` below + `exclude` in the
+# root manifest): libfuzzer-sys requires a nightly toolchain and links LLVM's
+# libFuzzer runtime, and pulling that into the workspace would force every
+# stable `cargo build`/`cargo clippy` to resolve it. The root crate is pinned to
+# stable 1.95.0 via rust-toolchain.toml, so the split keeps the fuzz targets
+# real without making the primary build depend on nightly.
+#
+# Versions verified against crates.io at 2026-07-26 (`cargo search`), not
+# guessed: libfuzzer-sys 0.4.13, arbitrary 1.4.2.
+
+[package]
+name = "automatised-pipeline-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+arbitrary = { version = "1.4.2", features = ["derive"] }
+
+[dependencies.ai-architect-mcp]
+path = ".."
+
+# Fuzz targets need debug assertions and overflow checks ON — a panic is the
+# signal we are hunting, so optimising them away would defeat the harness.
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
+incremental = false
+codegen-units = 1
+
+[[bin]]
+name = "parse_file"
+path = "fuzz_targets/parse_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_file_utf8"
+path = "fuzz_targets/parse_file_utf8.rs"
+test = false
+doc = false
+bench = false

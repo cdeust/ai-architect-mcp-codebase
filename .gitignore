@@ -12,6 +12,10 @@
 .DS_Store
 .claude/settings.local.json
 .claude/session-cache.json
+# Agent worktrees (agent:spawn / Agent isolation). These are checkouts of this
+# same repo created for parallel work; committing them would nest the repo
+# inside itself.
+.claude/worktrees/
 benches/runs/
 
 # Python bytecode — scripts/ carries the stdlib-only pin gate and its tests;
@@ -28,3 +32,11 @@ mutants.out*.log
 # check flags, because a checked-in binary cannot be reviewed and nobody can
 # prove it matches upstream.
 /actionlint
+
+# cargo-fuzz build output, generated corpora and crash reproducers.
+# A corpus is machine-generated search state, not source; crash artifacts are
+# attached to their failing CI run and reproduced locally on demand.
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/coverage/

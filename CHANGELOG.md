@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Fuzzing harness for the parser (Scorecard Fuzzing).** `parse_file` is the
+  tool's only untrusted-input boundary — the indexer walks a user's repository
+  and hands whatever it finds to it — so a panic there is a denial of service on
+  `index_codebase`: one malformed file would abort the whole indexing run.
+
+  Two cargo-fuzz targets in `fuzz/`, both exercising all eleven languages via a
+  selector byte: `parse_file` feeds lossy-converted arbitrary bytes (reaching
+  UTF-8 boundary edges, which matter because the walkers slice source by AST
+  byte offsets), and `parse_file_utf8` takes only valid UTF-8 so libFuzzer's
+  coverage feedback can evolve inputs toward real code structure. Both assert
+  the parser's stated contract rather than merely "does not panic": 1-based
+  line numbers, non-inverted spans, ordered error ranges, and non-empty
+  qualified names (a QN is a primary key).
+
+  Verified by running them, not just building them: **222,531** and **278,747**
+  executions with 0 crashes, 2130 coverage edges. `.github/workflows/fuzz.yml`
+  keeps them alive — a 120s smoke run per PR (catches a broken harness without
+  failing a PR over an unlucky search) and a 900s scheduled run for the real
+  search.
+
+  The `fuzz` crate is deliberately **excluded** from the workspace: libFuzzer
+  needs nightly, and this workspace is pinned to stable 1.95.0, so the split
+  keeps the targets real without making the primary build depend on nightly.
+  Verified that `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo fmt --check` are unaffected.
+
+
 ### Fixed
 
 - **C preprocessor macros and inline struct definitions reach the graph

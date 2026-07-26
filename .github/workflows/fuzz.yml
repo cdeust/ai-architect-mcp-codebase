@@ -1,0 +1,105 @@
+name: Fuzz
+
+# Scorecard Fuzzing. The point of this job is that the targets in `fuzz/` are
+# REAL and stay real: a fuzz harness nobody runs rots into decoration that
+# satisfies a checker while finding nothing (§9 — if it's built, it must be
+# called).
+#
+# `parse_file` is the tool's only untrusted-input boundary — the indexer walks a
+# user's repository and hands whatever it finds to it. A panic there is a denial
+# of service on `index_codebase`: one malformed file would abort the whole run.
+#
+# Bounded and non-blocking on PRs by design: fuzzing is a search, not a test, so
+# a PR must not fail because a scheduled search happened to be unlucky. The
+# nightly schedule does the long runs; PRs get a short smoke run that catches an
+# outright broken harness.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Daily, 03:41 UTC — long runs happen here, not on the PR path.
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_file, parse_file_utf8]
+
+    # Same zstd/lbug static-link conflict the other jobs hit — see ci.yml.
+    env:
+      ZSTD_SYS_USE_PKG_CONFIG: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libzstd-dev pkg-config cmake
+
+      # libFuzzer requires nightly. The `fuzz` crate is deliberately EXCLUDED
+      # from the workspace (see the root Cargo.toml) so this nightly requirement
+      # never reaches the stable build.
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-${{ matrix.target }}-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # A short run on PRs (is the harness alive?), a long one on the schedule
+      # (actually search). Quoted separately so the distinction is visible in
+      # the log rather than buried in an expression.
+      - name: Fuzz (pull request / push — smoke)
+        if: github.event_name != 'schedule'
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=120 -rss_limit_mb=4096
+
+      - name: Fuzz (scheduled — long run)
+        if: github.event_name == 'schedule'
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=900 -rss_limit_mb=4096
+
+      # On a crash, cargo-fuzz writes the reproducer to fuzz/artifacts/. Print it
+      # inline rather than uploading: this repo pins every action to a reviewed
+      # SHA, and adding an upload action would mean introducing a pin I have not
+      # verified. The input is small enough to read from the log, and base64
+      # keeps it exact through the log's encoding.
+      - name: Show crash reproducer
+        if: failure()
+        run: |
+          for f in fuzz/artifacts/${{ matrix.target }}/*; do
+            [ -e "$f" ] || continue
+            echo "=== reproducer: $f ==="
+            base64 < "$f"
+            echo "=== reproduce locally with: ==="
+            echo "cargo +nightly fuzz run ${{ matrix.target }} $f"
+          done
