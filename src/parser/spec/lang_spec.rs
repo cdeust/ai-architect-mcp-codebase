@@ -101,6 +101,14 @@ pub(crate) struct CFamilySpec {
     /// Leaf kind naming a struct field, unwrapped from pointer/array/function
     /// declarators (C `field_identifier`).
     pub field_identifier_kind: &'static str,
+    /// Object-like macro kinds → `Constant` (`macro=true`) + `Defines`, named by
+    /// `name_field` (C `preproc_def`: `#define MAX 10`).
+    pub macro_object_kinds: &'static [&'static str],
+    /// Function-like macro kinds → `Function` (`macro=true`) + `Defines`, named
+    /// by `name_field` (C `preproc_function_def`: `#define SQUARE(x) ((x)*(x))`).
+    /// Separate from `macro_object_kinds` because the graph label differs —
+    /// a function-like macro is callable, an object-like one is a value.
+    pub macro_function_kinds: &'static [&'static str],
 }
 
 /// Table-driven description of one language's structural node kinds.

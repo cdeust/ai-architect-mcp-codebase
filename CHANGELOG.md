@@ -8,6 +8,36 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **C preprocessor macros and inline struct definitions reach the graph
+  (issue #107).** `#define MAX 10` and `#define SQUARE(x) ((x)*(x))` produced
+  nothing at all, so macro-defined symbols were invisible to the graph and to
+  cross-file resolution. They are now a `Constant` and a `Function`
+  respectively — an object-like macro is a value, a function-like one is
+  callable — both marked `macro=true` so a consumer can tell a preprocessor
+  construct from a real C object. No `Calls` edges are invented from a macro
+  body: a replacement list is unexpanded tokens, not an expression.
+
+  A struct defined INLINE — `typedef struct { int x; } T;` or
+  `struct Foo { int x; } var;` — carries its body in the outer node's `type`
+  field, which the flat top-level scan never reached, so its fields were
+  missing entirely. Both shapes now contribute their `Struct` and `Field`
+  nodes. An anonymous body is emitted under its typedef alias (the alias is the
+  only name that type has), and in that case no separate `typedef` `Constant`
+  is emitted — two nodes on one qualified name would be a duplicate primary
+  key.
+
+  Guarded against the obvious over-correction: `typedef struct Point PointT;`
+  REFERENCES an existing struct rather than defining one, and must not re-emit
+  it. `struct_specifier` is the same node kind either way; only the presence of
+  a `body` field distinguishes them. An earlier draft of this fix emitted a
+  duplicate one-line `Point`, so that case is now a pinned negative control.
+
+  `macro_object_kinds` / `macro_function_kinds` are `CFamilySpec` fields, so
+  C++ and Obj-C inherit macro extraction as data when they migrate onto the
+  same sub-table. Additive to the graph schema (existing labels reused); the C
+  parity ground truth gained seven rows and lost none.
+
+
 - **C functions are named by their declarator, not their last parameter
   (issue #106).** `int add(int a, int b)` extracted a `Function` named `b` —
   and so did its prototype. The old `find_identifier` was a LIFO stack-DFS that

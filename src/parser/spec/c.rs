@@ -158,6 +158,8 @@ static C_FAMILY: CFamilySpec = CFamilySpec {
     parameters_field: "parameters",
     identifier_kinds: &["identifier", "type_identifier"],
     field_identifier_kind: "field_identifier",
+    macro_object_kinds: &["preproc_def"],
+    macro_function_kinds: &["preproc_function_def"],
 };
 
 /// The C language spec row. Class-model slices are empty; the flat C-family

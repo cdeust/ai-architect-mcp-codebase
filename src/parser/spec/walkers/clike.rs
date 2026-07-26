@@ -50,12 +50,22 @@ pub(super) fn walk_c_defs(
             emit_function(spec, cf, ctx, child, scope);
         } else if kind_in(spec.import_node_kinds, k) {
             imports::walk_imports(spec, ctx, child, scope);
+        } else if kind_in(cf.macro_object_kinds, k) {
+            emit_macro(spec, cf, ctx, child, scope, LABEL_CONSTANT);
+        } else if kind_in(cf.macro_function_kinds, k) {
+            emit_macro(spec, cf, ctx, child, scope, LABEL_FUNCTION);
         } else if kind_in(cf.func_decl_kinds, k) {
             // `declaration` is shared by prototypes (`int f(void);`) and plain
             // variable declarations (`int x;`); only the former — carrying a
             // function declarator — is emitted, matching the hand-written walker.
             if is_c_function_prototype(cf, child) {
                 emit_prototype(spec, cf, ctx, child, scope);
+            } else {
+                // Not a prototype, but `struct Foo { int x; } var;` still
+                // declares a type inline (issue #107). The variable itself is
+                // not a graph node (C locals/globals are out of scope for the
+                // flat walker), the TYPE is.
+                emit_inline_type(spec, cf, ctx, child, scope, "");
             }
         } else if child.named_child_count() > 0 {
             // Transparent recursion into an unmatched wrapper with named
@@ -200,7 +210,28 @@ fn named_or_first_identifier(
 /// `Field` + `HasField` per declared member (declarators unwrapped to their
 /// field name; a member with no field name — an anonymous member — is skipped).
 fn emit_struct(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
-    let name = named_or_first_identifier(cf, spec, ctx.source, node);
+    emit_struct_named(spec, cf, ctx, node, scope, None);
+}
+
+/// `emit_struct` with an optional name override for an ANONYMOUS specifier.
+///
+/// `typedef struct { int x; } T;` declares a type whose only usable name is the
+/// typedef alias. Without the override the specifier has no `name` field, the
+/// identifier fallback finds nothing (its members are `field_identifier`, not
+/// `identifier`), and the whole struct — fields included — is dropped, which is
+/// the second half of issue #107.
+fn emit_struct_named(
+    spec: &LangSpec,
+    cf: &CFamilySpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    override_name: Option<&str>,
+) {
+    let name = match override_name {
+        Some(n) => n.to_string(),
+        None => named_or_first_identifier(cf, spec, ctx.source, node),
+    };
     if name.is_empty() {
         return;
     }
@@ -348,12 +379,136 @@ fn emit_enum(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, s
     }
 }
 
+/// Emits a preprocessor macro (issue #107).
+///
+/// `label` splits the two shapes the graph must distinguish: an object-like
+/// `#define MAX 10` is a value (`Constant`), a function-like
+/// `#define SQUARE(x) ((x)*(x))` is callable (`Function`). Both carry
+/// `macro=true` so a consumer can tell a macro from a real declaration — the
+/// preprocessor runs before the compiler, so a macro is not a C object and
+/// silently presenting it as one would be its own defect.
+///
+/// No body is scanned for calls: a macro's replacement list is unexpanded
+/// tokens, not an expression the graph can attribute call sites to. Emitting
+/// speculative `Calls` edges from a macro body would be inventing edges the
+/// grammar does not support.
+fn emit_macro(
+    spec: &LangSpec,
+    _cf: &CFamilySpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    label: &str,
+) {
+    let name = node_field_text(ctx.source, node, spec.name_field);
+    if name.is_empty() {
+        return;
+    }
+    let qn = qual(scope, &name);
+    ctx.nodes.push(ExtractedNode {
+        label: label.to_string(),
+        name: name.clone(),
+        qualified_name: qn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: spec.conventions.visibility_of(&name),
+        properties: vec![("macro".to_string(), "true".to_string())],
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "Defines".to_string(),
+        from_qualified_name: scope.to_string(),
+        to_qualified_name: qn,
+    });
+}
+
+/// Emits a struct/union/enum body declared INLINE inside another declaration
+/// (issue #107): `typedef struct { int x; } T;` and
+/// `struct Foo { int x; } var;` both carry the specifier in their `type` field,
+/// which the flat walker's top-level scan never reaches.
+///
+/// Emitting the inner specifier here is what makes its FIELDS visible — before
+/// this, a typedef'd struct contributed a `Constant` for the alias and nothing
+/// for its members.
+/// What `emit_inline_type` found, so the caller knows whether the alias name has
+/// already been consumed by an anonymous type.
+#[derive(PartialEq, Eq)]
+enum InlineType {
+    /// No inline DEFINITION (absent, or a bare reference like `struct Point`).
+    None,
+    /// A named inline definition (`typedef struct Tag { … } T;`).
+    Named,
+    /// An anonymous inline definition, emitted under `alias`.
+    Anonymous,
+}
+
+fn emit_inline_type(
+    spec: &LangSpec,
+    cf: &CFamilySpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    alias: &str,
+) -> InlineType {
+    let Some(inner) = node.child_by_field_name(spec.type_field) else {
+        return InlineType::None;
+    };
+    // Only a DEFINITION is emitted, never a reference. `struct_specifier` is
+    // the same node kind for both `struct Point { int x; }` (a definition,
+    // which has a `body`) and the bare `struct Point` naming an existing type
+    // in `typedef struct Point PointT;` (no `body`).
+    //
+    // Without this guard the reference re-emitted `Point` as a second Struct
+    // node with a one-line span, so a typedef of an existing struct silently
+    // produced a duplicate type in the graph. Caught by the parity corpus,
+    // which contains exactly that construct — and pinned below by
+    // `c_typedef_of_an_existing_struct_emits_no_duplicate`.
+    if spec
+        .body_field
+        .and_then(|f| inner.child_by_field_name(f))
+        .is_none()
+    {
+        return InlineType::None;
+    }
+    let is_anonymous = node_field_text(ctx.source, inner, spec.name_field).is_empty();
+    let override_name = if is_anonymous && !alias.is_empty() {
+        Some(alias)
+    } else {
+        None
+    };
+    if kind_in(cf.struct_like_kinds, inner.kind()) {
+        emit_struct_named(spec, cf, ctx, inner, scope, override_name);
+    } else if kind_in(cf.enum_like_kinds, inner.kind()) {
+        emit_enum(spec, cf, ctx, inner, scope);
+    } else {
+        return InlineType::None;
+    }
+    if override_name.is_some() {
+        InlineType::Anonymous
+    } else {
+        InlineType::Named
+    }
+}
+
 /// Emits a typedef as a `Constant` (`typedef=true`) + `Defines`. The name is the
 /// first identifier leaf of the whole `type_definition` (LIFO DFS lands on the
 /// declared alias, which follows the aliased type in child order).
 fn emit_typedef(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     let name = find_identifier(cf, ctx.source, node);
     if name.is_empty() {
+        return;
+    }
+    // `typedef struct { … } T;` / `typedef struct Tag { … } T;` carry the type
+    // DEFINITION in the outer node's `type` field, which the flat top-level scan
+    // never reached — so its fields were invisible (issue #107).
+    //
+    // An ANONYMOUS specifier is emitted under the typedef's own name, because
+    // the alias is the only name that type has. In that case the alias IS the
+    // struct, so no separate `typedef` Constant is emitted: doing both would put
+    // two nodes on the same qualified name.
+    //
+    // A NAMED specifier (`typedef struct Tag { … } T;`) keeps both — `Tag` the
+    // struct and `T` the alias are genuinely two names.
+    if emit_inline_type(spec, cf, ctx, node, scope, &name) == InlineType::Anonymous {
         return;
     }
     let qn = qual(scope, &name);

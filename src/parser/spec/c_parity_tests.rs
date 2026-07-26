@@ -30,9 +30,19 @@
 //     walker recurses transparently through preprocessor wrappers, so `dbg`
 //     (prototype), `Gated` (struct), and `gated` (function + call) inside them
 //     are still extracted.
-//   - `#define MAX 10` / `#define SQUARE(x) …` — macros produce NOTHING
-//     (the hand-written walker never modelled `#define`; parity reproduces that;
-//     issue #107).
+//   - `#define MAX 10` → `Constant` and `#define SQUARE(x) …` → `Function`,
+//     both `macro=true` (issue #107). The deleted hand-written walker modelled
+//     neither, so these rows are a DELIBERATE divergence from it, not a
+//     rebaseline. No calls are scanned from a macro body: a replacement list is
+//     unexpanded tokens, not an expression.
+//   - `typedef struct { int ax; int ay; } Anon;` and
+//     `struct Tagged { int tv; } tagged_var;` — a struct defined INLINE inside a
+//     typedef or a declaration. Its body lives in the outer node's `type` field,
+//     which the flat top-level scan never reached, so its FIELDS were invisible
+//     (issue #107). `typedef struct Point PointT;` is the control: that is a
+//     REFERENCE to an existing struct (no `body` field), and must NOT re-emit
+//     `Point` — an earlier draft of the fix did exactly that and produced a
+//     duplicate one-line `Point` node.
 //   - `int global_var;` — a plain variable declaration, NOT a prototype (skipped).
 //   - `int (*signal_handler)(int) = 0;` — a function-pointer variable WITH an
 //     initializer: its `init_declarator` wraps a `function_declarator`, so
@@ -115,6 +125,15 @@ void gated(void) {
 int (*signal_handler)(int) = 0;
 
 int counter = 5;
+
+typedef struct {
+    int ax;
+    int ay;
+} Anon;
+
+struct Tagged {
+    int tv;
+} tagged_var;
 "#;
 
 const PATH: &str = "app/main.c";
@@ -143,6 +162,15 @@ fn expected_node_records() -> Vec<&'static str> {
         "CallSite|method|app/main.c::add#3::call@44:5#6|44|44|public|[(\"callee_name\", \"method\")]",
         "CallSite|printf|app/main.c::add#3::call@43:5#7|43|43|public|[(\"callee_name\", \"printf\")]",
         "Constant|BLUE|app/main.c::Color::BLUE|26|26|public|[(\"enum_entry\", \"true\")]",
+        // issue #107 — object-like macro
+        "Constant|MAX|app/main.c::MAX|5|6|public|[(\"macro\", \"true\")]",
+        // issue #107 — anonymous struct named by its typedef alias, with fields
+        "Struct|Anon|app/main.c::Anon|70|73|public|[]",
+        "Field|ax|app/main.c::Anon::ax|71|71|public|[(\"type_annotation\", \"int\")]",
+        "Field|ay|app/main.c::Anon::ay|72|72|public|[(\"type_annotation\", \"int\")]",
+        // issue #107 — struct defined inline in a declaration
+        "Struct|Tagged|app/main.c::Tagged|75|77|public|[]",
+        "Field|tv|app/main.c::Tagged::tv|76|76|public|[(\"type_annotation\", \"int\")]",
         "Constant|Callback|app/main.c::Callback|31|31|public|[(\"typedef\", \"true\")]",
         "Constant|GREEN|app/main.c::Color::GREEN|25|25|public|[(\"enum_entry\", \"true\")]",
         "Constant|PointT|app/main.c::PointT|29|29|public|[(\"typedef\", \"true\")]",
@@ -160,6 +188,8 @@ fn expected_node_records() -> Vec<&'static str> {
         "Field|width|app/main.c::Point::width|11|11|public|[(\"type_annotation\", \"int\")]",
         "Field|x|app/main.c::Point::x|9|9|public|[(\"type_annotation\", \"int\")]",
         "Field|y|app/main.c::Point::y|10|10|public|[(\"type_annotation\", \"int\")]",
+        // issue #107 — function-like macro
+        "Function|SQUARE|app/main.c::SQUARE|6|7|public|[(\"macro\", \"true\")]",
         "Function|add|app/main.c::add#1|35|35|public|[(\"is_prototype\", \"true\")]",
         "Function|add|app/main.c::add#3|41|49|public|[]",
         "Function|dbg|app/main.c::dbg#10|54|54|public|[(\"is_prototype\", \"true\")]",
@@ -201,6 +231,14 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         ("Defines", "app/main.c", "app/main.c::helper#2"),
         ("Defines", "app/main.c", "app/main.c::signal_handler#13"),
         ("Defines", "app/main.c", "app/main.c::ulong_t"),
+        // issue #107 — macros and inline types
+        ("Defines", "app/main.c", "app/main.c::MAX"),
+        ("Defines", "app/main.c", "app/main.c::SQUARE"),
+        ("Defines", "app/main.c", "app/main.c::Anon"),
+        ("Defines", "app/main.c", "app/main.c::Tagged"),
+        ("HasField", "app/main.c::Anon", "app/main.c::Anon::ax"),
+        ("HasField", "app/main.c::Anon", "app/main.c::Anon::ay"),
+        ("HasField", "app/main.c::Tagged", "app/main.c::Tagged::tv"),
         ("HasField", "app/main.c::Gated", "app/main.c::Gated::flag"),
         ("HasField", "app/main.c::Point", "app/main.c::Point::buf"),
         (
@@ -400,4 +438,142 @@ fn c_parameter_names_never_become_function_names() {
             "parameter {param:?} must never be emitted as a function name"
         );
     }
+}
+
+/// Issue #107 regression: preprocessor macros reach the graph.
+///
+/// The two shapes are deliberately different labels — an object-like `#define`
+/// is a value, a function-like one is callable — so a consumer can tell them
+/// apart, and `macro=true` marks both as preprocessor constructs rather than
+/// real C objects.
+#[test]
+fn c_macros_are_extracted_with_a_macro_marker() {
+    let r = parse_file(
+        "#define MAX 10\n#define SQUARE(x) ((x)*(x))\n",
+        "m.c",
+        Language::C,
+    )
+    .expect("c parse");
+    let find = |name: &str| r.nodes.iter().find(|n| n.name == name);
+
+    let max = find("MAX").expect("object-like macro MAX must be extracted");
+    assert_eq!(max.label, "Constant", "object-like macro is a value");
+    assert!(
+        max.properties
+            .iter()
+            .any(|(k, v)| k == "macro" && v == "true"),
+        "MAX must be marked macro=true, got {:?}",
+        max.properties
+    );
+
+    let sq = find("SQUARE").expect("function-like macro SQUARE must be extracted");
+    assert_eq!(sq.label, "Function", "function-like macro is callable");
+    assert!(
+        sq.properties
+            .iter()
+            .any(|(k, v)| k == "macro" && v == "true"),
+        "SQUARE must be marked macro=true, got {:?}",
+        sq.properties
+    );
+
+    // A macro's replacement list is unexpanded tokens, not an expression, so no
+    // Calls edge may be invented from it — `((x)*(x))` is not a call site.
+    assert!(
+        r.refs.iter().all(|e| e.kind != "Calls"),
+        "a macro body must not produce Calls edges"
+    );
+}
+
+/// Issue #107 regression: a struct DEFINED inline inside a typedef or a
+/// declaration contributes its fields.
+#[test]
+fn c_inline_struct_definitions_contribute_their_fields() {
+    let r = parse_file(
+        "typedef struct { int ax; int ay; } Anon;\nstruct Tagged { int tv; } tagged_var;\n",
+        "i.c",
+        Language::C,
+    )
+    .expect("c parse");
+
+    let structs: Vec<&str> = r
+        .nodes
+        .iter()
+        .filter(|n| n.label == "Struct")
+        .map(|n| n.name.as_str())
+        .collect();
+    assert!(
+        structs.contains(&"Anon"),
+        "an anonymous struct must be emitted under its typedef alias, got {structs:?}"
+    );
+    assert!(
+        structs.contains(&"Tagged"),
+        "a struct defined inline in a declaration must be emitted, got {structs:?}"
+    );
+
+    let fields: Vec<(&str, &str)> = r
+        .nodes
+        .iter()
+        .filter(|n| n.label == "Field")
+        .map(|n| (n.name.as_str(), n.qualified_name.as_str()))
+        .collect();
+    for (name, owner) in [("ax", "Anon"), ("ay", "Anon"), ("tv", "Tagged")] {
+        assert!(
+            fields
+                .iter()
+                .any(|(f, qn)| *f == name && qn.contains(&format!("::{owner}::"))),
+            "field {name:?} must hang off {owner:?}; got {fields:?}"
+        );
+    }
+
+    // The alias IS the struct for an anonymous body, so exactly one node may
+    // own the QN — emitting both a Struct and a typedef Constant named `Anon`
+    // would put two nodes on the same primary key.
+    let anon_nodes: Vec<&str> = r
+        .nodes
+        .iter()
+        .filter(|n| n.qualified_name.ends_with("::Anon"))
+        .map(|n| n.label.as_str())
+        .collect();
+    assert_eq!(
+        anon_nodes,
+        vec!["Struct"],
+        "exactly one node may own ::Anon, and it is the Struct; got {anon_nodes:?}"
+    );
+}
+
+/// Negative control for the inline-type extraction: `typedef struct Point PointT;`
+/// REFERENCES an existing struct — it does not define one — so it must not
+/// re-emit `Point`.
+///
+/// An earlier draft of the #107 fix did exactly that, producing a duplicate
+/// one-line `Point` node alongside the real definition. `struct_specifier` is
+/// the same node kind for a definition and a reference; only the presence of a
+/// `body` field distinguishes them.
+#[test]
+fn c_typedef_of_an_existing_struct_emits_no_duplicate() {
+    let r = parse_file(
+        "struct Point { int x; };\ntypedef struct Point PointT;\n",
+        "d.c",
+        Language::C,
+    )
+    .expect("c parse");
+    let points: Vec<(&str, u64, u64)> = r
+        .nodes
+        .iter()
+        .filter(|n| n.name == "Point" && n.label == "Struct")
+        .map(|n| (n.name.as_str(), n.start_line, n.end_line))
+        .collect();
+    assert_eq!(
+        points.len(),
+        1,
+        "`struct Point` must be emitted exactly once; a typedef REFERENCE is not \
+         a second definition. Got {points:?}"
+    );
+    // And the typedef alias still exists in its own right.
+    assert!(
+        r.nodes
+            .iter()
+            .any(|n| n.name == "PointT" && n.label == "Constant"),
+        "the typedef alias PointT must still be emitted"
+    );
 }
