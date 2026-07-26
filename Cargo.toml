@@ -55,7 +55,7 @@ lbug = "0.18"
 # required by tree-sitter-swift 0.7.3 (ABI 15). 0.24.7 capped at ABI 14 →
 # set_language() failed for Swift and the file was silently skipped.
 # source: github.com/tree-sitter/tree-sitter CHANGELOG 0.25.0 (ABI 15 support).
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 tree-sitter-rust = "0.23"
 # source: multi-language parser support — Python and TypeScript grammars.
 # MIT licensed. Used by parser/python.rs and parser/typescript.rs.

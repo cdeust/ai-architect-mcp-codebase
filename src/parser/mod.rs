@@ -22,6 +22,7 @@ mod spec;
 // CLI (`--time-limit 5`). Parser::parse returns None when this is exceeded.
 pub(crate) const PARSE_TIMEOUT_MICROS: u64 = 5_000_000;
 
+use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use tree_sitter::{Node, ParseOptions, ParseState, Parser, Tree};
@@ -202,20 +203,41 @@ pub(crate) fn collect_error_ranges(root: Node) -> Vec<(u32, u32)> {
     merged
 }
 
-/// Parses `source` under the shared per-file timeout guard and returns the tree.
+/// Parses `source`, cancelling once `deadline` passes, and returns the tree.
 ///
 /// tree-sitter 0.25 deprecated `Parser::set_timeout_micros`; the supported
-/// replacement is a progress callback supplied through `ParseOptions`. Per the
-/// tree-sitter C API (`api.h`: "Parsing was cancelled due to the progress
-/// callback returning true"), the callback returns `true` to CANCEL — so we
-/// return `true` once the wall-clock deadline of `PARSE_TIMEOUT_MICROS` passes.
+/// replacement is a progress callback supplied through `ParseOptions`.
+///
+/// **Cancel polarity.** tree-sitter 0.26 changed the callback's return type
+/// from `bool` to `ControlFlow<()>`. The polarity is unchanged, and is
+/// verified in the binding rather than assumed: its trampoline maps
+/// `ControlFlow::Break(()) => true` and `ControlFlow::Continue(()) => false`
+/// onto the C ABI, whose contract is "Parsing was cancelled due to the
+/// progress callback returning true". So `Break` CANCELS and `Continue`
+/// keeps parsing — which is why the deadline test returns `Break`.
+///
+/// Getting this backwards would silently disable every per-file parse timeout
+/// (or cancel every parse), so `deadline` is a parameter: it makes the cancel
+/// path testable with a deadline already in the past, instead of resting on a
+/// 5-second wall-clock wait no test can afford.
+///
 /// `parse_with_options` takes an input-reader closure; for an in-memory `&str`
 /// it hands tree-sitter the remaining byte slice from each requested offset.
 /// Returns `Err` on timeout-cancel, source rejection, or a `None` tree.
-/// source: tree-sitter v0.25 api.h TSParseOptions / ts_parser_parse_with_options.
-pub(crate) fn parse_with_timeout(parser: &mut Parser, source: &str) -> Result<Tree, String> {
-    let deadline = Instant::now() + Duration::from_micros(PARSE_TIMEOUT_MICROS);
-    let mut past_deadline = |_state: &ParseState| Instant::now() >= deadline;
+/// source: tree-sitter 0.26 binding_rust/lib.rs:221,892-895 (the ControlFlow
+/// trampoline) and api.h TSParseOptions / ts_parser_parse_with_options.
+pub(crate) fn parse_with_deadline(
+    parser: &mut Parser,
+    source: &str,
+    deadline: Instant,
+) -> Result<Tree, String> {
+    let mut past_deadline = |_state: &ParseState| {
+        if Instant::now() >= deadline {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
     let options = ParseOptions::new().progress_callback(&mut past_deadline);
     let bytes = source.as_bytes();
     parser
@@ -231,6 +253,13 @@ pub(crate) fn parse_with_timeout(parser: &mut Parser, source: &str) -> Result<Tr
         })
 }
 
+/// Parses `source` under the shared per-file timeout guard
+/// (`PARSE_TIMEOUT_MICROS`). Thin wrapper over `parse_with_deadline`.
+pub(crate) fn parse_with_timeout(parser: &mut Parser, source: &str) -> Result<Tree, String> {
+    let deadline = Instant::now() + Duration::from_micros(PARSE_TIMEOUT_MICROS);
+    parse_with_deadline(parser, source, deadline)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -238,6 +267,64 @@ pub(crate) fn parse_with_timeout(parser: &mut Parser, source: &str) -> Result<Tr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Go source large enough that tree-sitter consults the progress
+    /// callback at least once while parsing it. The callback fires only
+    /// periodically, so a few-line file completes before it is ever called —
+    /// which would make both polarity tests below vacuously pass.
+    fn progress_checked_source() -> String {
+        let mut src = String::from("package main\n");
+        for i in 0..20000 {
+            src.push_str(&format!("func f{i}() int {{ return {i} }}\n"));
+        }
+        src
+    }
+
+    /// Pins the parse-cancel POLARITY of the progress callback.
+    ///
+    /// tree-sitter 0.26 changed the callback's return type from `bool` to
+    /// `ControlFlow<()>`. Nothing exercised the cancel path before, so a
+    /// reversed mapping would have compiled, passed every existing test, and
+    /// silently either disabled the per-file parse timeout or cancelled every
+    /// parse — the kind of defect this repo has already paid for once (a
+    /// degraded path with no signal).
+    ///
+    /// A deadline already in the past forces the callback to fire on its first
+    /// invocation, so the cancel path is reached deterministically instead of
+    /// waiting out `PARSE_TIMEOUT_MICROS`.
+    #[test]
+    fn parse_cancels_when_the_deadline_has_already_passed() {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_go::LANGUAGE.into())
+            .expect("set go language");
+        let past = Instant::now() - Duration::from_secs(1);
+        let result = parse_with_deadline(&mut parser, &progress_checked_source(), past);
+        assert!(
+            result.is_err(),
+            "a deadline in the past must CANCEL the parse; \
+             Ok here means ControlFlow::Break no longer cancels"
+        );
+    }
+
+    /// The positive control for the test above. Without it, a callback that
+    /// cancelled unconditionally would also make that test pass — so this pins
+    /// that `ControlFlow::Continue` really does keep parsing.
+    #[test]
+    fn parse_succeeds_when_the_deadline_is_in_the_future() {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_go::LANGUAGE.into())
+            .expect("set go language");
+        let future = Instant::now() + Duration::from_secs(60);
+        // Deliberately the SAME large source as the cancel test: a small file
+        // never reaches a progress check, so it would pass even with the
+        // polarity inverted. With this source, an inverted mapping returns
+        // Break before the deadline and this parse would be cancelled.
+        let tree = parse_with_deadline(&mut parser, &progress_checked_source(), future)
+            .expect("a future deadline must NOT cancel the parse");
+        assert_eq!(tree.root_node().kind(), "source_file");
+    }
 
     #[test]
     fn test_language_from_extension() {
