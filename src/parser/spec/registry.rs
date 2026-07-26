@@ -18,12 +18,13 @@ use super::ruby::RUBY_SPEC;
 #[cfg(test)]
 use super::shallow::ShallowSpec;
 use super::swift::SWIFT_SPEC;
+use super::typescript::TS_SPEC;
 use crate::parser::Language;
 
 /// Returns the spec row for a migrated language, or `None` if the language is
 /// still served by its hand-written walker. Migrated so far (ADR-0055):
 /// Go (phase 1), Python (phase 2), Java (phase 3), Kotlin (phase 4),
-/// Swift (phase 5), C (phase 6), C++ (phase 7), ObjC (phase 8).
+/// Swift (phase 5), C (phase 6), C++ and TypeScript (phase 7), ObjC (phase 8).
 pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
     match language {
         Language::Go => Some(&GO_SPEC),
@@ -34,9 +35,9 @@ pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
         Language::C => Some(&C_SPEC),
         Language::Cpp => Some(&CPP_SPEC),
         Language::ObjC => Some(&OBJC_SPEC),
-        // The remaining two (Rust, TypeScript) stay on their hand-written
-        // walkers until each is migrated at parity behind the accuracy gate
-        // (ADR-0055 §5).
+        Language::TypeScript => Some(&TS_SPEC),
+        // Rust alone stays on its hand-written walker until it too is migrated
+        // at parity behind the accuracy gate (ADR-0055 §5).
         _ => None,
     }
 }
@@ -54,6 +55,7 @@ pub(crate) const MIGRATED_SPECS: &[&LangSpec] = &[
     &C_SPEC,
     &CPP_SPEC,
     &OBJC_SPEC,
+    &TS_SPEC,
 ];
 
 /// All shallow spec rows (ADR-0056), for the guard to iterate. A shallow row
@@ -102,6 +104,10 @@ mod tests {
         assert!(
             lang_spec(Language::ObjC).is_some(),
             "ObjC is migrated (phase 8)"
+        );
+        assert!(
+            lang_spec(Language::TypeScript).is_some(),
+            "TypeScript is migrated (phase 7)"
         );
         // Rust is not migrated yet — must stay on its hand-written walker.
         assert!(

@@ -21,12 +21,15 @@
 
 mod calls;
 mod clike;
+mod clike_names;
 mod constants;
 mod cpp;
 mod defs;
 mod embedded;
 mod imports;
 mod objc;
+mod ts;
+mod ts_types;
 mod types;
 
 pub(crate) use defs::walk_defs;
@@ -90,7 +93,7 @@ pub(crate) fn parse_with_spec(
     source: &str,
     file_path: &str,
 ) -> Result<ParseResult, String> {
-    let lang: tree_sitter::Language = (spec.ts_language)();
+    let lang: tree_sitter::Language = grammar_for(spec, file_path);
     let mut parser = Parser::new();
     parser
         .set_language(&lang)
@@ -111,6 +114,25 @@ pub(crate) fn parse_with_spec(
         parse_errors: count_parse_errors(tree.root_node()),
         error_ranges: collect_error_ranges(tree.root_node()),
     })
+}
+
+/// The grammar to parse `file_path` with: the row's `dialect` when the path's
+/// extension selects it, else the row's default `ts_language`.
+///
+/// Preconditions: none. Postconditions: returns the dialect grammar iff
+/// `spec.dialect` is `Some` and the text after the path's LAST `.` is in its
+/// `extensions`; the default grammar in every other case (no dialect, no `.` in
+/// the path, or an unlisted extension). The match is case-sensitive, matching
+/// the hand-written TypeScript walker's `matches!` on the extension.
+fn grammar_for(spec: &LangSpec, file_path: &str) -> tree_sitter::Language {
+    if let Some(dialect) = spec.dialect {
+        // A path with no `.` has no extension and never selects a dialect.
+        let ext = file_path.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+        if dialect.extensions.contains(&ext) {
+            return (dialect.ts_language)();
+        }
+    }
+    (spec.ts_language)()
 }
 
 pub(super) fn kind_in(kinds: &[&str], k: &str) -> bool {

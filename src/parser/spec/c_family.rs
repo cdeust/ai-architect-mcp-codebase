@@ -102,6 +102,10 @@ pub(super) fn call_entry(call_node: Node, caller_qn: &str, callee: &str, seq: u6
         end_line: call_node.end_position().row as u64 + 1,
         ref_kind: "Calls",
         ref_to: callee.to_string(),
+        // One edge per call site for the whole C family. Only TypeScript emits a
+        // second one (a `Calls` to the callee tail beside its `Defines` to the
+        // call-site node), so this stays empty here.
+        extra_refs: Vec::new(),
     }
 }
 

@@ -33,6 +33,9 @@ fn node_types_json(language: Language) -> &'static str {
         Language::C => tree_sitter_c::NODE_TYPES,
         Language::Cpp => tree_sitter_cpp::NODE_TYPES,
         Language::ObjC => tree_sitter_objc::NODE_TYPES,
+        // The `typescript` dialect; the `tsx` dialect is validated too, via
+        // `dialect_node_types_json` below.
+        Language::TypeScript => tree_sitter_typescript::TYPESCRIPT_NODE_TYPES,
         // Shallow-path languages (ADR-0056) are validated by the same guard:
         // a stale node kind in a shallow row drops symbols exactly as silently
         // as in a deep row, so breadth must not come with weaker validation.
@@ -43,6 +46,21 @@ fn node_types_json(language: Language) -> &'static str {
             "spec guard: no node-types.json wired for migrated language {other:?}; \
              wire it in guard::node_types_json"
         ),
+    }
+}
+
+/// The `node-types.json` of a language's ALTERNATE grammar dialect, when it has
+/// one. A row whose `dialect` is `Some` is parsed with either grammar depending
+/// on the file extension, so every node kind and field name it names must be
+/// real in BOTH — a kind that exists only in one dialect would silently drop
+/// symbols for files routed to the other. `None` for the single-grammar
+/// languages.
+/// source: tree-sitter-typescript 0.23.2 exposes `TYPESCRIPT_NODE_TYPES` and
+/// `TSX_NODE_TYPES`, each `include_str!` of that dialect's node-types.json.
+fn dialect_node_types_json(language: Language) -> Option<&'static str> {
+    match language {
+        Language::TypeScript => Some(tree_sitter_typescript::TSX_NODE_TYPES),
+        _ => None,
     }
 }
 
@@ -212,6 +230,70 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             of.typedef_name_kind.to_string(),
         ));
     }
+    // The ECMAScript-family sub-table's node kinds (validated only when present).
+    if let Some(tf) = spec.ts_family {
+        let ts_slices: &[(&'static str, &[&'static str])] = &[
+            ("ts_family.func_decl_kinds", tf.func_decl_kinds),
+            ("ts_family.class_decl_kinds", tf.class_decl_kinds),
+            ("ts_family.interface_decl_kinds", tf.interface_decl_kinds),
+            ("ts_family.enum_decl_kinds", tf.enum_decl_kinds),
+            ("ts_family.type_alias_kinds", tf.type_alias_kinds),
+            ("ts_family.value_decl_kinds", tf.value_decl_kinds),
+            ("ts_family.export_stmt_kinds", tf.export_stmt_kinds),
+            ("ts_family.class_body_kinds", tf.class_body_kinds),
+            ("ts_family.method_kinds", tf.method_kinds),
+            ("ts_family.field_kinds", tf.field_kinds),
+            ("ts_family.interface_body_kinds", tf.interface_body_kinds),
+            (
+                "ts_family.method_signature_kinds",
+                tf.method_signature_kinds,
+            ),
+            (
+                "ts_family.property_signature_kinds",
+                tf.property_signature_kinds,
+            ),
+            ("ts_family.enum_body_kinds", tf.enum_body_kinds),
+            ("ts_family.enum_member_kinds", tf.enum_member_kinds),
+            (
+                "ts_family.enum_bare_member_kinds",
+                tf.enum_bare_member_kinds,
+            ),
+            ("ts_family.class_heritage_kinds", tf.class_heritage_kinds),
+            ("ts_family.extends_clause_kinds", tf.extends_clause_kinds),
+            (
+                "ts_family.implements_clause_kinds",
+                tf.implements_clause_kinds,
+            ),
+            (
+                "ts_family.interface_extends_kinds",
+                tf.interface_extends_kinds,
+            ),
+            ("ts_family.heritage_name_kinds", tf.heritage_name_kinds),
+            ("ts_family.generic_type_kinds", tf.generic_type_kinds),
+            ("ts_family.declarator_kinds", tf.declarator_kinds),
+            ("ts_family.arrow_func_kinds", tf.arrow_func_kinds),
+            (
+                "ts_family.visibility_modifier_kinds",
+                tf.visibility_modifier_kinds,
+            ),
+            ("ts_family.import_clause_kinds", tf.import_clause_kinds),
+            ("ts_family.named_imports_kinds", tf.named_imports_kinds),
+            (
+                "ts_family.namespace_import_kinds",
+                tf.namespace_import_kinds,
+            ),
+            (
+                "ts_family.import_specifier_kinds",
+                tf.import_specifier_kinds,
+            ),
+            ("ts_family.default_import_kinds", tf.default_import_kinds),
+        ];
+        for (field, kinds) in ts_slices {
+            for k in *kinds {
+                out.push((field, (*k).to_string()));
+            }
+        }
+    }
     for emb in spec.embedded {
         out.push((
             "embedded.script_node_kind",
@@ -268,6 +350,15 @@ fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
         out.push((
             "objc_family.superclass_field",
             of.superclass_field.to_string(),
+        ));
+    }
+    // The ECMAScript-family fields (initializer/alias-target/module source).
+    if let Some(tf) = spec.ts_family {
+        out.push(("ts_family.value_field", tf.value_field.to_string()));
+        out.push(("ts_family.alias_field", tf.alias_field.to_string()));
+        out.push((
+            "ts_family.import_source_field",
+            tf.import_source_field.to_string(),
         ));
     }
     out
@@ -363,22 +454,32 @@ fn shallow_guard_is_not_vacuous() {
 fn every_spec_node_kind_is_real_for_its_grammar() {
     let mut failures: Vec<String> = Vec::new();
     for spec in MIGRATED_SPECS {
-        let (kinds, fields) = parse_node_types(node_types_json(spec.language));
-
-        for (field, kind) in spec_node_kinds(spec) {
-            if !kinds.contains(&kind) {
-                failures.push(format!(
-                    "{:?}.{field}: node kind {kind:?} is NOT in the grammar's node-types.json",
-                    spec.language
-                ));
-            }
+        // A row with an extension-selected dialect (TypeScript's `tsx`) is
+        // validated against BOTH grammars: a kind real in only one would drop
+        // symbols for files routed to the other.
+        let mut grammars: Vec<(&str, &str)> = vec![("default", node_types_json(spec.language))];
+        if let Some(json) = dialect_node_types_json(spec.language) {
+            grammars.push(("dialect", json));
         }
-        for (field, name) in spec_field_names(spec) {
-            if !fields.contains(&name) {
-                failures.push(format!(
-                    "{:?}.{field}: field name {name:?} is NOT a field in the grammar's node-types.json",
-                    spec.language
-                ));
+        for (which, json) in grammars {
+            let (kinds, fields) = parse_node_types(json);
+            for (field, kind) in spec_node_kinds(spec) {
+                if !kinds.contains(&kind) {
+                    failures.push(format!(
+                        "{:?}.{field} [{which} grammar]: node kind {kind:?} is NOT in \
+                         the grammar's node-types.json",
+                        spec.language
+                    ));
+                }
+            }
+            for (field, name) in spec_field_names(spec) {
+                if !fields.contains(&name) {
+                    failures.push(format!(
+                        "{:?}.{field} [{which} grammar]: field name {name:?} is NOT a \
+                         field in the grammar's node-types.json",
+                        spec.language
+                    ));
+                }
             }
         }
     }
@@ -387,6 +488,32 @@ fn every_spec_node_kind_is_real_for_its_grammar() {
         "spec-validation guard found stale/wrong spec rows:\n{}",
         failures.join("\n")
     );
+}
+
+/// The dialect half of the guard must actually inspect something. An empty
+/// `dialect_node_types_json` (or a row that stopped declaring its dialect) would
+/// make the second grammar pass above vacuous — the same failure mode
+/// `shallow_guard_is_not_vacuous` closes for the shallow rows.
+#[test]
+fn dialect_guard_is_not_vacuous() {
+    let with_dialect: Vec<Language> = MIGRATED_SPECS
+        .iter()
+        .filter(|s| s.dialect.is_some())
+        .map(|s| s.language)
+        .collect();
+    assert!(
+        !with_dialect.is_empty(),
+        "no migrated spec declares a dialect: the second-grammar validation in \
+         every_spec_node_kind_is_real_for_its_grammar checks nothing"
+    );
+    for language in with_dialect {
+        assert!(
+            dialect_node_types_json(language).is_some(),
+            "{language:?} declares a `dialect` grammar but no node-types.json is wired \
+             for it in guard::dialect_node_types_json, so its kinds are validated \
+             against only one of the two grammars it parses with"
+        );
+    }
 }
 
 #[test]

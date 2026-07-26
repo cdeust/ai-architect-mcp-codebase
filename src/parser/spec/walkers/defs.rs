@@ -11,7 +11,7 @@ use tree_sitter::Node;
 use super::super::lang_spec::LangSpec;
 use super::{
     call_scan_of, calls, class_body_of, clike, constants, cpp, embedded, end_line_of, imports,
-    kind_in, line_of, objc, types, WalkCtx,
+    kind_in, line_of, objc, ts, types, WalkCtx,
 };
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_ENUM, LABEL_FUNCTION,
@@ -52,6 +52,18 @@ pub(crate) fn walk_defs(
     // sends, and C constructs with ObjC's own name resolution fit no other lane.
     if let Some(of) = spec.objc_family {
         objc::walk_objc_defs(spec, of, ctx, parent, scope);
+        return;
+    }
+    // ECMAScript-family grammars (TypeScript/TSX) route to the dedicated `ts`
+    // walker: an export WRAPPER carries its inner declaration's visibility, a
+    // `const` binding is a `Function` or a `Constant` depending on its value,
+    // class and interface bodies emit both methods and fields, and def QNs are
+    // not deduplicated — none of which the arms below can express (see
+    // `TsFamilySpec`). Its own recursion handles class/interface/enum bodies,
+    // so this returns before the class dispatch and the (empty-for-TS) embedded
+    // pass.
+    if let Some(tf) = spec.ts_family {
+        ts::walk_ts_defs(spec, tf, ctx, parent, scope);
         return;
     }
     let mut cursor = parent.walk();

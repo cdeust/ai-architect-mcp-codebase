@@ -312,6 +312,9 @@ impl LanguageConventions for PythonConventions {
             end_line: line,
             ref_kind: "Defines",
             ref_to: cs_id,
+            // One edge per call site: only TypeScript emits a second one (a
+            // `Calls` edge to the callee tail alongside this `Defines`).
+            extra_refs: Vec::new(),
         }
     }
 
@@ -408,6 +411,9 @@ pub(crate) static PYTHON_SPEC: LangSpec = LangSpec {
     c_family: None,
     cpp_family: None,
     objc_family: None,
+    ts_family: None,
+    // One grammar per Python row: no extension-selected dialect.
+    dialect: None,
 };
 
 #[cfg(test)]

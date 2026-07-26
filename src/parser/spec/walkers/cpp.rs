@@ -23,7 +23,8 @@
 
 use tree_sitter::Node;
 
-use super::super::lang_spec::{CppFamilySpec, LangSpec};
+use super::super::families::CppFamilySpec;
+use super::super::lang_spec::LangSpec;
 use super::{calls, end_line_of, imports, kind_in, line_of, WalkCtx};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM,

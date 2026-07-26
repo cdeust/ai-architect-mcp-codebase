@@ -70,6 +70,14 @@ pub(crate) struct CallEntry {
     pub ref_kind: &'static str,
     /// Outgoing ref target (Go: the callee name; Python: this node's QN).
     pub ref_to: String,
+    /// Additional outgoing refs `(kind, to_qualified_name)` from the same caller,
+    /// emitted in order right after the primary one. Empty for every language
+    /// whose call site yields exactly one edge (Go/Python/Java/Kotlin/Swift/C/
+    /// C++). TypeScript emits TWO: a `Defines` edge to the `CallSite` node
+    /// (`ref_kind`/`ref_to`) PLUS a cross-language-consistent
+    /// `Calls`-to-callee-tail edge, so a `.ts` call graph carries the same
+    /// `Calls` edges as its sister languages.
+    pub extra_refs: Vec<(&'static str, String)>,
 }
 
 /// The inheritance a class-like node declares: the node properties recording
@@ -185,6 +193,22 @@ pub(crate) trait LanguageConventions: Sync {
     /// Whether a value-declaration name is a constant. Default: yes. Python
     /// overrides (only `UPPER_SNAKE` module assignments are constants).
     fn is_constant_name(&self, _name: &str) -> bool {
+        true
+    }
+
+    /// Whether a value-declaration STATEMENT declares constants, judged from the
+    /// statement itself rather than from the declared name. Default: yes — the
+    /// languages whose value declarations are always constants (Go/Python, whose
+    /// filter is `is_constant_name` instead). TypeScript overrides: only a
+    /// `const` statement yields `Constant`s (`let x = 1` / `var x = 1` yield
+    /// nothing), and the hand-written walker judged that from the statement's
+    /// leading text, not the grammar's `kind` field.
+    // mutation note (§12): this default body is UNREACHABLE for the migrated set
+    // — only the `ts` walker calls `is_const_decl`, and TypeScript overrides it.
+    // Mutants of the default therefore survive as documented EQUIVALENTs (the
+    // same precedent as `member_constants` / `member_constant_call_body` above),
+    // not as a coverage gap.
+    fn is_const_decl(&self, _source: &str, _node: Node) -> bool {
         true
     }
 

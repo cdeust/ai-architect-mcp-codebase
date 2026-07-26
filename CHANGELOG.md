@@ -140,6 +140,52 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Table-driven language specs — TypeScript migration (issue #60 phase 7,
+  ADR-0055).** Migrated TypeScript off its hand-written walker onto the
+  `src/parser/spec/` seam at exact parity, deleting `src/parser/typescript/`
+  (`mod.rs` + `extract/g1..g4.rs` + `extract/mod.rs`, 1089 LOC). Full 7-tuple
+  node parity and per-EdgeKind **F1 = 1.000** on all seven edge kinds
+  TypeScript emits (Defines / HasMethod / HasField / HasVariant / Extends /
+  Implements / Calls), pinned as ordered ground-truth records in
+  `ts_parity_tests.rs` (46 nodes / 60 refs) and `ts_dialect_tests.rs`
+  (4 nodes / 6 refs); the old-vs-new capture diff was empty.
+
+  TypeScript is the first **ECMAScript-family** row: it fits neither the
+  class-model `walk_defs` nor either C-family walker, because `export` is a
+  WRAPPER that carries its inner declaration's visibility, `const f = () => {}`
+  is a `Function` while `const N = 1` is a `Constant` and `let x = 1` is
+  neither, class and interface bodies emit both methods and fields from four
+  member kinds, and a def QN is deliberately NOT deduplicated (a getter/setter
+  pair shares one). So it gets a `TsFamilySpec` sub-table + a dedicated
+  `walkers/ts.rs` + `walkers/ts_types.rs`, mirroring `clike` for C (#109) and
+  `cpp` for C++ (#125); `walk_defs`/`clike`/`cpp` and the seven languages
+  riding them are untouched.
+
+  Also the first row with a **grammar dialect**: `LangSpec::dialect` +
+  `DialectSpec` move the tsx-vs-typescript grammar choice into data.
+  `.tsx`/`.jsx`/`.js`/`.mjs`/`.cjs` parse with `tsx` (JSX exists only there),
+  `.ts` with `typescript` — the pre-migration behavior, now with a test per
+  extension plus negative controls (`.ts`-on-JSX must report parse errors;
+  matching stays case-sensitive). The spec guard validates every node kind
+  against BOTH dialects' `node-types.json`, so a tsx-only kind in the row fails
+  loudly instead of silently dropping symbols from `.ts` files.
+
+  Behavior lands in `TypeScriptConventions` (~150 code LOC — in the
+  Go 114 / C 147 / C++ 150 / Java 153 band): the four import shapes with their
+  `/`→`::` normalization, the two-edge call site (a new `CallEntry::extra_refs`
+  carries the `Calls`-to-callee-tail edge alongside the `Defines`-to-call-site
+  one; empty for every other language), the keyword-prefix `async`/`const`
+  predicates, and the non-deduplicating def QN.
+- **Four files split back under the §4.1 size cap (boy-scout, §14).**
+  `lang_spec.rs` (which this change pushed to 547) → the per-family structural
+  sub-tables moved to `families.rs`; `walkers/ts.rs` (662) →
+  `walkers/ts_types.rs`; and two pre-existing violations in files this diff
+  touched: `walkers/clike.rs` (593) → `walkers/clike_names.rs` (the C-family
+  name-resolution searches) and `kotlin.rs` (523, over the cap since phase 4) →
+  `kotlin_conventions.rs`. All pure moves, proven by the unchanged C and Kotlin
+  parity suites. Also fixed a spliced pair of doc comments in `clike.rs` that
+  left `declarator_field_children` and `emit_struct_fields` each documenting
+  half of the other.
 - **Generic walker split under the §4.1 size cap (issue #101, ADR-0055).**
   `src/parser/spec/walkers.rs` had grown to 880 lines across the
   Go/Python/Java/Kotlin/Swift migrations, over the 500-line hard cap. Split

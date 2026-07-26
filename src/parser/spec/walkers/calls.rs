@@ -37,6 +37,18 @@ pub(super) fn walk_calls(spec: &LangSpec, ctx: &mut WalkCtx, root: Node, caller_
                     from_qualified_name: caller_qn.to_string(),
                     to_qualified_name: entry.ref_to,
                 });
+                // A language whose call site carries more than one edge
+                // (TypeScript: `Defines` to the call-site node PLUS `Calls` to
+                // the callee tail) lists the rest here, emitted in order right
+                // after the primary edge. Empty for every other language, so
+                // this loop is a no-op for them.
+                for (kind, to) in entry.extra_refs {
+                    ctx.refs.push(ExtractedRef {
+                        kind: kind.to_string(),
+                        from_qualified_name: caller_qn.to_string(),
+                        to_qualified_name: to,
+                    });
+                }
             }
         }
         let mut cursor = n.walk();

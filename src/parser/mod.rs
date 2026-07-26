@@ -1,14 +1,13 @@
 // parser — Multi-language tree-sitter parser module.
 //
 // Dispatches per language: the migrated set (Go/Python/Java/Kotlin/Swift/C/C++/
-// ObjC) routes through the table-driven spec walkers (`spec`, ADR-0055); the
-// rest (Rust/TypeScript) stay on their hand-written modules. All paths
+// ObjC/TypeScript) routes through the table-driven spec walkers (`spec`,
+// ADR-0055); only Rust stays on its hand-written module. All paths
 // produce the same ParseResult/ExtractedNode/ExtractedRef types, so the indexer
 // calls `parse_file(source, file_path, language)` and gets a uniform result
 // regardless of language.
 
 pub mod rust;
-pub mod typescript;
 
 // Table-driven extraction (ADR-0055). Migrated languages route through the
 // generic spec walkers; the rest stay on the hand-written modules above.
@@ -94,11 +93,12 @@ pub struct ExtractedRef {
 pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<ParseResult, String> {
     match lang {
         Language::Rust => rust::parse_rust_file(source, file_path),
-        Language::TypeScript => typescript::parse_typescript_file(source, file_path),
         // Migrated to the table-driven spec walkers (ADR-0055).
         // Go: phase 1 (#85). Python: phase 2 (#89). Java: phase 3 (#91).
         // Kotlin: phase 4 (#95). Swift: phase 5 (#102). C: phase 6 (#109).
-        // C++: phase 7 (#125). ObjC: phase 8 (#60).
+        // C++: phase 7 (#125). ObjC: phase 8 (#138). TypeScript: phase 7 (#60),
+        // whose row carries the TSX dialect, so `.tsx`/`.jsx`/`.js`/`.mjs`/
+        // `.cjs` parse with the tsx grammar and `.ts` with the typescript one.
         Language::ObjC => spec::parse_with_spec(&spec::OBJC_SPEC, source, file_path),
         Language::Go => spec::parse_with_spec(&spec::GO_SPEC, source, file_path),
         Language::Python => spec::parse_with_spec(&spec::PYTHON_SPEC, source, file_path),
@@ -107,6 +107,7 @@ pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<Parse
         Language::Swift => spec::parse_with_spec(&spec::SWIFT_SPEC, source, file_path),
         Language::C => spec::parse_with_spec(&spec::C_SPEC, source, file_path),
         Language::Cpp => spec::parse_with_spec(&spec::CPP_SPEC, source, file_path),
+        Language::TypeScript => spec::parse_with_spec(&spec::TS_SPEC, source, file_path),
         // Shallow path (ADR-0056): a node-kind row only. Emits definitions,
         // calls and the Defines/HasMethod structure, with no visibility and no
         // inheritance — see `spec::shallow` for what that deliberately omits.

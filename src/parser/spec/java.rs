@@ -171,6 +171,8 @@ impl LanguageConventions for JavaConventions {
             end_line: call_node.end_position().row as u64 + 1,
             ref_kind: "Calls",
             ref_to: callee.to_string(),
+            // One edge per call site: only TypeScript emits a second one.
+            extra_refs: Vec::new(),
         }
     }
 
@@ -295,4 +297,7 @@ pub(crate) static JAVA_SPEC: LangSpec = LangSpec {
     c_family: None,
     cpp_family: None,
     objc_family: None,
+    ts_family: None,
+    // One grammar per Java row: no extension-selected dialect.
+    dialect: None,
 };

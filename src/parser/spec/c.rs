@@ -158,4 +158,7 @@ pub(crate) static C_SPEC: LangSpec = LangSpec {
     c_family: Some(&C_FAMILY),
     cpp_family: None,
     objc_family: None,
+    ts_family: None,
+    // One grammar per C row: no extension-selected dialect.
+    dialect: None,
 };
