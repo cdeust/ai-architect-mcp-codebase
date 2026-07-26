@@ -41,7 +41,7 @@ serde_json = "1"
 # the user's existing comments and formatting survive. toml_edit is the
 # format-preserving TOML editor (unlike serde+toml which normalizes on
 # reserialize). Already in the dependency graph via benches/harness (toml 0.8).
-toml_edit = "0.22"
+toml_edit = "0.25"
 # source: stages/stage-2.md §12.4 — sha256 for stage-2 transcript_digest.
 # RustCrypto/hashes, primitive-only, audited since 2018. Single-purpose,
 # well-known, sourced — the only kind of dep the zetetic standard allows.
