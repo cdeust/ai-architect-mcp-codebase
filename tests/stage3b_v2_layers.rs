@@ -2,7 +2,7 @@
 // tests. source: stages/stage-3b-v2.md §5.
 
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::{indexer, macro_expansion, resolver, stdlib_index};
+use ai_architect_mcp::{indexer, macro_expansion, parser, resolver, stdlib_index};
 use std::fs;
 
 #[test]
@@ -147,7 +147,8 @@ pub struct Foo {
     pub x: i32,
 }
 "#;
-    let result = ai_architect_mcp::parser::rust::parse_rust_file(src, "test.rs").expect("parse");
+    let result = ai_architect_mcp::parser::parse_file(src, "test.rs", parser::Language::Rust)
+        .expect("parse");
     let debug_ref = result
         .refs
         .iter()

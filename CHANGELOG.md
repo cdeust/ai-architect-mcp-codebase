@@ -253,6 +253,43 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Table-driven language specs — Rust migration (issue #60 phase 8,
+  ADR-0055).** Migrated Rust off its hand-written walker onto the
+  `src/parser/spec/` seam at exact parity, deleting `src/parser/rust/`
+  (`mod.rs` + `extract/g1..g4.rs` + `extract/mod.rs`, 1649 LOC — the largest
+  per-language walker in the tree) and the dead `src/rust_parser.rs`
+  backward-compat shim. Parity is full 7-tuple node parity **in emission
+  order** plus per-EdgeKind `F1 = 1.000` on Defines/HasMethod/HasField/
+  HasVariant/Extends/Imports/DeriveImplements, pinned by
+  `rust_parity_corpus.rs` + `rust_parity_tests.rs`: **61 nodes, 66 refs, 0
+  parse errors**, captured from the hand-written walker before it was deleted.
+
+  Rust fits none of the three existing structural shapes, so it carries a new
+  `RustFamilySpec` sub-table + `rust_family` discriminator routed to
+  `walkers/rust.rs` + `walkers/rust_types.rs` — the #109 (`clike`, flat C) and
+  #125 (`cpp`, hybrid) precedent. `walk_defs`/`clike`/`cpp` and the seven
+  languages riding them are untouched. What made Rust its own shape: derive
+  attributes accumulate across siblings (and survive an intervening comment);
+  an `impl` block emits no node and re-scopes its methods to the FILE, not the
+  enclosing module; a trait requirement's body is unscanned while an `impl`
+  method's is; `use` and `extern crate` emit *different* edge kinds from one
+  language; and one call node can emit several call sites.
+
+  Calls, imports and supertraits still ride the SHARED generic walkers. Three
+  backward-compatible seam changes made that possible: `import_ref_kind` now
+  receives the import statement (so `use` → `Defines` and `extern crate` →
+  `Imports` can coexist), a new defaulted `extra_call_entries` hook lets one
+  call node yield several call sites (the issue #87 higher-order-argument
+  capture), and `WalkCtx` gained the host `file_path`. All seven prior
+  languages' parity suites are unchanged. The spec guard now validates every
+  `rust_family` node kind and field name against tree-sitter-rust 0.23.3's
+  `node-types.json`, and was proven to fail loudly on a wrong kind before being
+  reverted.
+
+  Two pre-existing extraction behaviors are preserved deliberately (parity is
+  the gate) and filed as separate behavior-changing follow-ups: an `impl` inside
+  a module scopes methods to the file rather than the module (#130), and a trait
+  requirement's default body is never scanned for calls (#131).
 - **Table-driven language specs — TypeScript migration (issue #60 phase 9,
   ADR-0055).** Migrated TypeScript off its hand-written walker onto the
   `src/parser/spec/` seam at exact parity, deleting `src/parser/typescript/`

@@ -346,9 +346,10 @@ impl LanguageConventions for PythonConventions {
         String::new()
     }
 
-    fn import_ref_kind(&self) -> &'static str {
+    fn import_ref_kind(&self, _import_stmt: Node) -> &'static str {
         // Python import refs are file-local `Defines` edges (the resolver
-        // upgrades them to cross-file `Imports` in a later pass).
+        // upgrades them to cross-file `Imports` in a later pass) — uniformly,
+        // for all three import statement kinds, so the statement is unread.
         "Defines"
     }
 }
@@ -410,6 +411,7 @@ pub(crate) static PYTHON_SPEC: LangSpec = LangSpec {
     objc_family: None,
     ts_family: None,
     ts_language_by_ext: None,
+    rust_family: None,
 };
 
 #[cfg(test)]

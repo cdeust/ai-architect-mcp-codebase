@@ -11,7 +11,7 @@ use tree_sitter::Node;
 use super::super::lang_spec::LangSpec;
 use super::{
     call_scan_of, calls, class_body_of, clike, constants, cpp, embedded, end_line_of, imports,
-    kind_in, line_of, objc, types, typescript, WalkCtx,
+    kind_in, line_of, objc, rust, types, typescript, WalkCtx,
 };
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_ENUM, LABEL_FUNCTION,
@@ -60,6 +60,14 @@ pub(crate) fn walk_defs(
     // the walker threads its own class scope.
     if let Some(tf) = spec.ts_family {
         typescript::walk_ts_defs(spec, tf, ctx, parent, scope);
+        return;
+    }
+    // Rust routes to its own item-list walker: derive-attribute accumulation
+    // across siblings, node-less `impl` blocks whose methods attach to the FILE
+    // scope, unscanned trait-requirement bodies, and two import edge kinds fit
+    // none of the arms below (ADR-0055 phase 8, the #109/#125 precedent).
+    if let Some(rf) = spec.rust_family {
+        rust::walk_rust_defs(rust::RustSpecs { spec, rf }, ctx, parent, scope);
         return;
     }
     let mut cursor = parent.walk();

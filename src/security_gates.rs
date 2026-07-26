@@ -277,7 +277,7 @@ fn run_s2(_store: &GraphStore, qualified_name: &str, flags: &mut Vec<SecurityFla
         gate: "unsafe_symbol".into(),
         severity: "info".into(),
         symbol: qualified_name.into(),
-        message: "unsafe detection unavailable: rust_parser does not record is_unsafe \
+        message: "unsafe detection unavailable: the Rust parser does not record is_unsafe \
                   (see stages/stage-8.md §7 Q1; unblocks when stage 3a-v2 ships)"
             .into(),
         details: json!({ "skipped": true, "reason": "parser_missing_is_unsafe" }),

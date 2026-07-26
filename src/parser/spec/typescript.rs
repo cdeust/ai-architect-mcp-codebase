@@ -139,8 +139,10 @@ impl LanguageConventions for TsConventions {
         }
     }
 
-    fn import_ref_kind(&self) -> &'static str {
+    fn import_ref_kind(&self, _import_stmt: Node) -> &'static str {
         // TS imports are file-local `Defines` edges (like Python), not `Imports`.
+        // The statement node is unused: TS has a single import edge kind, unlike
+        // Rust which reads it to split `use` (Defines) from `extern crate` (Imports).
         "Defines"
     }
 
@@ -438,4 +440,5 @@ pub(crate) static TS_SPEC: LangSpec = LangSpec {
     objc_family: None,
     ts_family: Some(&TS_FAMILY),
     ts_language_by_ext: Some(ts_grammar_for),
+    rust_family: None,
 };

@@ -43,7 +43,6 @@ mod prd_validator;
 mod resolver;
 mod resolver_layers;
 mod response_budget;
-mod rust_parser;
 mod search;
 mod security_gates;
 mod semantic_diff;

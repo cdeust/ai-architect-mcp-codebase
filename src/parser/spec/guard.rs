@@ -240,6 +240,55 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             }
         }
     }
+    // The Rust sub-table's node kinds (validated only when present).
+    if let Some(rf) = spec.rust_family {
+        let rust_slices: &[(&'static str, &[&'static str])] = &[
+            ("rust_family.attribute_kinds", rf.attribute_kinds),
+            ("rust_family.function_kinds", rf.function_kinds),
+            (
+                "rust_family.function_signature_kinds",
+                rf.function_signature_kinds,
+            ),
+            ("rust_family.struct_like_kinds", rf.struct_like_kinds),
+            ("rust_family.enum_kinds", rf.enum_kinds),
+            ("rust_family.variant_kinds", rf.variant_kinds),
+            ("rust_family.variant_list_kinds", rf.variant_list_kinds),
+            ("rust_family.trait_kinds", rf.trait_kinds),
+            ("rust_family.impl_kinds", rf.impl_kinds),
+            ("rust_family.decl_list_kinds", rf.decl_list_kinds),
+            ("rust_family.constant_kinds", rf.constant_kinds),
+            ("rust_family.macro_def_kinds", rf.macro_def_kinds),
+            ("rust_family.extern_crate_kinds", rf.extern_crate_kinds),
+            ("rust_family.type_alias_kinds", rf.type_alias_kinds),
+            ("rust_family.use_kinds", rf.use_kinds),
+            ("rust_family.mod_kinds", rf.mod_kinds),
+            ("rust_family.fn_value_arg_kinds", rf.fn_value_arg_kinds),
+        ];
+        for (field, kinds) in rust_slices {
+            for k in *kinds {
+                out.push((field, (*k).to_string()));
+            }
+        }
+        let rust_singles: &[(&'static str, &'static str)] = &[
+            ("rust_family.use_list_kind", rf.use_list_kind),
+            ("rust_family.scoped_use_list_kind", rf.scoped_use_list_kind),
+            ("rust_family.use_as_clause_kind", rf.use_as_clause_kind),
+            ("rust_family.use_wildcard_kind", rf.use_wildcard_kind),
+            (
+                "rust_family.macro_invocation_kind",
+                rf.macro_invocation_kind,
+            ),
+            ("rust_family.visibility_kind", rf.visibility_kind),
+            (
+                "rust_family.function_modifiers_kind",
+                rf.function_modifiers_kind,
+            ),
+            ("rust_family.async_kind", rf.async_kind),
+        ];
+        for (field, kind) in rust_singles {
+            out.push((field, (*kind).to_string()));
+        }
+    }
     for emb in spec.embedded {
         out.push((
             "embedded.script_node_kind",
@@ -307,6 +356,23 @@ fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
         out.push(("ts_family.source_field", tf.source_field.to_string()));
         out.push(("ts_family.value_field", tf.value_field.to_string()));
         out.push(("ts_family.alias_field", tf.alias_field.to_string()));
+    }
+    // The Rust sub-table's field names (the use-tree, impl-trait, and call
+    // fields the conventions read).
+    if let Some(rf) = spec.rust_family {
+        let rust_fields: &[(&'static str, &'static str)] = &[
+            ("rust_family.argument_field", rf.argument_field),
+            ("rust_family.path_field", rf.path_field),
+            ("rust_family.alias_field", rf.alias_field),
+            ("rust_family.list_field", rf.list_field),
+            ("rust_family.trait_field", rf.trait_field),
+            ("rust_family.arguments_field", rf.arguments_field),
+            ("rust_family.macro_field", rf.macro_field),
+            ("rust_family.callee_field", rf.callee_field),
+        ];
+        for (field, name) in rust_fields {
+            out.push((field, (*name).to_string()));
+        }
     }
     out
 }

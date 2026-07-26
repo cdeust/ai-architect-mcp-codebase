@@ -282,4 +282,5 @@ pub(crate) static OBJC_SPEC: LangSpec = LangSpec {
     objc_family: Some(&OBJC_FAMILY),
     ts_family: None,
     ts_language_by_ext: None,
+    rust_family: None,
 };

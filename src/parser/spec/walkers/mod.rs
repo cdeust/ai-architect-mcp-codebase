@@ -29,6 +29,8 @@ mod defs;
 mod embedded;
 mod imports;
 mod objc;
+mod rust;
+mod rust_types;
 mod types;
 mod typescript;
 
@@ -52,6 +54,11 @@ use crate::parser::{
 /// for languages whose `def_qn` is already unique (Go's `#seq`).
 pub(crate) struct WalkCtx<'a> {
     pub(super) source: &'a str,
+    /// The file's repo-relative id — the outermost scope of the walk. Read by
+    /// the `rust` walker, whose `impl` methods attach to `{file_path}::{Type}`
+    /// regardless of the enclosing module (an `impl` inside `mod helpers` still
+    /// scopes its methods to the file), so the scope alone cannot supply it.
+    pub(super) file_path: &'a str,
     pub(super) nodes: Vec<ExtractedNode>,
     pub(super) refs: Vec<ExtractedRef>,
     pub(super) next_seq: u64,
@@ -108,6 +115,7 @@ pub(crate) fn parse_with_spec(
 
     let mut ctx = WalkCtx {
         source,
+        file_path,
         nodes: Vec::new(),
         refs: Vec::new(),
         next_seq: 0,

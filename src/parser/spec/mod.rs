@@ -24,6 +24,7 @@ mod objc;
 mod python;
 mod registry;
 mod ruby;
+mod rust;
 mod shallow;
 mod swift;
 mod typescript;
@@ -62,6 +63,12 @@ mod parity_tests;
 #[cfg(test)]
 mod python_parity_tests;
 #[cfg(test)]
+mod rust_parity_corpus;
+#[cfg(test)]
+mod rust_parity_tests;
+#[cfg(test)]
+mod rust_walker_tests;
+#[cfg(test)]
 mod shallow_tests;
 #[cfg(test)]
 mod swift_parity_tests;
@@ -76,6 +83,7 @@ pub(crate) use kotlin::KOTLIN_SPEC;
 pub(crate) use objc::OBJC_SPEC;
 pub(crate) use python::PYTHON_SPEC;
 pub(crate) use ruby::RUBY_SPEC;
+pub(crate) use rust::RUST_SPEC;
 pub(crate) use shallow::parse_shallow;
 pub(crate) use swift::SWIFT_SPEC;
 pub(crate) use typescript::TS_SPEC;

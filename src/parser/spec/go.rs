@@ -201,4 +201,5 @@ pub(crate) static GO_SPEC: LangSpec = LangSpec {
     objc_family: None,
     ts_family: None,
     ts_language_by_ext: None,
+    rust_family: None,
 };

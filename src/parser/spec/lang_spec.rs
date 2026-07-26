@@ -31,6 +31,142 @@ use crate::parser::Language;
 // `families.rs` (§4.1 split, #144) and are re-exported above. The #123/#124
 // field additions landed in `families.rs`, not here.
 
+/// The node kinds a **Rust** grammar uses (ADR-0055 phase 8).
+///
+/// Rust fits none of the three existing shapes. Its hand-written walker
+/// (`parser::rust::extract`) is an item-list recursion whose divergences are
+/// structural, not behavioral:
+/// - `#[derive(...)]` attributes are **accumulated across siblings** and applied
+///   to the next struct/enum/union as an `implements` property plus synthetic
+///   `DeriveImplements` edges; a non-item child (a comment) does NOT reset the
+///   accumulator.
+/// - An `impl_item` emits **no node of its own**; its methods attach to
+///   `{file_path}::{impl_type_text}` — the FILE scope, not the enclosing module,
+///   and the type text carries its generics (`Wrapper<T>`).
+/// - A `trait_item`'s requirements are `Method`s whose bodies are NOT scanned
+///   for calls, while an `impl_item`'s method bodies are.
+/// - `use` declarations expand a brace/alias/glob tree into one atomic `Import`
+///   per leaf with a `Defines` edge, while `extern crate` emits an `Import` with
+///   an `Imports` edge — one language, two import edge kinds.
+/// - A `call_expression` emits the call site **plus** one extra call site per
+///   function-value argument (issue #87), and a `macro_invocation` emits a call
+///   site whose callee carries a trailing `!`.
+///
+/// When a `LangSpec` carries `rust_family: Some(_)`, `walk_defs` delegates the
+/// whole file to `walkers/rust.rs` (the #109 `clike` / #125 `cpp` precedent),
+/// leaving `walk_defs` / `clike` / `cpp` and the seven languages riding them
+/// untouched. Calls and imports still route through the SHARED generic walkers
+/// (`calls::walk_calls`, `imports::walk_imports`) via `RustConventions`.
+///
+/// Every string traces to tree-sitter-rust 0.23.3's `node-types.json` and is
+/// validated by the spec guard.
+/// source: tree-sitter-rust 0.23.3 src/node-types.json.
+pub(crate) struct RustFamilySpec {
+    /// Attribute kinds whose `#[derive(A, B)]` payload accumulates into the
+    /// pending-derive list applied to the next struct/enum/union
+    /// (`attribute_item`). Emits no node.
+    pub attribute_kinds: &'static [&'static str],
+    /// Free-function item kinds → `Function` + `Defines` at item scope, or
+    /// `Method` + `HasMethod` inside a trait/impl body (`function_item`).
+    pub function_kinds: &'static [&'static str],
+    /// Bodiless function-declaration kinds, valid only inside a trait or impl
+    /// body → `Method` + `HasMethod` with no call scan
+    /// (`function_signature_item`).
+    pub function_signature_kinds: &'static [&'static str],
+    /// Struct-like item kinds → `Struct` + `Defines`, recursing the `body_field`
+    /// for fields (`struct_item`, `union_item` — a union names and lists its
+    /// members exactly as a struct does).
+    pub struct_like_kinds: &'static [&'static str],
+    /// Enum item kinds → `Enum` + `Defines`, whose `variant_kinds` body children
+    /// become `Variant`s (`enum_item`).
+    pub enum_kinds: &'static [&'static str],
+    /// Enum-member kinds inside a `variant_list_kinds` body → `Variant` +
+    /// `HasVariant` (`enum_variant`).
+    pub variant_kinds: &'static [&'static str],
+    /// The `body_field` kind an enum's variants live in (`enum_variant_list`).
+    /// A body of any other kind yields no variants.
+    pub variant_list_kinds: &'static [&'static str],
+    /// Trait item kinds → `Trait` + `Defines`, supertraits → `Extends`, and
+    /// requirements → `Method` + `HasMethod` (`trait_item`).
+    pub trait_kinds: &'static [&'static str],
+    /// Impl-block kinds — emit NO node; their methods attach to the impl type
+    /// under the FILE scope (`impl_item`).
+    pub impl_kinds: &'static [&'static str],
+    /// The `body_field` kind a trait/impl/module body takes (`declaration_list`).
+    /// A body of any other kind is not walked.
+    pub decl_list_kinds: &'static [&'static str],
+    /// Const/static item kinds → `Constant` + `Defines` with a `type_annotation`
+    /// property (`const_item`, `static_item` — same name/type fields).
+    pub constant_kinds: &'static [&'static str],
+    /// `macro_rules!` definition kinds → `Constant` (`is_macro=true`) +
+    /// `Defines`; AP has no dedicated Macro label (`macro_definition`).
+    pub macro_def_kinds: &'static [&'static str],
+    /// `extern crate` kinds → `Import` + an **`Imports`** edge to the crate name
+    /// (`extern_crate_declaration`). Distinct from `use_kinds`, whose edge is
+    /// `Defines`.
+    pub extern_crate_kinds: &'static [&'static str],
+    /// Type-alias item kinds → `TypeAlias` + `Defines` with a `target_type`
+    /// property read from `type_field` (`type_item`).
+    pub type_alias_kinds: &'static [&'static str],
+    /// `use` declaration kinds → one `Import` + **`Defines`** edge per expanded
+    /// leaf of the `argument_field` tree (`use_declaration`).
+    pub use_kinds: &'static [&'static str],
+    /// Module item kinds → `Module` + `Defines`, recursing a `decl_list_kinds`
+    /// body under the module's QN (`mod_item`). A bodiless `mod foo;` emits the
+    /// node and recurses nothing.
+    pub mod_kinds: &'static [&'static str],
+    /// Brace-list kind in a `use` tree whose named children are expanded under
+    /// the current prefix (`use_list`).
+    pub use_list_kind: &'static str,
+    /// Prefixed brace-list kind in a `use` tree: `path_field` extends the prefix,
+    /// `list_field` holds the leaves (`scoped_use_list`).
+    pub scoped_use_list_kind: &'static str,
+    /// Aliased-import kind in a `use` tree: `path_field` + `alias_field`
+    /// (`use_as_clause`).
+    pub use_as_clause_kind: &'static str,
+    /// Glob kind in a `use` tree; its text is `<path>::*` (`use_wildcard`).
+    pub use_wildcard_kind: &'static str,
+    /// The call-site kind whose callee is a macro path rather than a callee
+    /// expression (`macro_invocation`): the callee is `macro_field`'s text plus a
+    /// trailing `!`, so the resolver's Layer 4 can tell a macro from a function
+    /// without re-parsing. Also listed in `call_node_kinds` so the shared call
+    /// DFS visits it.
+    pub macro_invocation_kind: &'static str,
+    /// Bare-callee kinds a call's `arguments_field` child may take to count as a
+    /// function passed **by value** (issue #87) → one extra `CallSite` each
+    /// (`identifier`, `scoped_identifier`). Anything else (a nested call, a
+    /// closure, a reference, a literal) is not a function reference.
+    pub fn_value_arg_kinds: &'static [&'static str],
+    /// The child kind carrying a declaration's visibility; its verbatim text IS
+    /// the visibility (`pub`, `pub(crate)`, `pub(super)`), and its absence means
+    /// private — an empty string (`visibility_modifier`).
+    pub visibility_kind: &'static str,
+    /// The child kind wrapping a function's modifier keywords
+    /// (`function_modifiers`); an `async_kind` child of it marks an async fn.
+    pub function_modifiers_kind: &'static str,
+    /// The modifier token marking a function async (`async`).
+    pub async_kind: &'static str,
+    /// Field naming a `use` declaration's import tree (`argument`).
+    pub argument_field: &'static str,
+    /// Field naming the path of a `scoped_use_list_kind` / `use_as_clause_kind`
+    /// (`path`).
+    pub path_field: &'static str,
+    /// Field naming the alias of a `use_as_clause_kind` (`alias`).
+    pub alias_field: &'static str,
+    /// Field naming the brace list of a `scoped_use_list_kind` (`list`).
+    pub list_field: &'static str,
+    /// Field naming the implemented trait on an `impl_kinds` node (`trait`);
+    /// absent for an inherent impl.
+    pub trait_field: &'static str,
+    /// Field naming a call's argument list (`arguments`), scanned for
+    /// `fn_value_arg_kinds` children.
+    pub arguments_field: &'static str,
+    /// Field naming a macro invocation's macro path (`macro`).
+    pub macro_field: &'static str,
+    /// Field naming a call expression's callee (`function`).
+    pub callee_field: &'static str,
+}
+
 /// Table-driven description of one language's structural node kinds.
 ///
 /// Consumed by the generic walkers (`walk_defs` / `walk_calls` /
@@ -203,7 +339,8 @@ pub(crate) struct LangSpec {
     /// When `Some`, this language is Objective-C: `walk_defs` delegates the whole
     /// file to the `objc` walker (consuming this sub-table) instead of any other
     /// lane. `None` for every other language. At most one of `c_family` /
-    /// `cpp_family` / `objc_family` / `ts_family` is `Some` on a given row.
+    /// `cpp_family` / `objc_family` / `ts_family` / `rust_family` is `Some` on a
+    /// given row.
     pub objc_family: Option<&'static ObjcFamilySpec>,
     /// When `Some`, this language is TypeScript/TSX: `walk_defs` delegates the
     /// whole file to the `typescript` walker (consuming this sub-table) instead
@@ -218,4 +355,10 @@ pub(crate) struct LangSpec {
     /// file path instead of the fixed `ts_language`; `None` for every other
     /// language, which uses `ts_language`.
     pub ts_language_by_ext: Option<fn(&str) -> TsLanguage>,
+    /// When `Some`, this language is Rust: `walk_defs` delegates the whole file
+    /// to the `rust` walker (consuming this sub-table) instead of the flat
+    /// `clike` walker, the hybrid `cpp` walker, or the class-model arms. `None`
+    /// for every other language. At most one of `c_family` / `cpp_family` /
+    /// `objc_family` / `ts_family` / `rust_family` is `Some` on a given row.
+    pub rust_family: Option<&'static RustFamilySpec>,
 }

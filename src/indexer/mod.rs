@@ -359,7 +359,7 @@ mod tests {
 
         assert!(
             result.files_indexed >= 3,
-            "should index at least main.rs + graph_store.rs + rust_parser.rs, got {}",
+            "should index at least main.rs + graph_store.rs + lib.rs, got {}",
             result.files_indexed
         );
         assert!(

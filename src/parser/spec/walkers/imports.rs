@@ -27,7 +27,7 @@ pub(super) fn walk_imports(spec: &LangSpec, ctx: &mut WalkCtx, import_node: Node
             properties: entry.properties,
         });
         ctx.refs.push(ExtractedRef {
-            kind: spec.conventions.import_ref_kind().to_string(),
+            kind: spec.conventions.import_ref_kind(import_node).to_string(),
             from_qualified_name: scope.to_string(),
             to_qualified_name: entry.ref_to,
         });

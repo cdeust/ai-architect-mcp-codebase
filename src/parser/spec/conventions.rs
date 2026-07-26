@@ -204,10 +204,40 @@ pub(crate) trait LanguageConventions: Sync {
         self.visibility_of(name)
     }
 
-    /// Edge kind for an import ref. Default: `Imports` (Go). Python emits
-    /// `Defines` for imports (file-local declaration edges) and overrides.
-    fn import_ref_kind(&self) -> &'static str {
+    /// Edge kind for an import ref, given the import STATEMENT node that
+    /// produced the entries. Default: `Imports` (Go). Python emits `Defines`
+    /// for imports (file-local declaration edges) and overrides unconditionally.
+    ///
+    /// The node is a parameter because Rust is one language with TWO import edge
+    /// kinds: a `use` declaration emits a file-local `Defines` (the imported
+    /// name becomes a symbol in this file), while `extern crate` emits an
+    /// `Imports` edge to the crate name. That distinction is a property of the
+    /// statement, so it can only be decided with the statement in hand.
+    fn import_ref_kind(&self, _import_stmt: Node) -> &'static str {
         "Imports"
+    }
+
+    /// Extra `CallSite`s a single accepted call node yields BEYOND the one
+    /// `call_entry` shapes, appended in order. Default: none — one call node is
+    /// one call site for every language but Rust.
+    ///
+    /// Rust overrides it for the higher-order-argument capture (issue #87): a
+    /// function passed *by value* (`queue.iter().map(process_order)`) is a real
+    /// reference to that function, but the argument identifier is not itself a
+    /// call node, so the DFS would never emit a call site for it and the
+    /// resolver would never record the `Calls` edge.
+    // mutation note (§12): the `Vec::new()` → `vec![]` mutant here is a proven
+    // EQUIVALENT mutant — both construct the same empty `Vec`, so no test can
+    // observe a difference (same precedent as `function_props` above). The
+    // default is also unreachable for the non-Rust languages in the sense that
+    // it can only ever contribute zero entries. Not a coverage gap.
+    fn extra_call_entries(
+        &self,
+        _source: &str,
+        _call_node: Node,
+        _caller_qn: &str,
+    ) -> Vec<CallEntry> {
+        Vec::new()
     }
 
     /// Visibility for a declared node, given both its AST node and its name.

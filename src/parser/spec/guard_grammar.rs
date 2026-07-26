@@ -32,16 +32,16 @@ pub(super) fn node_types_json(language: Language) -> &'static str {
         // grammar adds only JSX kinds, which the spec does not reference), so the
         // typescript node-types.json is the validation source.
         Language::TypeScript => tree_sitter_typescript::TYPESCRIPT_NODE_TYPES,
+        Language::Rust => tree_sitter_rust::NODE_TYPES,
         // Shallow-path languages (ADR-0056) are validated by the same guard:
         // a stale node kind in a shallow row drops symbols exactly as silently
         // as in a deep row, so breadth must not come with weaker validation.
         Language::Ruby => tree_sitter_ruby::NODE_TYPES,
-        // A spec row for a not-yet-wired language would fail loudly here rather
-        // than silently skip validation.
-        other => panic!(
-            "spec guard: no node-types.json wired for migrated language {other:?}; \
-             wire it in guard_grammar::node_types_json"
-        ),
+        // Every `Language` variant is wired above: with Rust's migration the
+        // core set is complete, so the match is exhaustive. A future variant
+        // therefore fails LOUDLY at compile time (non-exhaustive-match error) —
+        // a stronger guard than the previous runtime `panic!` catch-all, which
+        // is now unreachable and removed (§9 dead code).
     }
 }
 

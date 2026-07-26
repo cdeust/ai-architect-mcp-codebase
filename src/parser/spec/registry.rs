@@ -16,6 +16,7 @@ use super::typescript::TS_SPEC;
 // it — an ungated import would be an unused-import warning in release builds.
 #[cfg(test)]
 use super::ruby::RUBY_SPEC;
+use super::rust::RUST_SPEC;
 #[cfg(test)]
 use super::shallow::ShallowSpec;
 use super::swift::SWIFT_SPEC;
@@ -24,8 +25,8 @@ use crate::parser::Language;
 /// Returns the spec row for a migrated language, or `None` if the language is
 /// still served by its hand-written walker. Migrated so far (ADR-0055):
 /// Go (phase 1), Python (phase 2), Java (phase 3), Kotlin (phase 4),
-/// Swift (phase 5), C (phase 6), C++ (phase 7), ObjC (phase 8),
-/// TypeScript (phase 9).
+/// Swift (phase 5), C (phase 6), C++ (phase 7), ObjC, TypeScript, and Rust —
+/// all ten core languages are now table-driven.
 pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
     match language {
         Language::Go => Some(&GO_SPEC),
@@ -37,8 +38,9 @@ pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
         Language::Cpp => Some(&CPP_SPEC),
         Language::ObjC => Some(&OBJC_SPEC),
         Language::TypeScript => Some(&TS_SPEC),
-        // The remaining language (Rust) stays on its hand-written walker until
-        // migrated at parity behind the accuracy gate (ADR-0055 §5).
+        Language::Rust => Some(&RUST_SPEC),
+        // Every core language is migrated; any remaining `Language` variant
+        // (e.g. the shallow-only Ruby row) has no deep spec.
         _ => None,
     }
 }
@@ -57,6 +59,7 @@ pub(crate) const MIGRATED_SPECS: &[&LangSpec] = &[
     &CPP_SPEC,
     &OBJC_SPEC,
     &TS_SPEC,
+    &RUST_SPEC,
 ];
 
 /// All shallow spec rows (ADR-0056), for the guard to iterate. A shallow row
@@ -70,11 +73,11 @@ mod tests {
     use super::lang_spec;
     use crate::parser::Language;
 
-    /// Pins the strangler-fig migration state: every migrated language resolves
+    /// Pins the strangler-fig migration state: every core language now resolves
     /// to its spec (so the embedded-reparse path and any registry consumer sees
-    /// it), and an un-migrated language resolves to `None` (still on its hand-
-    /// written walker). Kills the "delete the `Language::Python` arm" mutant,
-    /// which `parse_file`'s direct `PYTHON_SPEC` dispatch would otherwise hide.
+    /// it) — with Rust's migration the core set is complete. Kills the "delete
+    /// the `Language::Python` arm" mutant, which `parse_file`'s direct
+    /// `PYTHON_SPEC` dispatch would otherwise hide.
     #[test]
     fn migrated_languages_resolve_and_unmigrated_do_not() {
         assert!(
@@ -102,18 +105,14 @@ mod tests {
             lang_spec(Language::Cpp).is_some(),
             "C++ is migrated (phase 7)"
         );
-        assert!(
-            lang_spec(Language::ObjC).is_some(),
-            "ObjC is migrated (phase 8)"
-        );
+        assert!(lang_spec(Language::ObjC).is_some(), "ObjC is migrated");
         assert!(
             lang_spec(Language::TypeScript).is_some(),
-            "TypeScript is migrated (phase 9)"
+            "TypeScript is migrated"
         );
-        // Rust is not migrated yet — must stay on its hand-written walker.
         assert!(
-            lang_spec(Language::Rust).is_none(),
-            "Rust is not migrated; registry must return None"
+            lang_spec(Language::Rust).is_some(),
+            "Rust is migrated (phase 8)"
         );
     }
 }

@@ -26,7 +26,6 @@ pub mod prd_input;
 pub mod prd_validator;
 pub mod resolver;
 pub mod resolver_layers;
-pub mod rust_parser;
 pub mod search;
 pub mod security_gates;
 pub mod semantic_diff;

@@ -61,6 +61,10 @@ fn reparse_embedded(inner_spec: &LangSpec, ctx: &mut WalkCtx, content: Node, sco
     // offsets resolve against `text`, then its output is merged into `ctx`.
     let mut inner = WalkCtx {
         source: &text,
+        // The embedded walk keeps the HOST file's id: an embedded region is part
+        // of the host file, so any file-scoped shaping (the Rust walker's `impl`
+        // receiver) must still resolve to the host path.
+        file_path: ctx.file_path,
         nodes: Vec::new(),
         refs: Vec::new(),
         next_seq: ctx.next_seq,
