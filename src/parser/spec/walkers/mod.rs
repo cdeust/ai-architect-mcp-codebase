@@ -20,6 +20,7 @@
 // OCP: adding a language is data, not a new walker (ADR-0055 §1.2).
 
 mod calls;
+mod imports;
 
 use std::collections::HashSet;
 
@@ -29,8 +30,7 @@ use super::lang_spec::LangSpec;
 use crate::parser::{
     collect_error_ranges, count_parse_errors, node_field_text, node_text, parse_with_timeout, qual,
     ExtractedNode, ExtractedRef, ParseResult, LABEL_CONSTANT, LABEL_ENUM, LABEL_FIELD,
-    LABEL_FUNCTION, LABEL_IMPORT, LABEL_METHOD, LABEL_STRUCT, LABEL_TRAIT, LABEL_TYPE_ALIAS,
-    LABEL_VARIANT,
+    LABEL_FUNCTION, LABEL_METHOD, LABEL_STRUCT, LABEL_TRAIT, LABEL_TYPE_ALIAS, LABEL_VARIANT,
 };
 
 /// Mutable state threaded through a single file's walk. `next_seq` is the
@@ -183,7 +183,7 @@ pub(crate) fn walk_defs(
         if kind_in(spec.skip_node_kinds, k) {
             continue;
         } else if kind_in(spec.import_node_kinds, k) {
-            walk_imports(spec, ctx, child, scope);
+            imports::walk_imports(spec, ctx, child, scope);
         } else if let Some(label) = class_like_label(spec, k) {
             emit_class(spec, ctx, child, scope, label);
         } else if kind_in(spec.decorated_def_kinds, k) {
@@ -751,31 +751,6 @@ fn emit_value_spec(spec: &LangSpec, ctx: &mut WalkCtx, n: Node, scope: &str) {
             kind: "Defines".to_string(),
             from_qualified_name: scope.to_string(),
             to_qualified_name: qn,
-        });
-    }
-}
-
-/// Import walker: interprets one import statement into zero or more `Import`
-/// nodes + import edges via the conventions (Go descends to `import_spec`
-/// nodes; Python dispatches the three Python import-statement kinds).
-pub(crate) fn walk_imports(spec: &LangSpec, ctx: &mut WalkCtx, import_node: Node, scope: &str) {
-    for entry in spec
-        .conventions
-        .imports_of(ctx.source, spec, import_node, scope)
-    {
-        ctx.nodes.push(ExtractedNode {
-            label: LABEL_IMPORT.to_string(),
-            name: entry.display_name,
-            qualified_name: entry.qualified_name,
-            start_line: entry.start_line,
-            end_line: entry.end_line,
-            visibility: entry.visibility,
-            properties: entry.properties,
-        });
-        ctx.refs.push(ExtractedRef {
-            kind: spec.conventions.import_ref_kind().to_string(),
-            from_qualified_name: scope.to_string(),
-            to_qualified_name: entry.ref_to,
         });
     }
 }
