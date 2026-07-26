@@ -63,9 +63,23 @@ pub(crate) struct LangSpec {
     pub method_node_kinds: &'static [&'static str],
     /// Class-like declaration kinds that map to `Struct`, may carry base
     /// classes (`extends_field`), and recurse into their `body_field` with the
-    /// class as the enclosing scope (Python `class_definition`). Empty for
-    /// languages without class-body recursion (Go, which uses type specs).
+    /// class as the enclosing scope (Python `class_definition`; Java
+    /// `class_declaration`/`record_declaration`). Empty for languages without
+    /// class-body recursion (Go, which uses type specs).
     pub class_node_kinds: &'static [&'static str],
+    /// Class-like declaration kinds that map to `Trait` instead of `Struct`
+    /// (Java `interface_declaration`/`annotation_type_declaration`). Walked by
+    /// the same class machinery (inheritance + body recursion) as
+    /// `class_node_kinds`, only the emitted label differs. Empty for languages
+    /// that surface interfaces as type specs (Go) or have none (Python).
+    pub interface_node_kinds: &'static [&'static str],
+    /// Class-like declaration kinds that map to `Enum` (Java
+    /// `enum_declaration`). Same class machinery, `Enum` label; their
+    /// `variant_node_kinds` children become `Variant`s. Empty otherwise.
+    pub enum_node_kinds: &'static [&'static str],
+    /// Enum-member kinds inside an enum body → `Variant` + `HasVariant`
+    /// (Java `enum_constant`). Empty for languages without enum variants.
+    pub variant_node_kinds: &'static [&'static str],
     /// Wrapper kinds carrying decorators plus a single inner def
     /// (Python `decorated_definition`). Empty for languages without decorators.
     pub decorated_def_kinds: &'static [&'static str],
@@ -96,8 +110,27 @@ pub(crate) struct LangSpec {
     pub value_spec_node_kinds: &'static [&'static str],
     /// Leaf identifier kind naming a value (Go/Python `identifier`) → `Constant`.
     pub value_name_kind: &'static str,
+    /// Declarator kind inside a `variable_field_kinds` node whose `name_field`
+    /// names one declared member (Java `variable_declarator`; a single
+    /// `field_declaration` may declare several). `None` for languages without
+    /// `variable_field_kinds`.
+    pub variable_declarator_kind: Option<&'static str>,
+    /// Member-field declaration kinds emitted as `Constant` + `Defines` under
+    /// the enclosing type (Java `field_declaration`, whose members are class
+    /// fields the graph models as constants). Each declared name in a
+    /// `variable_declarator_kind` child is one constant. Distinct from
+    /// `value_decl_node_kinds` (module-scope const/var) and from
+    /// `field_node_kinds` (Go struct fields → `Field`/`HasField`). Empty for
+    /// languages without class-member fields (Go, Python).
+    pub variable_field_kinds: &'static [&'static str],
+    /// Kinds walked transparently with the current scope + enclosing type,
+    /// without emitting a node — a grammar wrapper around further members
+    /// (Java `enum_body_declarations`, which holds the methods/fields after an
+    /// enum's constants). Empty for languages without such wrappers.
+    pub body_wrapper_kinds: &'static [&'static str],
     /// Import statement kinds (Go `import_declaration`; Python
-    /// `import_statement`/`import_from_statement`/`future_import_statement`).
+    /// `import_statement`/`import_from_statement`/`future_import_statement`;
+    /// Java `import_declaration`).
     pub import_node_kinds: &'static [&'static str],
     /// Import spec kinds inside an import statement (Go `import_spec`). May be
     /// empty for languages whose `imports_of` reads statement children directly.

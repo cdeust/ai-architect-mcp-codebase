@@ -26,6 +26,7 @@ fn node_types_json(language: Language) -> &'static str {
     match language {
         Language::Go => tree_sitter_go::NODE_TYPES,
         Language::Python => tree_sitter_python::NODE_TYPES,
+        Language::Java => tree_sitter_java::NODE_TYPES,
         // A spec row for a not-yet-wired language would fail loudly here rather
         // than silently skip validation.
         other => panic!(
@@ -72,12 +73,17 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
         ("function_node_kinds", spec.function_node_kinds),
         ("method_node_kinds", spec.method_node_kinds),
         ("class_node_kinds", spec.class_node_kinds),
+        ("interface_node_kinds", spec.interface_node_kinds),
+        ("enum_node_kinds", spec.enum_node_kinds),
+        ("variant_node_kinds", spec.variant_node_kinds),
         ("decorated_def_kinds", spec.decorated_def_kinds),
         ("base_node_kinds", spec.base_node_kinds),
         ("type_decl_node_kinds", spec.type_decl_node_kinds),
         ("type_spec_node_kinds", spec.type_spec_node_kinds),
         ("field_container_kinds", spec.field_container_kinds),
         ("field_node_kinds", spec.field_node_kinds),
+        ("variable_field_kinds", spec.variable_field_kinds),
+        ("body_wrapper_kinds", spec.body_wrapper_kinds),
         ("value_decl_node_kinds", spec.value_decl_node_kinds),
         ("value_spec_node_kinds", spec.value_spec_node_kinds),
         ("import_node_kinds", spec.import_node_kinds),
@@ -97,6 +103,9 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
     }
     if let Some(k) = spec.decorator_node_kind {
         out.push(("decorator_node_kind", k.to_string()));
+    }
+    if let Some(k) = spec.variable_declarator_kind {
+        out.push(("variable_declarator_kind", k.to_string()));
     }
     out.push(("value_name_kind", spec.value_name_kind.to_string()));
     for emb in spec.embedded {

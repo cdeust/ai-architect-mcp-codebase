@@ -13,6 +13,7 @@
 
 mod conventions;
 mod go;
+mod java;
 mod lang_spec;
 mod python;
 mod registry;
@@ -23,10 +24,13 @@ mod embedded_tests;
 #[cfg(test)]
 mod guard;
 #[cfg(test)]
+mod java_parity_tests;
+#[cfg(test)]
 mod parity_tests;
 #[cfg(test)]
 mod python_parity_tests;
 
 pub(crate) use go::GO_SPEC;
+pub(crate) use java::JAVA_SPEC;
 pub(crate) use python::PYTHON_SPEC;
 pub(crate) use walkers::parse_with_spec;

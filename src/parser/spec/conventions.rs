@@ -71,6 +71,20 @@ pub(crate) struct CallEntry {
     pub ref_to: String,
 }
 
+/// The inheritance a class-like node declares: the node properties recording
+/// it and the outgoing edges. Produced by `LanguageConventions::class_inheritance`;
+/// consumed by `walk_defs`' class emitter. One DTO absorbs the cross-language
+/// divergence: Python has a single `superclasses` list (→ `bases` property +
+/// `Extends` refs, `.`-normalized); Java splits `extends` (one superclass →
+/// `bases` + `Extends`) from `implements` (interface list → `implements` +
+/// `Implements`), and only records a property when the clause is present.
+pub(crate) struct ClassInheritance {
+    /// Properties to attach to the class node, in emission order.
+    pub properties: Vec<(String, String)>,
+    /// Outgoing edges `(ref_kind, to_qualified_name)`; `from` is the class QN.
+    pub refs: Vec<(&'static str, String)>,
+}
+
 /// Behavioral predicates and shaping for one language. Object-safe and `Sync`
 /// so a `&'static dyn LanguageConventions` can live in a `static LangSpec`.
 pub(crate) trait LanguageConventions: Sync {
@@ -149,5 +163,31 @@ pub(crate) trait LanguageConventions: Sync {
     /// `Defines` for imports (file-local declaration edges) and overrides.
     fn import_ref_kind(&self) -> &'static str {
         "Imports"
+    }
+
+    /// Visibility for a declared node, given both its AST node and its name.
+    /// Default: the name-based rule (Go uppercase / Python underscore) — the
+    /// name is the only signal. Java overrides to read the node's `modifiers`
+    /// child (`public`/`private`/`protected`, default package), which the name
+    /// cannot carry.
+    fn node_visibility(&self, _source: &str, _node: Node, name: &str) -> String {
+        self.visibility_of(name)
+    }
+
+    /// The inheritance a class-like node declares. Default: the single-list
+    /// model driven by `spec.extends_field` + `spec.base_node_kinds` (Python),
+    /// emitting an always-present `bases` property and one `.`-normalized
+    /// `Extends` ref per base. Java overrides to split `extends` from
+    /// `implements` and to record a property only when the clause is present.
+    fn class_inheritance(&self, source: &str, spec: &LangSpec, node: Node) -> ClassInheritance {
+        let bases = super::walkers::collect_bases(spec, source, node);
+        let refs = bases
+            .iter()
+            .map(|b| ("Extends", b.replace('.', "::")))
+            .collect();
+        ClassInheritance {
+            properties: vec![("bases".to_string(), bases.join(","))],
+            refs,
+        }
     }
 }

@@ -7,7 +7,6 @@
 
 pub mod c;
 pub mod cpp;
-pub mod java;
 pub mod kotlin;
 pub mod objc;
 pub mod rust;
@@ -98,16 +97,16 @@ pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<Parse
     match lang {
         Language::Rust => rust::parse_rust_file(source, file_path),
         Language::TypeScript => typescript::parse_typescript_file(source, file_path),
-        Language::Java => java::parse_java_file(source, file_path),
         Language::Kotlin => kotlin::parse_kotlin_file(source, file_path),
         Language::Swift => swift::parse_swift_file(source, file_path),
         Language::ObjC => objc::parse_objc_file(source, file_path),
         Language::C => c::parse_c_file(source, file_path),
         Language::Cpp => cpp::parse_cpp_file(source, file_path),
         // Migrated to the table-driven spec walkers (ADR-0055).
-        // Go: phase 1 (PR #85). Python: phase 2 (#60).
+        // Go: phase 1 (PR #85). Python: phase 2 (#89). Java: phase 3 (#60).
         Language::Go => spec::parse_with_spec(&spec::GO_SPEC, source, file_path),
         Language::Python => spec::parse_with_spec(&spec::PYTHON_SPEC, source, file_path),
+        Language::Java => spec::parse_with_spec(&spec::JAVA_SPEC, source, file_path),
     }
 }
 

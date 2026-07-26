@@ -26,8 +26,9 @@ use tree_sitter::{Node, Parser};
 use super::lang_spec::LangSpec;
 use crate::parser::{
     collect_error_ranges, count_parse_errors, node_field_text, node_text, parse_with_timeout, qual,
-    ExtractedNode, ExtractedRef, ParseResult, LABEL_CALL_SITE, LABEL_CONSTANT, LABEL_FIELD,
-    LABEL_FUNCTION, LABEL_IMPORT, LABEL_METHOD, LABEL_STRUCT, LABEL_TRAIT, LABEL_TYPE_ALIAS,
+    ExtractedNode, ExtractedRef, ParseResult, LABEL_CALL_SITE, LABEL_CONSTANT, LABEL_ENUM,
+    LABEL_FIELD, LABEL_FUNCTION, LABEL_IMPORT, LABEL_METHOD, LABEL_STRUCT, LABEL_TRAIT,
+    LABEL_TYPE_ALIAS, LABEL_VARIANT,
 };
 
 /// Mutable state threaded through a single file's walk. `next_seq` is the
@@ -132,8 +133,8 @@ pub(crate) fn walk_defs(
             continue;
         } else if kind_in(spec.import_node_kinds, k) {
             walk_imports(spec, ctx, child, scope);
-        } else if kind_in(spec.class_node_kinds, k) {
-            emit_class(spec, ctx, child, scope);
+        } else if let Some(label) = class_like_label(spec, k) {
+            emit_class(spec, ctx, child, scope, label);
         } else if kind_in(spec.decorated_def_kinds, k) {
             emit_decorated(spec, ctx, child, scope, enclosing_class);
         } else if kind_in(spec.type_decl_node_kinds, k) {
@@ -142,11 +143,36 @@ pub(crate) fn walk_defs(
             emit_def(spec, ctx, child, scope, enclosing_class, &[]);
         } else if kind_in(spec.method_node_kinds, k) {
             emit_method_recv(spec, ctx, child, scope);
+        } else if kind_in(spec.variant_node_kinds, k) {
+            emit_variant(spec, ctx, child, scope);
+        } else if kind_in(spec.variable_field_kinds, k) {
+            emit_variable_fields(spec, ctx, child, scope);
+        } else if kind_in(spec.body_wrapper_kinds, k) {
+            // A grammar wrapper around further members (Java's
+            // `enum_body_declarations`): recurse transparently, same scope and
+            // enclosing type, emitting no node of its own.
+            walk_defs(spec, ctx, child, scope, enclosing_class);
         } else if kind_in(spec.value_decl_node_kinds, k) && enclosing_class.is_none() {
             walk_value_decl(spec, ctx, child, scope);
         }
     }
     walk_embedded(spec, ctx, parent, scope);
+}
+
+/// Maps a class-like node kind to the label it emits, or `None` if the kind is
+/// not a class-like. All three share the same emitter (`emit_class`:
+/// inheritance + body recursion); only the label differs. Struct/Trait/Enum
+/// are disjoint slices, so at most one arm matches.
+fn class_like_label(spec: &LangSpec, k: &str) -> Option<&'static str> {
+    if kind_in(spec.class_node_kinds, k) {
+        Some(LABEL_STRUCT)
+    } else if kind_in(spec.interface_node_kinds, k) {
+        Some(LABEL_TRAIT)
+    } else if kind_in(spec.enum_node_kinds, k) {
+        Some(LABEL_ENUM)
+    } else {
+        None
+    }
 }
 
 /// Emits a free function (`Function` + `Defines`) or, inside a class body, a
@@ -183,7 +209,7 @@ fn emit_def(
                 qualified_name: qn.clone(),
                 start_line,
                 end_line: end_line_of(node),
-                visibility: spec.conventions.visibility_of(&name),
+                visibility: spec.conventions.node_visibility(ctx.source, node, &name),
                 properties: props,
             });
             ctx.refs.push(ExtractedRef {
@@ -199,7 +225,7 @@ fn emit_def(
                 qualified_name: qn.clone(),
                 start_line,
                 end_line: end_line_of(node),
-                visibility: spec.conventions.visibility_of(&name),
+                visibility: spec.conventions.node_visibility(ctx.source, node, &name),
                 properties: props,
             });
             ctx.refs.push(ExtractedRef {
@@ -242,7 +268,7 @@ fn emit_method_recv(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str)
         qualified_name: qn.clone(),
         start_line: line_of(node),
         end_line: end_line_of(node),
-        visibility: spec.conventions.visibility_of(&name),
+        visibility: spec.conventions.node_visibility(ctx.source, node, &name),
         properties: vec![("receiver_type".to_string(), recv_type)],
     });
     ctx.refs.push(ExtractedRef {
@@ -255,37 +281,37 @@ fn emit_method_recv(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str)
     }
 }
 
-/// Emits a class-like declaration (`Struct` + `Defines`), its base-class CSV
-/// property and `Extends` refs, then recurses into its body with the class as
-/// the enclosing scope so member functions become methods (Python).
-fn emit_class(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+/// Emits a class-like declaration (`label` + `Defines`), its inheritance
+/// properties and edges (via the conventions — `bases`/`Extends` for Python,
+/// plus `implements`/`Implements` for Java), then recurses into its body with
+/// the class as the enclosing scope so member functions become methods.
+/// `label` is `Struct`/`Trait`/`Enum` as selected by `class_like_label`.
+fn emit_class(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, label: &str) {
     let name = node_field_text(ctx.source, node, spec.name_field);
     if name.is_empty() {
         return;
     }
     let qn = qual(scope, &name);
-    let bases = collect_bases(spec, ctx.source, node);
+    let inheritance = spec.conventions.class_inheritance(ctx.source, spec, node);
     ctx.nodes.push(ExtractedNode {
-        label: LABEL_STRUCT.to_string(),
+        label: label.to_string(),
         name: name.clone(),
         qualified_name: qn.clone(),
         start_line: line_of(node),
         end_line: end_line_of(node),
-        visibility: spec.conventions.visibility_of(&name),
-        properties: vec![("bases".to_string(), bases.join(","))],
+        visibility: spec.conventions.node_visibility(ctx.source, node, &name),
+        properties: inheritance.properties,
     });
     ctx.refs.push(ExtractedRef {
         kind: "Defines".to_string(),
         from_qualified_name: scope.to_string(),
         to_qualified_name: qn.clone(),
     });
-    // Extends refs: one per base, `.`-normalized to `::` (resolver keys on the
-    // last segment). Emitted for downstream code that greps for them.
-    for base in &bases {
+    for (kind, to) in inheritance.refs {
         ctx.refs.push(ExtractedRef {
-            kind: "Extends".to_string(),
+            kind: kind.to_string(),
             from_qualified_name: qn.clone(),
-            to_qualified_name: base.replace('.', "::"),
+            to_qualified_name: to,
         });
     }
     if let Some(body) = node.child_by_field_name(spec.body_field) {
@@ -293,11 +319,75 @@ fn emit_class(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     }
 }
 
+/// Emits one enum member as a `Variant` + `HasVariant` under the enclosing
+/// enum's scope (Java `enum_constant`). Enum constants are implicitly public.
+fn emit_variant(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    let name = node_field_text(ctx.source, node, spec.name_field);
+    if name.is_empty() {
+        return;
+    }
+    let qn = qual(scope, &name);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_VARIANT.to_string(),
+        name: name.clone(),
+        qualified_name: qn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: "public".to_string(),
+        properties: Vec::new(),
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "HasVariant".to_string(),
+        from_qualified_name: scope.to_string(),
+        to_qualified_name: qn,
+    });
+}
+
+/// Emits one `Constant` + `Defines` per declared name in a member-field
+/// declaration (Java `field_declaration`). A single declaration may declare
+/// several names (`int x, y;`), so every `variable_declarator_kind` child is a
+/// constant. Visibility comes from the declaration node's modifiers (shared by
+/// every declarator); line spans come from each declarator.
+fn emit_variable_fields(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    let declarator_kind = match spec.variable_declarator_kind {
+        Some(k) => k,
+        None => return,
+    };
+    let visibility = spec.conventions.node_visibility(ctx.source, node, "");
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() != declarator_kind {
+            continue;
+        }
+        let name = node_field_text(ctx.source, child, spec.name_field);
+        if name.is_empty() {
+            continue;
+        }
+        let qn = qual(scope, &name);
+        ctx.nodes.push(ExtractedNode {
+            label: LABEL_CONSTANT.to_string(),
+            name: name.clone(),
+            qualified_name: qn.clone(),
+            start_line: line_of(child),
+            end_line: end_line_of(child),
+            visibility: visibility.clone(),
+            properties: Vec::new(),
+        });
+        ctx.refs.push(ExtractedRef {
+            kind: "Defines".to_string(),
+            from_qualified_name: scope.to_string(),
+            to_qualified_name: qn,
+        });
+    }
+}
+
 /// Base-class names: the `base_node_kinds` children of the class's
 /// `extends_field`, verbatim (attribute access like `typing.NamedTuple` is
 /// preserved; the resolver looks up by the last segment). Empty when the
-/// language has no `extends_field`.
-fn collect_bases(spec: &LangSpec, source: &str, class_node: Node) -> Vec<String> {
+/// language has no `extends_field`. Called by the default
+/// `LanguageConventions::class_inheritance` (Python); Java overrides that
+/// method and does not use this.
+pub(super) fn collect_bases(spec: &LangSpec, source: &str, class_node: Node) -> Vec<String> {
     let field = match spec.extends_field {
         Some(f) => f,
         None => return Vec::new(),
@@ -340,7 +430,10 @@ fn emit_decorated(
             let text = node_text(ctx.source, child);
             decorators.push(text.trim_start_matches('@').trim().to_string());
         } else if kind_in(spec.class_node_kinds, k) {
-            emit_class(spec, ctx, child, scope);
+            // A decorated class is a plain `Struct` (decorators dropped,
+            // matching the pre-migration walker). Python is the only decorated
+            // language; its decorated defs are always `class_definition`.
+            emit_class(spec, ctx, child, scope, LABEL_STRUCT);
             return;
         } else if kind_in(spec.function_node_kinds, k) {
             definition = Some(child);

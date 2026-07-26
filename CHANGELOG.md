@@ -8,6 +8,35 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Table-driven language specs — Java migration (issue #60 phase 3,
+  ADR-0055).** Migrated Java off its hand-written walker onto the
+  `src/parser/spec/` seam at exact parity, deleting `src/parser/java/`
+  (`mod.rs` + `extract/g1..g2.rs`, ~440 LOC). Java is the first migrated
+  language carrying the full OO spread the spec model must express as data:
+  interfaces and annotations (→ `Trait`), enums with constants (→ `Enum` +
+  `Variant`/`HasVariant`), records (→ `Struct`), and class-member fields (→
+  `Constant`). The generic walkers gained five (empty-for-Go/Python) spec
+  slices for that spread — `interface_node_kinds`, `enum_node_kinds`,
+  `variant_node_kinds`, `variable_field_kinds`, `body_wrapper_kinds` (plus
+  `variable_declarator_kind`) — so the class emitter now maps a node kind to a
+  Struct/Trait/Enum label, recurses transparently through wrapper members
+  (Java's `enum_body_declarations`), and emits enum variants and member-field
+  constants, all as data-gated arms (no bespoke walker). The two genuinely
+  *behavioral* divergences live in a `JavaConventions` override (152 code LOC
+  vs Go's 112 and Python's 248 — the recorded Risk-1 watch signal: between the
+  two, richer than Go but simpler than Python, the data/behavior split held):
+  modifier-keyword visibility (`public`/`private`/`protected`, read from the
+  node, not the name — the generic `node_visibility` hook, defaulting to the
+  name-based rule) and a SPLIT inheritance model (`extends` one superclass →
+  `bases`/`Extends` vs `implements` an interface list → `implements`/
+  `Implements`, via the new `class_inheritance` conventions hook whose default
+  reproduces Python's single-list `bases`/`Extends`). Per-EdgeKind parity held
+  at F1 = 1.000 (Defines/HasMethod/Imports/Calls/Extends/Implements/HasVariant)
+  against a full-7-tuple committed parity test that is the pre-migration
+  walker's exact output; Go's and Python's parity are unchanged. The spec-
+  validation guard now covers tree-sitter-java too. No graph-schema, MCP-API,
+  or consumer change; the remaining seven languages stay on their hand-written
+  walkers (strangler-fig, one language per step).
 - **Table-driven language specs — Python migration (issue #60 phase 2,
   ADR-0055).** Migrated Python off its hand-written walker onto the
   `src/parser/spec/` seam at exact parity, deleting `src/parser/python/`
