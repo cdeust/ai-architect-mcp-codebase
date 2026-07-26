@@ -25,6 +25,7 @@ use crate::parser::Language;
 fn node_types_json(language: Language) -> &'static str {
     match language {
         Language::Go => tree_sitter_go::NODE_TYPES,
+        Language::Python => tree_sitter_python::NODE_TYPES,
         // A spec row for a not-yet-wired language would fail loudly here rather
         // than silently skip validation.
         other => panic!(
@@ -70,6 +71,9 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
         ("skip_node_kinds", spec.skip_node_kinds),
         ("function_node_kinds", spec.function_node_kinds),
         ("method_node_kinds", spec.method_node_kinds),
+        ("class_node_kinds", spec.class_node_kinds),
+        ("decorated_def_kinds", spec.decorated_def_kinds),
+        ("base_node_kinds", spec.base_node_kinds),
         ("type_decl_node_kinds", spec.type_decl_node_kinds),
         ("type_spec_node_kinds", spec.type_spec_node_kinds),
         ("field_container_kinds", spec.field_container_kinds),
@@ -91,6 +95,9 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
     if let Some(k) = spec.interface_type_kind {
         out.push(("interface_type_kind", k.to_string()));
     }
+    if let Some(k) = spec.decorator_node_kind {
+        out.push(("decorator_node_kind", k.to_string()));
+    }
     out.push(("value_name_kind", spec.value_name_kind.to_string()));
     for emb in spec.embedded {
         out.push((
@@ -105,15 +112,29 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
     out
 }
 
-/// Every field name a spec references, tagged with its source field.
+/// Every field name a spec references, tagged with its source field. The
+/// always-present fields are validated unconditionally; the language-optional
+/// ones (`receiver_field`, `import_path_field`, `extends_field`,
+/// `value_name_field`, `value_type_field`) only when the language sets them.
 fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
-    vec![
+    let mut out = vec![
         ("name_field", spec.name_field.to_string()),
         ("body_field", spec.body_field.to_string()),
         ("type_field", spec.type_field.to_string()),
-        ("receiver_field", spec.receiver_field.to_string()),
-        ("import_path_field", spec.import_path_field.to_string()),
-    ]
+    ];
+    let optional: &[(&'static str, Option<&'static str>)] = &[
+        ("receiver_field", spec.receiver_field),
+        ("import_path_field", spec.import_path_field),
+        ("extends_field", spec.extends_field),
+        ("value_name_field", spec.value_name_field),
+        ("value_type_field", spec.value_type_field),
+    ];
+    for (field, value) in optional {
+        if let Some(v) = value {
+            out.push((field, v.to_string()));
+        }
+    }
+    out
 }
 
 #[test]

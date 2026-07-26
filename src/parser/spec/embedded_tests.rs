@@ -29,31 +29,13 @@ fn go_conventions() -> &'static dyn LanguageConventions {
 }
 
 fn host_spec() -> LangSpec {
+    // Identical to the Go spec but with one embedded rule and an explicit
+    // conventions handle. All `LangSpec` fields are `Copy` (references, `Option`s,
+    // and a fn pointer), so struct-update from the `static` copies the rest.
     LangSpec {
-        language: Language::Go,
-        skip_node_kinds: GO_SPEC.skip_node_kinds,
-        function_node_kinds: GO_SPEC.function_node_kinds,
-        method_node_kinds: GO_SPEC.method_node_kinds,
-        type_decl_node_kinds: GO_SPEC.type_decl_node_kinds,
-        type_spec_node_kinds: GO_SPEC.type_spec_node_kinds,
-        struct_type_kind: GO_SPEC.struct_type_kind,
-        interface_type_kind: GO_SPEC.interface_type_kind,
-        field_container_kinds: GO_SPEC.field_container_kinds,
-        field_node_kinds: GO_SPEC.field_node_kinds,
-        value_decl_node_kinds: GO_SPEC.value_decl_node_kinds,
-        value_spec_node_kinds: GO_SPEC.value_spec_node_kinds,
-        value_name_kind: GO_SPEC.value_name_kind,
-        import_node_kinds: GO_SPEC.import_node_kinds,
-        import_spec_kinds: GO_SPEC.import_spec_kinds,
-        call_node_kinds: GO_SPEC.call_node_kinds,
-        name_field: GO_SPEC.name_field,
-        body_field: GO_SPEC.body_field,
-        type_field: GO_SPEC.type_field,
-        receiver_field: GO_SPEC.receiver_field,
-        import_path_field: GO_SPEC.import_path_field,
-        ts_language: GO_SPEC.ts_language,
         embedded: &HOST_EMBEDDED,
         conventions: go_conventions(),
+        ..GO_SPEC
     }
 }
 

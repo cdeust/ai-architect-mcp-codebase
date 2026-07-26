@@ -8,6 +8,27 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Table-driven language specs — Python migration (issue #60 phase 2,
+  ADR-0055).** Migrated Python off its hand-written walker onto the
+  `src/parser/spec/` seam at exact parity, deleting `src/parser/python/`
+  (`mod.rs` + `extract/g1..g3.rs`, ~780 LOC). Python is the ADR's "richer-than-
+  CBM" language (Risk #1): its underscore visibility, `UPPER_SNAKE` constant
+  filter, `is_async`/decorator properties, `@property`/`@setter` QN dedup, and
+  three-kind import structure (import / from / `__future__`, with dotted /
+  aliased / wildcard children) all live in a `PythonConventions` behavioral
+  override (248 code LOC vs Go's 112 — the recorded Risk-1 watch signal: ~2.2×,
+  richer but still one behavioral trait through the shared walkers, no bespoke
+  walker), while the structural node kinds are a data row. The generic walkers gained context-based methods
+  (a free-function node inside a class body is a method), class-body recursion
+  with base-class `Extends`, decorator unwrapping, and a field-based constant
+  path — each gated by (empty-for-Go) spec slices, so no per-language walker is
+  added. Per-EdgeKind parity held at F1 = 1.000 (Nodes/Defines/HasMethod/
+  Imports/Calls/Extends) across all 41 `graph_accuracy` Python fixtures plus a
+  full-tuple committed parity test; Go's parity is unchanged. The spec-
+  validation guard now covers Python's grammar too. No graph-schema, MCP-API,
+  or consumer change. The phase-1 `walk_value_decl` `||`→`&&` equivalent-mutant
+  note is removed: Python's `UPPER_SNAKE` filter makes that guard observable, so
+  the mutant is now killed by a lowercase-module-assignment negative assertion.
 - **Table-driven language specs — scaffold + Go migration (issue #60 phase 1,
   ADR-0055).** Introduced `src/parser/spec/`: a `LangSpec` data row (structural
   node kinds per concern + grammar factory + embedded list), a

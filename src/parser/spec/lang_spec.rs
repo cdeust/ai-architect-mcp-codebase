@@ -51,10 +51,30 @@ pub(crate) struct LangSpec {
     // --- structural node-kind slices (validated against node-types.json) ---
     /// Top-level child kinds to ignore outright (e.g. Go `package_clause`).
     pub skip_node_kinds: &'static [&'static str],
-    /// Free-function declaration kinds → `Function` + `Defines`.
+    /// Free-function declaration kinds → `Function` + `Defines`. When such a
+    /// node is walked inside a `class_node_kinds` body (see below) it becomes a
+    /// `Method` + `HasMethod` instead — the language distinguishes methods by
+    /// enclosing scope (Python) rather than by a distinct node kind (Go, which
+    /// leaves `class_node_kinds` empty and uses `method_node_kinds`).
     pub function_node_kinds: &'static [&'static str],
-    /// Method declaration kinds → `Method` + `HasMethod` (receiver-scoped).
+    /// Method declaration kinds → `Method` + `HasMethod` (receiver-scoped via
+    /// `receiver_field`; Go `method_declaration`). Empty for languages whose
+    /// methods are free-function nodes inside a class body (Python).
     pub method_node_kinds: &'static [&'static str],
+    /// Class-like declaration kinds that map to `Struct`, may carry base
+    /// classes (`extends_field`), and recurse into their `body_field` with the
+    /// class as the enclosing scope (Python `class_definition`). Empty for
+    /// languages without class-body recursion (Go, which uses type specs).
+    pub class_node_kinds: &'static [&'static str],
+    /// Wrapper kinds carrying decorators plus a single inner def
+    /// (Python `decorated_definition`). Empty for languages without decorators.
+    pub decorated_def_kinds: &'static [&'static str],
+    /// The decorator child kind inside a `decorated_def_kinds` node
+    /// (Python `decorator`). `None` when the language has no decorators.
+    pub decorator_node_kind: Option<&'static str>,
+    /// Child kinds under `extends_field` naming a base class
+    /// (Python `identifier`/`attribute`) → `Extends`. Empty for non-OO langs.
+    pub base_node_kinds: &'static [&'static str],
     /// Wrapper kinds that contain a type spec (Go `type_declaration`).
     pub type_decl_node_kinds: &'static [&'static str],
     /// The named-type spec kinds inside a wrapper (Go `type_spec`/`type_alias`).
@@ -67,30 +87,48 @@ pub(crate) struct LangSpec {
     pub field_container_kinds: &'static [&'static str],
     /// Field declaration kinds → `Field` + `HasField`.
     pub field_node_kinds: &'static [&'static str],
-    /// Const/var declaration kinds (Go `const_declaration`/`var_declaration`).
+    /// Const/var declaration or statement kinds. Go `const_declaration`/
+    /// `var_declaration`; Python `expression_statement` (module-level).
+    /// Only walked at module scope (never inside a class body).
     pub value_decl_node_kinds: &'static [&'static str],
-    /// Const/var spec kinds inside a value decl (Go `const_spec`/`var_spec`).
+    /// Value-spec kinds inside a value decl. Go `const_spec`/`var_spec`;
+    /// Python `assignment`.
     pub value_spec_node_kinds: &'static [&'static str],
-    /// Leaf identifier kind naming a value (Go `identifier`) → `Constant`.
+    /// Leaf identifier kind naming a value (Go/Python `identifier`) → `Constant`.
     pub value_name_kind: &'static str,
-    /// Import statement kinds (Go `import_declaration`).
+    /// Import statement kinds (Go `import_declaration`; Python
+    /// `import_statement`/`import_from_statement`/`future_import_statement`).
     pub import_node_kinds: &'static [&'static str],
-    /// Import spec kinds inside an import statement (Go `import_spec`).
+    /// Import spec kinds inside an import statement (Go `import_spec`). May be
+    /// empty for languages whose `imports_of` reads statement children directly.
     pub import_spec_kinds: &'static [&'static str],
-    /// Call expression kinds (Go `call_expression`) → `CallSite` + `Calls`.
+    /// Call expression kinds (Go `call_expression`; Python `call`).
     pub call_node_kinds: &'static [&'static str],
 
     // --- field names the walkers read (validated against node-types fields) ---
     /// Field carrying a declaration's name (usually `name`).
     pub name_field: &'static str,
-    /// Field carrying a function/method body (usually `body`).
+    /// Field carrying a function/method/class body (usually `body`).
     pub body_field: &'static str,
-    /// Field carrying a type / type-annotation (Go `type`).
+    /// Field carrying a type / type-annotation (Go/Python `type`).
     pub type_field: &'static str,
-    /// Field carrying a method receiver (Go `receiver`).
-    pub receiver_field: &'static str,
-    /// Field carrying an import path (Go `path`).
-    pub import_path_field: &'static str,
+    /// Field carrying a method receiver (Go `receiver`). `None` when the
+    /// language has no receiver concept (Python — methods scope by class).
+    pub receiver_field: Option<&'static str>,
+    /// Field carrying an import path (Go `path`). `None` when `imports_of`
+    /// reads the statement structure directly (Python).
+    pub import_path_field: Option<&'static str>,
+    /// Field naming the superclass list on a class node (Python `superclasses`).
+    /// `None` for non-OO languages.
+    pub extends_field: Option<&'static str>,
+    /// Field on a value-spec node carrying the value's name. `Some` (Python
+    /// `left`) selects the single-name, field-based path; `None` (Go) selects
+    /// the multi-name DFS over `value_name_kind` children.
+    pub value_name_field: Option<&'static str>,
+    /// Field on a value-spec node carrying the value's type annotation
+    /// (Python `type`). `Some` emits a `type_annotation` property on constants;
+    /// `None` (Go) emits none.
+    pub value_type_field: Option<&'static str>,
 
     // --- grammar factory, embedded rules, behavioral escape hatch ---
     /// Grammar factory (the Rust tree-sitter crate's `LANGUAGE`).

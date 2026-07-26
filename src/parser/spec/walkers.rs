@@ -6,10 +6,20 @@
 // `ExtractedRef` contract. One implementation each, replacing the per-language
 // hand-written walkers one language at a time behind the accuracy gate.
 //
-// The traversal deliberately mirrors the hand-written Go walker it replaces
-// (top-level dispatch in source order; stack-based DFS for imports / values /
-// calls) so the migration is provable at *exact* parity, node-for-node and
-// ref-for-ref, before the old walker is deleted (ADR-0055 §5, step 3).
+// The walker skeleton spans the structural patterns of the migrated languages,
+// each pattern gated by (empty-for-non-applicable) spec data:
+//   - Go   uses `method_node_kinds` (receiver-scoped), `type_decl_node_kinds`
+//          (struct/interface/alias with fields), and a multi-name DFS constant
+//          path. It leaves `class_node_kinds` / `decorated_def_kinds` empty.
+//   - Python uses `class_node_kinds` (recurse into the body; in-class functions
+//          become methods by enclosing scope), `decorated_def_kinds`, and a
+//          field-based constant path. It leaves `method_node_kinds` /
+//          `type_decl_node_kinds` empty.
+// A node kind belongs to exactly one slice, so the dispatch is unambiguous and
+// a language selects the arms it needs by populating (or emptying) its slices —
+// OCP: adding a language is data, not a new walker (ADR-0055 §1.2).
+
+use std::collections::HashSet;
 
 use tree_sitter::{Node, Parser};
 
@@ -22,18 +32,34 @@ use crate::parser::{
 
 /// Mutable state threaded through a single file's walk. `next_seq` is the
 /// per-file monotonic counter the conventions use to disambiguate overloads
-/// (Go's `#seq` suffix) and to key call sites.
+/// (Go's `#seq` suffix) and to key call sites. `emitted_qns` backs the
+/// def-QN collision dedup (Python's `@property`/`@setter` case); it is inert
+/// for languages whose `def_qn` is already unique (Go's `#seq`).
 pub(crate) struct WalkCtx<'a> {
     source: &'a str,
     nodes: Vec<ExtractedNode>,
     refs: Vec<ExtractedRef>,
     next_seq: u64,
+    emitted_qns: HashSet<String>,
 }
 
-impl<'a> WalkCtx<'a> {
+impl WalkCtx<'_> {
     fn next_seq(&mut self) -> u64 {
         self.next_seq += 1;
         self.next_seq
+    }
+
+    /// Returns a unique QN: the input if unseen, else `qn@{start_line}` so every
+    /// definition has a unique primary key while preserving the readable name
+    /// for resolver name-based lookups. A no-op for `def_qn`s that are already
+    /// unique (Go appends `#seq`), the mechanism for Python overload pairs.
+    fn dedup(&mut self, qn: String, start_line: u64) -> String {
+        if self.emitted_qns.insert(qn.clone()) {
+            return qn;
+        }
+        let unique = format!("{qn}@{start_line}");
+        self.emitted_qns.insert(unique.clone());
+        unique
     }
 }
 
@@ -64,8 +90,9 @@ pub(crate) fn parse_with_spec(
         nodes: Vec::new(),
         refs: Vec::new(),
         next_seq: 0,
+        emitted_qns: HashSet::new(),
     };
-    walk_defs(spec, &mut ctx, tree.root_node(), file_path);
+    walk_defs(spec, &mut ctx, tree.root_node(), file_path, None);
     Ok(ParseResult {
         nodes: ctx.nodes,
         refs: ctx.refs,
@@ -88,7 +115,16 @@ fn end_line_of(node: Node) -> u64 {
 
 /// Top-level definition walker: dispatches each child of `parent` to the
 /// concern its node kind names in `spec`, then re-parses any embedded regions.
-pub(crate) fn walk_defs(spec: &LangSpec, ctx: &mut WalkCtx, parent: Node, scope: &str) {
+/// `enclosing_class` is `Some(class_qn)` while walking a class body — a
+/// free-function node inside a class body is emitted as a method (Python), and
+/// module-level value declarations are skipped inside a class.
+pub(crate) fn walk_defs(
+    spec: &LangSpec,
+    ctx: &mut WalkCtx,
+    parent: Node,
+    scope: &str,
+    enclosing_class: Option<&str>,
+) {
     let mut cursor = parent.walk();
     for child in parent.children(&mut cursor) {
         let k = child.kind();
@@ -96,51 +132,102 @@ pub(crate) fn walk_defs(spec: &LangSpec, ctx: &mut WalkCtx, parent: Node, scope:
             continue;
         } else if kind_in(spec.import_node_kinds, k) {
             walk_imports(spec, ctx, child, scope);
+        } else if kind_in(spec.class_node_kinds, k) {
+            emit_class(spec, ctx, child, scope);
+        } else if kind_in(spec.decorated_def_kinds, k) {
+            emit_decorated(spec, ctx, child, scope, enclosing_class);
         } else if kind_in(spec.type_decl_node_kinds, k) {
             walk_type_decl(spec, ctx, child, scope);
         } else if kind_in(spec.function_node_kinds, k) {
-            emit_function(spec, ctx, child, scope);
+            emit_def(spec, ctx, child, scope, enclosing_class, &[]);
         } else if kind_in(spec.method_node_kinds, k) {
-            emit_method(spec, ctx, child, scope);
-        } else if kind_in(spec.value_decl_node_kinds, k) {
+            emit_method_recv(spec, ctx, child, scope);
+        } else if kind_in(spec.value_decl_node_kinds, k) && enclosing_class.is_none() {
             walk_value_decl(spec, ctx, child, scope);
         }
     }
     walk_embedded(spec, ctx, parent, scope);
 }
 
-fn emit_function(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+/// Emits a free function (`Function` + `Defines`) or, inside a class body, a
+/// method (`Method` + `HasMethod` with the class as receiver). `decorators`
+/// are the already-stripped decorator names from an enclosing decorated def.
+fn emit_def(
+    spec: &LangSpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    enclosing_class: Option<&str>,
+    decorators: &[String],
+) {
     let name = node_field_text(ctx.source, node, spec.name_field);
     if name.is_empty() {
         return;
     }
+    let start_line = line_of(node);
     let seq = ctx.next_seq();
-    let qn = spec.conventions.def_qn(scope, &name, seq);
-    ctx.nodes.push(ExtractedNode {
-        label: LABEL_FUNCTION.to_string(),
-        name: name.clone(),
-        qualified_name: qn.clone(),
-        start_line: line_of(node),
-        end_line: end_line_of(node),
-        visibility: spec.conventions.visibility_of(&name),
-        properties: spec.conventions.function_props(ctx.source, node),
-    });
-    ctx.refs.push(ExtractedRef {
-        kind: "Defines".to_string(),
-        from_qualified_name: scope.to_string(),
-        to_qualified_name: qn.clone(),
-    });
+    let base_qn = spec.conventions.def_qn(scope, &name, seq);
+    let qn = ctx.dedup(base_qn, start_line);
+
+    let mut props = spec.conventions.function_props(ctx.source, node);
+    if !decorators.is_empty() {
+        props.push(("decorators".to_string(), decorators.join(",")));
+    }
+
+    match enclosing_class {
+        Some(class_qn) => {
+            props.push(("receiver_type".to_string(), class_qn.to_string()));
+            ctx.nodes.push(ExtractedNode {
+                label: LABEL_METHOD.to_string(),
+                name: name.clone(),
+                qualified_name: qn.clone(),
+                start_line,
+                end_line: end_line_of(node),
+                visibility: spec.conventions.visibility_of(&name),
+                properties: props,
+            });
+            ctx.refs.push(ExtractedRef {
+                kind: "HasMethod".to_string(),
+                from_qualified_name: scope.to_string(),
+                to_qualified_name: qn.clone(),
+            });
+        }
+        None => {
+            ctx.nodes.push(ExtractedNode {
+                label: LABEL_FUNCTION.to_string(),
+                name: name.clone(),
+                qualified_name: qn.clone(),
+                start_line,
+                end_line: end_line_of(node),
+                visibility: spec.conventions.visibility_of(&name),
+                properties: props,
+            });
+            ctx.refs.push(ExtractedRef {
+                kind: "Defines".to_string(),
+                from_qualified_name: scope.to_string(),
+                to_qualified_name: qn.clone(),
+            });
+        }
+    }
+
     if let Some(body) = node.child_by_field_name(spec.body_field) {
         walk_calls(spec, ctx, body, &qn);
     }
 }
 
-fn emit_method(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+/// Emits a receiver-scoped method (`Method` + `HasMethod`) for languages whose
+/// methods are a distinct node kind carrying a receiver field (Go). The
+/// receiver type is parsed from `spec.receiver_field` and scopes the method's
+/// QN under `scope::RecvType`.
+fn emit_method_recv(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     let name = node_field_text(ctx.source, node, spec.name_field);
     if name.is_empty() {
         return;
     }
-    let receiver_text = node_field_text(ctx.source, node, spec.receiver_field);
+    let receiver_text = spec
+        .receiver_field
+        .map(|rf| node_field_text(ctx.source, node, rf))
+        .unwrap_or_default();
     let recv_type = spec.conventions.receiver_type(&receiver_text);
     let scope_qn = if recv_type.is_empty() {
         scope.to_string()
@@ -165,6 +252,102 @@ fn emit_method(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     });
     if let Some(body) = node.child_by_field_name(spec.body_field) {
         walk_calls(spec, ctx, body, &qn);
+    }
+}
+
+/// Emits a class-like declaration (`Struct` + `Defines`), its base-class CSV
+/// property and `Extends` refs, then recurses into its body with the class as
+/// the enclosing scope so member functions become methods (Python).
+fn emit_class(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    let name = node_field_text(ctx.source, node, spec.name_field);
+    if name.is_empty() {
+        return;
+    }
+    let qn = qual(scope, &name);
+    let bases = collect_bases(spec, ctx.source, node);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_STRUCT.to_string(),
+        name: name.clone(),
+        qualified_name: qn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: spec.conventions.visibility_of(&name),
+        properties: vec![("bases".to_string(), bases.join(","))],
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "Defines".to_string(),
+        from_qualified_name: scope.to_string(),
+        to_qualified_name: qn.clone(),
+    });
+    // Extends refs: one per base, `.`-normalized to `::` (resolver keys on the
+    // last segment). Emitted for downstream code that greps for them.
+    for base in &bases {
+        ctx.refs.push(ExtractedRef {
+            kind: "Extends".to_string(),
+            from_qualified_name: qn.clone(),
+            to_qualified_name: base.replace('.', "::"),
+        });
+    }
+    if let Some(body) = node.child_by_field_name(spec.body_field) {
+        walk_defs(spec, ctx, body, &qn, Some(&qn));
+    }
+}
+
+/// Base-class names: the `base_node_kinds` children of the class's
+/// `extends_field`, verbatim (attribute access like `typing.NamedTuple` is
+/// preserved; the resolver looks up by the last segment). Empty when the
+/// language has no `extends_field`.
+fn collect_bases(spec: &LangSpec, source: &str, class_node: Node) -> Vec<String> {
+    let field = match spec.extends_field {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+    let superclasses = match class_node.child_by_field_name(field) {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    let mut names = Vec::new();
+    let mut cursor = superclasses.walk();
+    for child in superclasses.children(&mut cursor) {
+        if kind_in(spec.base_node_kinds, child.kind()) {
+            let text = node_text(source, child);
+            if !text.is_empty() {
+                names.push(text);
+            }
+        }
+    }
+    names
+}
+
+/// Unwraps a decorated definition: collects the decorator names (stripped of
+/// the leading `@`), then dispatches the inner class or function. A decorated
+/// class is extracted as a plain class (decorators dropped, matching the
+/// pre-migration walker); a decorated function carries its decorators as a
+/// property.
+fn emit_decorated(
+    spec: &LangSpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    enclosing_class: Option<&str>,
+) {
+    let mut decorators: Vec<String> = Vec::new();
+    let mut definition: Option<Node> = None;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let k = child.kind();
+        if spec.decorator_node_kind == Some(k) {
+            let text = node_text(ctx.source, child);
+            decorators.push(text.trim_start_matches('@').trim().to_string());
+        } else if kind_in(spec.class_node_kinds, k) {
+            emit_class(spec, ctx, child, scope);
+            return;
+        } else if kind_in(spec.function_node_kinds, k) {
+            definition = Some(child);
+        }
+    }
+    if let Some(func_node) = definition {
+        emit_def(spec, ctx, func_node, scope, enclosing_class, &decorators);
     }
 }
 
@@ -276,105 +459,140 @@ fn walk_value_decl(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) 
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         if kind_in(spec.value_spec_node_kinds, n.kind()) {
+            emit_value_spec(spec, ctx, n, scope);
+        }
+        let mut cursor = n.walk();
+        for c in n.children(&mut cursor) {
+            stack.push(c);
+        }
+    }
+}
+
+/// Emits the constants declared by one value-spec node. Two shapes, selected
+/// by `spec.value_name_field`. `Some(field)` (Python): the single name is the
+/// `field` child, and the node's line spans come from the value-spec node
+/// itself. `None` (Go): every `value_name_kind` child is a name, and its own
+/// line spans are used (a grouped `const (…)` block has one line per spec).
+/// Both shapes funnel through the SAME constant guard, so a language with a
+/// real `is_constant_name` filter (Python's `UPPER_SNAKE`) makes the guard
+/// observably load-bearing — see the §12 note below.
+fn emit_value_spec(spec: &LangSpec, ctx: &mut WalkCtx, n: Node, scope: &str) {
+    let candidates: Vec<(String, Node)> = match spec.value_name_field {
+        Some(field) => match n.child_by_field_name(field) {
+            // mutation note (§12): the `nn.kind() == value_name_kind` guard →
+            // `true` mutant is EQUIVALENT for the migrated languages. It only
+            // matters when the value name field holds a NON-identifier node
+            // (attribute `a.B`, subscript `a[B]`, tuple `A, B`), and every such
+            // node's text carries punctuation (`.`/`[`/`,`) that the downstream
+            // `is_constant_name` (`is_upper_snake_case`) filter rejects — so
+            // relaxing the guard emits nothing extra. The guard is kept as a
+            // precise, self-documenting restriction to the identifier case.
+            Some(nn) if nn.kind() == spec.value_name_kind => {
+                vec![(node_text(ctx.source, nn), n)]
+            }
+            _ => Vec::new(),
+        },
+        None => {
+            let mut v = Vec::new();
             let mut cursor = n.walk();
             for child in n.children(&mut cursor) {
-                if child.kind() != spec.value_name_kind {
-                    continue;
+                if child.kind() == spec.value_name_kind {
+                    v.push((node_text(ctx.source, child), child));
                 }
-                let name = node_text(ctx.source, child);
-                // mutation note (§12): the `||` → `&&` mutant here is EQUIVALENT
-                // under Go — `value_name_kind` (`identifier`) nodes are never
-                // empty and Go's `is_constant_name` is constant-true, so both
-                // operands are always false and the guard never fires either
-                // way. The guard becomes observable when a language whose
-                // `is_constant_name` can return false migrates (e.g. Python's
-                // UPPER_SNAKE filter), whose fixtures will then kill the mutant.
-                if name.is_empty() || !spec.conventions.is_constant_name(&name) {
-                    continue;
-                }
-                let qn = qual(scope, &name);
-                ctx.nodes.push(ExtractedNode {
-                    label: LABEL_CONSTANT.to_string(),
-                    name: name.clone(),
-                    qualified_name: qn.clone(),
-                    start_line: line_of(child),
-                    end_line: end_line_of(child),
-                    visibility: spec.conventions.visibility_of(&name),
-                    properties: Vec::new(),
-                });
-                ctx.refs.push(ExtractedRef {
-                    kind: "Defines".to_string(),
-                    from_qualified_name: scope.to_string(),
-                    to_qualified_name: qn,
-                });
             }
+            v
         }
-        let mut cursor = n.walk();
-        for c in n.children(&mut cursor) {
-            stack.push(c);
+    };
+
+    for (name, line_node) in candidates {
+        // §12: the `||` → `&&` mutant on this guard was EQUIVALENT under Go
+        // (Go's `is_constant_name` is constant-true and `value_name_kind`
+        // nodes are never empty, so both operands are always false). Python's
+        // `is_upper_snake_case` filter returns false for a lowercase module
+        // assignment, making the two operators observably different: under
+        // `||` a lowercase name is correctly skipped; under `&&` it would be
+        // emitted as a spurious `Constant`. A Python fixture with a lowercase
+        // module assignment (asserted absent) now KILLS this mutant.
+        if name.is_empty() || !spec.conventions.is_constant_name(&name) {
+            continue;
         }
+        let props = match spec.value_type_field {
+            Some(tf) => vec![(
+                "type_annotation".to_string(),
+                node_field_text(ctx.source, n, tf),
+            )],
+            None => Vec::new(),
+        };
+        let qn = qual(scope, &name);
+        ctx.nodes.push(ExtractedNode {
+            label: LABEL_CONSTANT.to_string(),
+            name: name.clone(),
+            qualified_name: qn.clone(),
+            start_line: line_of(line_node),
+            end_line: end_line_of(line_node),
+            visibility: spec.conventions.constant_visibility(&name),
+            properties: props,
+        });
+        ctx.refs.push(ExtractedRef {
+            kind: "Defines".to_string(),
+            from_qualified_name: scope.to_string(),
+            to_qualified_name: qn,
+        });
     }
 }
 
-/// Import walker: descends `import_node` for each import spec and emits the
-/// `Import` node + import edge the conventions shape. Stack DFS matches the
-/// hand-written walker (single `import "x"` and grouped `import ( ... )`).
+/// Import walker: interprets one import statement into zero or more `Import`
+/// nodes + import edges via the conventions (Go descends to `import_spec`
+/// nodes; Python dispatches the three Python import-statement kinds).
 pub(crate) fn walk_imports(spec: &LangSpec, ctx: &mut WalkCtx, import_node: Node, scope: &str) {
-    let mut stack = vec![import_node];
-    while let Some(n) = stack.pop() {
-        if kind_in(spec.import_spec_kinds, n.kind()) {
-            if let Some(entry) = spec.conventions.import_entry(ctx.source, spec, n, scope) {
-                ctx.nodes.push(ExtractedNode {
-                    label: LABEL_IMPORT.to_string(),
-                    name: entry.display_name,
-                    qualified_name: entry.qualified_name,
-                    start_line: line_of(n),
-                    end_line: end_line_of(n),
-                    visibility: entry.visibility,
-                    properties: entry.properties,
-                });
-                ctx.refs.push(ExtractedRef {
-                    kind: spec.conventions.import_ref_kind().to_string(),
-                    from_qualified_name: scope.to_string(),
-                    to_qualified_name: entry.ref_to,
-                });
-            }
-        }
-        let mut cursor = n.walk();
-        for c in n.children(&mut cursor) {
-            stack.push(c);
-        }
+    for entry in spec
+        .conventions
+        .imports_of(ctx.source, spec, import_node, scope)
+    {
+        ctx.nodes.push(ExtractedNode {
+            label: LABEL_IMPORT.to_string(),
+            name: entry.display_name,
+            qualified_name: entry.qualified_name,
+            start_line: entry.start_line,
+            end_line: entry.end_line,
+            visibility: entry.visibility,
+            properties: entry.properties,
+        });
+        ctx.refs.push(ExtractedRef {
+            kind: spec.conventions.import_ref_kind().to_string(),
+            from_qualified_name: scope.to_string(),
+            to_qualified_name: entry.ref_to,
+        });
     }
 }
 
-/// Call walker: emits one `CallSite` node + `Calls` edge per call expression
-/// the conventions accept. Stack DFS matches the hand-written walker so the
-/// `seq` counter (which keys call-site QNs) is assigned in identical order.
+/// Call walker: emits one `CallSite` node + edge per call expression the
+/// conventions accept. Stack DFS matches the hand-written walker so the `seq`
+/// counter (which keys Go call-site QNs) is assigned in identical order. `seq`
+/// is consumed only when the callee is accepted, so a dropped call (Go's
+/// non-identifier callee) does not perturb the counter.
 pub(crate) fn walk_calls(spec: &LangSpec, ctx: &mut WalkCtx, root: Node, caller_qn: &str) {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
         if kind_in(spec.call_node_kinds, n.kind()) {
             if let Some(callee) = spec.conventions.call_callee(ctx.source, n) {
                 let seq = ctx.next_seq();
-                let site_qn = spec.conventions.call_site_qn(
-                    caller_qn,
-                    n.start_position().row + 1,
-                    n.start_position().column + 1,
-                    seq,
-                );
+                let entry = spec
+                    .conventions
+                    .call_entry(ctx.source, n, caller_qn, &callee, seq);
                 ctx.nodes.push(ExtractedNode {
                     label: LABEL_CALL_SITE.to_string(),
-                    name: callee.clone(),
-                    qualified_name: site_qn,
-                    start_line: line_of(n),
-                    end_line: end_line_of(n),
-                    visibility: "public".to_string(),
-                    properties: vec![("callee_name".to_string(), callee.clone())],
+                    name: entry.name,
+                    qualified_name: entry.qualified_name,
+                    start_line: entry.start_line,
+                    end_line: entry.end_line,
+                    visibility: entry.visibility,
+                    properties: entry.properties,
                 });
                 ctx.refs.push(ExtractedRef {
-                    kind: "Calls".to_string(),
+                    kind: entry.ref_kind.to_string(),
                     from_qualified_name: caller_qn.to_string(),
-                    to_qualified_name: callee,
+                    to_qualified_name: entry.ref_to,
                 });
             }
         }
@@ -440,9 +658,11 @@ fn reparse_embedded(inner_spec: &LangSpec, ctx: &mut WalkCtx, content: Node, sco
         nodes: Vec::new(),
         refs: Vec::new(),
         next_seq: ctx.next_seq,
+        emitted_qns: std::mem::take(&mut ctx.emitted_qns),
     };
-    walk_defs(inner_spec, &mut inner, tree.root_node(), scope);
+    walk_defs(inner_spec, &mut inner, tree.root_node(), scope, None);
     ctx.next_seq = inner.next_seq;
+    ctx.emitted_qns = inner.emitted_qns;
     ctx.nodes.append(&mut inner.nodes);
     ctx.refs.append(&mut inner.refs);
 }

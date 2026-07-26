@@ -5,14 +5,17 @@
 
 use super::go::GO_SPEC;
 use super::lang_spec::LangSpec;
+use super::python::PYTHON_SPEC;
 use crate::parser::Language;
 
 /// Returns the spec row for a migrated language, or `None` if the language is
-/// still served by its hand-written walker. Phase 1 (ADR-0055): Go only.
+/// still served by its hand-written walker. Migrated so far (ADR-0055):
+/// Go (phase 1), Python (phase 2).
 pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
     match language {
         Language::Go => Some(&GO_SPEC),
-        // The remaining nine stay on their hand-written walkers until each is
+        Language::Python => Some(&PYTHON_SPEC),
+        // The remaining eight stay on their hand-written walkers until each is
         // migrated at parity behind the accuracy gate (ADR-0055 §5).
         _ => None,
     }
@@ -22,4 +25,32 @@ pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
 /// guard (a `#[cfg(test)]` consumer) reads this, so it is test-only — gating it
 /// keeps production builds free of an otherwise-unused const (§9).
 #[cfg(test)]
-pub(crate) const MIGRATED_SPECS: &[&LangSpec] = &[&GO_SPEC];
+pub(crate) const MIGRATED_SPECS: &[&LangSpec] = &[&GO_SPEC, &PYTHON_SPEC];
+
+#[cfg(test)]
+mod tests {
+    use super::lang_spec;
+    use crate::parser::Language;
+
+    /// Pins the strangler-fig migration state: every migrated language resolves
+    /// to its spec (so the embedded-reparse path and any registry consumer sees
+    /// it), and an un-migrated language resolves to `None` (still on its hand-
+    /// written walker). Kills the "delete the `Language::Python` arm" mutant,
+    /// which `parse_file`'s direct `PYTHON_SPEC` dispatch would otherwise hide.
+    #[test]
+    fn migrated_languages_resolve_and_unmigrated_do_not() {
+        assert!(
+            lang_spec(Language::Go).is_some(),
+            "Go is migrated (phase 1)"
+        );
+        assert!(
+            lang_spec(Language::Python).is_some(),
+            "Python is migrated (phase 2)"
+        );
+        // Rust is not migrated yet — must stay on its hand-written walker.
+        assert!(
+            lang_spec(Language::Rust).is_none(),
+            "Rust is not migrated; registry must return None"
+        );
+    }
+}
