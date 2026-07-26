@@ -34,6 +34,24 @@ fn detect_entry_points(store: &GraphStore) -> Result<Vec<EntryPoint>, String> {
     // common framework entry-point shapes.
     // source: Pictet-tech-fest benchmark 2026-05-20 / RUST_BUGS_VERIFIED.md
     query_entries(store, "f.name = 'main'", "main", 1.0, &mut entries)?;
+    // Go program entry point. The runtime entry is `func main` in `package
+    // main` (caught by the lowercase rule above), but the idiomatic *testable*
+    // entry convention is a thin `func main` that delegates to an exported
+    // `func Main` carrying the real startup logic (`os.Exit(cli.Main())`), so a
+    // top-level Go `Main` is a program entry point too. Go is case-sensitive,
+    // so the lowercase-`main` rule cannot catch it; gated to Go because `Main`
+    // is not an entry marker in other languages (it would false-match e.g. a
+    // Kotlin/Java helper). Confidence just below the certain lowercase `main`.
+    // source: Go spec §"Program execution" (func main in package main); the
+    //   testscript / cobra `func Main` testable-entry convention.
+    //   Falsified as missing by the issue #64 head-to-head eval (go-D3).
+    query_entries(
+        store,
+        "f.language = 'go' AND f.name = 'Main'",
+        "main",
+        0.9,
+        &mut entries,
+    )?;
     query_entries(
         store,
         "f.name STARTS WITH 'test_'",

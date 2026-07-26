@@ -88,17 +88,15 @@
         "tool_calls": 3
       },
       "graph": {
-        "f1": 1.0,
+        "f1": 0.0,
         "precision": 1.0,
-        "recall": 1.0,
-        "retrieved_files": [
-          "main.go"
-        ],
-        "tokens_est": 26.0,
+        "recall": 0.0,
+        "retrieved_files": [],
+        "tokens_est": 11.25,
         "tool_calls": 1
       },
       "graph_precision_minus_explorer": 0.0,
-      "graph_recall_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": -1.0,
       "ground_truth_files": [
         "main.go"
       ],
@@ -405,18 +403,17 @@
         "tool_calls": 7
       },
       "graph": {
-        "f1": 1.0,
+        "f1": 0.67,
         "precision": 1.0,
-        "recall": 1.0,
+        "recall": 0.5,
         "retrieved_files": [
-          "gateway.rs",
-          "worker.rs"
+          "gateway.rs"
         ],
-        "tokens_est": 45.0,
+        "tokens_est": 29.0,
         "tool_calls": 1
       },
       "graph_precision_minus_explorer": 0.6,
-      "graph_recall_minus_explorer": 0.0,
+      "graph_recall_minus_explorer": -0.5,
       "ground_truth_files": [
         "gateway.rs",
         "worker.rs"

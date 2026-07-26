@@ -105,24 +105,73 @@ pub(super) fn extract_single_call_site(ctx: &mut ExtractCtx, node: Node, caller_
     // source: Spike B' BUG #10 fix — was `callee.contains('.')` which dropped
     // every method call (obj.method, etc.). Now extract all call_expression
     // nodes; resolver decides what can be resolved.
-    if callee.is_empty() {
-        return;
+    if !callee.is_empty() {
+        // The call's span keys the CallSite id; chained calls share start_byte
+        // so the (start, end) byte span is the unique discriminator.
+        push_call_site(ctx, &callee, node, caller_qn);
     }
-    let line = node.start_position().row as u64 + 1;
-    let col = node.start_position().column as u64;
-    // Chained calls share start_byte; (start, end) span is unique.
-    let start_byte = node.start_byte() as u64;
-    let end_byte = node.end_byte() as u64;
+    // A function passed *by value* as an argument (a higher-order call, e.g.
+    // `queue.iter().map(process_order)`) is a real reference to that function,
+    // but the argument identifier is not itself a `call_expression`, so the
+    // call-site walk in `extract_call_sites` never emits a CallSite for it and
+    // the resolver never records the Calls edge. Emit one CallSite per bare
+    // identifier / path argument so the resolver can bind it to the referenced
+    // function (Calls edge) or type (Uses edge). Arguments that are themselves
+    // calls, closures, references, or literals are handled elsewhere or are not
+    // function references, and are skipped.
+    // source: issue #87 gap 3 (rs-D2) — the #64 head-to-head eval showed
+    //   worker.rs::drain, which passes `process_order` to `.map`, was absent
+    //   from the callers of `process_order` (recall 0.5 vs the Grep baseline).
+    extract_fn_value_arg_call_sites(ctx, node, caller_qn);
+}
+
+/// Emit a CallSite for every function-value argument (a bare `identifier` or
+/// `scoped_identifier` passed by value) of `call`. See the call site in
+/// `extract_single_call_site` for the rationale and source.
+///
+/// precondition: `call` is a `call_expression` node.
+/// postcondition: one CallSite (+ its `Defines` ref) is appended per direct
+/// `identifier`/`scoped_identifier` child of the call's `arguments` field; no
+/// CallSite is appended when the call has no such arguments. Speculative by
+/// design — the resolver drops the reference when the name is a local binding
+/// rather than a known function/type, exactly as it drops any other unresolved
+/// callee (`len`, `HashMap::new`, …).
+fn extract_fn_value_arg_call_sites(ctx: &mut ExtractCtx, call: Node, caller_qn: &str) {
+    let args = match call.child_by_field_name(TS_ARGUMENTS) {
+        Some(a) => a,
+        None => return,
+    };
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor) {
+        if matches!(arg.kind(), TS_IDENTIFIER | TS_SCOPED_IDENTIFIER) {
+            let callee = node_text(ctx.source, arg);
+            if !callee.is_empty() {
+                push_call_site(ctx, &callee, arg, caller_qn);
+            }
+        }
+    }
+}
+
+/// Append one CallSite node (and the `Defines` ref linking it to its caller)
+/// for a callee named `callee`, keyed on `span_node`'s source span so the id is
+/// unique among the caller's call sites (chained calls share a start byte, so
+/// the (start, end) span is the discriminator).
+/// precondition: `callee` is non-empty.
+fn push_call_site(ctx: &mut ExtractCtx, callee: &str, span_node: Node, caller_qn: &str) {
+    let line = span_node.start_position().row as u64 + 1;
+    let col = span_node.start_position().column as u64;
+    let start_byte = span_node.start_byte() as u64;
+    let end_byte = span_node.end_byte() as u64;
     let cs_id = format!("{caller_qn}::call@{line}:{col}#{start_byte}-{end_byte}");
     ctx.nodes.push(ExtractedNode {
         label: LABEL_CALL_SITE.to_string(),
-        name: callee.clone(),
+        name: callee.to_string(),
         qualified_name: cs_id.clone(),
         start_line: line,
         end_line: line,
         visibility: String::new(),
         properties: vec![
-            ("callee_name".to_string(), callee),
+            ("callee_name".to_string(), callee.to_string()),
             ("caller_qn".to_string(), caller_qn.to_string()),
         ],
     });

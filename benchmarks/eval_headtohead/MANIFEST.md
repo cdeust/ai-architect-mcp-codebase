@@ -15,9 +15,18 @@ Reproducible: the corpus is committed and content-hashed, so
 
 ## Provenance
 - **Corpus SHA-256:** `ac80fa254b8524afba418143183278d95b081eee838b03695a6efdc635902024`
-  (the corpus IS the pin — §AC5; recomputed at every run and printed).
-- **Base commit:** `a4fa000` (branch `eval/issue-64-head-to-head`).
-- **Date:** 2026-07-26.
+  (the corpus IS the pin — §AC5; recomputed at every run and printed). Unchanged
+  by the #87 fix — the corpus bytes are identical; only the resolver/extractor
+  changed.
+- **Base commit:** `a4fa000` (branch `eval/issue-64-head-to-head`) for the
+  original falsifying run; re-run on branch `fix/recall-gaps-87` (issue #87)
+  after the go-D3 / rs-D2 fixes.
+- **Date:** 2026-07-26 (original run) · 2026-07-26 (#87 re-run).
+- **Original falsifying run preserved at:** `results.2026-07-26-pre-fix-87.json`
+  + `raw_results.2026-07-26-pre-fix-87.json` (the H4-FALSIFIED record stays on
+  file; `PRE_REGISTRATION.md` is untouched). The canonical `results.json` /
+  `raw_results.json` now hold the #87 re-run, so `reproduce.sh` regenerates them
+  byte-for-byte on the current tree.
 - **Hardware:** Apple Silicon (`arm64` / `aarch64`), macOS 26.5.1.
 - **Toolchain:** rustc 1.95.0 (59807616e 2026-04-14), release profile.
 - **Search/graph dependency set:** tantivy 0.26, lbug 0.18 (issue #78 set). A
@@ -56,50 +65,74 @@ sample stdev across questions, also broken down per dimension and per language i
 
 ## Headline results (offline run, judge gated off)
 
-| metric (mean ± stdev, n=20) | GRAPH | EXPLORER |
-|---|---:|---:|
-| retrieval precision | **1.00 ± 0.00** | 0.65 ± 0.33 |
-| retrieval recall | 0.83 ± 0.34 | **1.00 ± 0.00** |
-| tokens (est.) | **36.7 ± 19.8** | 550.4 ± 330.3 |
-| tool calls | **1.0 ± 0.0** | 5.2 ± 1.6 |
+Two runs are on record. The **original** run FALSIFIED H4 (that is the eval doing
+its job — a pre-registered guard catching a real product gap); the **#87 re-run**
+is after go-D3 and rs-D2 were fixed. Both columns below quote GRAPH; EXPLORER is
+unchanged between runs (its numbers do not depend on the resolver).
 
-- **Token ratio (explorer / graph): 17.4× mean.** The graph answer is bounded and
+| metric (mean ± stdev, n=20) | GRAPH (original) | GRAPH (#87 re-run) | EXPLORER |
+|---|---:|---:|---:|
+| retrieval precision | 1.00 ± 0.00 | **1.00 ± 0.00** | 0.65 ± 0.33 |
+| retrieval recall | 0.83 ± 0.34 | **0.90 ± 0.26** | **1.00 ± 0.00** |
+| tokens (est.) | 36.7 ± 19.8 | **38.2 ± 19.0** | 550.4 ± 330.3 |
+| tool calls | 1.0 ± 0.0 | **1.0 ± 0.0** | 5.2 ± 1.6 |
+
+- **Recall improved 0.825 → 0.90** (mean over 20 questions): go-D3 0.0→1.0 and
+  rs-D2 0.5→1.0. The remaining 0.10 gap is the type-usage gap deferred to #92.
+- **Token ratio (explorer / graph): ~17× mean.** The graph answer is bounded and
   paginated; the file-exploring transcript grows with the files grep surfaces.
 - **Tool-call ratio: 5.2× mean.** One graph tool call vs glob + grep + N reads.
 
 ### Hypotheses (pre-registered thresholds)
-| H | Claim | Verdict | Evidence |
-|---|---|---|---|
-| H1 | tokens: explorer/graph ratio > 1.5× | **SUPPORTED** | 17.4× |
-| H2 | tool calls: ratio > 2× | **SUPPORTED** | 5.2× |
-| H3 | GRAPH D2 precision ≥ EXPLORER + 0.15 | **SUPPORTED** | 1.00 vs 0.40 |
-| H4 | GRAPH recall not > 0.10 below EXPLORER | **FALSIFIED** | 0.83 vs 1.00 |
+| H | Claim | Original | #87 re-run | Evidence |
+|---|---|---|---|---|
+| H1 | tokens: explorer/graph ratio > 1.5× | SUPPORTED | **SUPPORTED** | ~17× |
+| H2 | tool calls: ratio > 2× | SUPPORTED | **SUPPORTED** | 5.2× |
+| H3 | GRAPH D2 precision ≥ EXPLORER + 0.15 | SUPPORTED | **SUPPORTED** | 1.00 vs 0.40 |
+| H4 | GRAPH recall not > 0.10 below EXPLORER | **FALSIFIED** (0.83 vs 1.00) | **SUPPORTED** (0.90 vs 1.00) | see below |
 
-## The honest negative (H4 FALSIFIED) — reported, not buried (§AC6)
+## The honest negative (H4) and its #87 disposition (§AC6)
 
-The graph wins tokens, tool calls, and precision decisively, but its **recall is
-0.17 below the baseline**, and the pre-registered guard H4 catches it. The
-substring baseline finds every occurrence (recall 1.0 by construction); the graph
-misses answers on four specific rows (see `raw_results.json`):
+The **original** run's honest negative — recall 0.17 below the baseline, caught by
+the pre-registered H4 guard — is preserved in `raw_results.2026-07-26-pre-fix-87.json`
+and stays the record; the eval exists to surface exactly this. #87 then closed two
+of the three underlying gaps and classified the third out of scope (with a filed
+issue, not a shrug):
 
-- **`go-D3` (recall 0):** AP does not classify a Go program entry as `kind=main`
-  (all Go entries came back `composable_candidate`), so `get_processes` filtered
-  to entry points returns nothing. `Grep "main"` finds `main.go`. Baseline wins.
-- **`go-D4`, `ts-D4`, `rs-D4` (recall 0 / 0.5 / 0.5):** reverse type-usage edges
-  (`Uses`/`Imports` → `get_impact` users/importers) are fully populated in
-  **Python** (recall 1.0) but partial in TypeScript/Rust and absent for the Go
-  struct. This is a measured limitation of cross-language type-usage resolution.
-- **`rs-D2` (recall 0.5):** `worker.rs` calls `process_order` via a higher-order
-  reference (`queue.iter().map(process_order)`), idiomatic Rust the call-graph
-  resolver does not capture; `get_impact` finds only the direct caller.
+- **`go-D3` (recall 0 → 1.0) — FIXED.** AP classified every Go function as
+  `composable_candidate` and none as `kind=main` (Go is case-sensitive; the
+  corpus entry is the exported `func Main`, which the lowercase-`main` rule
+  missed), so `get_processes` filtered to entry points returned nothing. Fix:
+  `clustering::process::detect_entry_points` now recognizes a Go `Main` as a
+  program entry point (the idiomatic testable-entry convention: a thin `func main`
+  delegating to `os.Exit(cli.Main())`), gated to `f.language = 'go'`. Regression:
+  `benchmarks/eval_headtohead/tests/recall_gaps_87.rs::gap1_go_main_is_a_main_kind_entry_point`.
+- **`rs-D2` (recall 0.5 → 1.0) — FIXED.** `worker.rs` references `process_order`
+  via a higher-order argument (`queue.iter().map(process_order)`), idiomatic Rust
+  the walker did not capture, so `get_impact` found only the direct caller. Fix:
+  the Rust walker (`parser::rust::extract::g4`) now emits a CallSite for
+  function-value arguments (bare identifier / path passed by value), which the
+  resolver binds to the referenced function. Regression:
+  `recall_gaps_87.rs::gap3_rust_higher_order_caller_is_captured` +
+  `tests/parser_fidelity.rs::issue87_rust_higher_order_arg_is_captured_as_call_site`.
+- **`go-D4`, `ts-D4`, `rs-D4` (recall 0 / 0.5 / 0.5) — OUT OF SCOPE → issue #92.**
+  Reverse type-usage (`Uses_*`) edges are populated only from **Field** type
+  annotations and from **calls** whose callee resolves to a type. Python's D4
+  passes because it constructs via a plain call (`OrderConfig()`); Go/Rust/TS
+  construct via composite/struct literals and `new`, and use the type in
+  return-type annotations — none of which the graph captures today (Function/Method
+  nodes carry no return-type/signature data; there is no Parameter node). Closing
+  this requires **new type-reference extraction in the walkers** (return-type
+  annotations + type-construction expressions) across the Go spec, Rust walker, and
+  TS walker, plus a `Uses_*_Class` table for TS — a cross-cutting extraction
+  feature that also intersects the in-flight #60 LangSpec migration. It is filed as
+  **#92** with root cause and acceptance criteria, per #87's sanctioned
+  out-of-scope disposition. This is a limitation of cross-language type-usage
+  resolution, stated plainly, not engineered away.
 
-None of these were engineered to make the graph lose — they are what AP's
-resolver actually does on idiomatic code, surfaced by a pre-registered guard.
-They are the honest counterweight to the token/precision wins, and they point at
-concrete resolver work (Go entry classification, cross-language `Uses` edges,
-higher-order call edges). Per-language and per-dimension breakdowns are in
-`results.json`; every per-question row, including these losses, is in
-`raw_results.json`.
+Per-language and per-dimension breakdowns are in `results.json`; every per-question
+row is in `raw_results.json` (#87 re-run) and `raw_results.2026-07-26-pre-fix-87.json`
+(original falsification).
 
 ## Judge leg (answer quality) — runnable vs budget-gated
 The blinded LLM-as-a-Judge leg (`src/judge.rs`) is **config-gated** by

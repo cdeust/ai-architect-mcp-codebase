@@ -46,6 +46,15 @@ pub(crate) const TS_USE_WILDCARD: &str = "use_wildcard";
 pub(crate) const TS_CALL_EXPR: &str = "call_expression";
 pub(crate) const TS_MACRO_INVOCATION: &str = "macro_invocation";
 pub(crate) const TS_ATTRIBUTE_ITEM: &str = "attribute_item";
+// Call-argument list plus the two node kinds a function passed *by value*
+// (a higher-order argument) can take: a bare `identifier` (`map(process_order)`)
+// or a `scoped_identifier` (`map(core::process_order)`). Used by the
+// function-value-argument capture in extract::g4.
+// source: https://github.com/tree-sitter/tree-sitter-rust node-types.json
+//   (call_expression.arguments; identifier; scoped_identifier).
+pub(crate) const TS_ARGUMENTS: &str = "arguments";
+pub(crate) const TS_IDENTIFIER: &str = "identifier";
+pub(crate) const TS_SCOPED_IDENTIFIER: &str = "scoped_identifier";
 
 // ---------------------------------------------------------------------------
 // Entry point

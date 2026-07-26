@@ -285,6 +285,95 @@ macro_rules! my_macro { () => {}; }
     );
 }
 
+// ---- issue #87 gap 3: Rust higher-order call (function passed as value) -----
+
+/// True iff the parse produced a CallSite whose `callee_name` property equals
+/// `callee` exactly.
+fn has_callsite(r: &ParseResult, callee: &str) -> bool {
+    callsite_line(r, callee).is_some()
+}
+
+/// The `start_line` of the CallSite whose `callee_name` equals `callee`, or
+/// `None` if there is no such CallSite.
+fn callsite_line(r: &ParseResult, callee: &str) -> Option<u64> {
+    r.nodes
+        .iter()
+        .find(|n| {
+            n.label == "CallSite"
+                && n.properties
+                    .iter()
+                    .any(|(k, v)| k == "callee_name" && v == callee)
+        })
+        .map(|n| n.start_line)
+}
+
+#[test]
+fn issue87_rust_higher_order_arg_is_captured_as_call_site() {
+    // Derived from the #64 eval corpus (corpus/rust/worker.rs): `process_order`
+    // is passed *by value* to `.map`, not called directly. Before the fix the
+    // walker emitted CallSites only for the method chain
+    // (`queue.iter().map(...).collect`), never for the function-value argument,
+    // so `process_order` had no caller edge from `drain` and the graph lost the
+    // "which functions call process_order?" row (rs-D2) to the Grep baseline.
+    // Raw string so line numbers are unambiguous: `process_order` is on line 4.
+    let src = r#"use crate::core::process_order;
+
+pub fn drain(queue: Vec<i32>) -> Vec<i32> {
+    queue.iter().map(process_order).collect()
+}
+"#;
+    let r = parse(src, "worker.rs", Language::Rust);
+    assert!(
+        has_callsite(&r, "process_order"),
+        "issue #87: a Rust function passed by value as a call argument \
+         (`.map(process_order)`) must yield a CallSite with that callee so the \
+         resolver can record the Calls edge; got callees {:?}",
+        r_callees(&r)
+    );
+    // Pin the source span too (start_line) — the CallSite id and start_line are
+    // derived from `row + 1`; asserting the exact line kills the off-by-one
+    // mutant on that arithmetic (a wrong line breaks call-site identity /
+    // navigation even when the callee name is right).
+    assert_eq!(
+        callsite_line(&r, "process_order"),
+        Some(4),
+        "the `process_order` argument call-site must report its real source line"
+    );
+}
+
+/// All CallSite callee names in a parse result (diagnostic helper).
+fn r_callees(r: &ParseResult) -> Vec<&str> {
+    r.nodes
+        .iter()
+        .filter(|n| n.label == "CallSite")
+        .filter_map(|n| {
+            n.properties
+                .iter()
+                .find(|(k, _)| k == "callee_name")
+                .map(|(_, v)| v.as_str())
+        })
+        .collect()
+}
+
+#[test]
+fn issue87_rust_plain_value_arg_does_not_suppress_the_direct_call() {
+    // Guard the sibling case: a direct call `process_order(order)` whose own
+    // argument is a plain value must still emit the direct-call CallSite (the
+    // function-value-argument capture is additive, never a replacement).
+    let src = "fn f(order: i32) { process_order(order); }\n";
+    let r = parse(src, "gateway.rs", Language::Rust);
+    assert!(
+        has_callsite(&r, "process_order"),
+        "the direct call `process_order(order)` must still be captured"
+    );
+    // `order` is a local binding, not a function — it is emitted speculatively
+    // and the resolver drops it, exactly as it drops `len` / `HashMap::new`.
+    assert!(
+        has_callsite(&r, "order"),
+        "the value argument is emitted speculatively for the resolver to bind"
+    );
+}
+
 // ---- Universal: every supported language yields SOME symbols on real code --
 
 #[test]

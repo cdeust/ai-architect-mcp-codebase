@@ -24,20 +24,20 @@
     },
     "graph": {
       "f1": {
-        "mean": 0.92,
-        "stdev": 0.24
+        "mean": 0.85,
+        "stdev": 0.31
       },
       "precision": {
         "mean": 1.0,
         "stdev": 0.0
       },
       "recall": {
-        "mean": 0.9,
-        "stdev": 0.26
+        "mean": 0.83,
+        "stdev": 0.34
       },
       "tokens": {
-        "mean": 38.24,
-        "stdev": 19.03
+        "mean": 36.7,
+        "stdev": 19.8
       },
       "tool_calls": {
         "mean": 1.0,
@@ -45,8 +45,8 @@
       }
     },
     "token_ratio_explorer_over_graph": {
-      "mean": 16.64,
-      "stdev": 11.72
+      "mean": 17.4,
+      "stdev": 12.16
     },
     "toolcall_ratio_explorer_over_graph": {
       "mean": 5.2,
@@ -62,7 +62,7 @@
     "H1_tokens": {
       "claim": "GRAPH uses fewer tokens; mean explorer/graph ratio > 1.5x",
       "evidence": {
-        "mean_token_ratio_explorer_over_graph": 16.64,
+        "mean_token_ratio_explorer_over_graph": 17.4,
         "threshold": 1.5
       },
       "result": "SUPPORTED"
@@ -88,10 +88,10 @@
       "claim": "GRAPH recall not worse than EXPLORER by more than 0.10",
       "evidence": {
         "explorer_recall": 1.0,
-        "graph_recall": 0.9,
+        "graph_recall": 0.83,
         "max_regression": 0.1
       },
-      "result": "SUPPORTED"
+      "result": "FALSIFIED"
     }
   },
   "n_questions": 20,
@@ -167,20 +167,20 @@
       },
       "graph": {
         "f1": {
-          "mean": 1.0,
-          "stdev": 0.0
+          "mean": 0.92,
+          "stdev": 0.17
         },
         "precision": {
           "mean": 1.0,
           "stdev": 0.0
         },
         "recall": {
-          "mean": 1.0,
-          "stdev": 0.0
+          "mean": 0.88,
+          "stdev": 0.25
         },
         "tokens": {
-          "mean": 45.13,
-          "stdev": 0.43
+          "mean": 41.13,
+          "stdev": 8.09
         },
         "tool_calls": {
           "mean": 1.0,
@@ -213,20 +213,20 @@
       },
       "graph": {
         "f1": {
-          "mean": 1.0,
-          "stdev": 0.0
+          "mean": 0.75,
+          "stdev": 0.5
         },
         "precision": {
           "mean": 1.0,
           "stdev": 0.0
         },
         "recall": {
-          "mean": 1.0,
-          "stdev": 0.0
+          "mean": 0.75,
+          "stdev": 0.5
         },
         "tokens": {
-          "mean": 25.63,
-          "stdev": 0.25
+          "mean": 21.94,
+          "stdev": 7.13
         },
         "tool_calls": {
           "mean": 1.0,
@@ -353,20 +353,20 @@
       },
       "graph": {
         "f1": {
-          "mean": 0.8,
-          "stdev": 0.45
+          "mean": 0.6,
+          "stdev": 0.55
         },
         "precision": {
           "mean": 1.0,
           "stdev": 0.0
         },
         "recall": {
-          "mean": 0.8,
-          "stdev": 0.45
+          "mean": 0.6,
+          "stdev": 0.55
         },
         "tokens": {
-          "mean": 34.15,
-          "stdev": 19.42
+          "mean": 31.2,
+          "stdev": 21.93
         },
         "tool_calls": {
           "mean": 1.0,
@@ -445,20 +445,20 @@
       },
       "graph": {
         "f1": {
-          "mean": 0.93,
-          "stdev": 0.15
+          "mean": 0.87,
+          "stdev": 0.18
         },
         "precision": {
           "mean": 1.0,
           "stdev": 0.0
         },
         "recall": {
-          "mean": 0.9,
-          "stdev": 0.22
+          "mean": 0.8,
+          "stdev": 0.27
         },
         "tokens": {
-          "mean": 36.05,
-          "stdev": 16.18
+          "mean": 32.85,
+          "stdev": 15.54
         },
         "tool_calls": {
           "mean": 1.0,
