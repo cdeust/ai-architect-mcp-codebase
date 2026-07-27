@@ -18,260 +18,13 @@
 use tree_sitter::Language as TsLanguage;
 
 use super::conventions::LanguageConventions;
+// The per-family structural sub-tables live in `families` (§4.1 split); they are
+// re-exported here so every consumer's `super::lang_spec::{CFamilySpec, …}`
+// import — and this module's own `LangSpec` field types — resolve unchanged.
+pub(crate) use super::families::{
+    CFamilySpec, CppFamilySpec, EmbeddedSpec, ObjcFamilySpec, TsFamilySpec,
+};
 use crate::parser::Language;
-
-/// An embedded-language re-parse rule for host grammars (Vue/Svelte/Astro)
-/// that leave an embedded language's source unparsed inside a host node.
-///
-/// The generic embedded walker locates each `script_node_kind` in the host
-/// AST, takes its `content_node_kind` child's byte slice, re-parses it with
-/// `embedded_language`'s grammar, and runs the same generic walkers on the
-/// inner tree. Empty for all ten core languages (ADR-0055 §3): no core
-/// grammar is a host grammar. Consumed by `walk_embedded` and validated by
-/// the spec guard.
-pub(crate) struct EmbeddedSpec {
-    /// Host node kind carrying an embedded region (e.g. `script_element`).
-    pub script_node_kind: &'static str,
-    /// Child node kind of `script_node_kind` holding the raw embedded source.
-    pub content_node_kind: &'static str,
-    /// Language the raw content must be re-parsed as.
-    pub embedded_language: Language,
-}
-
-/// The node kinds a **flat C-family** grammar (C, and later C++/ObjC) uses.
-///
-/// C-family languages do not fit the class-body-recursion model the generic
-/// `walk_defs` was built around (Python/Java/Kotlin/Swift): they are flat
-/// (structs carry *fields*, not methods), name their declarations through
-/// wrapped declarators (`int (*handler)(int)` → the name is a `field_identifier`
-/// buried under a `function_declarator`), model enum members and typedefs as
-/// `Constant`s, filter function *declarations* (a prototype) apart from
-/// variable declarations that share the `declaration` node kind, and recurse
-/// transparently through preprocessor wrappers (`#ifdef … #endif`). When a
-/// `LangSpec` carries `c_family: Some(_)`, `walk_defs` delegates the whole file
-/// to the flat `clike` walker instead of the class-model arms.
-///
-/// This sub-table is the *shared* structural abstraction for the C family: the
-/// dedup win ADR-0055 promises (`extract_function`×8, `extract_struct`×7) is
-/// realized as C, C++, and ObjC migrate onto this one walker with three data
-/// rows. Every string traces to tree-sitter-c's `node-types.json` and is
-/// validated by the spec guard.
-pub(crate) struct CFamilySpec {
-    /// Struct/union declaration kinds → `Struct` + `Defines`, recursing into the
-    /// `body_field` for `field_decl_kinds` (C `struct_specifier`/`union_specifier`).
-    pub struct_like_kinds: &'static [&'static str],
-    /// Enum declaration kinds → `Enum` + `Defines`, whose `enum_member_kinds`
-    /// body children become `Constant`s (C `enum_specifier`).
-    pub enum_like_kinds: &'static [&'static str],
-    /// Enum-member kinds inside an enum body → `Constant` (`enum_entry=true`) +
-    /// `Defines` under the enum's scope (C `enumerator`).
-    pub enum_member_kinds: &'static [&'static str],
-    /// Typedef kinds → `Constant` (`typedef=true`) + `Defines` (C `type_definition`).
-    pub typedef_kinds: &'static [&'static str],
-    /// Function-definition kinds → `Function` + `Defines`, scanning the body for
-    /// calls (C `function_definition`).
-    pub func_def_kinds: &'static [&'static str],
-    /// Declaration kinds that MAY be a function prototype → `Function`
-    /// (`is_prototype=true`) + `Defines`, only when a function declarator is
-    /// present (`is_c_function_prototype`); a plain `int x;` variable declaration
-    /// shares this kind and is skipped (C `declaration`).
-    pub func_decl_kinds: &'static [&'static str],
-    /// Member-declaration kinds inside a struct/union body → `Field` + `HasField`,
-    /// one per declared name (C `field_declaration`; `int a, b;` is one node with
-    /// two declarators).
-    pub field_decl_kinds: &'static [&'static str],
-    /// The declarator kind that marks a `func_decl_kinds` node as a function
-    /// prototype (C `function_declarator`).
-    pub func_declarator_kind: &'static str,
-    /// The declarator wrapper that may itself hold a `func_declarator_kind`
-    /// (`int f(void) = …`, rare — C `init_declarator`).
-    pub init_declarator_kind: &'static str,
-    /// The field naming a declaration's declarator, walked for field names and
-    /// function names (C `declarator`).
-    pub declarator_field: &'static str,
-    /// The field holding a function declarator's parameter list (C
-    /// `parameters`). A name search must SKIP this subtree: the parameters of
-    /// `int add(int a, int b)` contain identifiers too, and descending into
-    /// them is what made the function resolve to its last parameter (#106).
-    pub parameters_field: &'static str,
-    /// Leaf identifier kinds a name search unwraps to (C `identifier`,
-    /// `type_identifier`) — the function/typedef/enum-member name is the first
-    /// such leaf in a right-to-left DFS of the declarator.
-    pub identifier_kinds: &'static [&'static str],
-    /// Leaf kind naming a struct field, unwrapped from pointer/array/function
-    /// declarators (C `field_identifier`).
-    pub field_identifier_kind: &'static str,
-    /// Object-like macro kinds → `Constant` (`macro=true`) + `Defines`, named by
-    /// `name_field` (C `preproc_def`: `#define MAX 10`).
-    pub macro_object_kinds: &'static [&'static str],
-    /// Function-like macro kinds → `Function` (`macro=true`) + `Defines`, named
-    /// by `name_field` (C `preproc_function_def`: `#define SQUARE(x) ((x)*(x))`).
-    /// Separate from `macro_object_kinds` because the graph label differs —
-    /// a function-like macro is callable, an object-like one is a value.
-    pub macro_function_kinds: &'static [&'static str],
-}
-
-/// The node kinds a **hybrid C-family class-model** grammar (C++, and later
-/// ObjC) uses.
-///
-/// C++ is neither the flat C family (`CFamilySpec`, whose structs carry
-/// *fields* and whose enums emit members) nor the pure class-model
-/// (`walk_defs`, whose classes recurse with `class_inheritance`/dedup). Its
-/// hand-written walker (`parser::cpp::extract`) is a single class-recursive DFS
-/// with semantics that match neither: a namespace is a `Struct` whose body
-/// recurses as a NON-class scope (inner functions stay `Function`s, not
-/// methods); a class/struct/union is a `Struct` whose body recurses as a class
-/// scope; a member `field_declaration` becomes a `Constant` (a data member) OR
-/// a `Method` (`is_prototype`, when it carries a function declarator), NOT a
-/// `Field`/`HasField`; an enum emits NO members; a typedef is a `Constant`; a
-/// `using`/`#include` is an `Import`; and a single per-file `seq` counter keys
-/// functions, prototypes, AND call sites in one DFS order. That last property
-/// makes exact parity possible only by reproducing the DFS itself, so C++ gets
-/// a dedicated `walkers/cpp` walker driven by this sub-table (the #109 precedent
-/// that added `walkers/clike` for C), leaving `walk_defs`/`clike` — and the six
-/// languages that ride them — untouched.
-///
-/// When a `LangSpec` carries `cpp_family: Some(_)`, `walk_defs` delegates the
-/// whole file to the `cpp` walker. Every string traces to tree-sitter-cpp's
-/// `node-types.json` and is validated by the spec guard. Import/call/QN
-/// behavior lives in the companion `CppConventions` (ADR-0055 §4).
-pub(crate) struct CppFamilySpec {
-    /// Namespace declaration kinds → `Struct` (`is_namespace=true`) + `Defines`,
-    /// recursing into `body_field` as a NON-class scope (C++
-    /// `namespace_definition`). An anonymous namespace emits no node but still
-    /// recurses its body under the unchanged scope.
-    pub namespace_kinds: &'static [&'static str],
-    /// Class declaration kinds → `Struct` (`is_class=true`) + `Defines`, base
-    /// clause → `Extends`, body recursed as a CLASS scope (C++ `class_specifier`).
-    pub class_kinds: &'static [&'static str],
-    /// Struct/union declaration kinds → `Struct` (no `is_class`) + `Defines`,
-    /// same base-clause + class-scope-recursion as `class_kinds` (C++
-    /// `struct_specifier`/`union_specifier`).
-    pub struct_kinds: &'static [&'static str],
-    /// Enum declaration kinds → `Enum` + `Defines`, with NO body recursion —
-    /// the hand-written walker never emitted enum members (C++ `enum_specifier`,
-    /// which also covers `enum class`). Preserved for parity.
-    pub enum_kinds: &'static [&'static str],
-    /// Wrapper kinds walked transparently (same scope + enclosing type, no node
-    /// emitted) because they wrap a class/function (C++ `template_declaration`).
-    pub template_kinds: &'static [&'static str],
-    /// Function-definition kinds → `Function` + `Defines` (at file/namespace
-    /// scope) or `Method` + `HasMethod` (inside a class body, receiver-scoped),
-    /// scanning `body_field` for calls (C++ `function_definition`).
-    pub func_def_kinds: &'static [&'static str],
-    /// Member-declaration kinds inside a class/struct body: a `Method`
-    /// (`is_prototype`) when a function declarator is present, else a data-member
-    /// `Constant` (C++ `field_declaration`). Ignored outside a class body.
-    pub field_decl_kinds: &'static [&'static str],
-    /// Typedef kinds → `Constant` (`typedef=true`) + `Defines` (C++
-    /// `type_definition`).
-    pub typedef_kinds: &'static [&'static str],
-    /// The declarator kind that marks a `field_decl_kinds` member as a method
-    /// prototype rather than a data member (C++ `function_declarator`).
-    pub func_declarator_kind: &'static str,
-    /// The field naming a `func_def_kinds` node's declarator, searched for the
-    /// function/method name (C++ `declarator`).
-    pub declarator_field: &'static str,
-    /// The base-class clause kind, a direct child of a class/struct node whose
-    /// `base_type_kinds` children each name a superclass (C++ `base_class_clause`).
-    pub base_clause_kind: &'static str,
-    /// Child kinds of a `base_clause_kind` naming a base type → `Extends`
-    /// (C++ `type_identifier`/`qualified_identifier`/`template_type`; access
-    /// specifiers and virtual/attribute tokens are skipped).
-    pub base_type_kinds: &'static [&'static str],
-    /// Leaf identifier kinds a name search unwraps to, in a right-to-left DFS
-    /// (C++ `identifier`/`type_identifier`/`field_identifier`). The DFS order is
-    /// load-bearing: for a declarator with named parameters it lands on the LAST
-    /// parameter name, a pre-existing naming defect the migration preserves.
-    pub identifier_kinds: &'static [&'static str],
-}
-
-/// The node kinds an **Objective-C hybrid** grammar uses.
-///
-/// Objective-C fits none of the existing lanes. It is a C superset (plain C
-/// structs/unions/enums/typedefs and functions appear in a `.m`/`.h` file) AND
-/// carries an ObjC object model whose shapes match neither the flat C family
-/// (`CFamilySpec`) nor the C++ hybrid (`CppFamilySpec`): a class
-/// (`@interface`/`@implementation`) is a `Struct` keyed by name (so an
-/// interface, its implementation, and a category all share one QN), a category
-/// is that same node carrying a `category` field, a `@protocol` is a `Trait`
-/// with NO member extraction, a method's name is a reconstructed SELECTOR
-/// (`doWith:andThen:`) not a plain identifier, and a message send
-/// (`[obj do:x]`) is a `Calls` edge whose callee is the reconstructed selector.
-/// A single per-file `seq` counter keys methods, functions, AND call sites in
-/// one DFS order (as in C++), so exact parity requires reproducing that DFS —
-/// hence a dedicated `walkers/objc` walker driven by this sub-table (the #109
-/// `clike` / #125 `cpp` precedent), leaving the other lanes untouched.
-///
-/// Its C-side name resolution deliberately differs from `CFamilySpec`'s: the
-/// hand-written ObjC walker named C structs/enums by the `name` field then the
-/// first identifier leaf (NOT the parameter-skipping declarator chain), named
-/// functions by the declarator's `declarator` field, named typedefs by the LAST
-/// `type_identifier` under the declarator, and did NOT recurse inline struct
-/// definitions inside a typedef. Those differences are preserved for parity, so
-/// ObjC gets its own sub-table and walker rather than reusing `clike`. When a
-/// `LangSpec` carries `objc_family: Some(_)`, `walk_defs` delegates the whole
-/// file to the `objc` walker. Every string traces to tree-sitter-objc's
-/// `node-types.json`, validated by the spec guard. Import/call behavior lives in
-/// the companion `ObjcConventions` (ADR-0055 §4).
-pub(crate) struct ObjcFamilySpec {
-    /// Class declaration kinds → `Struct` (keyed by name), superclass
-    /// (`superclass_field`) → `Extends`, `category_field` → `is_category`/
-    /// `category` props, then walked for `method_kinds` members
-    /// (`class_interface`/`class_implementation`).
-    pub class_kinds: &'static [&'static str],
-    /// Protocol declaration kinds → `Trait` + `Defines`, with NO member
-    /// extraction (`protocol_declaration`). Preserved for parity.
-    pub protocol_kinds: &'static [&'static str],
-    /// Method declaration/definition kinds → `Method` + `HasMethod`, keyed by a
-    /// reconstructed selector, `receiver_type` = the enclosing class QN
-    /// (`method_declaration`/`method_definition`).
-    pub method_kinds: &'static [&'static str],
-    /// Free-function definition kinds → `Function` + `Defines` at file scope,
-    /// scanning the body for calls (`function_definition`).
-    pub func_def_kinds: &'static [&'static str],
-    /// C struct/union kinds → `Struct` + `Defines`, whose `field_decl_kinds`
-    /// body members become `Field` + `HasField`
-    /// (`struct_specifier`/`union_specifier`).
-    pub struct_kinds: &'static [&'static str],
-    /// C enum kinds → `Enum` + `Defines`, whose `enum_member_kinds` become
-    /// `Constant` (`enum_entry=true`) (`enum_specifier`).
-    pub enum_kinds: &'static [&'static str],
-    /// Enum-member kinds inside an enum body → `Constant` (`enumerator`).
-    pub enum_member_kinds: &'static [&'static str],
-    /// Typedef kinds → `Constant` (`typedef=true`) (`type_definition`).
-    pub typedef_kinds: &'static [&'static str],
-    /// Member-declaration kinds inside a C struct/union body → `Field` +
-    /// `HasField`, one per declarator (`field_declaration`).
-    pub field_decl_kinds: &'static [&'static str],
-    /// The field on a class node naming a category (`category`); its presence
-    /// marks the class as a category.
-    pub category_field: &'static str,
-    /// The field on a class node naming its superclass → `Extends`
-    /// (`superclass`).
-    pub superclass_field: &'static str,
-    /// The field naming a function definition's declarator, read for the
-    /// function name (`declarator`).
-    pub declarator_field: &'static str,
-    /// Body kinds a function/method scans for calls when the `body_field` is
-    /// absent (`compound_statement`).
-    pub func_body_kinds: &'static [&'static str],
-    /// Leaf kind naming a C struct field, unwrapped from pointer/array
-    /// declarators in a DFS (`field_identifier`).
-    pub field_identifier_kind: &'static str,
-    /// Leaf identifier kinds a class/protocol name search accepts, in source
-    /// order (`identifier`/`type_identifier`).
-    pub identifier_kinds: &'static [&'static str],
-    /// The bare identifier kind a C struct/enum name fallback and a selector
-    /// keyword read — the FIRST direct child of exactly this kind
-    /// (`identifier`). Narrower than `identifier_kinds` on purpose: an anonymous
-    /// struct/enum (no `name` field and no `identifier` child) must resolve to
-    /// empty and be skipped, so this must NOT also match `type_identifier`.
-    pub plain_identifier_kind: &'static str,
-    /// Leaf kind a typedef name search unwraps to, taking the LAST such leaf
-    /// under the declarator (`type_identifier`).
-    pub typedef_name_kind: &'static str,
-}
 
 /// Table-driven description of one language's structural node kinds.
 ///
@@ -445,6 +198,19 @@ pub(crate) struct LangSpec {
     /// When `Some`, this language is Objective-C: `walk_defs` delegates the whole
     /// file to the `objc` walker (consuming this sub-table) instead of any other
     /// lane. `None` for every other language. At most one of `c_family` /
-    /// `cpp_family` / `objc_family` is `Some` on a given row.
+    /// `cpp_family` / `objc_family` / `ts_family` is `Some` on a given row.
     pub objc_family: Option<&'static ObjcFamilySpec>,
+    /// When `Some`, this language is TypeScript/TSX: `walk_defs` delegates the
+    /// whole file to the `typescript` walker (consuming this sub-table) instead
+    /// of any other lane. `None` for every other language.
+    pub ts_family: Option<&'static TsFamilySpec>,
+    /// A grammar factory that selects the tree-sitter `Language` by FILE PATH,
+    /// for languages whose grammar depends on the file extension rather than a
+    /// single fixed grammar. `Some` only for TypeScript, which ships two
+    /// grammars (`typescript` and `tsx`): a `.tsx`/`.jsx`/`.js`/`.mjs`/`.cjs`
+    /// file must parse with `tsx` (JSX is only in that grammar), a `.ts` file
+    /// with `typescript`. When `Some`, `parse_with_spec` calls this with the
+    /// file path instead of the fixed `ts_language`; `None` for every other
+    /// language, which uses `ts_language`.
+    pub ts_language_by_ext: Option<fn(&str) -> TsLanguage>,
 }

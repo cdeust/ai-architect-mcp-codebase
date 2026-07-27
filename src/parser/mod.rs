@@ -1,14 +1,13 @@
 // parser — Multi-language tree-sitter parser module.
 //
 // Dispatches per language: the migrated set (Go/Python/Java/Kotlin/Swift/C/C++/
-// ObjC) routes through the table-driven spec walkers (`spec`, ADR-0055); the
-// rest (Rust/TypeScript) stay on their hand-written modules. All paths
+// ObjC/TypeScript) routes through the table-driven spec walkers (`spec`,
+// ADR-0055); the rest (Rust) stay on their hand-written modules. All paths
 // produce the same ParseResult/ExtractedNode/ExtractedRef types, so the indexer
 // calls `parse_file(source, file_path, language)` and gets a uniform result
 // regardless of language.
 
 pub mod rust;
-pub mod typescript;
 
 // Table-driven extraction (ADR-0055). Migrated languages route through the
 // generic spec walkers; the rest stay on the hand-written modules above.
@@ -94,7 +93,7 @@ pub struct ExtractedRef {
 pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<ParseResult, String> {
     match lang {
         Language::Rust => rust::parse_rust_file(source, file_path),
-        Language::TypeScript => typescript::parse_typescript_file(source, file_path),
+        Language::TypeScript => spec::parse_with_spec(&spec::TS_SPEC, source, file_path),
         // Migrated to the table-driven spec walkers (ADR-0055).
         // Go: phase 1 (#85). Python: phase 2 (#89). Java: phase 3 (#91).
         // Kotlin: phase 4 (#95). Swift: phase 5 (#102). C: phase 6 (#109).

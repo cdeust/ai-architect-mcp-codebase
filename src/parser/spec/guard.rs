@@ -33,6 +33,11 @@ fn node_types_json(language: Language) -> &'static str {
         Language::C => tree_sitter_c::NODE_TYPES,
         Language::Cpp => tree_sitter_cpp::NODE_TYPES,
         Language::ObjC => tree_sitter_objc::NODE_TYPES,
+        // TypeScript ships two grammars (typescript + tsx); every node kind in
+        // TS_FAMILY is a core-TS kind present in the typescript grammar (the tsx
+        // grammar adds only JSX kinds, which the spec does not reference), so the
+        // typescript node-types.json is the validation source.
+        Language::TypeScript => tree_sitter_typescript::TYPESCRIPT_NODE_TYPES,
         // Shallow-path languages (ADR-0056) are validated by the same guard:
         // a stale node kind in a shallow row drops symbols exactly as silently
         // as in a deep row, so breadth must not come with weaker validation.
@@ -212,6 +217,59 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             of.typedef_name_kind.to_string(),
         ));
     }
+    // The TypeScript sub-table's node kinds (validated only when present).
+    if let Some(tf) = spec.ts_family {
+        let ts_slices: &[(&'static str, &[&'static str])] = &[
+            ("ts_family.type_alias_kinds", tf.type_alias_kinds),
+            ("ts_family.export_kinds", tf.export_kinds),
+            ("ts_family.method_def_kinds", tf.method_def_kinds),
+            ("ts_family.field_def_kinds", tf.field_def_kinds),
+            ("ts_family.method_sig_kinds", tf.method_sig_kinds),
+            ("ts_family.property_sig_kinds", tf.property_sig_kinds),
+            ("ts_family.class_body_kinds", tf.class_body_kinds),
+            ("ts_family.interface_body_kinds", tf.interface_body_kinds),
+            ("ts_family.enum_body_kinds", tf.enum_body_kinds),
+            ("ts_family.enum_assignment_kinds", tf.enum_assignment_kinds),
+            (
+                "ts_family.enum_member_ident_kinds",
+                tf.enum_member_ident_kinds,
+            ),
+            ("ts_family.heritage_kinds", tf.heritage_kinds),
+            ("ts_family.extends_clause_kinds", tf.extends_clause_kinds),
+            (
+                "ts_family.implements_clause_kinds",
+                tf.implements_clause_kinds,
+            ),
+            (
+                "ts_family.interface_extends_kinds",
+                tf.interface_extends_kinds,
+            ),
+            ("ts_family.heritage_name_kinds", tf.heritage_name_kinds),
+            ("ts_family.generic_type_kinds", tf.generic_type_kinds),
+            ("ts_family.import_clause_kinds", tf.import_clause_kinds),
+            ("ts_family.named_imports_kinds", tf.named_imports_kinds),
+            (
+                "ts_family.namespace_import_kinds",
+                tf.namespace_import_kinds,
+            ),
+            (
+                "ts_family.import_specifier_kinds",
+                tf.import_specifier_kinds,
+            ),
+            (
+                "ts_family.default_import_ident_kinds",
+                tf.default_import_ident_kinds,
+            ),
+            ("ts_family.declarator_kinds", tf.declarator_kinds),
+            ("ts_family.arrow_kinds", tf.arrow_kinds),
+            ("ts_family.accessibility_kinds", tf.accessibility_kinds),
+        ];
+        for (field, kinds) in ts_slices {
+            for k in *kinds {
+                out.push((field, (*k).to_string()));
+            }
+        }
+    }
     for emb in spec.embedded {
         out.push((
             "embedded.script_node_kind",
@@ -269,6 +327,13 @@ fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
             "objc_family.superclass_field",
             of.superclass_field.to_string(),
         ));
+    }
+    // The TypeScript field names read by its walker/conventions
+    // (import source, declarator/type-alias value, import-specifier alias).
+    if let Some(tf) = spec.ts_family {
+        out.push(("ts_family.source_field", tf.source_field.to_string()));
+        out.push(("ts_family.value_field", tf.value_field.to_string()));
+        out.push(("ts_family.alias_field", tf.alias_field.to_string()));
     }
     out
 }

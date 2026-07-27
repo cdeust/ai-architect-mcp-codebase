@@ -1,0 +1,367 @@
+// parser::spec::walkers::typescript — the TypeScript/TSX definition walker
+// (ADR-0055 phase 9). Reproduces the pre-migration hand-written TS walker
+// (`parser::typescript::extract`) at EXACT parity, driven by the `TsFamilySpec`
+// sub-table instead of hardcoded `TS_*` constants.
+//
+// TypeScript is class-model-shaped but carries six structural divergences the
+// generic class-model arms cannot express (enumerated on `TsFamilySpec`), so
+// `walk_defs` delegates the whole file here. This module holds the dispatch,
+// the export wrapper, functions, classes (heritage + body), methods, fields,
+// and the call-site walk; the remaining concerns (interfaces, enums, type
+// aliases, value declarations) live in the `members` submodule (split along the
+// §4.1 concern boundary). Imports route through the generic `imports::walk_imports`
+// via `TsConventions::imports_of` (edge kind `Defines`).
+//
+// Distinctive behaviors preserved here:
+//   - An `export_statement` marks its inner declaration `pub` (threaded, not a
+//     token check); a re-export (`export { x }`, `export * from`) emits nothing.
+//   - A getter and setter of the same name are TWO `Method`s on ONE QN (no
+//     dedup — `def_qn` is `{scope}::{name}`).
+//   - A class member is a `Field` + `HasField`; an interface `property_signature`
+//     is likewise a `Field`. An abstract method signature inside a class body is
+//     NOT a `method_definition`, so it is dropped (pre-existing, preserved).
+//   - A call site emits TWO refs: `Defines`(caller → call-site node) AND
+//     `Calls`(caller → callee tail).
+
+mod members;
+
+use tree_sitter::Node;
+
+use super::super::lang_spec::{LangSpec, TsFamilySpec};
+use super::{end_line_of, imports, kind_in, line_of, WalkCtx};
+use crate::parser::{
+    node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CALL_SITE, LABEL_FIELD,
+    LABEL_FUNCTION, LABEL_METHOD, LABEL_STRUCT,
+};
+
+/// Top-level TypeScript definition walker: dispatches each child of `parent` to
+/// the concern its node kind names. At file scope declarations are not exported
+/// unless wrapped in an `export_statement`; `dispatch_decl` threads the export
+/// flag into the same emitters.
+pub(super) fn walk_ts_defs(
+    spec: &LangSpec,
+    tf: &TsFamilySpec,
+    ctx: &mut WalkCtx,
+    parent: Node,
+    scope: &str,
+) {
+    let mut cursor = parent.walk();
+    for child in parent.children(&mut cursor) {
+        dispatch_decl(spec, tf, ctx, child, scope, false);
+    }
+}
+
+/// Dispatches one top-level or exported declaration. `is_exported` is `true`
+/// when reached through an `export_statement`. An `import_statement` routes to
+/// the generic import walker; an `export_statement` recurses its children with
+/// the flag set; every other kind is a def/class/interface/enum/type-alias/
+/// value declaration or (a re-export clause, a decorator, punctuation) ignored.
+fn dispatch_decl(
+    spec: &LangSpec,
+    tf: &TsFamilySpec,
+    ctx: &mut WalkCtx,
+    child: Node,
+    scope: &str,
+    is_exported: bool,
+) {
+    let k = child.kind();
+    if kind_in(spec.import_node_kinds, k) {
+        imports::walk_imports(spec, ctx, child, scope);
+    } else if kind_in(tf.export_kinds, k) {
+        let mut cursor = child.walk();
+        for inner in child.children(&mut cursor) {
+            dispatch_decl(spec, tf, ctx, inner, scope, true);
+        }
+    } else if kind_in(spec.function_node_kinds, k) {
+        emit_function(spec, ctx, child, scope, is_exported);
+    } else if kind_in(spec.class_node_kinds, k) {
+        emit_class(spec, tf, ctx, child, scope, is_exported);
+    } else if kind_in(spec.interface_node_kinds, k) {
+        members::emit_interface(spec, tf, ctx, child, scope, is_exported);
+    } else if kind_in(spec.enum_node_kinds, k) {
+        members::emit_enum(spec, tf, ctx, child, scope, is_exported);
+    } else if kind_in(tf.type_alias_kinds, k) {
+        members::emit_type_alias(spec, tf, ctx, child, scope, is_exported);
+    } else if kind_in(spec.value_decl_node_kinds, k) {
+        members::emit_value_decl(spec, tf, ctx, child, scope, is_exported);
+    }
+}
+
+/// `"pub"` for an exported declaration, empty otherwise. TS visibility of a
+/// top-level definition is exactly its export status.
+pub(super) fn export_vis(is_exported: bool) -> String {
+    if is_exported {
+        "pub".to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Whether a node's source text begins with the `async ` keyword. Reproduces
+/// the hand-written `has_async_keyword`. A generator (`function*`) begins with
+/// `function`, so it is correctly non-async.
+pub(super) fn has_async(source: &str, node: Node) -> bool {
+    source[node.byte_range()].starts_with("async ")
+}
+
+/// The visibility text of a class member: the first `accessibility_kinds`
+/// (`accessibility_modifier`) child's text (`public`/`private`/`protected`),
+/// or empty when none is present. Reproduces `extract_ts_member_visibility`.
+pub(super) fn member_visibility(tf: &TsFamilySpec, source: &str, node: Node) -> String {
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .find(|c| kind_in(tf.accessibility_kinds, c.kind()))
+        .map(|c| node_text(source, c))
+        .unwrap_or_default();
+    found
+}
+
+/// Emits a free function (`Function` + `Defines`), `is_async` property, `pub`
+/// when exported, and scans its body for calls. Both `function_declaration` and
+/// `generator_function_declaration` route here.
+fn emit_function(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, is_exported: bool) {
+    let name = node_field_text(ctx.source, node, spec.name_field);
+    if name.is_empty() {
+        return;
+    }
+    let qn = spec.conventions.def_qn(scope, &name, 0);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_FUNCTION.to_string(),
+        name: name.clone(),
+        qualified_name: qn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: export_vis(is_exported),
+        properties: vec![(
+            "is_async".to_string(),
+            has_async(ctx.source, node).to_string(),
+        )],
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "Defines".to_string(),
+        from_qualified_name: scope.to_string(),
+        to_qualified_name: qn.clone(),
+    });
+    if let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) {
+        ts_walk_calls(spec, ctx, body, &qn);
+    }
+}
+
+/// Emits a class (`Struct` + `Defines`), its heritage edges
+/// (`extends` → `Extends`, `implements` → `Implements`), then recurses its
+/// body for methods and fields. Both `class_declaration` and
+/// `abstract_class_declaration` route here.
+fn emit_class(
+    spec: &LangSpec,
+    tf: &TsFamilySpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    is_exported: bool,
+) {
+    let name = node_field_text(ctx.source, node, spec.name_field);
+    if name.is_empty() {
+        return;
+    }
+    let qn = qual(scope, &name);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_STRUCT.to_string(),
+        name: name.clone(),
+        qualified_name: qn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: export_vis(is_exported),
+        properties: Vec::new(),
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "Defines".to_string(),
+        from_qualified_name: scope.to_string(),
+        to_qualified_name: qn.clone(),
+    });
+    emit_class_heritage(tf, ctx, node, &qn);
+    if let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) {
+        emit_class_body(spec, tf, ctx, body, &qn);
+    }
+}
+
+/// Emits one `Extends`/`Implements` edge per base named in a class's
+/// `class_heritage` (an `extends_clause` → `Extends`, an `implements_clause` →
+/// `Implements`), unwrapping a `generic_type` base (`extends Wrapper<T>` →
+/// `Wrapper`). Reproduces `extract_class_heritage` + `extract_heritage_clause`.
+fn emit_class_heritage(tf: &TsFamilySpec, ctx: &mut WalkCtx, class_node: Node, class_qn: &str) {
+    let mut cursor = class_node.walk();
+    for child in class_node.children(&mut cursor) {
+        if !kind_in(tf.heritage_kinds, child.kind()) {
+            continue;
+        }
+        let mut hcursor = child.walk();
+        for clause in child.children(&mut hcursor) {
+            let edge = if kind_in(tf.extends_clause_kinds, clause.kind()) {
+                "Extends"
+            } else if kind_in(tf.implements_clause_kinds, clause.kind()) {
+                "Implements"
+            } else {
+                continue;
+            };
+            emit_heritage_names(tf, ctx, clause, class_qn, edge);
+        }
+    }
+}
+
+/// Emits one `edge` ref per base type named directly in a heritage `clause`: a
+/// bare `identifier`/`type_identifier`, or the `name` child of a `generic_type`.
+fn emit_heritage_names(
+    tf: &TsFamilySpec,
+    ctx: &mut WalkCtx,
+    clause: Node,
+    class_qn: &str,
+    edge: &str,
+) {
+    let mut cursor = clause.walk();
+    for child in clause.children(&mut cursor) {
+        let name = if kind_in(tf.heritage_name_kinds, child.kind()) {
+            node_text(ctx.source, child)
+        } else if kind_in(tf.generic_type_kinds, child.kind()) {
+            child
+                .child_by_field_name("name")
+                .map(|n| node_text(ctx.source, n))
+                .unwrap_or_default()
+        } else {
+            continue;
+        };
+        if !name.is_empty() {
+            ctx.refs.push(ExtractedRef {
+                kind: edge.to_string(),
+                from_qualified_name: class_qn.to_string(),
+                to_qualified_name: name,
+            });
+        }
+    }
+}
+
+/// Recurses a `class_body`, emitting a `Method` per `method_definition` and a
+/// `Field` per `public_field_definition`. Abstract method signatures
+/// (`abstract_method_signature`) and other member kinds are not matched, so
+/// they are dropped — a pre-existing defect preserved for parity (issue #141).
+fn emit_class_body(
+    spec: &LangSpec,
+    tf: &TsFamilySpec,
+    ctx: &mut WalkCtx,
+    body: Node,
+    class_qn: &str,
+) {
+    if !kind_in(tf.class_body_kinds, body.kind()) {
+        return;
+    }
+    let mut cursor = body.walk();
+    for child in body.children(&mut cursor) {
+        let k = child.kind();
+        if kind_in(tf.method_def_kinds, k) {
+            emit_method(spec, tf, ctx, child, class_qn);
+        } else if kind_in(tf.field_def_kinds, k) {
+            emit_field(spec, tf, ctx, child, class_qn);
+        }
+    }
+}
+
+/// Emits a `Method` + `HasMethod` (receiver = the class QN), `is_async`
+/// property, member visibility, and scans its body for calls. A getter and
+/// setter of the same name produce TWO methods on the SAME QN (no dedup).
+fn emit_method(spec: &LangSpec, tf: &TsFamilySpec, ctx: &mut WalkCtx, node: Node, class_qn: &str) {
+    let name = node_field_text(ctx.source, node, spec.name_field);
+    if name.is_empty() {
+        return;
+    }
+    let qn = spec.conventions.def_qn(class_qn, &name, 0);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_METHOD.to_string(),
+        name: name.clone(),
+        qualified_name: qn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: member_visibility(tf, ctx.source, node),
+        properties: vec![
+            (
+                "is_async".to_string(),
+                has_async(ctx.source, node).to_string(),
+            ),
+            ("receiver_type".to_string(), class_qn.to_string()),
+        ],
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "HasMethod".to_string(),
+        from_qualified_name: class_qn.to_string(),
+        to_qualified_name: qn.clone(),
+    });
+    if let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) {
+        ts_walk_calls(spec, ctx, body, &qn);
+    }
+}
+
+/// Emits a `Field` + `HasField` for a `public_field_definition`, with its
+/// `type_annotation` (the `type` field's text, which includes the leading `: `
+/// — a pre-existing quirk preserved for parity, issue #140) and member
+/// visibility.
+fn emit_field(spec: &LangSpec, tf: &TsFamilySpec, ctx: &mut WalkCtx, node: Node, class_qn: &str) {
+    let name = node_field_text(ctx.source, node, spec.name_field);
+    if name.is_empty() {
+        return;
+    }
+    let type_ann = node_field_text(ctx.source, node, spec.type_field);
+    let fqn = qual(class_qn, &name);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_FIELD.to_string(),
+        name,
+        qualified_name: fqn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: member_visibility(tf, ctx.source, node),
+        properties: vec![("type_annotation".to_string(), type_ann)],
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "HasField".to_string(),
+        from_qualified_name: class_qn.to_string(),
+        to_qualified_name: fqn,
+    });
+}
+
+/// Scans `root` for `call_expression` nodes (stack DFS), emitting per accepted
+/// call a `CallSite` node plus TWO refs: `Defines`(caller → call-site QN) and
+/// the callee edge from `call_entry` (`Calls`(caller → callee tail)). The
+/// callee decision and shaping come from `TsConventions`.
+pub(super) fn ts_walk_calls(spec: &LangSpec, ctx: &mut WalkCtx, root: Node, caller_qn: &str) {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if kind_in(spec.call_node_kinds, n.kind()) {
+            if let Some(callee) = spec.conventions.call_callee(ctx.source, n) {
+                let entry = spec
+                    .conventions
+                    .call_entry(ctx.source, n, caller_qn, &callee, 0);
+                ctx.nodes.push(ExtractedNode {
+                    label: LABEL_CALL_SITE.to_string(),
+                    name: entry.name,
+                    qualified_name: entry.qualified_name.clone(),
+                    start_line: entry.start_line,
+                    end_line: entry.end_line,
+                    visibility: entry.visibility,
+                    properties: entry.properties,
+                });
+                ctx.refs.push(ExtractedRef {
+                    kind: "Defines".to_string(),
+                    from_qualified_name: caller_qn.to_string(),
+                    to_qualified_name: entry.qualified_name,
+                });
+                ctx.refs.push(ExtractedRef {
+                    kind: entry.ref_kind.to_string(),
+                    from_qualified_name: caller_qn.to_string(),
+                    to_qualified_name: entry.ref_to,
+                });
+            }
+        }
+        let mut cursor = n.walk();
+        for c in n.children(&mut cursor) {
+            stack.push(c);
+        }
+    }
+}

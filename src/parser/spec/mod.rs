@@ -15,6 +15,7 @@ mod c;
 mod c_family;
 mod conventions;
 mod cpp;
+mod families;
 mod go;
 mod java;
 mod kotlin;
@@ -25,6 +26,7 @@ mod registry;
 mod ruby;
 mod shallow;
 mod swift;
+mod typescript;
 mod walkers;
 
 #[cfg(test)]
@@ -49,6 +51,8 @@ mod python_parity_tests;
 mod shallow_tests;
 #[cfg(test)]
 mod swift_parity_tests;
+#[cfg(test)]
+mod typescript_parity_tests;
 
 pub(crate) use c::C_SPEC;
 pub(crate) use cpp::CPP_SPEC;
@@ -60,4 +64,5 @@ pub(crate) use python::PYTHON_SPEC;
 pub(crate) use ruby::RUBY_SPEC;
 pub(crate) use shallow::parse_shallow;
 pub(crate) use swift::SWIFT_SPEC;
+pub(crate) use typescript::TS_SPEC;
 pub(crate) use walkers::parse_with_spec;

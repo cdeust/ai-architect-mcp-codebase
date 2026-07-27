@@ -28,6 +28,7 @@ mod embedded;
 mod imports;
 mod objc;
 mod types;
+mod typescript;
 
 pub(crate) use defs::walk_defs;
 pub(super) use types::collect_bases;
@@ -90,7 +91,13 @@ pub(crate) fn parse_with_spec(
     source: &str,
     file_path: &str,
 ) -> Result<ParseResult, String> {
-    let lang: tree_sitter::Language = (spec.ts_language)();
+    // Most languages have one fixed grammar (`ts_language`); TypeScript selects
+    // between its `typescript` and `tsx` grammars by file extension
+    // (`ts_language_by_ext`), because JSX syntax is only in the tsx grammar.
+    let lang: tree_sitter::Language = match spec.ts_language_by_ext {
+        Some(select) => select(file_path),
+        None => (spec.ts_language)(),
+    };
     let mut parser = Parser::new();
     parser
         .set_language(&lang)

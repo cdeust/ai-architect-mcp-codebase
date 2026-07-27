@@ -140,6 +140,36 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Table-driven language specs — TypeScript migration (issue #60 phase 9,
+  ADR-0055).** Migrated TypeScript off its hand-written walker onto the
+  `src/parser/spec/` seam at exact parity, deleting `src/parser/typescript/`
+  (`mod.rs` + `extract/g1..g4.rs` + `extract/mod.rs`, 1089 LOC) — full 7-tuple
+  node parity and per-EdgeKind `F1 = 1.000` (durable pin
+  `typescript_parity_tests/`: 62 nodes, 78 refs). TypeScript is class-model-
+  shaped but fits none of the existing lanes: six structural divergences the
+  generic class-model arms cannot express without perturbing the six languages
+  that ride them — class members are `Field`s (not `Constant`s as Java models
+  them); a `variable_declarator` is polymorphic (arrow → a call-scanning
+  `Function`, `const` → `Constant`, `let` → nothing); a call site emits TWO refs
+  (`Defines` to the call-site node AND `Calls` to the callee); a getter/setter
+  pair shares ONE QN with no dedup; a `type_alias_declaration` → `TypeAlias`;
+  and a bare enum member → `Variant`. So TypeScript gets a dedicated
+  `walkers/typescript/` walker driven by a new `TsFamilySpec` sub-table
+  (`ts_family: Some(_)` routes `walk_defs` to it), exactly as C++ (#125) and
+  Objective-C (#138) did for grammars that fit neither the flat `clike` walker
+  nor the class-model arms. It is also the only language whose grammar depends
+  on the file extension: a new `ts_language_by_ext` selects the `tsx` grammar
+  for `.tsx`/`.jsx`/`.js`/`.mjs`/`.cjs` (JSX is only there) and `typescript` for
+  `.ts`. The behavioral escape hatch lives in a `TsConventions` override (the
+  recorded Risk-1 watch signal), and imports route through the generic
+  `walk_imports` (edge kind `Defines`). The spec-validation guard now covers
+  tree-sitter-typescript 0.23.2, including the `TsFamilySpec` node kinds. The
+  schema file `lang_spec.rs` was split under the §4.1 cap: the four family
+  sub-tables moved to `families.rs` (pure move, re-exported, no consumer import
+  changed). Pre-existing defects in the deleted walker are preserved for parity
+  and tracked separately: field/constant `type_annotation` includes the leading
+  `: ` (#140), abstract method signatures inside a class body are dropped
+  (#141), and object-literal method bodies are not scanned for calls (#142).
 - **Generic walker split under the §4.1 size cap (issue #101, ADR-0055).**
   `src/parser/spec/walkers.rs` had grown to 880 lines across the
   Go/Python/Java/Kotlin/Swift migrations, over the 500-line hard cap. Split
