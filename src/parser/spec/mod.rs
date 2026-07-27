@@ -71,6 +71,8 @@ mod rust_walker_tests;
 #[cfg(test)]
 mod shallow_tests;
 #[cfg(test)]
+mod swift_ground_truth;
+#[cfg(test)]
 mod swift_parity_tests;
 #[cfg(test)]
 mod typescript_parity_tests;
