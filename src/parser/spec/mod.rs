@@ -19,6 +19,7 @@ mod families;
 mod go;
 mod java;
 mod kotlin;
+mod kotlin_conventions;
 mod lang_spec;
 mod objc;
 mod python;
