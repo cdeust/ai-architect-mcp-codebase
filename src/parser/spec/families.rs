@@ -369,6 +369,20 @@ pub(crate) struct TsFamilySpec {
     /// Accessibility-modifier kinds giving a member its visibility text
     /// (`accessibility_modifier`: `public`/`private`/`protected`).
     pub accessibility_kinds: &'static [&'static str],
+    /// Abstract-method-signature kinds inside a class body → `Method` +
+    /// `HasMethod` (bodiless, so no calls scanned), like a concrete
+    /// `method_definition` (`abstract_method_signature`; issue #141). Mirrors
+    /// Swift's bodiless `protocol_function_declaration` and Java's `abstract`
+    /// `method_declaration`, which both extract the requirement as a `Method`.
+    pub abstract_method_sig_kinds: &'static [&'static str],
+    /// Object-literal value kinds whose `method_definition` and arrow-property
+    /// bodies are scanned for calls under the enclosing const's QN
+    /// (`object`; issue #142).
+    pub object_literal_kinds: &'static [&'static str],
+    /// Property-pair kinds inside an object literal (`key: value`); a pair whose
+    /// value is an `arrow_function` has its body scanned for calls (`pair`;
+    /// issue #142).
+    pub pair_kinds: &'static [&'static str],
     /// Field naming an import statement's module string (`source`).
     pub source_field: &'static str,
     /// Field naming a declarator's / type-alias's value (`value`).

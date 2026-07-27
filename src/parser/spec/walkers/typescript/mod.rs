@@ -18,8 +18,14 @@
 //   - A getter and setter of the same name are TWO `Method`s on ONE QN (no
 //     dedup — `def_qn` is `{scope}::{name}`).
 //   - A class member is a `Field` + `HasField`; an interface `property_signature`
-//     is likewise a `Field`. An abstract method signature inside a class body is
-//     NOT a `method_definition`, so it is dropped (pre-existing, preserved).
+//     is likewise a `Field`. A field/const/property's `type_annotation` is the
+//     BARE type text (`number`), the grammar's leading `: ` stripped (issue #140),
+//     matching the clike/constants/types walkers' bare `type_field` convention.
+//   - An abstract method signature (`abstract_method_signature`) inside a class
+//     body emits a `Method` + `HasMethod` like a concrete method (bodiless, so no
+//     calls are scanned), aligned with Swift's bodiless
+//     `protocol_function_declaration` and Java's `abstract` `method_declaration`
+//     (issue #141).
 //   - A call site emits TWO refs: `Defines`(caller → call-site node) AND
 //     `Calls`(caller → callee tail).
 
@@ -115,6 +121,26 @@ pub(super) fn member_visibility(tf: &TsFamilySpec, source: &str, node: Node) -> 
         .map(|c| node_text(source, c))
         .unwrap_or_default();
     found
+}
+
+/// The BARE type text of a member's `type` field (a `type_annotation` node whose
+/// grammar text is `": T"`): the leading `:` and surrounding whitespace stripped,
+/// so a class field / interface property / const `age: number` yields `number`
+/// rather than `: number` (issue #140). Empty when the member has no annotation
+/// (the field is absent → `node_field_text` returns empty → no `:` to strip).
+/// Aligns TS with the house convention: the clike/constants/types walkers all
+/// store the bare `type_field` text.
+///
+/// pre: `node` is a class field / interface property / const declarator whose
+///      `type_field` (when present) names a `type_annotation` node.
+/// post: result has no leading `:` and no surrounding whitespace; empty iff the
+///       annotation is absent.
+pub(super) fn ts_type_annotation(source: &str, node: Node, type_field: &str) -> String {
+    let raw = node_field_text(source, node, type_field);
+    match raw.trim_start().strip_prefix(':') {
+        Some(rest) => rest.trim().to_string(),
+        None => raw,
+    }
 }
 
 /// Emits a free function (`Function` + `Defines`), `is_async` property, `pub`
@@ -240,10 +266,9 @@ fn emit_heritage_names(
     }
 }
 
-/// Recurses a `class_body`, emitting a `Method` per `method_definition` and a
-/// `Field` per `public_field_definition`. Abstract method signatures
-/// (`abstract_method_signature`) and other member kinds are not matched, so
-/// they are dropped — a pre-existing defect preserved for parity (issue #141).
+/// Recurses a `class_body`, emitting a `Method` per `method_definition`, a
+/// `Method` per `abstract_method_signature` (bodiless requirement, issue #141),
+/// and a `Field` per `public_field_definition`. Other member kinds are ignored.
 fn emit_class_body(
     spec: &LangSpec,
     tf: &TsFamilySpec,
@@ -259,10 +284,54 @@ fn emit_class_body(
         let k = child.kind();
         if kind_in(tf.method_def_kinds, k) {
             emit_method(spec, tf, ctx, child, class_qn);
+        } else if kind_in(tf.abstract_method_sig_kinds, k) {
+            emit_abstract_method(spec, tf, ctx, child, class_qn);
         } else if kind_in(tf.field_def_kinds, k) {
             emit_field(spec, tf, ctx, child, class_qn);
         }
     }
+}
+
+/// Emits a `Method` + `HasMethod` (receiver = the class QN) for an
+/// `abstract_method_signature` — an abstract member is a requirement, extracted
+/// like a concrete method so it is visible in the graph (issue #141). It is
+/// bodiless, so no calls are scanned and `is_async` is always `false` (an
+/// abstract member carries no `async ` keyword). Visibility comes from any
+/// `accessibility_modifier` child, else empty. This mirrors Swift's bodiless
+/// `protocol_function_declaration` (#98) and Java's `abstract` `method_declaration`.
+///
+/// pre: `node` is an `abstract_method_signature` inside `class_qn`'s body.
+/// post: exactly one `Method` node and one `HasMethod`(class → method) ref are
+///       pushed; no `CallSite`/`Calls` (bodiless). Emits nothing if unnamed.
+fn emit_abstract_method(
+    spec: &LangSpec,
+    tf: &TsFamilySpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    class_qn: &str,
+) {
+    let name = node_field_text(ctx.source, node, spec.name_field);
+    if name.is_empty() {
+        return;
+    }
+    let qn = spec.conventions.def_qn(class_qn, &name, 0);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_METHOD.to_string(),
+        name: name.clone(),
+        qualified_name: qn.clone(),
+        start_line: line_of(node),
+        end_line: end_line_of(node),
+        visibility: member_visibility(tf, ctx.source, node),
+        properties: vec![
+            ("is_async".to_string(), "false".to_string()),
+            ("receiver_type".to_string(), class_qn.to_string()),
+        ],
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "HasMethod".to_string(),
+        from_qualified_name: class_qn.to_string(),
+        to_qualified_name: qn,
+    });
 }
 
 /// Emits a `Method` + `HasMethod` (receiver = the class QN), `is_async`
@@ -300,15 +369,14 @@ fn emit_method(spec: &LangSpec, tf: &TsFamilySpec, ctx: &mut WalkCtx, node: Node
 }
 
 /// Emits a `Field` + `HasField` for a `public_field_definition`, with its
-/// `type_annotation` (the `type` field's text, which includes the leading `: `
-/// — a pre-existing quirk preserved for parity, issue #140) and member
-/// visibility.
+/// `type_annotation` (the bare type text, leading `: ` stripped — issue #140)
+/// and member visibility.
 fn emit_field(spec: &LangSpec, tf: &TsFamilySpec, ctx: &mut WalkCtx, node: Node, class_qn: &str) {
     let name = node_field_text(ctx.source, node, spec.name_field);
     if name.is_empty() {
         return;
     }
-    let type_ann = node_field_text(ctx.source, node, spec.type_field);
+    let type_ann = ts_type_annotation(ctx.source, node, spec.type_field);
     let fqn = qual(class_qn, &name);
     ctx.nodes.push(ExtractedNode {
         label: LABEL_FIELD.to_string(),

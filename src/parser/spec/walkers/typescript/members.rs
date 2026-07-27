@@ -7,7 +7,7 @@ use tree_sitter::Node;
 
 use super::super::super::lang_spec::{LangSpec, TsFamilySpec};
 use super::super::{end_line_of, kind_in, line_of, WalkCtx};
-use super::{export_vis, has_async, ts_walk_calls};
+use super::{export_vis, has_async, ts_type_annotation, ts_walk_calls};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM,
     LABEL_FIELD, LABEL_FUNCTION, LABEL_METHOD, LABEL_TRAIT, LABEL_TYPE_ALIAS, LABEL_VARIANT,
@@ -117,7 +117,7 @@ fn emit_interface_body(
             if name.is_empty() {
                 continue;
             }
-            let type_ann = node_field_text(ctx.source, child, spec.type_field);
+            let type_ann = ts_type_annotation(ctx.source, child, spec.type_field);
             let fqn = qual(iface_qn, &name);
             ctx.nodes.push(ExtractedNode {
                 label: LABEL_FIELD.to_string(),
@@ -270,10 +270,10 @@ pub(super) fn emit_value_decl(
 }
 
 /// Emits one `variable_declarator`: an `arrow_function` value → a call-scanning
-/// `Function`; a `const` non-arrow → a `Constant` (with `type_annotation`); a
-/// `let`/`var` non-arrow → nothing. A non-arrow object-literal value emits only
-/// the `Constant` and its methods' bodies are NOT scanned for calls — a
-/// pre-existing defect preserved for parity (issue #142).
+/// `Function`; a `const` non-arrow → a `Constant` (with its bare
+/// `type_annotation`, issue #140); a `let`/`var` non-arrow → nothing. When the
+/// `const`'s value is an object literal, its method and arrow-property bodies are
+/// scanned for calls keyed under the const's QN (issue #142).
 fn emit_declarator(
     spec: &LangSpec,
     tf: &TsFamilySpec,
@@ -314,7 +314,7 @@ fn emit_declarator(
         }
     } else if is_const {
         let qn = qual(scope, &name);
-        let type_ann = node_field_text(ctx.source, node, spec.type_field);
+        let type_ann = ts_type_annotation(ctx.source, node, spec.type_field);
         ctx.nodes.push(ExtractedNode {
             label: LABEL_CONSTANT.to_string(),
             name,
@@ -327,7 +327,51 @@ fn emit_declarator(
         ctx.refs.push(ExtractedRef {
             kind: "Defines".to_string(),
             from_qualified_name: scope.to_string(),
-            to_qualified_name: qn,
+            to_qualified_name: qn.clone(),
         });
+        if let Some(v) = value {
+            scan_object_literal_calls(spec, tf, ctx, v, &qn);
+        }
+    }
+}
+
+/// Scans an object-literal `const` value for call sites inside its member
+/// bodies, keyed under the enclosing const's QN (issue #142). A `method_definition`
+/// (`{ get(url) { fetch(url); } }`) has its body scanned; a `pair` whose value is
+/// an `arrow_function` (`{ post: (url) => send(url) }`) has the arrow's body
+/// scanned. A non-object value, or a pair with a non-arrow value, contributes
+/// nothing — the const itself is not a caller of the values it merely holds.
+///
+/// pre: `value` is the declarator's value node; `const_qn` is the const's QN.
+/// post: for each object-literal method/arrow-property body, `ts_walk_calls`
+///       emits its `CallSite` + `Defines` + `Calls` under `const_qn`. No-op when
+///       `value` is not an object literal.
+fn scan_object_literal_calls(
+    spec: &LangSpec,
+    tf: &TsFamilySpec,
+    ctx: &mut WalkCtx,
+    value: Node,
+    const_qn: &str,
+) {
+    if !kind_in(tf.object_literal_kinds, value.kind()) {
+        return;
+    }
+    let mut cursor = value.walk();
+    for child in value.children(&mut cursor) {
+        let k = child.kind();
+        if kind_in(tf.method_def_kinds, k) {
+            if let Some(body) = spec.body_field.and_then(|f| child.child_by_field_name(f)) {
+                ts_walk_calls(spec, ctx, body, const_qn);
+            }
+        } else if kind_in(tf.pair_kinds, k) {
+            let arrow = child
+                .child_by_field_name(tf.value_field)
+                .filter(|v| kind_in(tf.arrow_kinds, v.kind()));
+            if let Some(arrow) = arrow {
+                if let Some(body) = spec.body_field.and_then(|f| arrow.child_by_field_name(f)) {
+                    ts_walk_calls(spec, ctx, body, const_qn);
+                }
+            }
+        }
     }
 }

@@ -37,6 +37,24 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **TypeScript extraction: bare type annotations, abstract methods, and
+  object-literal call scanning (issues #140, #141, #142).** Three defects the
+  phase-9 LangSpec migration (#144) preserved for exact parity are now
+  deliberately corrected:
+  - A class field, interface property, or `const`'s `type_annotation` no longer
+    carries the grammar's leading `: ` — `age: number` yields `number`, not
+    `: number` — aligning TypeScript with the bare `type_field` convention the
+    clike/constants/types walkers already use (#140).
+  - An `abstract` method declared in an `abstract class` body
+    (`abstract compute(): number;`) now emits a `Method` + `HasMethod` like a
+    concrete method (bodiless, so no calls are scanned), so abstract members are
+    visible in the graph — the same modeling Swift's bodiless
+    `protocol_function_declaration` (#98) and Java's `abstract`
+    `method_declaration` already use (#141).
+  - An object-literal `const` (`const api = { get(u){ fetch(u) }, post: u => send(u) }`)
+    now has its method and arrow-property bodies scanned for calls, keyed under
+    the enclosing const's QN, so `fetch`/`send` produce `Calls` edges (#142).
+
 - **C preprocessor macros and inline struct definitions reach the graph
   (issue #107).** `#define MAX 10` and `#define SQUARE(x) ((x)*(x))` produced
   nothing at all, so macro-defined symbols were invisible to the graph and to

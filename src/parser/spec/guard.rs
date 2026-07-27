@@ -263,6 +263,12 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             ("ts_family.declarator_kinds", tf.declarator_kinds),
             ("ts_family.arrow_kinds", tf.arrow_kinds),
             ("ts_family.accessibility_kinds", tf.accessibility_kinds),
+            (
+                "ts_family.abstract_method_sig_kinds",
+                tf.abstract_method_sig_kinds,
+            ),
+            ("ts_family.object_literal_kinds", tf.object_literal_kinds),
+            ("ts_family.pair_kinds", tf.pair_kinds),
         ];
         for (field, kinds) in ts_slices {
             for k in *kinds {

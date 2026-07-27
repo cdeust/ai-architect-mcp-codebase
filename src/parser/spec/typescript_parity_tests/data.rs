@@ -1,8 +1,10 @@
 // parser::spec::typescript_parity_tests::data — the TypeScript parity
-// corpus and the hand-written walker's captured ground truth (full 7-tuple
-// node records + ref triples), split from the test harness (mod.rs) to keep
-// both files under the §4.1 500-line cap. See the parent module doc for how
-// these records were captured (ADR-0055 phase 9, §5 step 1).
+// corpus and the walker's ground truth (full 7-tuple node records + ref
+// triples), split from the test harness (mod.rs) to keep both files under the
+// §4.1 500-line cap. The records began as the hand-written walker's captured
+// output (ADR-0055 phase 9, §5 step 1) and were then updated for the three
+// deliberate defect fixes #140/#141/#142 (deltas marked inline). See the parent
+// module doc.
 
 pub(super) const CORPUS: &str = r#"import { Router, Request } from 'express';
 import { foo, bar as baz } from './module';
@@ -134,6 +136,9 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "CallSite|Promise.resolve|app/mod.ts::Animal::fetch::call@69:15#1371-1390|69|69||[(\"callee_name\", \"Promise.resolve\"), (\"caller_qn\", \"app/mod.ts::Animal::fetch\")]",
         "CallSite|Promise.resolve|app/mod.ts::Dog::speak::call@75:15#1481-1504|75|75||[(\"callee_name\", \"Promise.resolve\"), (\"caller_qn\", \"app/mod.ts::Dog::speak\")]",
         "CallSite|draw|app/mod.ts::Widget::render::call@107:8#2009-2015|107|107||[(\"callee_name\", \"draw\"), (\"caller_qn\", \"app/mod.ts::Widget::render\")]",
+        // #142: object-literal `api` method + arrow-property bodies scanned for calls.
+        "CallSite|fetch|app/mod.ts::api::call@112:30#2077-2087|112|112||[(\"callee_name\", \"fetch\"), (\"caller_qn\", \"app/mod.ts::api\")]",
+        "CallSite|send|app/mod.ts::api::call@113:27#2119-2128|113|113||[(\"callee_name\", \"send\"), (\"caller_qn\", \"app/mod.ts::api\")]",
         "CallSite|fetchData|app/mod.ts::asyncArrow::call@30:10#678-692|30|30||[(\"callee_name\", \"fetchData\"), (\"caller_qn\", \"app/mod.ts::asyncArrow\")]",
         "CallSite|fetch|app/mod.ts::fetchData::call@18:11#486-496|18|18||[(\"callee_name\", \"fetch\"), (\"caller_qn\", \"app/mod.ts::fetchData\")]",
         "CallSite|format|app/mod.ts::greet::call@14:11#392-404|14|14||[(\"callee_name\", \"format\"), (\"caller_qn\", \"app/mod.ts::greet\")]",
@@ -143,19 +148,19 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "CallSite|super|app/mod.ts::Animal::constructor::call@48:8#1012-1019|48|48||[(\"callee_name\", \"super\"), (\"caller_qn\", \"app/mod.ts::Animal::constructor\")]",
         "CallSite|this.fetch|app/mod.ts::Animal::speak::call@65:21#1296-1308|65|65||[(\"callee_name\", \"this.fetch\"), (\"caller_qn\", \"app/mod.ts::Animal::speak\")]",
         "Constant|MAX_RETRIES|app/mod.ts::MAX_RETRIES|8|8|pub|[(\"type_annotation\", \"\")]",
-        "Constant|TIMEOUT|app/mod.ts::TIMEOUT|9|9|pub|[(\"type_annotation\", \": number\")]",
+        "Constant|TIMEOUT|app/mod.ts::TIMEOUT|9|9|pub|[(\"type_annotation\", \"number\")]",
         "Constant|api|app/mod.ts::api|111|114|pub|[(\"type_annotation\", \"\")]",
         "Constant|localConst|app/mod.ts::localConst|10|10||[(\"type_annotation\", \"\")]",
         "Enum|Color|app/mod.ts::Color|89|93|pub|[]",
         "Enum|Direction|app/mod.ts::Direction|95|98|pub|[]",
-        "Field|age|app/mod.ts::Animal::age|43|43|private|[(\"type_annotation\", \": number\")]",
-        "Field|count|app/mod.ts::Serializable::count|86|86||[(\"type_annotation\", \": number\")]",
-        "Field|id|app/mod.ts::Animal::id|45|45||[(\"type_annotation\", \": number\")]",
-        "Field|id|app/mod.ts::Serializable::id|85|85||[(\"type_annotation\", \": number\")]",
-        "Field|kind|app/mod.ts::Animal::kind|44|44|protected|[(\"type_annotation\", \": string\")]",
-        "Field|label|app/mod.ts::Widget::label|105|105||[(\"type_annotation\", \": string\")]",
-        "Field|name|app/mod.ts::Animal::name|42|42|public|[(\"type_annotation\", \": string\")]",
-        "Field|value|app/mod.ts::Container::value|80|80||[(\"type_annotation\", \": T\")]",
+        "Field|age|app/mod.ts::Animal::age|43|43|private|[(\"type_annotation\", \"number\")]",
+        "Field|count|app/mod.ts::Serializable::count|86|86||[(\"type_annotation\", \"number\")]",
+        "Field|id|app/mod.ts::Animal::id|45|45||[(\"type_annotation\", \"number\")]",
+        "Field|id|app/mod.ts::Serializable::id|85|85||[(\"type_annotation\", \"number\")]",
+        "Field|kind|app/mod.ts::Animal::kind|44|44|protected|[(\"type_annotation\", \"string\")]",
+        "Field|label|app/mod.ts::Widget::label|105|105||[(\"type_annotation\", \"string\")]",
+        "Field|name|app/mod.ts::Animal::name|42|42|public|[(\"type_annotation\", \"string\")]",
+        "Field|value|app/mod.ts::Container::value|80|80||[(\"type_annotation\", \"T\")]",
         "Function|asyncArrow|app/mod.ts::asyncArrow|29|31|pub|[(\"is_async\", \"true\")]",
         "Function|fetchData|app/mod.ts::fetchData|17|19|pub|[(\"is_async\", \"true\")]",
         "Function|gen|app/mod.ts::gen|21|23|pub|[(\"is_async\", \"false\")]",
@@ -172,6 +177,8 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Import|express::Router|app/mod.ts::express::Router|1|1||[(\"path\", \"express::Router\"), (\"alias\", \"\"), (\"is_glob\", \"false\")]",
         "Import|utils|app/mod.ts::utils|3|3||[(\"path\", \"..::utils\"), (\"alias\", \"utils\"), (\"is_glob\", \"true\")]",
         "Method|compute|app/mod.ts::Animal::compute|52|54||[(\"is_async\", \"false\"), (\"receiver_type\", \"app/mod.ts::Animal\")]",
+        // #141: the `abstract compute(): number;` requirement in `Base`'s body.
+        "Method|compute|app/mod.ts::Base::compute|38|38||[(\"is_async\", \"false\"), (\"receiver_type\", \"app/mod.ts::Base\")]",
         "Method|constructor|app/mod.ts::Animal::constructor|47|50||[(\"is_async\", \"false\"), (\"receiver_type\", \"app/mod.ts::Animal\")]",
         "Method|displayName|app/mod.ts::Animal::displayName|56|58||[(\"is_async\", \"false\"), (\"receiver_type\", \"app/mod.ts::Animal\")]",
         "Method|displayName|app/mod.ts::Animal::displayName|60|62||[(\"is_async\", \"false\"), (\"receiver_type\", \"app/mod.ts::Animal\")]",
@@ -205,6 +212,9 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
         ("Calls", "app/mod.ts::Animal::speak", "fetch"),
         ("Calls", "app/mod.ts::Dog::speak", "resolve"),
         ("Calls", "app/mod.ts::Widget::render", "draw"),
+        // #142: calls found inside the `api` object literal's member bodies.
+        ("Calls", "app/mod.ts::api", "fetch"),
+        ("Calls", "app/mod.ts::api", "send"),
         ("Calls", "app/mod.ts::asyncArrow", "fetchData"),
         ("Calls", "app/mod.ts::fetchData", "fetch"),
         ("Calls", "app/mod.ts::greet", "format"),
@@ -235,6 +245,17 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "Defines",
             "app/mod.ts::Widget::render",
             "app/mod.ts::Widget::render::call@107:8#2009-2015",
+        ),
+        // #142: the `Defines` companions of the two `api` call sites.
+        (
+            "Defines",
+            "app/mod.ts::api",
+            "app/mod.ts::api::call@112:30#2077-2087",
+        ),
+        (
+            "Defines",
+            "app/mod.ts::api",
+            "app/mod.ts::api::call@113:27#2119-2128",
         ),
         (
             "Defines",
@@ -328,6 +349,8 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/mod.ts::Animal",
             "app/mod.ts::Animal::compute",
         ),
+        // #141: `Base` now owns its abstract `compute` requirement.
+        ("HasMethod", "app/mod.ts::Base", "app/mod.ts::Base::compute"),
         (
             "HasMethod",
             "app/mod.ts::Animal",

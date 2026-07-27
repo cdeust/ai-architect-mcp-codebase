@@ -2,26 +2,31 @@
 // dedicated `typescript` walker at EXACT parity with the hand-written walker it
 // replaced (ADR-0055 phase 9, §5 step 3).
 //
-// The expected records below ARE the pre-migration `parse_typescript_file`
+// The expected records below started as the pre-migration `parse_typescript_file`
 // output (full 7-tuple per node + full ref triples), captured mechanically from
 // the hand-written walker on this corpus BEFORE it was deleted (62 nodes,
-// 78 refs, 0 parse errors). Per-EdgeKind F1(new-vs-groundtruth) = 1.000 ==
-// F1(old-vs-groundtruth). The test parses through the crate's public
-// `parse_file`, so it also covers the TypeScript dispatch arm and the
-// extension-keyed grammar selection (`.ts` → typescript grammar).
+// 78 refs, 0 parse errors). Three pre-existing defects that walker carried were
+// preserved for exact migration parity and then FIXED as deliberate,
+// behavior-changing corrections: the `: `-prefixed `type_annotation` (#140), the
+// dropped abstract method signatures (#141), and the unscanned object-literal
+// method bodies (#142). The ground truth below is the corrected output (65 nodes,
+// 83 refs) — the three per-issue deltas are marked inline with `// #140/#141/#142`.
+// The test parses through the crate's public `parse_file`, so it also covers the
+// TypeScript dispatch arm and the extension-keyed grammar selection
+// (`.ts` → typescript grammar).
 //
 // The exact-multiset assertion (sorted `Vec`, not a set) is the mutation oracle:
 // it kills every walker mutant that perturbs, adds, or drops any emitted node or
 // ref — including the TWO identical-QN `Method` records for the `displayName`
 // getter/setter pair and their two `HasMethod` edges (a set would collapse them,
-// so a mutant dropping one would survive; the multiset does not), and the eleven
-// `Defines`-to-call-site edges that ride alongside the eleven `Calls` edges.
+// so a mutant dropping one would survive; the multiset does not), and the
+// `Defines`-to-call-site edges that ride alongside the `Calls` edges. The
+// per-construct fidelity tests (`typescript_type_annotation_is_bare`,
+// `typescript_abstract_method_is_extracted`,
+// `typescript_object_literal_calls_are_scanned`) pin each fix independently.
 //
 // The corpus exercises every TypeScript concern the walker handles, plus the
-// edge cases that pin specific behaviors (each preserved for parity; three
-// document pre-existing defects filed separately: the `: `-prefixed
-// `type_annotation` #140, dropped abstract method signatures #141, and
-// unscanned object-literal method bodies #142):
+// edge cases that pin specific behaviors:
 //   - Imports: named (`Router`, `Request` — display = full `express::Router`
 //     path, no alias), aliased (`bar as baz` → display `baz`, path `.::module::bar`),
 //     namespace (`* as utils` → is_glob, display = alias), default (`defaultExport`
@@ -32,16 +37,18 @@
 //     (generator, `is_async=false`), arrow-in-`const` (`handler`, `asyncArrow`),
 //     and `export default function main`. A non-exported `internalFn` → empty
 //     visibility; every `export`ed def → `pub`.
-//   - Values: `const` → `Constant` (with `type_annotation` INCLUDING the leading
-//     `: `, e.g. `: number` — a pre-existing quirk, preserved), `let mutableVar`
-//     → NOTHING (negative assertion), an object-literal `const api` → a single
-//     `Constant` with NO recursion into its methods (so `send` is never a call).
+//   - Values: `const` → `Constant` (with the BARE `type_annotation`, e.g.
+//     `number` — #140), `let mutableVar` → NOTHING (negative assertion), an
+//     object-literal `const api` → a `Constant` whose method (`get`) and
+//     arrow-property (`post`) bodies ARE scanned, so `fetch`/`send` become
+//     `Calls` under `api` (#142).
 //   - Classes: `extends`/`implements` (`Animal`), `extends Wrapper<T>` (a
 //     `generic_type` base → `Wrapper`), `abstract class Base` whose
-//     `abstract compute()` signature is NOT a `method_definition` and so is
-//     DROPPED (negative assertion). Members: `public`/`private`/`protected`
-//     fields (visibility from `accessibility_modifier`, else empty), a getter
-//     and setter of the same name → TWO `Method`s on ONE QN (no dedup).
+//     `abstract compute()` signature emits a `Method` + `HasMethod` like a
+//     concrete method (#141). Members: `public`/`private`/`protected` fields
+//     (visibility from `accessibility_modifier`, else empty; bare
+//     `type_annotation` #140), a getter and setter of the same name → TWO
+//     `Method`s on ONE QN (no dedup).
 //   - Interfaces → `Trait`; `extends Base` → `Extends`; `method_signature` →
 //     `Method` (`is_async=false`), `property_signature` → `Field`.
 //   - Enums: `enum_assignment` members (`Color`) AND bare `property_identifier`
@@ -88,10 +95,10 @@ fn typescript_spec_output_is_exact_parity() {
     );
     assert_eq!(
         r.nodes.len(),
-        62,
+        65,
         "TS node count diverged from ground truth"
     );
-    assert_eq!(r.refs.len(), 78, "TS ref count diverged from ground truth");
+    assert_eq!(r.refs.len(), 83, "TS ref count diverged from ground truth");
 
     let mut obs: Vec<String> = r.nodes.iter().map(node_record).collect();
     obs.sort();
@@ -174,10 +181,12 @@ fn typescript_per_edge_kind_f1_is_at_parity() {
     }
 }
 
-/// A `let` non-arrow declaration, an object literal's methods, an abstract
-/// method signature inside a class body, and a re-export all emit NOTHING.
-/// Negative assertions the multiset test covers implicitly, pinned explicitly
-/// so a future walker that starts emitting any of them fails loudly.
+/// A `let` non-arrow declaration and a re-export emit NOTHING. Negative
+/// assertions the multiset test covers implicitly, pinned explicitly so a future
+/// walker that starts emitting either fails loudly. (The former object-literal
+/// and abstract-method negatives are now the POSITIVE fidelity assertions in
+/// `typescript_object_literal_calls_are_scanned` / `typescript_abstract_method_is_extracted`,
+/// issues #142/#141.)
 #[test]
 fn typescript_negative_space_is_empty() {
     let r = parse();
@@ -186,18 +195,106 @@ fn typescript_negative_space_is_empty() {
         "a `let` non-arrow declaration must emit nothing (only `const` → Constant)"
     );
     assert!(
-        !r.refs.iter().any(|e| e.to_qualified_name == "send"),
-        "an object-literal method body must NOT be scanned for calls (parity)"
-    );
-    assert!(
-        !r.nodes
-            .iter()
-            .any(|n| n.qualified_name == "app/mod.ts::Base::compute"),
-        "an abstract method signature in a class body is NOT a method_definition (dropped)"
-    );
-    assert!(
         !r.nodes.iter().any(|n| n.name.contains("reexport")),
         "`export * from` / `export {{ }}` re-exports must emit nothing (parity)"
+    );
+}
+
+/// #140: a class field, an interface property, and a `const` all carry the BARE
+/// type text in `type_annotation` — the grammar's leading `: ` stripped — so a
+/// downstream consumer never re-parses a `: ` prefix. Kills the mutant that drops
+/// the strip (which would restore `: number`).
+#[test]
+fn typescript_type_annotation_is_bare() {
+    let r = parse();
+    let ann = |qn: &str| -> String {
+        r.nodes
+            .iter()
+            .find(|n| n.qualified_name == qn)
+            .and_then(|n| {
+                n.properties
+                    .iter()
+                    .find(|(k, _)| k == "type_annotation")
+                    .map(|(_, v)| v.clone())
+            })
+            .unwrap_or_else(|| panic!("node {qn} with a type_annotation must exist"))
+    };
+    // class field, interface property, const — each bare, no leading `: `.
+    assert_eq!(ann("app/mod.ts::Animal::age"), "number");
+    assert_eq!(ann("app/mod.ts::Serializable::count"), "number");
+    assert_eq!(ann("app/mod.ts::TIMEOUT"), "number");
+    assert_eq!(ann("app/mod.ts::Container::value"), "T");
+    // an absent annotation stays empty (no spurious `:` produced).
+    assert_eq!(ann("app/mod.ts::MAX_RETRIES"), "");
+    assert!(
+        !r.nodes.iter().any(|n| n
+            .properties
+            .iter()
+            .any(|(k, v)| k == "type_annotation" && v.starts_with(':'))),
+        "no type_annotation may retain the grammar's leading `:` (#140)"
+    );
+}
+
+/// #141: an `abstract_method_signature` inside an abstract class body emits a
+/// `Method` + `HasMethod`(class → method) like a concrete method — bodiless, so
+/// `is_async=false` and no `CallSite`/`Calls`. Kills the mutant that drops the
+/// abstract-method arm.
+#[test]
+fn typescript_abstract_method_is_extracted() {
+    let r = parse();
+    let compute = r
+        .nodes
+        .iter()
+        .find(|n| n.qualified_name == "app/mod.ts::Base::compute")
+        .expect("abstract `compute` requirement must emit a Method (#141)");
+    assert_eq!(compute.label, "Method");
+    assert!(compute
+        .properties
+        .iter()
+        .any(|(k, v)| k == "is_async" && v == "false"));
+    assert!(compute
+        .properties
+        .iter()
+        .any(|(k, v)| k == "receiver_type" && v == "app/mod.ts::Base"));
+    assert!(
+        r.refs.iter().any(|e| e.kind == "HasMethod"
+            && e.from_qualified_name == "app/mod.ts::Base"
+            && e.to_qualified_name == "app/mod.ts::Base::compute"),
+        "the abstract method must be owned by its class via HasMethod (#141)"
+    );
+    // Bodiless: no call site is keyed under the abstract method.
+    assert!(
+        !r.refs
+            .iter()
+            .any(|e| e.from_qualified_name == "app/mod.ts::Base::compute"),
+        "an abstract (bodiless) method scans no calls (#141)"
+    );
+}
+
+/// #142: an object-literal `const`'s `method_definition` and arrow-property
+/// bodies are scanned for calls, keyed under the const's QN. Kills the mutant
+/// that skips the object-literal scan.
+#[test]
+fn typescript_object_literal_calls_are_scanned() {
+    let r = parse();
+    for callee in ["fetch", "send"] {
+        assert!(
+            r.refs.iter().any(|e| e.kind == "Calls"
+                && e.from_qualified_name == "app/mod.ts::api"
+                && e.to_qualified_name == callee),
+            "the object-literal member body's `{callee}` call must edge Calls under `api` (#142)"
+        );
+    }
+    // Each call also emits its `Defines`(const → call-site) companion.
+    assert_eq!(
+        r.refs
+            .iter()
+            .filter(|e| e.kind == "Defines"
+                && e.from_qualified_name == "app/mod.ts::api"
+                && e.to_qualified_name.contains("::call@"))
+            .count(),
+        2,
+        "both api call sites must emit their Defines companion (#142)"
     );
 }
 
