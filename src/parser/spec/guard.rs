@@ -32,6 +32,7 @@ fn node_types_json(language: Language) -> &'static str {
         Language::Swift => tree_sitter_swift::NODE_TYPES,
         Language::C => tree_sitter_c::NODE_TYPES,
         Language::Cpp => tree_sitter_cpp::NODE_TYPES,
+        Language::ObjC => tree_sitter_objc::NODE_TYPES,
         // Shallow-path languages (ADR-0056) are validated by the same guard:
         // a stale node kind in a shallow row drops symbols exactly as silently
         // as in a deep row, so breadth must not come with weaker validation.
@@ -178,6 +179,39 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             cf.base_clause_kind.to_string(),
         ));
     }
+    // The Objective-C sub-table's node kinds (validated only when present).
+    if let Some(of) = spec.objc_family {
+        let objc_slices: &[(&'static str, &[&'static str])] = &[
+            ("objc_family.class_kinds", of.class_kinds),
+            ("objc_family.protocol_kinds", of.protocol_kinds),
+            ("objc_family.method_kinds", of.method_kinds),
+            ("objc_family.func_def_kinds", of.func_def_kinds),
+            ("objc_family.struct_kinds", of.struct_kinds),
+            ("objc_family.enum_kinds", of.enum_kinds),
+            ("objc_family.enum_member_kinds", of.enum_member_kinds),
+            ("objc_family.typedef_kinds", of.typedef_kinds),
+            ("objc_family.field_decl_kinds", of.field_decl_kinds),
+            ("objc_family.func_body_kinds", of.func_body_kinds),
+            ("objc_family.identifier_kinds", of.identifier_kinds),
+        ];
+        for (field, kinds) in objc_slices {
+            for k in *kinds {
+                out.push((field, (*k).to_string()));
+            }
+        }
+        out.push((
+            "objc_family.field_identifier_kind",
+            of.field_identifier_kind.to_string(),
+        ));
+        out.push((
+            "objc_family.plain_identifier_kind",
+            of.plain_identifier_kind.to_string(),
+        ));
+        out.push((
+            "objc_family.typedef_name_kind",
+            of.typedef_name_kind.to_string(),
+        ));
+    }
     for emb in spec.embedded {
         out.push((
             "embedded.script_node_kind",
@@ -222,6 +256,18 @@ fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
         out.push((
             "cpp_family.declarator_field",
             cf.declarator_field.to_string(),
+        ));
+    }
+    // The ObjC field names read by its walker (declarator/category/superclass).
+    if let Some(of) = spec.objc_family {
+        out.push((
+            "objc_family.declarator_field",
+            of.declarator_field.to_string(),
+        ));
+        out.push(("objc_family.category_field", of.category_field.to_string()));
+        out.push((
+            "objc_family.superclass_field",
+            of.superclass_field.to_string(),
         ));
     }
     out

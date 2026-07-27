@@ -407,6 +407,7 @@ pub(crate) static PYTHON_SPEC: LangSpec = LangSpec {
     conventions: &PYTHON_CONVENTIONS,
     c_family: None,
     cpp_family: None,
+    objc_family: None,
 };
 
 #[cfg(test)]

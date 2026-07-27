@@ -24,9 +24,10 @@
 
 use tree_sitter::Node;
 
+use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
 use super::lang_spec::{CppFamilySpec, LangSpec};
-use crate::parser::{node_field_text, node_text, qual, Language};
+use crate::parser::{node_text, qual, Language};
 
 /// The tree-sitter-cpp field naming a call expression's callee. Used only by the
 /// conventions (not the generic walkers), so it is a local const rather than a
@@ -39,20 +40,18 @@ const CPP_CALL_FUNCTION_FIELD: &str = "function";
 /// members) — parity preserves that. The genuine behavior is `#include`/`using`
 /// import shaping, member-access callee extraction, and the `#{seq}` QN.
 ///
-/// The member-access callee (`call_callee`/`call_entry`) and the `#include`
-/// shaping duplicate `c.rs`'s `CConventions` verbatim — this is the SECOND use
-/// (§3.3: extract at three concrete uses, not two). The ObjC migration
-/// (phase 8) is the third and the point to lift the shared C-family callee/
-/// include helpers into a common module; extracting now would be premature
-/// abstraction (coding-standards §3.3). The `using` branch below is genuinely
-/// C++-specific and would not move.
+/// The member-access callee (`call_callee`/`call_entry`), the `#{seq}` QN, the
+/// `public` visibility, and the `#include` shaping are now the shared C-family
+/// helpers (`c_family`) — the phase-8 (ObjC) rule-of-three extraction (§3.3),
+/// behavior-preserving for C++ (this file's parity suite proves it). The `using`
+/// branch below is genuinely C++-specific and stays here.
 pub(super) struct CppConventions;
 
 impl LanguageConventions for CppConventions {
     fn visibility_of(&self, _name: &str) -> String {
         // The hand-written walker emitted `public` on every node regardless of
         // the C++ access specifier (`private:`/`protected:`); parity preserves it.
-        "public".to_string()
+        c_family::public_visibility()
     }
 
     fn receiver_type(&self, _receiver_text: &str) -> String {
@@ -66,10 +65,7 @@ impl LanguageConventions for CppConventions {
     }
 
     fn def_qn(&self, scope: &str, name: &str, seq: u64) -> String {
-        // `#{seq}` makes every function/method/prototype QN unique per file, so
-        // C++ never needs the walker's collision dedup. Matches the hand-written
-        // walker's `format!("{scope}::{name}#{seq}")`.
-        format!("{scope}::{name}#{seq}")
+        c_family::def_qn(scope, name, seq)
     }
 
     fn call_callee(&self, source: &str, call_node: Node) -> Option<String> {
@@ -78,24 +74,7 @@ impl LanguageConventions for CppConventions {
         // `geometry::identity` → `identity`. A non-identifier callee (`(fp)()`)
         // is dropped. Reproduces the hand-written `extract_calls` split on
         // `['.', '>', ':']`.
-        let callee = node_field_text(source, call_node, CPP_CALL_FUNCTION_FIELD);
-        let tail = callee
-            .rsplit(['.', '>', ':'])
-            .next()
-            .unwrap_or("")
-            .trim_end_matches('(')
-            .trim()
-            .to_string();
-        if !tail.is_empty()
-            && tail
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_alphabetic() || c == '_')
-        {
-            Some(tail)
-        } else {
-            None
-        }
+        c_family::member_access_callee(source, call_node, CPP_CALL_FUNCTION_FIELD)
     }
 
     fn call_entry(
@@ -106,18 +85,7 @@ impl LanguageConventions for CppConventions {
         callee: &str,
         seq: u64,
     ) -> CallEntry {
-        let line = call_node.start_position().row + 1;
-        let col = call_node.start_position().column + 1;
-        CallEntry {
-            name: callee.to_string(),
-            qualified_name: format!("{caller_qn}::call@{line}:{col}#{seq}"),
-            visibility: "public".to_string(),
-            properties: vec![("callee_name".to_string(), callee.to_string())],
-            start_line: call_node.start_position().row as u64 + 1,
-            end_line: call_node.end_position().row as u64 + 1,
-            ref_kind: "Calls",
-            ref_to: callee.to_string(),
-        }
+        c_family::call_entry(call_node, caller_qn, callee, seq)
     }
 
     fn imports_of(
@@ -135,39 +103,11 @@ impl LanguageConventions for CppConventions {
             "using_declaration" => using_entry(source, import_stmt, scope),
             // `preproc_include` and any other kind fall to the include shaping —
             // the walker only routes these two kinds here, so the arm is the
-            // include path (matching the hand-written `extract_include`).
-            _ => include_entry(source, import_stmt, scope),
+            // shared C-family include path (matching the hand-written
+            // `extract_include`).
+            _ => c_family::include_entry(source, import_stmt, scope, &["#include"], "include:"),
         }
     }
-}
-
-/// One `#include` → one `Import`. Strip the directive and the `<>`/`""`
-/// delimiters; the display name is the path's last segment; the edge target is
-/// the full cleaned path. Reproduces the hand-written `extract_include`.
-fn include_entry(source: &str, node: Node, scope: &str) -> Vec<ImportEntry> {
-    let text = node_text(source, node);
-    let cleaned = text
-        .trim()
-        .trim_start_matches("#include")
-        .trim()
-        .trim_matches('<')
-        .trim_matches('>')
-        .trim_matches('"')
-        .trim()
-        .to_string();
-    if cleaned.is_empty() {
-        return Vec::new();
-    }
-    let display_name = cleaned.rsplit('/').next().unwrap_or(&cleaned).to_string();
-    vec![ImportEntry {
-        display_name,
-        qualified_name: qual(scope, &format!("include:{cleaned}")),
-        ref_to: cleaned.clone(),
-        properties: vec![("path".to_string(), cleaned)],
-        visibility: "public".to_string(),
-        start_line: node.start_position().row as u64 + 1,
-        end_line: node.end_position().row as u64 + 1,
-    }]
 }
 
 /// One `using` directive/declaration → one `Import` (`using=true`). Strip the
@@ -270,4 +210,5 @@ pub(crate) static CPP_SPEC: LangSpec = LangSpec {
     conventions: &CPP_CONVENTIONS,
     c_family: None,
     cpp_family: Some(&CPP_FAMILY),
+    objc_family: None,
 };

@@ -12,12 +12,14 @@
 // each is migrated at parity behind the accuracy gate (ADR-0055 §5).
 
 mod c;
+mod c_family;
 mod conventions;
 mod cpp;
 mod go;
 mod java;
 mod kotlin;
 mod lang_spec;
+mod objc;
 mod python;
 mod registry;
 mod ruby;
@@ -38,6 +40,8 @@ mod java_parity_tests;
 #[cfg(test)]
 mod kotlin_parity_tests;
 #[cfg(test)]
+mod objc_parity_tests;
+#[cfg(test)]
 mod parity_tests;
 #[cfg(test)]
 mod python_parity_tests;
@@ -51,6 +55,7 @@ pub(crate) use cpp::CPP_SPEC;
 pub(crate) use go::GO_SPEC;
 pub(crate) use java::JAVA_SPEC;
 pub(crate) use kotlin::KOTLIN_SPEC;
+pub(crate) use objc::OBJC_SPEC;
 pub(crate) use python::PYTHON_SPEC;
 pub(crate) use ruby::RUBY_SPEC;
 pub(crate) use shallow::parse_shallow;

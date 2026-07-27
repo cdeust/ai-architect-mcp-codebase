@@ -26,6 +26,7 @@ mod cpp;
 mod defs;
 mod embedded;
 mod imports;
+mod objc;
 mod types;
 
 pub(crate) use defs::walk_defs;

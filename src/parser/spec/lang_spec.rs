@@ -186,6 +186,93 @@ pub(crate) struct CppFamilySpec {
     pub identifier_kinds: &'static [&'static str],
 }
 
+/// The node kinds an **Objective-C hybrid** grammar uses.
+///
+/// Objective-C fits none of the existing lanes. It is a C superset (plain C
+/// structs/unions/enums/typedefs and functions appear in a `.m`/`.h` file) AND
+/// carries an ObjC object model whose shapes match neither the flat C family
+/// (`CFamilySpec`) nor the C++ hybrid (`CppFamilySpec`): a class
+/// (`@interface`/`@implementation`) is a `Struct` keyed by name (so an
+/// interface, its implementation, and a category all share one QN), a category
+/// is that same node carrying a `category` field, a `@protocol` is a `Trait`
+/// with NO member extraction, a method's name is a reconstructed SELECTOR
+/// (`doWith:andThen:`) not a plain identifier, and a message send
+/// (`[obj do:x]`) is a `Calls` edge whose callee is the reconstructed selector.
+/// A single per-file `seq` counter keys methods, functions, AND call sites in
+/// one DFS order (as in C++), so exact parity requires reproducing that DFS —
+/// hence a dedicated `walkers/objc` walker driven by this sub-table (the #109
+/// `clike` / #125 `cpp` precedent), leaving the other lanes untouched.
+///
+/// Its C-side name resolution deliberately differs from `CFamilySpec`'s: the
+/// hand-written ObjC walker named C structs/enums by the `name` field then the
+/// first identifier leaf (NOT the parameter-skipping declarator chain), named
+/// functions by the declarator's `declarator` field, named typedefs by the LAST
+/// `type_identifier` under the declarator, and did NOT recurse inline struct
+/// definitions inside a typedef. Those differences are preserved for parity, so
+/// ObjC gets its own sub-table and walker rather than reusing `clike`. When a
+/// `LangSpec` carries `objc_family: Some(_)`, `walk_defs` delegates the whole
+/// file to the `objc` walker. Every string traces to tree-sitter-objc's
+/// `node-types.json`, validated by the spec guard. Import/call behavior lives in
+/// the companion `ObjcConventions` (ADR-0055 §4).
+pub(crate) struct ObjcFamilySpec {
+    /// Class declaration kinds → `Struct` (keyed by name), superclass
+    /// (`superclass_field`) → `Extends`, `category_field` → `is_category`/
+    /// `category` props, then walked for `method_kinds` members
+    /// (`class_interface`/`class_implementation`).
+    pub class_kinds: &'static [&'static str],
+    /// Protocol declaration kinds → `Trait` + `Defines`, with NO member
+    /// extraction (`protocol_declaration`). Preserved for parity.
+    pub protocol_kinds: &'static [&'static str],
+    /// Method declaration/definition kinds → `Method` + `HasMethod`, keyed by a
+    /// reconstructed selector, `receiver_type` = the enclosing class QN
+    /// (`method_declaration`/`method_definition`).
+    pub method_kinds: &'static [&'static str],
+    /// Free-function definition kinds → `Function` + `Defines` at file scope,
+    /// scanning the body for calls (`function_definition`).
+    pub func_def_kinds: &'static [&'static str],
+    /// C struct/union kinds → `Struct` + `Defines`, whose `field_decl_kinds`
+    /// body members become `Field` + `HasField`
+    /// (`struct_specifier`/`union_specifier`).
+    pub struct_kinds: &'static [&'static str],
+    /// C enum kinds → `Enum` + `Defines`, whose `enum_member_kinds` become
+    /// `Constant` (`enum_entry=true`) (`enum_specifier`).
+    pub enum_kinds: &'static [&'static str],
+    /// Enum-member kinds inside an enum body → `Constant` (`enumerator`).
+    pub enum_member_kinds: &'static [&'static str],
+    /// Typedef kinds → `Constant` (`typedef=true`) (`type_definition`).
+    pub typedef_kinds: &'static [&'static str],
+    /// Member-declaration kinds inside a C struct/union body → `Field` +
+    /// `HasField`, one per declarator (`field_declaration`).
+    pub field_decl_kinds: &'static [&'static str],
+    /// The field on a class node naming a category (`category`); its presence
+    /// marks the class as a category.
+    pub category_field: &'static str,
+    /// The field on a class node naming its superclass → `Extends`
+    /// (`superclass`).
+    pub superclass_field: &'static str,
+    /// The field naming a function definition's declarator, read for the
+    /// function name (`declarator`).
+    pub declarator_field: &'static str,
+    /// Body kinds a function/method scans for calls when the `body_field` is
+    /// absent (`compound_statement`).
+    pub func_body_kinds: &'static [&'static str],
+    /// Leaf kind naming a C struct field, unwrapped from pointer/array
+    /// declarators in a DFS (`field_identifier`).
+    pub field_identifier_kind: &'static str,
+    /// Leaf identifier kinds a class/protocol name search accepts, in source
+    /// order (`identifier`/`type_identifier`).
+    pub identifier_kinds: &'static [&'static str],
+    /// The bare identifier kind a C struct/enum name fallback and a selector
+    /// keyword read — the FIRST direct child of exactly this kind
+    /// (`identifier`). Narrower than `identifier_kinds` on purpose: an anonymous
+    /// struct/enum (no `name` field and no `identifier` child) must resolve to
+    /// empty and be skipped, so this must NOT also match `type_identifier`.
+    pub plain_identifier_kind: &'static str,
+    /// Leaf kind a typedef name search unwraps to, taking the LAST such leaf
+    /// under the declarator (`type_identifier`).
+    pub typedef_name_kind: &'static str,
+}
+
 /// Table-driven description of one language's structural node kinds.
 ///
 /// Consumed by the generic walkers (`walk_defs` / `walk_calls` /
@@ -349,10 +436,15 @@ pub(crate) struct LangSpec {
     /// instead of the class-model arms. `None` for the class-model languages
     /// (Go/Python/Java/Kotlin/Swift), which leave the C-family walker untouched.
     pub c_family: Option<&'static CFamilySpec>,
-    /// When `Some`, this language is a hybrid C-family class-model grammar (C++,
-    /// later ObjC): `walk_defs` delegates the whole file to the `cpp` walker
+    /// When `Some`, this language is a hybrid C-family class-model grammar (C++):
+    /// `walk_defs` delegates the whole file to the `cpp` walker
     /// (consuming this sub-table) instead of the flat `clike` walker or the
     /// class-model arms. `None` for every other language. At most one of
-    /// `c_family` / `cpp_family` is `Some` on a given row.
+    /// `c_family` / `cpp_family` / `objc_family` is `Some` on a given row.
     pub cpp_family: Option<&'static CppFamilySpec>,
+    /// When `Some`, this language is Objective-C: `walk_defs` delegates the whole
+    /// file to the `objc` walker (consuming this sub-table) instead of any other
+    /// lane. `None` for every other language. At most one of `c_family` /
+    /// `cpp_family` / `objc_family` is `Some` on a given row.
+    pub objc_family: Option<&'static ObjcFamilySpec>,
 }

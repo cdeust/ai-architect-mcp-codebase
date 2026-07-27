@@ -11,7 +11,7 @@ use tree_sitter::Node;
 use super::super::lang_spec::LangSpec;
 use super::{
     call_scan_of, calls, class_body_of, clike, constants, cpp, embedded, end_line_of, imports,
-    kind_in, line_of, types, WalkCtx,
+    kind_in, line_of, objc, types, WalkCtx,
 };
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_ENUM, LABEL_FUNCTION,
@@ -45,6 +45,13 @@ pub(crate) fn walk_defs(
     // (`None` at file scope), threaded through the recursion.
     if let Some(cf) = spec.cpp_family {
         cpp::walk_cpp_defs(spec, cf, ctx, parent, scope, enclosing_class);
+        return;
+    }
+    // Objective-C (a C superset + ObjC object model) routes to the dedicated
+    // `objc` walker: selector-named methods, categories, protocols, message
+    // sends, and C constructs with ObjC's own name resolution fit no other lane.
+    if let Some(of) = spec.objc_family {
+        objc::walk_objc_defs(spec, of, ctx, parent, scope);
         return;
     }
     let mut cursor = parent.walk();
