@@ -6,12 +6,12 @@
 // methods, functions). Both consume the same `ObjcFamilySpec` sub-table and the
 // shared `WalkCtx`, at EXACT parity with the hand-written walker.
 //
-// The C-side name resolution deliberately differs from `walkers::clike`'s: the
-// hand-written ObjC walker named C structs/enums by the `name` field then the
-// first BARE `identifier` (NOT the parameter-skipping declarator chain), and
-// named typedefs by the LAST `type_identifier` under the declarator, and it did
-// NOT recurse a typedef's inline struct definition (issue #127). Those
-// differences are preserved here for parity.
+// The C-side name resolution deliberately differs from `walkers::clike`'s: this
+// lane names C structs/enums by the `name` field alone (NOT the
+// parameter-skipping declarator chain) and typedefs by the LAST `type_identifier`
+// under the declarator. Unlike the original hand-written walker, it DOES recurse
+// a typedef's inline struct definition (issue #127). Those differences are ObjC's
+// name resolution, not a defect.
 
 use tree_sitter::Node;
 
@@ -22,37 +22,32 @@ use crate::parser::{
     LABEL_FIELD, LABEL_STRUCT,
 };
 
-/// The text of the first direct child of exactly `plain_identifier_kind`
-/// (`identifier`), or empty. Matches the hand-written `first_identifier` — and
-/// is deliberately narrower than `objc/mod.rs`'s `find_name` (see
-/// `plain_identifier_kind`): an anonymous C type has no bare `identifier` child,
-/// so it resolves to empty and is skipped.
-fn first_identifier(of: &ObjcFamilySpec, source: &str, node: Node) -> String {
-    let mut cursor = node.walk();
-    let text = node
-        .children(&mut cursor)
-        .find(|c| c.kind() == of.plain_identifier_kind)
-        .map(|c| node_text(source, c))
-        .unwrap_or_default();
-    text
-}
-
-/// The name of a C struct/union/enum: the `name_field` text, or the first bare
-/// `identifier`. Matches the hand-written `node_field_text(node,"name")`-then-
-/// `first_identifier` fallback (an anonymous C type resolves to empty here).
-fn c_type_name(spec: &LangSpec, of: &ObjcFamilySpec, source: &str, node: Node) -> String {
-    let n = node_field_text(source, node, spec.name_field);
-    if n.is_empty() {
-        first_identifier(of, source, node)
-    } else {
-        n
-    }
+/// The name of a C struct/union/enum (or an enumerator): the `name_field` text,
+/// empty when the specifier is anonymous.
+///
+/// Preconditions: `node` is a struct/union/enum specifier or an enumerator.
+/// Postconditions: the declared name, or `""` for an anonymous specifier — which
+/// every caller treats as "emit nothing".
+///
+/// This used to fall back to "the first bare `identifier` child" when the `name`
+/// field was absent. That fallback was unreachable: in tree-sitter-objc 3.0.2 a
+/// struct/union/enum specifier's only non-field children are `attribute_specifier`
+/// and `ms_declspec_modifier`, so a bare `identifier` is never a direct child and
+/// the fallback could only ever return `""`. Mutation testing proved it — every
+/// mutant that made the helper return empty SURVIVED, which is the signature of
+/// dead code, so it is removed rather than pinned (§9, §12.1). Absorbed from
+/// fix/cpp-extraction-123-124 commit f7c4fb2.
+/// source: tree-sitter-objc 3.0.2 node-types.json (struct_specifier /
+/// union_specifier / enum_specifier: fields `name`/`body`, children
+/// `attribute_specifier`/`ms_declspec_modifier`; enumerator: field `name`).
+fn c_type_name(spec: &LangSpec, source: &str, node: Node) -> String {
+    node_field_text(source, node, spec.name_field)
 }
 
 /// Emits a C `struct`/`union` as a `Struct` + `Defines` and, from its
 /// `body_field`, one `Field` + `HasField` per declared member. The name is the
-/// `name_field` text then the first bare `identifier` (anonymous ⇒ skipped).
-/// Matches the hand-written `extract_c_struct`.
+/// `name_field` text (anonymous ⇒ skipped). Matches the hand-written
+/// `extract_c_struct`.
 pub(super) fn emit_c_struct(
     spec: &LangSpec,
     of: &ObjcFamilySpec,
@@ -79,7 +74,7 @@ fn emit_c_struct_named(
 ) {
     let name = match override_name {
         Some(n) => n.to_string(),
-        None => c_type_name(spec, of, ctx.source, node),
+        None => c_type_name(spec, ctx.source, node),
     };
     if name.is_empty() {
         return; // anonymous struct with no alias to borrow — skip
@@ -203,7 +198,7 @@ fn emit_c_enum_named(
 ) {
     let name = match override_name {
         Some(n) => n.to_string(),
-        None => c_type_name(spec, of, ctx.source, node),
+        None => c_type_name(spec, ctx.source, node),
     };
     if name.is_empty() {
         return;
@@ -232,7 +227,7 @@ fn emit_c_enum_named(
         if !kind_in(of.enum_member_kinds, child.kind()) {
             continue;
         }
-        let en = c_type_name(spec, of, ctx.source, child);
+        let en = c_type_name(spec, ctx.source, child);
         if en.is_empty() {
             continue;
         }
@@ -299,7 +294,7 @@ fn emit_typedef_inline_type(
     {
         return InlineType::None;
     }
-    let is_anonymous = c_type_name(spec, of, ctx.source, inner).is_empty();
+    let is_anonymous = c_type_name(spec, ctx.source, inner).is_empty();
     let override_name = if is_anonymous && !alias.is_empty() {
         Some(alias)
     } else {

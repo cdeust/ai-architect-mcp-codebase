@@ -30,15 +30,15 @@
 //     transparent-recursion arm; `struct { int q; } anon;` — an ANONYMOUS struct
 //     (also `declaration`-wrapped) that resolves to an empty name and emits
 //     NOTHING. [mutant] Wrapper kills `walk_objc_defs`'s `named_child_count() >
-//     0` → `<`/`==` (they stop recursing, dropping Wrapper+z); anon kills
-//     `first_identifier`'s `-> "xyzzy"` (would emit `Struct|xyzzy`) and its
-//     `== ` → `!=` (would emit `Struct|struct`).
+//     0` → `<`/`==` (they stop recursing, dropping Wrapper+z); anon pins that an
+//     anonymous specifier contributes nothing (kills the `name.is_empty()` guard
+//     mutant, which would otherwise emit a nameless `Struct`).
 //   - `enum Dir { NORTH, SOUTH = 5 }` → `Enum` + two `Constant`s (`enum_entry`);
 //     an enumerator WITH a value still resolves to its name.
 //   - `typedef int MyInt;` → `Constant` (`typedef=true`). `typedef struct Node {
-//     int v; } NodeT;` → ONLY `Constant|NodeT`: the inline `Node` struct and its
-//     field `v` are DROPPED (pre-existing defect #127, preserved — the ObjC
-//     walker never recursed a typedef's inline type, unlike C #107).
+//     int v; } NodeT;` → `Constant|NodeT` PLUS the inline `Node` struct as
+//     `Struct|Node` + `Field|v` (issue #127 fixed — the ObjC lane now recurses a
+//     typedef's inline type, as C did in #107).
 //   - `@protocol Drawable` → a `Trait` with NO member extraction (the `- (void)
 //     draw;` inside it emits NOTHING — negative assertion).
 //   - `@interface Shape : NSObject <Drawable>` → a `Struct` keyed `…::Shape`,
