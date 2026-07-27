@@ -77,6 +77,16 @@ pub(crate) struct DeclaratorNaming {
     /// is what made the function resolve to its last parameter (#106 for C, #123
     /// for C++).
     pub parameters_field: &'static str,
+    /// Declarator wrappers that introduce a level of indirection between an outer
+    /// `function_declarator` and the bound name (C `pointer_declarator`; C++ adds
+    /// `reference_declarator`). Their presence BELOW an outermost
+    /// `function_declarator` marks a function-POINTER — `void (*cb)(int)` is data,
+    /// not a callable — which is how `declarator::binds_function_prototype`
+    /// tells a real prototype (`void f(int)`) from a function-pointer member/
+    /// variable (issue #135; the C analog is `int (*signal_handler)(int)`). A
+    /// pointer/reference ABOVE the function_declarator is a pointer/reference
+    /// RETURN type (`int *f()`), which stays a prototype.
+    pub indirection_declarator_kinds: &'static [&'static str],
 }
 
 pub(crate) struct CFamilySpec {
@@ -106,9 +116,6 @@ pub(crate) struct CFamilySpec {
     /// The declarator kind that marks a `func_decl_kinds` node as a function
     /// prototype (C `function_declarator`).
     pub func_declarator_kind: &'static str,
-    /// The declarator wrapper that may itself hold a `func_declarator_kind`
-    /// (`int f(void) = …`, rare — C `init_declarator`).
-    pub init_declarator_kind: &'static str,
     /// How this grammar spells a declaration's name (shared with the C++
     /// sub-table so `declarator_name` has one implementation — #106/#123).
     pub naming: &'static DeclaratorNaming,
@@ -308,11 +315,19 @@ pub(crate) struct ObjcFamilySpec {
     /// order (`identifier`/`type_identifier`).
     pub identifier_kinds: &'static [&'static str],
     /// The bare identifier kind a C struct/enum name fallback and a selector
-    /// keyword read — the FIRST direct child of exactly this kind
-    /// (`identifier`). Narrower than `identifier_kinds` on purpose: an anonymous
-    /// struct/enum (no `name` field and no `identifier` child) must resolve to
-    /// empty and be skipped, so this must NOT also match `type_identifier`.
+    /// keyword read — a direct child of exactly this kind (`identifier`).
+    /// Narrower than `identifier_kinds` on purpose: an anonymous struct/enum (no
+    /// `name` field and no `identifier` child) must resolve to empty and be
+    /// skipped, so this must NOT also match `type_identifier`. In a
+    /// `method_kinds` node the direct `plain_identifier_kind` children are the
+    /// selector's keyword parts, IN ORDER (`areaWithWidth`, `height`).
     pub plain_identifier_kind: &'static str,
+    /// Selector-argument kinds inside a `method_kinds` node (`method_parameter`).
+    /// Their COUNT decides a keyword selector (`areaWithWidth:height:`, ≥1
+    /// argument, keywords joined with a trailing `:`) from a unary one (`start`,
+    /// 0 arguments, the sole keyword bare) — the method-declaration analog of the
+    /// message-send `message_selector` reconstruction (issue #128).
+    pub method_parameter_kinds: &'static [&'static str],
     /// Leaf kind a typedef name search unwraps to, taking the LAST such leaf
     /// under the declarator (`type_identifier`).
     pub typedef_name_kind: &'static str,

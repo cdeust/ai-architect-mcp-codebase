@@ -114,11 +114,17 @@ pub(super) fn walk_cpp_defs(
     }
 }
 
-/// Whether `node` carries a function declarator anywhere in its subtree — the
-/// test that distinguishes a member declaration that is a method prototype
-/// (`int f() const;`, `Point(int,int);`) from a data member (`int x;`) or a
-/// nested-type declaration (`class Inner;`). DFS over the whole node.
-pub(super) fn has_function_declarator(cf: &CppFamilySpec, node: Node) -> bool {
+/// Whether `node` carries a function declarator anywhere in its subtree.
+///
+/// Used ONLY to gate the ctor/dtor dispatch arm (`member_decl_kinds`, a bare
+/// `declaration`): a constructor/destructor carries a function declarator, a
+/// stray non-function `declaration` in a class body does not. The finer
+/// prototype-vs-function-pointer decision is per DECLARED NAME in
+/// `cpp_members::emit_member` via `declarator::binds_function_prototype` (#135) —
+/// a function-pointer member reaches `emit_member` as a `field_declaration`, not
+/// through this arm, so a whole-subtree DFS is the right (and sufficient) test
+/// here.
+fn has_function_declarator(cf: &CppFamilySpec, node: Node) -> bool {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         if n.kind() == cf.func_declarator_kind {

@@ -21,8 +21,10 @@
 use tree_sitter::Node;
 
 use super::super::lang_spec::{CppFamilySpec, LangSpec};
-use super::cpp::{emit_class_like, has_function_declarator};
-use super::declarator::{declarator_field_children, declarator_name, named_or_first_identifier};
+use super::cpp::emit_class_like;
+use super::declarator::{
+    binds_function_prototype, declarator_field_children, declarator_name, named_or_first_identifier,
+};
 use super::{end_line_of, kind_in, line_of, WalkCtx};
 use crate::parser::{
     node_field_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM, LABEL_FIELD,
@@ -117,6 +119,9 @@ pub(super) fn emit_enum(
 /// rather than per node — a node-wide test would label `x` a method or drop `f`:
 ///   - `int f() const;` / `Point(int,int);` → function declarator ⇒ prototype
 ///   - `int a, b;` / `int& r;`              → plain declarators   ⇒ data members
+///   - `void (*cb)(int);`                   → function POINTER     ⇒ data member
+///     (issue #135: a `pointer_declarator` sits between the outer
+///     `function_declarator` and the name, so it is data, not a callable)
 ///   - `class Inner { int z; };`            → `type` specifier    ⇒ nested type
 pub(super) fn emit_member(
     spec: &LangSpec,
@@ -132,7 +137,7 @@ pub(super) fn emit_member(
         if name.is_empty() {
             continue;
         }
-        if has_function_declarator(cf, declarator) {
+        if binds_function_prototype(cf.naming, cf.func_declarator_kind, declarator) {
             emit_member_proto(spec, ctx, node, scope, &name);
         } else {
             emit_member_field(spec, cf, ctx, node, scope, &name, &type_text);

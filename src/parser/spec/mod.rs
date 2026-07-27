@@ -32,11 +32,15 @@ mod walkers;
 #[cfg(test)]
 mod c_extraction_tests;
 #[cfg(test)]
+mod c_ground_truth;
+#[cfg(test)]
 mod c_parity_tests;
 #[cfg(test)]
 mod cpp_extraction_tests;
 #[cfg(test)]
 mod cpp_ground_truth;
+#[cfg(test)]
+mod cpp_member_classification_tests;
 #[cfg(test)]
 mod cpp_parity_tests;
 #[cfg(test)]
@@ -44,9 +48,13 @@ mod embedded_tests;
 #[cfg(test)]
 mod guard;
 #[cfg(test)]
+mod guard_grammar;
+#[cfg(test)]
 mod java_parity_tests;
 #[cfg(test)]
 mod kotlin_parity_tests;
+#[cfg(test)]
+mod objc_extraction_tests;
 #[cfg(test)]
 mod objc_parity_tests;
 #[cfg(test)]

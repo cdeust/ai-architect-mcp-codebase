@@ -103,3 +103,36 @@ fn c_anonymous_inline_struct_is_emitted_under_its_alias_only_once() {
         "exactly one Defines edge for the one name"
     );
 }
+
+/// #135 (C analog): `int (*signal_handler)(int) = 0;` at file scope is a
+/// function-POINTER variable, not a prototype. Its `init_declarator` wraps a
+/// `function_declarator`, so the pre-fix `is_c_function_prototype` saw the
+/// function declarator and emitted a bogus prototype `Function`. A
+/// `pointer_declarator` sits between that `function_declarator` and the name, so
+/// it is DATA — and the flat C walker does not model file-scope variables, so it
+/// emits NOTHING. A real prototype (`int add(int a);`) and a plain global
+/// (`int g;`) are the controls: the first STAYS a prototype, the second was
+/// already skipped.
+#[test]
+fn c_function_pointer_variable_is_not_a_prototype() {
+    let (nodes, _refs) = parse("int (*signal_handler)(int) = 0;\nint add(int a);\nint g;\n");
+    assert_eq!(
+        records(&nodes),
+        vec!["Function|add|a.c::add#1|[(\"is_prototype\", \"true\")]".to_string()],
+        "#135: only the real prototype `add` is emitted; the function-pointer \
+         variable and the plain global are not graph nodes"
+    );
+}
+
+/// #135 negative control: a pointer-RETURN prototype (`int *make(int n);`) STAYS
+/// a prototype. The pointer is the return type — ABOVE the `function_declarator`,
+/// not between it and the name — so the discriminator must keep it callable.
+#[test]
+fn c_pointer_return_prototype_stays_a_prototype() {
+    let (nodes, _refs) = parse("int *make(int n);\n");
+    assert_eq!(
+        records(&nodes),
+        vec!["Function|make|a.c::make#1|[(\"is_prototype\", \"true\")]".to_string()],
+        "#135: a pointer-return prototype is still a callable prototype"
+    );
+}

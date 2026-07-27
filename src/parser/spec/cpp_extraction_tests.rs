@@ -339,23 +339,8 @@ fn cpp_a_mixed_member_declaration_routes_each_name_separately() {
     );
 }
 
-/// A function-POINTER data member (`void (*cb)(int z);`) has a
-/// `function_declarator` as its outermost declarator, so the existing
-/// prototype discriminator classifies it as a method prototype. That
-/// classification is UNCHANGED by #123/#124 — neither issue enumerates it — but
-/// the NAME is now right (`cb`, from the declarator chain, not `z` from the
-/// parameter list). Pinned so the classification cannot drift silently; the
-/// modeling question is tracked in issue #135.
-#[test]
-fn cpp_function_pointer_member_keeps_its_classification_with_the_right_name() {
-    let src = "class Cb {\n    void (*cb)(int z);\n};\n";
-    let (nodes, _refs) = parse(src);
-    assert_eq!(
-        label_names(&nodes),
-        vec!["Method|cb".to_string(), "Struct|Cb".to_string()],
-        "the parameter name `z` must not be the member's name (#123)"
-    );
-}
+// The prototype-vs-function-pointer decision (#135) is pinned in the sibling
+// `cpp_member_classification_tests` module (split for the §4.1 file cap).
 
 /// The #107 body-presence trap, in its C++ form: a nested forward declaration
 /// (`class Inner;`) is a `field_declaration` whose `type` is a `class_specifier`

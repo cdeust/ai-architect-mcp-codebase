@@ -10,73 +10,10 @@
 // node-kind string) and asserts every kind and field name in the spec is real
 // for that grammar. It makes the §8 source citation executable.
 
-use std::collections::BTreeSet;
-
-use serde_json::Value;
-
+use super::guard_grammar::{node_types_json, parse_node_types};
 use super::lang_spec::{DeclaratorNaming, LangSpec};
 use super::registry::{MIGRATED_SPECS, SHALLOW_SPECS};
 use super::shallow::ShallowSpec;
-use crate::parser::Language;
-
-/// The grammar's `node-types.json` text for a migrated language. One arm per
-/// migrated language (added as each language migrates — OCP dispatch, not a
-/// growing conditional in the walker). source: each crate's `NODE_TYPES`,
-/// which is `include_str!("../../src/node-types.json")`.
-fn node_types_json(language: Language) -> &'static str {
-    match language {
-        Language::Go => tree_sitter_go::NODE_TYPES,
-        Language::Python => tree_sitter_python::NODE_TYPES,
-        Language::Java => tree_sitter_java::NODE_TYPES,
-        Language::Kotlin => tree_sitter_kotlin_ng::NODE_TYPES,
-        Language::Swift => tree_sitter_swift::NODE_TYPES,
-        Language::C => tree_sitter_c::NODE_TYPES,
-        Language::Cpp => tree_sitter_cpp::NODE_TYPES,
-        Language::ObjC => tree_sitter_objc::NODE_TYPES,
-        // TypeScript ships two grammars (typescript + tsx); every node kind in
-        // TS_FAMILY is a core-TS kind present in the typescript grammar (the tsx
-        // grammar adds only JSX kinds, which the spec does not reference), so the
-        // typescript node-types.json is the validation source.
-        Language::TypeScript => tree_sitter_typescript::TYPESCRIPT_NODE_TYPES,
-        // Shallow-path languages (ADR-0056) are validated by the same guard:
-        // a stale node kind in a shallow row drops symbols exactly as silently
-        // as in a deep row, so breadth must not come with weaker validation.
-        Language::Ruby => tree_sitter_ruby::NODE_TYPES,
-        // A spec row for a not-yet-wired language would fail loudly here rather
-        // than silently skip validation.
-        other => panic!(
-            "spec guard: no node-types.json wired for migrated language {other:?}; \
-             wire it in guard::node_types_json"
-        ),
-    }
-}
-
-/// Parses `node-types.json` into (set of node kinds, set of field names).
-fn parse_node_types(json: &str) -> (BTreeSet<String>, BTreeSet<String>) {
-    let root: Value = serde_json::from_str(json).expect("node-types.json is valid JSON");
-    let entries = root.as_array().expect("node-types.json is a JSON array");
-    let mut kinds = BTreeSet::new();
-    let mut fields = BTreeSet::new();
-    for entry in entries {
-        if let Some(t) = entry.get("type").and_then(Value::as_str) {
-            kinds.insert(t.to_string());
-        }
-        // Supertype nodes list their concrete members under "subtypes".
-        if let Some(subs) = entry.get("subtypes").and_then(Value::as_array) {
-            for s in subs {
-                if let Some(t) = s.get("type").and_then(Value::as_str) {
-                    kinds.insert(t.to_string());
-                }
-            }
-        }
-        if let Some(field_map) = entry.get("fields").and_then(Value::as_object) {
-            for name in field_map.keys() {
-                fields.insert(name.clone());
-            }
-        }
-    }
-    (kinds, fields)
-}
 
 /// Every node-kind string a `DeclaratorNaming` sub-table references, tagged with
 /// its path. One helper for both C-family rows, so adding a family cannot forget
@@ -90,6 +27,9 @@ fn naming_node_kinds(
         out.push((prefix, (*k).to_string()));
     }
     for k in naming.name_text_kinds {
+        out.push((prefix, (*k).to_string()));
+    }
+    for k in naming.indirection_declarator_kinds {
         out.push((prefix, (*k).to_string()));
     }
     out
@@ -165,10 +105,6 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             cf.func_declarator_kind.to_string(),
         ));
         out.push((
-            "c_family.init_declarator_kind",
-            cf.init_declarator_kind.to_string(),
-        ));
-        out.push((
             "c_family.field_identifier_kind",
             cf.field_identifier_kind.to_string(),
         ));
@@ -222,6 +158,10 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             ("objc_family.field_decl_kinds", of.field_decl_kinds),
             ("objc_family.func_body_kinds", of.func_body_kinds),
             ("objc_family.identifier_kinds", of.identifier_kinds),
+            (
+                "objc_family.method_parameter_kinds",
+                of.method_parameter_kinds,
+            ),
         ];
         for (field, kinds) in objc_slices {
             for k in *kinds {

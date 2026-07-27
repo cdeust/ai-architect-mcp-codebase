@@ -110,6 +110,46 @@ adheres to [Semantic Versioning](https://semver.org/).
   `cpp_ground_truth.rs`); per-edge-kind F1 is 1.000, and `graph_accuracy` stays
   41/41.
 
+- **A C++ function-pointer data member is a `Field`, not a method prototype
+  (issue #135); the identical C defect is fixed too.** A member such as
+  `void (*cb)(int);` has a `function_declarator` as its OUTERMOST declarator, so
+  the prototype discriminator classified it as a `Method` (`is_prototype=true`).
+  But a `pointer_declarator` sits between that `function_declarator` and the name
+  (`(*cb)`), which makes it a pointer TO a function — data. Classification is now
+  positional: a member is a prototype only when a `function_declarator` is reached
+  with NO pointer/reference wrapper between it and the name, so `void (*cb)(int);`
+  is a `Field` + `HasField` (`type_annotation="void"`) while `void f(int);` and a
+  pointer-RETURN prototype (`int *g();`) stay `Method`s. **Consumer-visible for
+  C:** the identical looseness misclassified a file-scope function-pointer
+  variable (`int (*signal_handler)(int) = 0;`) as a prototype `Function`; the flat
+  C walker does not model file-scope variables, so it now emits NOTHING for it —
+  the single `Function|signal_handler#13` node and its `Defines` edge are removed
+  from the C graph (`#13` was the highest `seq`, so no other QN shifts). The
+  discriminator lives once in `walkers/declarator::binds_function_prototype`,
+  driven by each family's `DeclaratorNaming` (`indirection_declarator_kinds`).
+
+- **Objective-C: a typedef of an inline struct no longer drops the struct and
+  its fields (issue #127).** `typedef struct Node { int v; } NodeT;` emitted ONLY
+  `Constant|NodeT` — the walker never recursed the inline type in the typedef's
+  `type` field, unlike the C walker (#107). It now also emits `Struct|Node` +
+  `Field|v` (`HasField`), and an anonymous body (`typedef struct { int v; } T;`)
+  is emitted under the alias with no duplicate `Constant`. **Consumer-visible:**
+  the ObjC graph gains the previously invisible inline-struct types and fields
+  (2 nodes / 2 refs on the parity corpus).
+
+- **Objective-C: a keyword-selector method name is now the full selector
+  (issue #128).** `- (int)areaWithWidth:(int)w height:(int)h;` extracted as
+  `areaWithWidth` — only the first keyword — while message SENDS already
+  reconstructed the full selector, an asymmetry. tree-sitter-objc shapes the
+  selector as bare `identifier` keywords interleaved with `method_parameter`
+  nodes (no `keyword_declarator`); the name is now reconstructed exactly as a
+  send is, joining each keyword with a trailing `:` when there is at least one
+  argument. **Consumer-visible/BREAKING for ObjC method names:** a keyword method
+  is renamed to its full selector (`areaWithWidth:height:`) and a single-keyword
+  selector keeps its colon (`shapeNamed:`); a unary selector (`start`) is
+  unchanged. QNs and `HasMethod`/`Calls` edges re-key on the full selector.
+  Re-index any Objective-C repository.
+
 - **C preprocessor macros and inline struct definitions reach the graph
   (issue #107).** `#define MAX 10` and `#define SQUARE(x) ((x)*(x))` produced
   nothing at all, so macro-defined symbols were invisible to the graph and to

@@ -100,6 +100,8 @@ static C_NAMING: DeclaratorNaming = DeclaratorNaming {
     name_text_kinds: &[],
     declarator_field: "declarator",
     parameters_field: "parameters",
+    // C has `pointer_declarator` but no reference declarator.
+    indirection_declarator_kinds: &["pointer_declarator"],
 };
 
 /// The C-family structural sub-table (ADR-0055 phase 6). All node kinds:
@@ -113,7 +115,6 @@ static C_FAMILY: CFamilySpec = CFamilySpec {
     func_decl_kinds: &["declaration"],
     field_decl_kinds: &["field_declaration"],
     func_declarator_kind: "function_declarator",
-    init_declarator_kind: "init_declarator",
     naming: &C_NAMING,
     field_identifier_kind: "field_identifier",
     macro_object_kinds: &["preproc_def"],

@@ -60,9 +60,29 @@ pub(super) fn emit_c_struct(
     node: Node,
     scope: &str,
 ) {
-    let name = c_type_name(spec, of, ctx.source, node);
+    emit_c_struct_named(spec, of, ctx, node, scope, None);
+}
+
+/// `emit_c_struct` with an optional name override for an ANONYMOUS specifier.
+///
+/// `typedef struct { int x; } T;` declares a type whose only usable name is the
+/// typedef alias (issue #127). Without the override the specifier has no `name`
+/// field and no bare `identifier` child, so it resolves to empty and its FIELDS
+/// are dropped. Mirrors the C walker's `emit_struct_named` (#107).
+fn emit_c_struct_named(
+    spec: &LangSpec,
+    of: &ObjcFamilySpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    override_name: Option<&str>,
+) {
+    let name = match override_name {
+        Some(n) => n.to_string(),
+        None => c_type_name(spec, of, ctx.source, node),
+    };
     if name.is_empty() {
-        return; // anonymous struct (e.g. inside a typedef) — skip
+        return; // anonymous struct with no alias to borrow — skip
     }
     let qn = qual(scope, &name);
     ctx.nodes.push(ExtractedNode {
@@ -167,7 +187,24 @@ pub(super) fn emit_c_enum(
     node: Node,
     scope: &str,
 ) {
-    let name = c_type_name(spec, of, ctx.source, node);
+    emit_c_enum_named(spec, of, ctx, node, scope, None);
+}
+
+/// `emit_c_enum` with an optional name override for an ANONYMOUS specifier —
+/// `typedef enum { A } E;`, whose only name is the alias (issue #127), the enum
+/// analog of `emit_c_struct_named`.
+fn emit_c_enum_named(
+    spec: &LangSpec,
+    of: &ObjcFamilySpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    override_name: Option<&str>,
+) {
+    let name = match override_name {
+        Some(n) => n.to_string(),
+        None => c_type_name(spec, of, ctx.source, node),
+    };
     if name.is_empty() {
         return;
     }
@@ -217,13 +254,81 @@ pub(super) fn emit_c_enum(
     }
 }
 
-/// Emits a C `typedef` as a `Constant` (`typedef=true`) + `Defines`. The name is
-/// the LAST `typedef_name_kind` (`type_identifier`) reached through the
-/// `declarator_field` (unwrapping pointer/array declarators), falling back to a
-/// full-node DFS. The inline struct definition of a `typedef struct { … } T;` is
-/// deliberately NOT recursed — its fields are dropped, a pre-existing defect
-/// preserved for parity (issue #127). Matches `extract_c_typedef` +
-/// `find_c_typedef_name`.
+/// What `emit_typedef_inline_type` found, so `emit_c_typedef` knows whether the
+/// alias name has already been consumed by an anonymous type.
+#[derive(PartialEq, Eq)]
+enum InlineType {
+    /// No inline DEFINITION (absent, or a bare reference like `struct Node`).
+    None,
+    /// A named inline definition (`typedef struct Node { … } T;`).
+    Named,
+    /// An anonymous inline definition, emitted under the alias.
+    Anonymous,
+}
+
+/// Emits the struct/union/enum DEFINITION carried inline in a typedef's `type`
+/// field (`typedef struct Node { int v; } NodeT;`), scoped under the file —
+/// exactly what the ObjC walker never did, so the inline type and its fields were
+/// dropped (issue #127; the C walker fixed the analog in #107 with
+/// `emit_inline_type`).
+///
+/// Preconditions: `node` is a `typedef_kinds` node; `alias` is the typedef's own
+/// name. Postconditions: emits the inner specifier (and its fields/members) iff
+/// the `type_field` child is a struct/union/enum specifier WITH a body; emits
+/// nothing for a bare reference (`typedef struct Node NodeT;`, no body). Returns
+/// which case fired so the caller can suppress the duplicate `Constant` when the
+/// anonymous type has taken the alias name.
+fn emit_typedef_inline_type(
+    spec: &LangSpec,
+    of: &ObjcFamilySpec,
+    ctx: &mut WalkCtx,
+    node: Node,
+    scope: &str,
+    alias: &str,
+) -> InlineType {
+    let Some(inner) = node.child_by_field_name(spec.type_field) else {
+        return InlineType::None;
+    };
+    // Only a DEFINITION (a specifier carrying a body) is emitted, never a bare
+    // reference to an existing type — re-emitting the reference would duplicate
+    // the real definition's node on its qualified name (#107's lesson).
+    if spec
+        .body_field
+        .and_then(|f| inner.child_by_field_name(f))
+        .is_none()
+    {
+        return InlineType::None;
+    }
+    let is_anonymous = c_type_name(spec, of, ctx.source, inner).is_empty();
+    let override_name = if is_anonymous && !alias.is_empty() {
+        Some(alias)
+    } else {
+        None
+    };
+    if kind_in(of.struct_kinds, inner.kind()) {
+        emit_c_struct_named(spec, of, ctx, inner, scope, override_name);
+    } else if kind_in(of.enum_kinds, inner.kind()) {
+        emit_c_enum_named(spec, of, ctx, inner, scope, override_name);
+    } else {
+        return InlineType::None;
+    }
+    if override_name.is_some() {
+        InlineType::Anonymous
+    } else {
+        InlineType::Named
+    }
+}
+
+/// Emits a C `typedef`. The name is the LAST `typedef_name_kind`
+/// (`type_identifier`) reached through the `declarator_field` (unwrapping
+/// pointer/array declarators), falling back to a full-node DFS.
+///
+/// The inline struct/union/enum DEFINITION carried in the `type` field is now
+/// recursed (issue #127): `typedef struct Node { int v; } NodeT;` emits
+/// `Struct|Node` + `Field|v` (`HasField`) as well as `Constant|NodeT`. An
+/// ANONYMOUS body (`typedef struct { int v; } T;`) is emitted under the alias and
+/// then NO separate `Constant` is emitted — two nodes on one qualified name would
+/// be a duplicated key (mirrors the C walker's `emit_typedef`).
 pub(super) fn emit_c_typedef(
     spec: &LangSpec,
     of: &ObjcFamilySpec,
@@ -233,6 +338,9 @@ pub(super) fn emit_c_typedef(
 ) {
     let name = find_typedef_name(of, ctx.source, node);
     if name.is_empty() {
+        return;
+    }
+    if emit_typedef_inline_type(spec, of, ctx, node, scope, &name) == InlineType::Anonymous {
         return;
     }
     let qn = qual(scope, &name);

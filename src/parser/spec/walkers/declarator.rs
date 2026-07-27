@@ -122,6 +122,81 @@ pub(super) fn declarator_name(naming: &DeclaratorNaming, source: &str, node: Nod
     String::new()
 }
 
+/// Whether a member/declaration declarator binds a real function PROTOTYPE
+/// (a callable — a C++ method or a C function) rather than a function-POINTER
+/// (data — a C++ data member or a C variable). Issue #135, and its C analog
+/// `int (*signal_handler)(int)`.
+///
+/// Preconditions: `node` is the `declarator_field` child of a member/declaration
+/// (a `function_declarator`, `pointer_declarator`, `init_declarator`, …).
+/// `func_declarator_kind` is the grammar's function-declarator kind.
+/// Postconditions: `true` iff, following the declarator chain toward the bound
+/// name, a `function_declarator` is reached AND no `indirection_declarator_kinds`
+/// wrapper sits BETWEEN that function_declarator and the name.
+///
+/// The two shapes are structurally identical at the top — both spell the
+/// outermost declarator as a `function_declarator` — so a plain
+/// "is there a function_declarator anywhere" test cannot tell them apart:
+///   - `void f(int)`     → `function_declarator > name` ⇒ prototype
+///   - `void (*cb)(int)` → `function_declarator > (…) > * > name` ⇒ data (a
+///     pointer BELOW the function_declarator)
+///   - `int  *f(int)`    → `* > function_declarator > name` ⇒ prototype (the
+///     pointer is the RETURN type, ABOVE the function_declarator)
+///
+/// So the discriminator is position: an indirection wrapper counts only once a
+/// `function_declarator` has already been entered on the path to the name. The
+/// walk follows `declarator_field` and, for the fieldless
+/// `parenthesized_declarator`, its named children (never `parameters_field`) —
+/// the same chain `declarator_name` follows.
+pub(super) fn binds_function_prototype(
+    naming: &DeclaratorNaming,
+    func_declarator_kind: &str,
+    node: Node,
+) -> bool {
+    classify_prototype(naming, func_declarator_kind, node, false, false).unwrap_or(false)
+}
+
+/// The recursion behind `binds_function_prototype`. `seen_func` is set once a
+/// `function_declarator` has been entered; `ptr_after` once an indirection
+/// wrapper is seen WHILE `seen_func` holds. Returns `Some(is_prototype)` at the
+/// first name leaf reached, `None` for a subtree that holds no name leaf (so the
+/// caller tries the next named child).
+fn classify_prototype(
+    naming: &DeclaratorNaming,
+    func_declarator_kind: &str,
+    node: Node,
+    seen_func: bool,
+    ptr_after: bool,
+) -> Option<bool> {
+    let k = node.kind();
+    let ptr_after = ptr_after || (seen_func && kind_in(naming.indirection_declarator_kinds, k));
+    let seen_func = seen_func || k == func_declarator_kind;
+    if kind_in(naming.name_text_kinds, k) || kind_in(naming.identifier_kinds, k) {
+        return Some(seen_func && !ptr_after);
+    }
+    if let Some(inner) = node.child_by_field_name(naming.declarator_field) {
+        return classify_prototype(naming, func_declarator_kind, inner, seen_func, ptr_after);
+    }
+    // Fieldless wrappers only (`parenthesized_declarator` / `reference_declarator`):
+    // scan named children for the one continuing toward the name. No parameter
+    // skip is needed here — the ONLY node carrying a `parameters` field is a
+    // `function_declarator`, which always has a `declarator` field and so is
+    // consumed by the branch above; a node reaching this loop never has a
+    // parameter list. (`declarator_name`'s loop keeps the skip because it is
+    // reached in more contexts; here it would be dead code, and a dead
+    // parameter-skip is a mutant no test can kill — §9/§12.1.)
+    let mut cursor = node.walk();
+    let children: Vec<Node> = node.named_children(&mut cursor).collect();
+    for child in children {
+        if let Some(r) =
+            classify_prototype(naming, func_declarator_kind, child, seen_func, ptr_after)
+        {
+            return Some(r);
+        }
+    }
+    None
+}
+
 /// Every `declarator_field` child of `decl`, in source order.
 ///
 /// Preconditions: none. Postconditions: one entry per child whose FIELD NAME is

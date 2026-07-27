@@ -146,7 +146,7 @@ fn ref_triple(e: &ExtractedRef) -> (String, String, String) {
 fn expected_node_records() -> Vec<&'static str> {
     vec![
         "CallSite|NSLog|app/Shape.m::Shape::start#4::call@28:5#6|28|28|public|[(\"callee_name\", \"NSLog\")]",
-        "CallSite|compute:|app/Shape.m::Shape::areaWithWidth#9::call@32:12#10|32|32|public|[(\"callee_name\", \"compute:\")]",
+        "CallSite|compute:|app/Shape.m::Shape::areaWithWidth:height:#9::call@32:12#10|32|32|public|[(\"callee_name\", \"compute:\")]",
         "CallSite|doThingWith:andY:|app/Shape.m::Shape::start#4::call@26:5#8|26|26|public|[(\"callee_name\", \"doThingWith:andY:\")]",
         "CallSite|helper|app/Shape.m::Shape::start#4::call@29:5#5|29|29|public|[(\"callee_name\", \"helper\")]",
         "CallSite|helper|app/Shape.m::gated#15::call@47:12#16|47|47|public|[(\"callee_name\", \"helper\")]",
@@ -160,6 +160,7 @@ fn expected_node_records() -> Vec<&'static str> {
         "Enum|Dir|app/Shape.m::Dir|8|8|public|[]",
         "Field|f|app/Shape.m::Value::f|7|7|public|[(\"type_annotation\", \"float\")]",
         "Field|i|app/Shape.m::Value::i|7|7|public|[(\"type_annotation\", \"int\")]",
+        "Field|v|app/Shape.m::Node::v|10|10|public|[(\"type_annotation\", \"int\")]",
         "Field|x|app/Shape.m::Point::x|6|6|public|[(\"type_annotation\", \"int\")]",
         "Field|y|app/Shape.m::Point::y|6|6|public|[(\"type_annotation\", \"int\")]",
         "Field|z|app/Shape.m::Wrapper::z|11|11|public|[(\"type_annotation\", \"int\")]",
@@ -169,12 +170,13 @@ fn expected_node_records() -> Vec<&'static str> {
         "Import|MyHeader.h|app/Shape.m::import:MyHeader.h|2|3|public|[(\"path\", \"MyHeader.h\")]",
         "Import|UIKit|app/Shape.m::import:UIKit|4|4|public|[(\"path\", \"UIKit\")]",
         "Import|stdio.h|app/Shape.m::import:stdio.h|3|4|public|[(\"path\", \"stdio.h\")]",
-        "Method|areaWithWidth|app/Shape.m::Shape::areaWithWidth#2|20|20|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
-        "Method|areaWithWidth|app/Shape.m::Shape::areaWithWidth#9|31|33|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
+        "Method|areaWithWidth:height:|app/Shape.m::Shape::areaWithWidth:height:#2|20|20|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
+        "Method|areaWithWidth:height:|app/Shape.m::Shape::areaWithWidth:height:#9|31|33|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
         "Method|extra|app/Shape.m::Shape::extra#11|37|37|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
-        "Method|shapeNamed|app/Shape.m::Shape::shapeNamed#3|21|21|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
+        "Method|shapeNamed:|app/Shape.m::Shape::shapeNamed:#3|21|21|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
         "Method|start|app/Shape.m::Shape::start#1|19|19|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
         "Method|start|app/Shape.m::Shape::start#4|25|30|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
+        "Struct|Node|app/Shape.m::Node|10|10|public|[]",
         "Struct|Point|app/Shape.m::Point|6|6|public|[]",
         "Struct|Shape|app/Shape.m::Shape|18|22|public|[]",
         "Struct|Shape|app/Shape.m::Shape|24|34|public|[]",
@@ -190,7 +192,11 @@ fn expected_node_records() -> Vec<&'static str> {
 /// `Vec` to keep the duplicates.
 fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        ("Calls", "app/Shape.m::Shape::areaWithWidth#9", "compute:"),
+        (
+            "Calls",
+            "app/Shape.m::Shape::areaWithWidth:height:#9",
+            "compute:",
+        ),
         ("Calls", "app/Shape.m::Shape::start#4", "NSLog"),
         ("Calls", "app/Shape.m::Shape::start#4", "doThingWith:andY:"),
         ("Calls", "app/Shape.m::Shape::start#4", "helper"),
@@ -203,6 +209,7 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         ("Defines", "app/Shape.m", "app/Shape.m::Dir"),
         ("Defines", "app/Shape.m", "app/Shape.m::Drawable"),
         ("Defines", "app/Shape.m", "app/Shape.m::MyInt"),
+        ("Defines", "app/Shape.m", "app/Shape.m::Node"),
         ("Defines", "app/Shape.m", "app/Shape.m::NodeT"),
         ("Defines", "app/Shape.m", "app/Shape.m::Point"),
         ("Defines", "app/Shape.m", "app/Shape.m::Shape"),
@@ -213,6 +220,7 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         ("Defines", "app/Shape.m", "app/Shape.m::freeFunction#12"),
         ("Defines", "app/Shape.m", "app/Shape.m::gated#15"),
         ("Extends", "app/Shape.m::Shape", "NSObject"),
+        ("HasField", "app/Shape.m::Node", "app/Shape.m::Node::v"),
         ("HasField", "app/Shape.m::Point", "app/Shape.m::Point::x"),
         ("HasField", "app/Shape.m::Point", "app/Shape.m::Point::y"),
         ("HasField", "app/Shape.m::Value", "app/Shape.m::Value::f"),
@@ -225,12 +233,12 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         (
             "HasMethod",
             "app/Shape.m::Shape",
-            "app/Shape.m::Shape::areaWithWidth#2",
+            "app/Shape.m::Shape::areaWithWidth:height:#2",
         ),
         (
             "HasMethod",
             "app/Shape.m::Shape",
-            "app/Shape.m::Shape::areaWithWidth#9",
+            "app/Shape.m::Shape::areaWithWidth:height:#9",
         ),
         (
             "HasMethod",
@@ -240,7 +248,7 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         (
             "HasMethod",
             "app/Shape.m::Shape",
-            "app/Shape.m::Shape::shapeNamed#3",
+            "app/Shape.m::Shape::shapeNamed:#3",
         ),
         (
             "HasMethod",
@@ -269,12 +277,12 @@ fn objc_spec_output_is_exact_parity() {
     assert_eq!(r.parse_errors, 0, "clean ObjC must report 0 parse errors");
     assert_eq!(
         r.nodes.len(),
-        37,
+        39,
         "ObjC node count diverged from ground truth"
     );
     assert_eq!(
         r.refs.len(),
-        38,
+        40,
         "ObjC ref count diverged from ground truth"
     );
 

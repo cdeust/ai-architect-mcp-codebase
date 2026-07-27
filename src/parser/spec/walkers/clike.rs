@@ -25,7 +25,8 @@ use tree_sitter::Node;
 
 use super::super::lang_spec::{CFamilySpec, LangSpec};
 use super::declarator::{
-    declarator_field_children, declarator_name, first_identifier, named_or_first_identifier,
+    binds_function_prototype, declarator_field_children, declarator_name, first_identifier,
+    named_or_first_identifier,
 };
 use super::{calls, end_line_of, imports, kind_in, line_of, WalkCtx};
 use crate::parser::{
@@ -111,25 +112,23 @@ fn find_field_identifier(cf: &CFamilySpec, source: &str, node: Node) -> String {
     String::new()
 }
 
-/// A `func_decl_kinds` node is a function prototype iff it carries a function
-/// declarator directly, or inside an `init_declarator` (`int f(void) = …`).
-/// A plain variable declaration (`int x;`) carries neither and is not a prototype.
+/// A `func_decl_kinds` node is a function prototype iff its declarator binds a
+/// callable — a `function_declarator` reached with no pointer/reference wrapper
+/// between it and the name.
+///
+/// The declaration's `declarator_field` child is a `function_declarator`
+/// (`int f(void);`), an `init_declarator` (`int f(void) = …;`, `int x = 5;`),
+/// a plain identifier (`int x;`), or a function-POINTER declarator
+/// (`int (*signal_handler)(int) = 0;`). `binds_function_prototype` follows that
+/// chain and answers `true` only for a real prototype: a plain variable is not a
+/// prototype, and — the #135 C analog — neither is a function-pointer variable
+/// (a `pointer_declarator` sits between the `function_declarator` and the name,
+/// so it is data; the flat C walker does not model file-scope variables, so it
+/// emits NOTHING for it rather than a bogus `Function`).
 fn is_c_function_prototype(cf: &CFamilySpec, node: Node) -> bool {
-    let mut cursor = node.walk();
-    for c in node.children(&mut cursor) {
-        if c.kind() == cf.func_declarator_kind {
-            return true;
-        }
-        if c.kind() == cf.init_declarator_kind {
-            let mut ic = c.walk();
-            for gc in c.children(&mut ic) {
-                if gc.kind() == cf.func_declarator_kind {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    node.child_by_field_name(cf.naming.declarator_field)
+        .map(|d| binds_function_prototype(cf.naming, cf.func_declarator_kind, d))
+        .unwrap_or(false)
 }
 
 /// Emits a struct/union (`Struct` + `Defines`) and, from its `body_field`, one

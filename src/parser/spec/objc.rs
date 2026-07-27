@@ -223,6 +223,7 @@ static OBJC_FAMILY: ObjcFamilySpec = ObjcFamilySpec {
     // reference); the ObjC parity suite proves the output is unchanged.
     identifier_kinds: &["identifier", "type_identifier"],
     plain_identifier_kind: "identifier",
+    method_parameter_kinds: &["method_parameter"],
     typedef_name_kind: "type_identifier",
 };
 

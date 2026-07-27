@@ -184,31 +184,46 @@ fn emit_protocol(spec: &LangSpec, of: &ObjcFamilySpec, ctx: &mut WalkCtx, node: 
     });
 }
 
-/// The method's selector name: the FIRST bare `plain_identifier_kind`
-/// (`identifier`) direct child of the method node.
+/// The method's FULL selector name (issue #128).
 ///
-/// tree-sitter-objc 3.0.2 shapes `- (int)areaWithWidth:(int)w height:(int)h;`
-/// as `identifier("areaWithWidth")` followed by `method_parameter` nodes and a
-/// second bare `identifier("height")` — there is NO `keyword_declarator` (the
-/// grammar's selector keywords surface as bare identifiers + `method_parameter`s,
-/// verified against the AST). The hand-written `method_selector` LOOKED for
-/// `keyword_declarator` children and, finding none, fell through to its unary
-/// branch (the first bare identifier), so a keyword selector resolved to its
-/// FIRST keyword only (`areaWithWidth`, not `areaWithWidth:height:`) — a
-/// pre-existing defect (issue #128). This reproduces that EXACT output; the dead
-/// `keyword_declarator` branch is removed (§9/§12: every mutant of an unreachable
-/// branch survives — remove it, don't test it), which is behavior-preserving
-/// (the ObjC parity suite proves the selectors are unchanged).
+/// tree-sitter-objc 3.0.2 shapes `- (int)areaWithWidth:(int)w height:(int)h;` as
+/// the return `method_type`, then the selector keywords as bare
+/// `plain_identifier_kind` (`identifier`) children INTERLEAVED with
+/// `method_parameter_kinds` (`method_parameter`) nodes — there is NO
+/// `keyword_declarator` in this grammar (verified against the AST). So the
+/// selector is reconstructed exactly as `message_selector` does for a message
+/// SEND: collect the keyword identifiers in order, and if there is at least one
+/// argument (`method_parameter`), join them each with a trailing `:`
+/// (`areaWithWidth:height:`, `shapeNamed:`); with zero arguments it is a unary
+/// selector and the sole keyword stands bare (`start`).
+///
+/// The pre-#128 walker took only the FIRST identifier, so a keyword selector
+/// resolved to its first keyword (`areaWithWidth`) and a single-keyword selector
+/// dropped its colon (`shapeNamed`) — asymmetric with sends, which already
+/// reconstruct the full selector. This makes declaration and send agree.
+///
+/// Preconditions: `node`'s kind is in `of.method_kinds`. Postconditions: the full
+/// selector, or `""` when the node has no selector keyword.
 fn method_selector(of: &ObjcFamilySpec, source: &str, node: Node) -> String {
+    let mut keywords: Vec<String> = Vec::new();
+    let mut arg_count: usize = 0;
     let mut cursor = node.walk();
-    // Bind before returning so the `children` iterator temporary (which borrows
-    // `cursor`) drops before `cursor` itself (E0597).
-    let sel = node
-        .children(&mut cursor)
-        .find(|c| c.kind() == of.plain_identifier_kind)
-        .map(|c| node_text(source, c))
-        .unwrap_or_default();
-    sel
+    for child in node.children(&mut cursor) {
+        let k = child.kind();
+        if k == of.plain_identifier_kind {
+            keywords.push(node_text(source, child));
+        } else if kind_in(of.method_parameter_kinds, k) {
+            arg_count += 1;
+        }
+    }
+    if keywords.is_empty() {
+        return String::new();
+    }
+    if arg_count > 0 {
+        keywords.iter().map(|k| format!("{k}:")).collect::<String>()
+    } else {
+        keywords.join("")
+    }
 }
 
 /// Emits a method (`Method` + `HasMethod`, `receiver_type` = the class QN),
