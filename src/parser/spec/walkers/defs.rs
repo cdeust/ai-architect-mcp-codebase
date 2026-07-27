@@ -11,7 +11,7 @@ use tree_sitter::Node;
 use super::super::lang_spec::LangSpec;
 use super::{
     call_scan_of, calls, class_body_of, clike, constants, cpp, embedded, end_line_of, imports,
-    kind_in, line_of, objc, rust, types, typescript, WalkCtx,
+    kind_in, line_of, objc, rust, type_uses, types, typescript, WalkCtx,
 };
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_ENUM, LABEL_FUNCTION,
@@ -145,6 +145,9 @@ fn emit_def(
     if !decorators.is_empty() {
         props.push(("decorators".to_string(), decorators.join(",")));
     }
+    // Type-usage properties (return type + constructed types) for languages that
+    // adopt the #92 spec fields; a no-op (nothing appended) for the rest.
+    type_uses::append_type_use_props(spec, ctx, node, call_scan_of(spec, node), &mut props);
 
     match enclosing_class {
         Some(class_qn) => {
@@ -208,6 +211,9 @@ fn emit_method_recv(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str)
     };
     let seq = ctx.next_seq();
     let qn = spec.conventions.def_qn(&scope_qn, &name, seq);
+    let mut props = vec![("receiver_type".to_string(), recv_type)];
+    // Return type + constructed types (issue #92); a no-op for non-adopters.
+    type_uses::append_type_use_props(spec, ctx, node, call_scan_of(spec, node), &mut props);
     ctx.nodes.push(ExtractedNode {
         label: LABEL_METHOD.to_string(),
         name: name.clone(),
@@ -215,7 +221,7 @@ fn emit_method_recv(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str)
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: spec.conventions.node_visibility(ctx.source, node, &name),
-        properties: vec![("receiver_type".to_string(), recv_type)],
+        properties: props,
     });
     ctx.refs.push(ExtractedRef {
         kind: "HasMethod".to_string(),

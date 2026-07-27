@@ -8,6 +8,35 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Cross-language type-usage (`Uses`) edges for return types and type
+  construction (issue #92).** The code graph now captures a function/method that
+  names a type in its **return-type annotation** (`func F() OrderConfig`,
+  `fn f() -> OrderConfig`, `function f(): OrderConfig`) or **constructs** it
+  (Go composite literal `OrderConfig{..}`, Rust struct literal `OrderConfig{..}`,
+  TS `new OrderConfig()`) as a reverse-`Uses` dependency, so
+  `change_impact` / `get_impact(...).users` surfaces those callers. Previously
+  `Uses_*` edges came only from **Field** type annotations and from **calls**
+  whose callee resolved to a type — which is why Python (constructs via a plain
+  call) passed the #64 eval's D4 row while Go/Rust/TS did not.
+
+  Implemented once at the spec level: three new `LangSpec` data fields
+  (`type_construction_kinds`, `return_type_field`, `construction_type_field`),
+  consumed by one shared walker helper (`parser::spec::walkers::type_uses`) across
+  the Go generic, Rust, and TypeScript lanes. The parser records the referenced
+  types as `return_type` / `constructed_types` properties on Function/Method
+  (new schema columns); the resolver's `resolve_callable_type_uses` binds each to
+  its type node, emitting `Uses_<caller>_<Type>` edges (existing tables — TS
+  classes are covered because AP already folds `Class → Struct`, so no
+  `Uses_*_Class` table is needed). Adopting the feature for another language is a
+  data row, not walker code: an empty slice adds no property and no edge, proven
+  by every untouched language's parity suite passing unchanged.
+
+  Closes the last open recall gap from the #64 head-to-head eval: `benchmarks/
+  eval_headtohead/reproduce.sh` GRAPH recall **0.90 → 1.00** (go-D4 0.0→1.0,
+  rs-D4 0.5→1.0, ts-D4 0.5→1.0; py-D4 stays 1.0), reaching parity with the Grep
+  baseline. Regressions: `benchmarks/eval_headtohead/tests/recall_gaps_87.rs`
+  (`gap2_*_d4_*`) and `tests/parser_fidelity.rs` (`uses92_*`).
+
 - **Fuzzing harness for the parser (Scorecard Fuzzing).** `parse_file` is the
   tool's only untrusted-input boundary — the indexer walks a user's repository
   and hands whatever it finds to it — so a panic there is a denial of service on

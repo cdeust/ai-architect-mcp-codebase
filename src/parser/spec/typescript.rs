@@ -424,6 +424,8 @@ pub(crate) static TS_SPEC: LangSpec = LangSpec {
     import_node_kinds: &["import_statement"],
     import_spec_kinds: &[],
     call_node_kinds: &["call_expression"],
+    // `new OrderConfig()` (issue #92); `constructor` names the constructed type.
+    type_construction_kinds: &["new_expression"],
     name_field: "name",
     body_field: Some("body"),
     type_field: "type",
@@ -432,6 +434,9 @@ pub(crate) static TS_SPEC: LangSpec = LangSpec {
     extends_field: None,
     value_name_field: None,
     value_type_field: None,
+    // `function f(): OrderConfig` — `return_type` is the `type_annotation` (issue #92).
+    return_type_field: Some("return_type"),
+    construction_type_field: Some("constructor"),
     ts_language: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
     embedded: &[],
     conventions: &TS_CONVENTIONS,

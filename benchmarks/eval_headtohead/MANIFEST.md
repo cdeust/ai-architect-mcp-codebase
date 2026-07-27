@@ -20,13 +20,18 @@ Reproducible: the corpus is committed and content-hashed, so
   changed.
 - **Base commit:** `a4fa000` (branch `eval/issue-64-head-to-head`) for the
   original falsifying run; re-run on branch `fix/recall-gaps-87` (issue #87)
-  after the go-D3 / rs-D2 fixes.
-- **Date:** 2026-07-26 (original run) · 2026-07-26 (#87 re-run).
+  after the go-D3 / rs-D2 fixes; re-run again on branch `feat/uses-edges-92`
+  (issue #92) after the D4 type-usage fix.
+- **Date:** 2026-07-26 (original run) · 2026-07-26 (#87 re-run) · 2026-07-27
+  (#92 re-run).
 - **Original falsifying run preserved at:** `results.2026-07-26-pre-fix-87.json`
   + `raw_results.2026-07-26-pre-fix-87.json` (the H4-FALSIFIED record stays on
-  file; `PRE_REGISTRATION.md` is untouched). The canonical `results.json` /
-  `raw_results.json` now hold the #87 re-run, so `reproduce.sh` regenerates them
-  byte-for-byte on the current tree.
+  file; `PRE_REGISTRATION.md` is untouched). **The #87 re-run (pre-#92) is
+  preserved at** `results.2026-07-27-pre-fix-92.json` +
+  `raw_results.2026-07-27-pre-fix-92.json` (recall 0.90, the three open D4 rows).
+  The canonical `results.json` / `raw_results.json` now hold the **#92 re-run**,
+  so `reproduce.sh` regenerates them byte-for-byte on the current tree. No prior
+  results file is edited — each run adds a dated snapshot (no-retro-editing).
 - **Hardware:** Apple Silicon (`arm64` / `aarch64`), macOS 26.5.1.
 - **Toolchain:** rustc 1.95.0 (59807616e 2026-04-14), release profile.
 - **Search/graph dependency set:** tantivy 0.26, lbug 0.18 (issue #78 set). A
@@ -65,31 +70,34 @@ sample stdev across questions, also broken down per dimension and per language i
 
 ## Headline results (offline run, judge gated off)
 
-Two runs are on record. The **original** run FALSIFIED H4 (that is the eval doing
-its job — a pre-registered guard catching a real product gap); the **#87 re-run**
-is after go-D3 and rs-D2 were fixed. Both columns below quote GRAPH; EXPLORER is
-unchanged between runs (its numbers do not depend on the resolver).
+Three runs are on record. The **original** run FALSIFIED H4 (that is the eval
+doing its job — a pre-registered guard catching a real product gap); the **#87
+re-run** is after go-D3 and rs-D2 were fixed; the **#92 re-run** is after the
+three D4 type-usage rows were fixed. All GRAPH columns below; EXPLORER is
+unchanged across runs (its numbers do not depend on the resolver).
 
-| metric (mean ± stdev, n=20) | GRAPH (original) | GRAPH (#87 re-run) | EXPLORER |
-|---|---:|---:|---:|
-| retrieval precision | 1.00 ± 0.00 | **1.00 ± 0.00** | 0.65 ± 0.33 |
-| retrieval recall | 0.83 ± 0.34 | **0.90 ± 0.26** | **1.00 ± 0.00** |
-| tokens (est.) | 36.7 ± 19.8 | **38.2 ± 19.0** | 550.4 ± 330.3 |
-| tool calls | 1.0 ± 0.0 | **1.0 ± 0.0** | 5.2 ± 1.6 |
+| metric (mean ± stdev, n=20) | GRAPH (original) | GRAPH (#87 re-run) | GRAPH (#92 re-run) | EXPLORER |
+|---|---:|---:|---:|---:|
+| retrieval precision | 1.00 ± 0.00 | 1.00 ± 0.00 | **1.00 ± 0.00** | 0.65 ± 0.33 |
+| retrieval recall | 0.83 ± 0.34 | 0.90 ± 0.26 | **1.00 ± 0.00** | **1.00 ± 0.00** |
+| tokens (est.) | 36.7 ± 19.8 | 38.2 ± 19.0 | **43.1 ± 17.3** | 550.4 ± 330.3 |
+| tool calls | 1.0 ± 0.0 | 1.0 ± 0.0 | **1.0 ± 0.0** | 5.2 ± 1.6 |
 
-- **Recall improved 0.825 → 0.90** (mean over 20 questions): go-D3 0.0→1.0 and
-  rs-D2 0.5→1.0. The remaining 0.10 gap is the type-usage gap deferred to #92.
+- **Recall improved 0.825 → 0.90 → 1.00** (mean over 20 questions): #87 fixed
+  go-D3 0.0→1.0 and rs-D2 0.5→1.0; #92 fixed the remaining type-usage gap —
+  go-D4 0.0→1.0, rs-D4 0.5→1.0, ts-D4 0.5→1.0 (py-D4 stays 1.0). GRAPH now
+  matches the EXPLORER baseline's recall at ~13× fewer tokens.
 - **Token ratio (explorer / graph): ~17× mean.** The graph answer is bounded and
   paginated; the file-exploring transcript grows with the files grep surfaces.
 - **Tool-call ratio: 5.2× mean.** One graph tool call vs glob + grep + N reads.
 
 ### Hypotheses (pre-registered thresholds)
-| H | Claim | Original | #87 re-run | Evidence |
-|---|---|---|---|---|
-| H1 | tokens: explorer/graph ratio > 1.5× | SUPPORTED | **SUPPORTED** | ~17× |
-| H2 | tool calls: ratio > 2× | SUPPORTED | **SUPPORTED** | 5.2× |
-| H3 | GRAPH D2 precision ≥ EXPLORER + 0.15 | SUPPORTED | **SUPPORTED** | 1.00 vs 0.40 |
-| H4 | GRAPH recall not > 0.10 below EXPLORER | **FALSIFIED** (0.83 vs 1.00) | **SUPPORTED** (0.90 vs 1.00) | see below |
+| H | Claim | Original | #87 re-run | #92 re-run | Evidence |
+|---|---|---|---|---|---|
+| H1 | tokens: explorer/graph ratio > 1.5× | SUPPORTED | SUPPORTED | **SUPPORTED** | ~14× |
+| H2 | tool calls: ratio > 2× | SUPPORTED | SUPPORTED | **SUPPORTED** | 5.2× |
+| H3 | GRAPH D2 precision ≥ EXPLORER + 0.15 | SUPPORTED | SUPPORTED | **SUPPORTED** | 1.00 vs 0.40 |
+| H4 | GRAPH recall not > 0.10 below EXPLORER | **FALSIFIED** (0.83 vs 1.00) | SUPPORTED (0.90 vs 1.00) | **SUPPORTED** (1.00 vs 1.00) | see below |
 
 ## The honest negative (H4) and its #87 disposition (§AC6)
 
@@ -115,24 +123,32 @@ issue, not a shrug):
   resolver binds to the referenced function. Regression:
   `recall_gaps_87.rs::gap3_rust_higher_order_caller_is_captured` +
   `tests/parser_fidelity.rs::issue87_rust_higher_order_arg_is_captured_as_call_site`.
-- **`go-D4`, `ts-D4`, `rs-D4` (recall 0 / 0.5 / 0.5) — OUT OF SCOPE → issue #92.**
-  Reverse type-usage (`Uses_*`) edges are populated only from **Field** type
-  annotations and from **calls** whose callee resolves to a type. Python's D4
-  passes because it constructs via a plain call (`OrderConfig()`); Go/Rust/TS
-  construct via composite/struct literals and `new`, and use the type in
-  return-type annotations — none of which the graph captures today (Function/Method
-  nodes carry no return-type/signature data; there is no Parameter node). Closing
-  this requires **new type-reference extraction in the walkers** (return-type
-  annotations + type-construction expressions) across the Go spec, Rust walker, and
-  TS walker, plus a `Uses_*_Class` table for TS — a cross-cutting extraction
-  feature that also intersects the in-flight #60 LangSpec migration. It is filed as
-  **#92** with root cause and acceptance criteria, per #87's sanctioned
-  out-of-scope disposition. This is a limitation of cross-language type-usage
-  resolution, stated plainly, not engineered away.
+- **`go-D4`, `ts-D4`, `rs-D4` (recall 0 / 0.5 / 0.5 → 1.0 / 1.0 / 1.0) — FIXED
+  in #92.** (Historical root cause, preserved: reverse type-usage `Uses_*` edges
+  were populated only from **Field** type annotations and from **calls** whose
+  callee resolves to a type. Python's D4 passed because it constructs via a plain
+  call `OrderConfig()`; Go/Rust/TS construct via composite/struct literals and
+  `new`, and name the type in return-type annotations — none of which the graph
+  captured, since Function/Method nodes carried no return-type data.) The fix adds
+  return-type + type-construction extraction at the **spec level**: three new
+  `LangSpec` fields (`type_construction_kinds`, `return_type_field`,
+  `construction_type_field`) consumed by one shared walker helper
+  (`walkers/type_uses.rs`) across all three lanes (Go generic, Rust, TS). The
+  parser records the referenced types as `return_type` / `constructed_types`
+  properties on Function/Method; the resolver's `resolve_callable_type_uses` binds
+  each to its type node, emitting `Uses_<caller>_<Type>` edges. TS classes are
+  covered without a new table because AP folds `Class → Struct`, so
+  `Uses_Function_Struct` / `Uses_Method_Struct` already exist (the "fold Class
+  into the type labels" option in #92's acceptance criteria). An empty slice on a
+  non-adopting language adds no property and no edge — proven by every untouched
+  language's parity suite passing unchanged. Regressions:
+  `recall_gaps_87.rs::gap2_{go,rust,typescript,python}_d4_*` and
+  `tests/parser_fidelity.rs::uses92_*`.
 
 Per-language and per-dimension breakdowns are in `results.json`; every per-question
-row is in `raw_results.json` (#87 re-run) and `raw_results.2026-07-26-pre-fix-87.json`
-(original falsification).
+row is in `raw_results.json` (#92 re-run), `raw_results.2026-07-27-pre-fix-92.json`
+(#87 re-run, pre-#92, the three open D4 rows), and
+`raw_results.2026-07-26-pre-fix-87.json` (original falsification).
 
 ## Judge leg (answer quality) — runnable vs budget-gated
 The blinded LLM-as-a-Judge leg (`src/judge.rs`) is **config-gated** by

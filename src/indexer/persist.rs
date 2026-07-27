@@ -414,6 +414,12 @@ fn append_label_properties(props: &mut Vec<(String, String)>, node: &parser::Ext
     match node.label.as_str() {
         "Function" => {
             props.push(("is_async".to_string(), find("is_async")));
+            // source: issue #92 — Uses-edge inputs; "" when the parser set none.
+            props.push(("return_type".to_string(), cypher_str(&find("return_type"))));
+            props.push((
+                "constructed_types".to_string(),
+                cypher_str(&find("constructed_types")),
+            ));
         }
         "Method" => {
             props.push(("is_async".to_string(), find("is_async")));
@@ -424,6 +430,12 @@ fn append_label_properties(props: &mut Vec<(String, String)>, node: &parser::Ext
             // source: implements fix — trait_name set by the parser on methods
             // inside `impl Trait for Type` blocks; resolve_implements reads it.
             props.push(("trait_name".to_string(), cypher_str(&find("trait_name"))));
+            // source: issue #92 — Uses-edge inputs; "" when the parser set none.
+            props.push(("return_type".to_string(), cypher_str(&find("return_type"))));
+            props.push((
+                "constructed_types".to_string(),
+                cypher_str(&find("constructed_types")),
+            ));
         }
         "Field" => {
             props.push((

@@ -844,18 +844,24 @@ fn node_table_ddl() -> Vec<String> {
         // `language` STRING column populated by the indexer from the file's
         // extension (python/rust/typescript). Previously every symbol came
         // back with `language: None` in the JSON dump.
+        // source: issue #92 — `return_type` and `constructed_types` carry the
+        // function's return-type annotation and the space-joined set of types it
+        // constructs; resolve_uses reads both to emit Uses_Function_<Type> edges.
+        // Empty ("") for languages that have not adopted the extraction.
         ddl_node(NODE_FUNCTION,
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, is_async BOOLEAN, \
-             language STRING"),
+             return_type STRING, constructed_types STRING, language STRING"),
         // source: implements fix — `trait_name` carries the trait a method
         // belongs to in an `impl Trait for Type` block (already extracted by
         // the parser at parser/rust.rs but previously dropped for lack of a
         // column). resolve_implements reads it to emit the Type→Trait edge.
+        // source: issue #92 — `return_type`/`constructed_types` as on Function.
         ddl_node(NODE_METHOD,
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, is_async BOOLEAN, \
-             receiver_type STRING, trait_name STRING, language STRING"),
+             receiver_type STRING, trait_name STRING, return_type STRING, \
+             constructed_types STRING, language STRING"),
         // source: Spike B' BUG #9 fix — `bases STRING` column carries a CSV
         // of unresolved base-class names emitted by the parser. The resolver
         // reads this in resolve_extends, looks each name up in the symbol
@@ -1193,6 +1199,9 @@ const COLS_FUNCTION: ColTypes = &[
     ("end_line", LogicalType::Int64),
     ("visibility", LogicalType::String),
     ("is_async", LogicalType::Bool),
+    // source: issue #92 — Uses-edge inputs (return type + constructed types).
+    ("return_type", LogicalType::String),
+    ("constructed_types", LogicalType::String),
     ("language", LogicalType::String),
 ];
 const COLS_METHOD: ColTypes = &[
@@ -1205,6 +1214,9 @@ const COLS_METHOD: ColTypes = &[
     ("is_async", LogicalType::Bool),
     ("receiver_type", LogicalType::String),
     ("trait_name", LogicalType::String),
+    // source: issue #92 — Uses-edge inputs (return type + constructed types).
+    ("return_type", LogicalType::String),
+    ("constructed_types", LogicalType::String),
     ("language", LogicalType::String),
 ];
 const COLS_TYPEDECL: ColTypes = &[

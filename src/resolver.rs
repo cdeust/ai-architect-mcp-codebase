@@ -1204,7 +1204,111 @@ fn resolve_uses(
     total += field_result.1;
     unresolved.extend(field_result.2);
 
+    // Resolve return-type + type-construction references on Function/Method
+    // (issue #92) -> Uses_<caller>_<Type>.
+    let callable_result = resolve_callable_type_uses(store, idx, buf)?;
+    resolved += callable_result.0;
+    total += callable_result.1;
+    unresolved.extend(callable_result.2);
+
     Ok((resolved, total, unresolved))
+}
+
+/// Resolves the `return_type` and `constructed_types` references recorded on
+/// each Function/Method (issue #92) into `Uses_<caller_label>_<TargetLabel>`
+/// edges. The two properties are the parser's record of the types a callable
+/// names in its return-type annotation and constructs in its body; neither is a
+/// call the call walker captures for Go composite literals / Rust struct
+/// literals / TS `new` (Python constructs via a plain call, already covered by
+/// `stage_call_edge`), so this phase is what surfaces `core.go`/`core.rs`/
+/// `core.ts` as users of `OrderConfig` in the #64 eval's D4 rows.
+///
+/// postcondition: `resolved + unresolved.len() as u64 == total`; `total` counts
+/// one unit per extracted type identifier across BOTH properties (matching
+/// `resolve_field_type_uses`' per-identifier accounting, so a callable that both
+/// returns and constructs the same type contributes 2 — the second `buf.add` is
+/// a `DuplicateInRun` no-op edge-wise but still a resolved reference).
+fn resolve_callable_type_uses(
+    store: &GraphStore,
+    idx: &SymbolIndex,
+    buf: &mut EdgeBuffer,
+) -> PhaseResult {
+    let mut resolved = 0u64;
+    let mut total = 0u64;
+    let mut unresolved = Vec::new();
+
+    // Function and Method carry the same two columns (graph_store COLS_*); each
+    // is its own caller label in the emitted `Uses_<label>_<Type>` table.
+    for caller_label in ["Function", "Method"] {
+        let query = format!(
+            "MATCH (f:{caller_label}) RETURN f.id, f.return_type, f.constructed_types, f.language"
+        );
+        let qr = store.execute_query(&query)?;
+        for row in &qr.rows {
+            if row.len() < 4 {
+                continue;
+            }
+            let callable_id = &row[0];
+            let provider = crate::language_provider::provider_for(&row[3]);
+            let prims = provider.primitives();
+            // Return-type identifiers, then construction identifiers — both fed
+            // through the same nominal-type extractor the field path uses.
+            let names: Vec<String> = extract_type_identifiers(&row[1], prims)
+                .into_iter()
+                .chain(extract_type_identifiers(&row[2], prims))
+                .collect();
+            for type_name in &names {
+                total += 1;
+                let (r, u) =
+                    resolve_one_callable_type_use(idx, buf, callable_id, caller_label, type_name);
+                resolved += r;
+                unresolved.extend(u);
+            }
+        }
+    }
+    Ok((resolved, total, unresolved))
+}
+
+/// Resolves one extracted type identifier for one Function/Method into a
+/// `Uses_<caller_label>_<TargetLabel>` edge.
+/// postcondition: `(1, vec![])` iff the identifier matched a known type-like
+/// node AND the schema declares the resulting rel table; `(0, vec![one entry])`
+/// otherwise (type not found, or no rel table for the label combination).
+fn resolve_one_callable_type_use(
+    idx: &SymbolIndex,
+    buf: &mut EdgeBuffer,
+    callable_id: &str,
+    caller_label: &str,
+    type_name: &str,
+) -> (u64, Vec<UnresolvedRef>) {
+    let target = match find_type_target(idx, type_name) {
+        Some(t) => t,
+        None => {
+            return (
+                0,
+                vec![UnresolvedRef {
+                    kind: "Uses".to_string(),
+                    from_id: callable_id.to_string(),
+                    target_text: type_name.to_string(),
+                    reason: "type not found in graph".to_string(),
+                }],
+            )
+        }
+    };
+    let table = format!("Uses_{caller_label}_{}", target.label);
+    if !check_known_rel_table(&table, callable_id, &target.id) {
+        return (
+            0,
+            vec![UnresolvedRef {
+                kind: "Uses".to_string(),
+                from_id: callable_id.to_string(),
+                target_text: type_name.to_string(),
+                reason: format!("unknown rel table {table}"),
+            }],
+        );
+    }
+    buf.add(&table, callable_id, &target.id, 0.9, "type-reference-parse");
+    (1, vec![])
 }
 
 /// Resolves every nominal type identifier extracted from each Field's type

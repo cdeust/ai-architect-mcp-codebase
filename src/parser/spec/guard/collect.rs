@@ -56,6 +56,7 @@ pub(super) fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
         ("import_node_kinds", spec.import_node_kinds),
         ("import_spec_kinds", spec.import_spec_kinds),
         ("call_node_kinds", spec.call_node_kinds),
+        ("type_construction_kinds", spec.type_construction_kinds),
     ];
     for (field, kinds) in slices {
         for k in *kinds {
@@ -310,6 +311,8 @@ pub(super) fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
         ("extends_field", spec.extends_field),
         ("value_name_field", spec.value_name_field),
         ("value_type_field", spec.value_type_field),
+        ("return_type_field", spec.return_type_field),
+        ("construction_type_field", spec.construction_type_field),
     ];
     for (field, value) in optional {
         if let Some(v) = value {

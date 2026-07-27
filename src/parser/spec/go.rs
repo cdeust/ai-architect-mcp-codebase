@@ -185,6 +185,8 @@ pub(crate) static GO_SPEC: LangSpec = LangSpec {
     import_node_kinds: &["import_declaration"],
     import_spec_kinds: &["import_spec"],
     call_node_kinds: &["call_expression"],
+    // `OrderConfig{..}` (issue #92); its `type` field names the constructed type.
+    type_construction_kinds: &["composite_literal"],
     name_field: "name",
     body_field: Some("body"),
     type_field: "type",
@@ -193,6 +195,9 @@ pub(crate) static GO_SPEC: LangSpec = LangSpec {
     extends_field: None,
     value_name_field: None,
     value_type_field: None,
+    // `func F() OrderConfig` — the `result` field is the return-type annotation.
+    return_type_field: Some("result"),
+    construction_type_field: Some("type"),
     ts_language: || tree_sitter_go::LANGUAGE.into(),
     embedded: &[],
     conventions: &GO_CONVENTIONS,

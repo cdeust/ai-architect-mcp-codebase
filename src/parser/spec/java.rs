@@ -281,6 +281,9 @@ pub(crate) static JAVA_SPEC: LangSpec = LangSpec {
     import_node_kinds: &["import_declaration"],
     import_spec_kinds: &[],
     call_node_kinds: &["method_invocation", "object_creation_expression"],
+    // Not adopted (issue #92): `new T()` is already an `object_creation_expression`
+    // CallSite the resolver turns into a Uses edge.
+    type_construction_kinds: &[],
     name_field: "name",
     body_field: Some("body"),
     type_field: "type",
@@ -289,6 +292,8 @@ pub(crate) static JAVA_SPEC: LangSpec = LangSpec {
     extends_field: None,
     value_name_field: None,
     value_type_field: None,
+    return_type_field: None,
+    construction_type_field: None,
     ts_language: || tree_sitter_java::LANGUAGE.into(),
     embedded: &[],
     conventions: &JAVA_CONVENTIONS,

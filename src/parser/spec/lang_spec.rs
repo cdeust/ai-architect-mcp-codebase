@@ -289,6 +289,20 @@ pub(crate) struct LangSpec {
     pub import_spec_kinds: &'static [&'static str],
     /// Call expression kinds (Go `call_expression`; Python `call`).
     pub call_node_kinds: &'static [&'static str],
+    /// Type-construction expression kinds — a syntactic construction of a named
+    /// type that is NOT a call the call walker captures (Go `composite_literal`
+    /// `OrderConfig{..}`; Rust `struct_expression` `OrderConfig{..}`; TS
+    /// `new_expression` `new OrderConfig()`). When non-empty, the def walkers
+    /// scan a function/method body for these nodes and record each constructed
+    /// type's name (read from `construction_type_field`) in the enclosing
+    /// callable's `constructed_types` property; the resolver's Uses phase binds
+    /// each to its type node (`Uses_<caller>_<Type>`). Empty for every language
+    /// that has not adopted the feature — an empty slice adds no property and no
+    /// edge, so the untouched languages' parity is unchanged (issue #92, OCP:
+    /// adoption is a data row, not new walker code). source: tree-sitter-go
+    /// 0.25.0 / tree-sitter-rust 0.23.3 / tree-sitter-typescript 0.23.2
+    /// node-types.json (validated by the spec guard).
+    pub type_construction_kinds: &'static [&'static str],
 
     // --- field names the walkers read (validated against node-types fields) ---
     /// Field carrying a declaration's name (usually `name`).
@@ -317,6 +331,23 @@ pub(crate) struct LangSpec {
     /// (Python `type`). `Some` emits a `type_annotation` property on constants;
     /// `None` (Go) emits none.
     pub value_type_field: Option<&'static str>,
+    /// Field on a function/method node carrying its return-type annotation
+    /// (Go `result`; Rust `return_type`; TS `return_type`). `Some` makes the def
+    /// walkers record the return-type text in the callable's `return_type`
+    /// property, which the resolver's Uses phase resolves to a `Uses_<caller>_
+    /// <Type>` edge. `None` for every language that has not adopted the feature —
+    /// no property, no edge, parity unchanged (issue #92). The text is stored
+    /// verbatim minus a leading `:`/`->` (TS annotations, `: T`); the resolver's
+    /// `extract_type_identifiers` strips generics/refs and keeps the nominal
+    /// names. source: the grammar's node-types.json (validated by the guard).
+    pub return_type_field: Option<&'static str>,
+    /// Field on a `type_construction_kinds` node naming the constructed type
+    /// (Go `composite_literal` `type`; Rust `struct_expression` `name`; TS
+    /// `new_expression` `constructor`). `Some` iff `type_construction_kinds` is
+    /// non-empty; the two are read together. `None` (and an empty
+    /// `type_construction_kinds`) for every non-adopting language. source: the
+    /// grammar's node-types.json (validated by the guard).
+    pub construction_type_field: Option<&'static str>,
 
     // --- grammar factory, embedded rules, behavioral escape hatch ---
     /// Grammar factory (the Rust tree-sitter crate's `LANGUAGE`).

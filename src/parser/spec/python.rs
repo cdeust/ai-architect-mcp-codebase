@@ -395,6 +395,9 @@ pub(crate) static PYTHON_SPEC: LangSpec = LangSpec {
     ],
     import_spec_kinds: &[],
     call_node_kinds: &["call"],
+    // Python constructs types via a plain call (`OrderConfig()`), already a
+    // CallSite the resolver turns into a Uses edge — no separate slice (issue #92).
+    type_construction_kinds: &[],
     name_field: "name",
     body_field: Some("body"),
     type_field: "type",
@@ -403,6 +406,9 @@ pub(crate) static PYTHON_SPEC: LangSpec = LangSpec {
     extends_field: Some("superclasses"),
     value_name_field: Some("left"),
     value_type_field: Some("type"),
+    // Not adopted for Python (issue #92): construction is already a CallSite.
+    return_type_field: None,
+    construction_type_field: None,
     ts_language: || tree_sitter_python::LANGUAGE.into(),
     embedded: &[],
     conventions: &PYTHON_CONVENTIONS,

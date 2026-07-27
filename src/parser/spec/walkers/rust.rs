@@ -33,7 +33,9 @@
 use tree_sitter::Node;
 
 use super::super::lang_spec::{LangSpec, RustFamilySpec};
-use super::{call_scan_of, calls, end_line_of, imports, kind_in, line_of, rust_types, WalkCtx};
+use super::{
+    call_scan_of, calls, end_line_of, imports, kind_in, line_of, rust_types, type_uses, WalkCtx,
+};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_FUNCTION,
     LABEL_MODULE, LABEL_TYPE_ALIAS,
@@ -256,6 +258,12 @@ fn emit_function(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope: &str) {
     }
     let seq = ctx.next_seq();
     let qn = spec.conventions.def_qn(scope, &name, seq);
+    let mut properties = vec![(
+        "is_async".to_string(),
+        has_async(specs.rf, node).to_string(),
+    )];
+    // Return type + constructed types (issue #92).
+    type_uses::append_type_use_props(spec, ctx, node, call_scan_of(spec, node), &mut properties);
     push_def(
         ctx,
         node,
@@ -264,10 +272,7 @@ fn emit_function(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope: &str) {
             name: &name,
             qn: &qn,
             visibility: spec.conventions.node_visibility(ctx.source, node, &name),
-            properties: vec![(
-                "is_async".to_string(),
-                has_async(specs.rf, node).to_string(),
-            )],
+            properties,
             edge_kind: "Defines",
             edge_from: scope,
         },

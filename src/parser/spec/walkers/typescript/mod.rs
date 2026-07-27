@@ -34,7 +34,7 @@ mod members;
 use tree_sitter::Node;
 
 use super::super::lang_spec::{LangSpec, TsFamilySpec};
-use super::{end_line_of, imports, kind_in, line_of, WalkCtx};
+use super::{end_line_of, imports, kind_in, line_of, type_uses, WalkCtx};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CALL_SITE, LABEL_FIELD,
     LABEL_FUNCTION, LABEL_METHOD, LABEL_STRUCT,
@@ -152,6 +152,13 @@ fn emit_function(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, is
         return;
     }
     let qn = spec.conventions.def_qn(scope, &name, 0);
+    let body = spec.body_field.and_then(|f| node.child_by_field_name(f));
+    let mut properties = vec![(
+        "is_async".to_string(),
+        has_async(ctx.source, node).to_string(),
+    )];
+    // Return type + constructed types (issue #92).
+    type_uses::append_type_use_props(spec, ctx, node, body, &mut properties);
     ctx.nodes.push(ExtractedNode {
         label: LABEL_FUNCTION.to_string(),
         name: name.clone(),
@@ -159,17 +166,14 @@ fn emit_function(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, is
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: export_vis(is_exported),
-        properties: vec![(
-            "is_async".to_string(),
-            has_async(ctx.source, node).to_string(),
-        )],
+        properties,
     });
     ctx.refs.push(ExtractedRef {
         kind: "Defines".to_string(),
         from_qualified_name: scope.to_string(),
         to_qualified_name: qn.clone(),
     });
-    if let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) {
+    if let Some(body) = body {
         ts_walk_calls(spec, ctx, body, &qn);
     }
 }
@@ -343,6 +347,16 @@ fn emit_method(spec: &LangSpec, tf: &TsFamilySpec, ctx: &mut WalkCtx, node: Node
         return;
     }
     let qn = spec.conventions.def_qn(class_qn, &name, 0);
+    let body = spec.body_field.and_then(|f| node.child_by_field_name(f));
+    let mut properties = vec![
+        (
+            "is_async".to_string(),
+            has_async(ctx.source, node).to_string(),
+        ),
+        ("receiver_type".to_string(), class_qn.to_string()),
+    ];
+    // Return type + constructed types (issue #92).
+    type_uses::append_type_use_props(spec, ctx, node, body, &mut properties);
     ctx.nodes.push(ExtractedNode {
         label: LABEL_METHOD.to_string(),
         name: name.clone(),
@@ -350,20 +364,14 @@ fn emit_method(spec: &LangSpec, tf: &TsFamilySpec, ctx: &mut WalkCtx, node: Node
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: member_visibility(tf, ctx.source, node),
-        properties: vec![
-            (
-                "is_async".to_string(),
-                has_async(ctx.source, node).to_string(),
-            ),
-            ("receiver_type".to_string(), class_qn.to_string()),
-        ],
+        properties,
     });
     ctx.refs.push(ExtractedRef {
         kind: "HasMethod".to_string(),
         from_qualified_name: class_qn.to_string(),
         to_qualified_name: qn.clone(),
     });
-    if let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) {
+    if let Some(body) = body {
         ts_walk_calls(spec, ctx, body, &qn);
     }
 }

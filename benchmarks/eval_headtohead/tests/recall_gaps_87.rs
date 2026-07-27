@@ -96,3 +96,99 @@ fn gap3_rust_higher_order_caller_is_captured() {
          `.map`, must be captured as a caller; got {caller_files:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gap 2 (D4) — issue #92: cross-language type-usage (Uses) edges for
+// return-types and type-construction expressions. Before #92 the graph had NO
+// return-type / type-construction reference data, so `get_impact(OrderConfig)`
+// lost recall to the Grep baseline: go-D4 = 0.0 (nothing), rs-D4 / ts-D4 = 0.5
+// (missed core.rs / core.ts). Each test below asserts the D4 ground-truth files
+// surface as USERS of `OrderConfig`, so a re-run cannot regress the row.
+// ---------------------------------------------------------------------------
+
+/// Collects the distinct file prefixes of a type's D4 dependents, mirroring the
+/// eval's `op_impact_users` exactly: reverse `Uses` (users) UNION reverse
+/// `Imports` (importers). Go's same-package `OrderConfig` has no importer, so it
+/// depends entirely on the new Uses edges; the imported languages combine both.
+fn user_files(store: &GraphStore, type_qn: &str) -> Vec<String> {
+    let impact = get_impact(store, type_qn).expect("get_impact");
+    let mut files: Vec<String> = impact
+        .users
+        .iter()
+        .chain(impact.importers.iter())
+        .map(|u| {
+            u.qualified_name
+                .split("::")
+                .next()
+                .unwrap_or(&u.qualified_name)
+                .to_string()
+        })
+        .collect();
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// go-D4: `LoadConfig` (return type + composite-literal construction) and
+/// `ApplyConfig` (return type) both use `OrderConfig`; core.go AND api.go must
+/// surface (recall 1.0, up from 0.0 — no import existed for the Imports fallback).
+#[test]
+fn gap2_go_d4_return_and_construction_uses() {
+    let (store, _tmp) = index("go");
+    let files = user_files(&store, "core.go::OrderConfig");
+    assert!(
+        files.iter().any(|f| f == "core.go"),
+        "issue #92 go-D4: core.go (return type + `OrderConfig{{}}` construction) \
+         must use OrderConfig; got {files:?}"
+    );
+    assert!(
+        files.iter().any(|f| f == "api.go"),
+        "issue #92 go-D4: api.go (return type OrderConfig) must use OrderConfig; got {files:?}"
+    );
+}
+
+/// rs-D4: core.rs (`-> OrderConfig` + `OrderConfig {..}` struct literal) was
+/// the missed file (recall 0.5). Both core.rs and api.rs must surface now.
+#[test]
+fn gap2_rust_d4_return_and_construction_uses() {
+    let (store, _tmp) = index("rust");
+    let files = user_files(&store, "core.rs::OrderConfig");
+    assert!(
+        files.iter().any(|f| f == "core.rs"),
+        "issue #92 rs-D4: core.rs (return type + struct-literal construction) \
+         must use OrderConfig; got {files:?}"
+    );
+    assert!(
+        files.iter().any(|f| f == "api.rs"),
+        "issue #92 rs-D4: api.rs (return type OrderConfig) must use OrderConfig; got {files:?}"
+    );
+}
+
+/// ts-D4: core.ts (`: OrderConfig` return annotation + `new OrderConfig()`) was
+/// the missed file (recall 0.5). Both core.ts and api.ts must surface now.
+#[test]
+fn gap2_typescript_d4_return_and_construction_uses() {
+    let (store, _tmp) = index("typescript");
+    let files = user_files(&store, "core.ts::OrderConfig");
+    assert!(
+        files.iter().any(|f| f == "core.ts"),
+        "issue #92 ts-D4: core.ts (return annotation + `new OrderConfig()`) \
+         must use OrderConfig; got {files:?}"
+    );
+    assert!(
+        files.iter().any(|f| f == "api.ts"),
+        "issue #92 ts-D4: api.ts (return annotation OrderConfig) must use OrderConfig; got {files:?}"
+    );
+}
+
+/// Python already passed D4 (recall 1.0) via the plain-call construction path;
+/// pin that #92 did not disturb it (core.py + api.py still use OrderConfig).
+#[test]
+fn gap2_python_d4_unchanged() {
+    let (store, _tmp) = index("python");
+    let files = user_files(&store, "core.py::OrderConfig");
+    assert!(
+        files.iter().any(|f| f == "core.py") && files.iter().any(|f| f == "api.py"),
+        "issue #92 py-D4: core.py and api.py must still use OrderConfig; got {files:?}"
+    );
+}

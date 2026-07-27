@@ -433,6 +433,8 @@ pub(crate) static RUST_SPEC: LangSpec = LangSpec {
     import_node_kinds: &[],
     import_spec_kinds: &[],
     call_node_kinds: &["call_expression", "macro_invocation"],
+    // `OrderConfig { .. }` (issue #92); its `name` field names the constructed type.
+    type_construction_kinds: &["struct_expression"],
     name_field: "name",
     body_field: Some("body"),
     type_field: "type",
@@ -441,6 +443,9 @@ pub(crate) static RUST_SPEC: LangSpec = LangSpec {
     extends_field: Some("bounds"),
     value_name_field: None,
     value_type_field: None,
+    // `fn f() -> OrderConfig` — `return_type` is the type after `->` (issue #92).
+    return_type_field: Some("return_type"),
+    construction_type_field: Some("name"),
     ts_language: || tree_sitter_rust::LANGUAGE.into(),
     embedded: &[],
     conventions: &RUST_CONVENTIONS,

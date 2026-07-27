@@ -16,7 +16,7 @@ use super::rust::{
     decl_list_body, emit_derive_implements, has_async, implements_props, push_def, Def,
     DeriveScope, RustSpecs,
 };
-use super::{call_scan_of, calls, kind_in, types, WalkCtx};
+use super::{call_scan_of, calls, kind_in, type_uses, types, WalkCtx};
 use crate::parser::{
     node_field_text, qual, ExtractedRef, LABEL_ENUM, LABEL_FIELD, LABEL_METHOD, LABEL_STRUCT,
     LABEL_TRAIT, LABEL_VARIANT,
@@ -243,6 +243,19 @@ fn emit_trait_methods(specs: RustSpecs, ctx: &mut WalkCtx, trait_node: Node, tra
         // defaulted `fn` has its modifiers read. The hand-written walker's split,
         // preserved.
         let is_async = !is_sig && has_async(rf, child);
+        let mut properties = vec![
+            ("is_async".to_string(), is_async.to_string()),
+            ("receiver_type".to_string(), trait_qn.to_string()),
+        ];
+        // Return type + constructed types (issue #92); a bodiless requirement
+        // constructs nothing (its `call_scan_of` is `None`).
+        type_uses::append_type_use_props(
+            spec,
+            ctx,
+            child,
+            call_scan_of(spec, child),
+            &mut properties,
+        );
         push_def(
             ctx,
             child,
@@ -251,10 +264,7 @@ fn emit_trait_methods(specs: RustSpecs, ctx: &mut WalkCtx, trait_node: Node, tra
                 name: &name,
                 qn: &mqn,
                 visibility: spec.conventions.node_visibility(ctx.source, child, &name),
-                properties: vec![
-                    ("is_async".to_string(), is_async.to_string()),
-                    ("receiver_type".to_string(), trait_qn.to_string()),
-                ],
+                properties,
                 edge_kind: "HasMethod",
                 edge_from: trait_qn,
             },
@@ -319,6 +329,8 @@ fn emit_impl_method(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, target: &Im
     if !target.trait_name.is_empty() {
         props.push(("trait_name".to_string(), target.trait_name.to_string()));
     }
+    // Return type + constructed types (issue #92).
+    type_uses::append_type_use_props(spec, ctx, node, call_scan_of(spec, node), &mut props);
     push_def(
         ctx,
         node,

@@ -156,6 +156,8 @@ pub(crate) static C_SPEC: LangSpec = LangSpec {
     import_node_kinds: &["preproc_include"],
     import_spec_kinds: &[],
     call_node_kinds: &["call_expression"],
+    // Not adopted (issue #92): no return-type/type-construction Uses extraction.
+    type_construction_kinds: &[],
     name_field: "name",
     body_field: Some("body"),
     type_field: "type",
@@ -164,6 +166,8 @@ pub(crate) static C_SPEC: LangSpec = LangSpec {
     extends_field: None,
     value_name_field: None,
     value_type_field: None,
+    return_type_field: None,
+    construction_type_field: None,
     ts_language: || tree_sitter_c::LANGUAGE.into(),
     embedded: &[],
     conventions: &C_CONVENTIONS,
