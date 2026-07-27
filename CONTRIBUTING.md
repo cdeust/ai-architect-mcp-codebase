@@ -8,7 +8,7 @@ change is held to that bar.
 
 ## What this project is
 
-A Rust 1.94+ stdio JSON-RPC server (no SDK — we own the wire). Indexes
+A Rust stdio JSON-RPC server (no SDK — we own the wire). Indexes
 Rust / Python / TypeScript codebases via tree-sitter, persists to
 LadybugDB (a property-graph engine the project builds from C++ source),
 resolves cross-file imports + calls, detects functional communities via
@@ -21,7 +21,7 @@ architecture.
 
 ## Dev setup
 
-**Prerequisites:** Rust 1.94+ (`rustup install stable`), CMake (LadybugDB
+**Prerequisites:** Rust 1.95.0 — pinned by `rust-toolchain.toml`, so `rustup` installs and selects it for you — plus CMake (LadybugDB
 builds its C++ core from source — ~5 minutes first build, cached after).
 
 ```bash
@@ -118,14 +118,39 @@ is tested against published reference implementations. Changes here:
 ## Testing
 
 ```bash
-cargo test --release                    # full suite
+cargo test                              # full suite (947 tests as of v0.8.2)
+cargo test --release                    # same suite, release profile
 cargo test --release -- --test-threads=1   # serial mode (debugging flakes)
 cargo bench                             # micro-benchmarks
 ```
 
-The `tests/integration/` suite spins up a real stdio JSON-RPC server
-process and exercises the wire protocol. These tests are slow (~30s) but
-load-bearing — a wire-level regression is a regression we ship.
+The per-stage `tests/*_integration.rs` suites drive the pipeline end to end
+against fixture data, and several of them (`tests/artifact_bootstrap.rs`,
+`tests/installer.rs`, `tests/temporal_runtime_edges.rs`) spawn a real process
+and exercise the wire protocol. These are slow but load-bearing — a wire-level
+regression is a regression we ship.
+
+### Testing policy (mandatory)
+
+This is a policy, not a preference. It is what the OpenSSF Best Practices
+criteria `test_policy_mandated`, `tests_are_added` and `regression_tests_added50`
+are answered against, so it has to be true rather than aspirational.
+
+1. **New functionality ships with tests in the same pull request.** Any change
+   that adds a tool, a graph edge kind, a parser lane, or any other behaviour a
+   consumer can observe MUST add tests for it to the automated suite. A PR that
+   adds behaviour and no test is not ready for review.
+2. **Every bug fix ships with a regression test that fails on the pre-fix
+   code.** Name it after the failure, not the fix, and reference the issue
+   number in the file header — the existing suite does this (see
+   `tests/no_naive_cypher_escape.rs` for #16, `tests/coverage_honesty.rs` for
+   #57, `tests/parser_parse_bound.rs` for #148).
+3. **A defence that only a reviewer enforces will be defeated.** Where a fix can
+   be silently reintroduced, add a mechanical guard that fails `cargo test`,
+   not a comment asking future readers to be careful.
+4. **Statement coverage must not regress below 80%.** It is 81.59% (measured
+   2026-07-27 with `cargo llvm-cov --workspace`). Run it locally before a large
+   change: `cargo llvm-cov --workspace --summary-only`.
 
 ---
 

@@ -8,6 +8,29 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **OpenSSF Best Practices answers, and the documents the silver criteria
+  require (`.bestpractices.json`).** Every passing and silver criterion is
+  answered with a status and a justification that cites a file in this
+  repository or a dated measurement: 115 criteria, 93 Met / 7 Unmet / 15 N/A.
+  Passing is 59 Met / 1 Unmet / 7 N/A; silver is 40 Met / 6 Unmet / 9 N/A. The
+  answers are read by bestpractices.dev for project 13845, whose badge is now in
+  the README badge row.
+
+  Three documents the questionnaire asks for did not exist and were written
+  rather than logged as gaps: `GOVERNANCE.md` (who decides, roles, continuity of
+  access, and the contribution-licensing position), `docs/ROADMAP.md` (what the
+  next year holds and what this project will not do), and
+  `docs/ASSURANCE-CASE.md` (threat model, six trust boundaries, five claims each
+  with its evidence and its stated limit, and a weakness-class table).
+  `CONTRIBUTING.md` gained an explicit, mandatory testing policy.
+
+  Two criteria are answered Unmet with a filed issue rather than argued around:
+  the private disclosure channel SECURITY.md points at is disabled (#159, a
+  passing MUST), and no published release carries a provenance attestation, an
+  SBOM or a signed tag (#158, the only silver MUST not met). Also filed: the
+  ungated coverage measurement (#160), README claim drift (#161), and the three
+  disabled repository security settings (#162).
+
 - **Cross-language type-usage (`Uses`) edges for return types and type
   construction (issue #92).** The code graph now captures a function/method that
   names a type in its **return-type annotation** (`func F() OrderConfig`,
@@ -65,6 +88,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 
 ### Fixed
+
+- **Documentation claims that had drifted from the code.** The README advertised
+  434 tests in three places against a suite that runs 947 (`cargo test`, measured
+  2026-07-27), and both the README and CONTRIBUTING.md named "Rust 1.94+" while
+  `rust-toolchain.toml` pins 1.95.0 for local builds, CI and releases.
+  CONTRIBUTING.md referenced a `tests/integration/` directory that does not exist
+  — the integration suites are `tests/*_integration.rs`. The README badge row now
+  also carries the measured line coverage (81.59%, `cargo llvm-cov --workspace`,
+  2026-07-27). Remaining drift is tracked in #161.
 
 - **Parser: bound recursion depth (and input size) at the parse boundary
   (issue #148).** The scheduled 900 s `Fuzz` job OOMed (used 4136 MB > the

@@ -6,9 +6,11 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/Rust-1.94+-dea584.svg" alt="Rust 1.94+">
+  <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-24-orange" alt="24 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-434_passing-brightgreen" alt="434 tests">
+  <img src="https://img.shields.io/badge/Tests-947_passing-brightgreen" alt="947 tests">
+  <img src="https://img.shields.io/badge/Coverage-81.59%25-brightgreen" alt="81.59% line coverage">
+  <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-10-blueviolet" alt="10 languages">
   <img src="https://img.shields.io/badge/Stages-0_through_9-8A2BE2" alt="Stages">
 </p>
@@ -32,7 +34,7 @@ Every AI coding assistant hits the same wall: you ask it to change `handle_tool_
 
 It is the **codebase intelligence layer** that sits between a finding ("this bug exists") and a PRD ("here is the fix, here is what it affects, here is what it must never break"). It is **read-only intelligence** — it never writes code, opens PRs, or runs CI. It tells the system what is true about the code so the next stage can reason without guessing.
 
-**One pipeline stage = one MCP tool. 10 stages. 24 tools. 12,000+ lines of Rust. 434 tests. Zero warnings. Every constant sourced.**
+**One pipeline stage = one MCP tool. 10 stages. 24 tools. 12,000+ lines of Rust. 947 tests. Zero warnings. Every constant sourced.**
 
 ---
 
@@ -80,7 +82,7 @@ verify_semantic_diff(before_graph_path, after_graph_path)
 
 ### Prerequisites
 
-- Rust 1.94+ (`rustup install stable`)
+- Rust 1.95.0 — pinned by [`rust-toolchain.toml`](rust-toolchain.toml), so `rustup` installs and selects it for you; the same compiler builds CI and the releases
 - CMake (LadybugDB builds its C++ core from source — ~5 minutes first build, cached after)
 
 ### Clone + build
@@ -449,7 +451,15 @@ Four CRITICAL, four HIGH, three MEDIUM findings were surfaced by a `security-aud
 - LSP `rootUri` → RFC 3986 percent-encoding
 - Diff line overflow → `DIFF_LINE_MAX = u64::MAX / 2` guard
 
-Each fix has a test that asserts the exploit is now rejected. Run `cargo test` to see 434 tests pass including the exploit-regression suite.
+Each fix has a test that asserts the exploit is now rejected. Run `cargo test` to see 947 tests pass including the exploit-regression suite.
+
+The full security argument — threat model, trust boundaries, what each claim
+rests on, and where it stops — is in
+[docs/ASSURANCE-CASE.md](docs/ASSURANCE-CASE.md). Reporting process and response
+SLA: [SECURITY.md](SECURITY.md). How the project is run and what happens if the
+maintainer stops: [GOVERNANCE.md](GOVERNANCE.md). Where it is going:
+[docs/ROADMAP.md](docs/ROADMAP.md). OpenSSF Best Practices answers, criterion by
+criterion: [.bestpractices.json](.bestpractices.json).
 
 ---
 
@@ -544,7 +554,7 @@ precision/recall/token/tool-call numbers above stand on their own.
 ## Testing
 
 ```bash
-cargo test                                          # 434 tests, full suite
+cargo test                                          # 947 tests, full suite
 cargo test --release --test scalability_bench       # 500-file synthetic fixture
 cargo test --release --test lbug_bulk_investigation # dba's 9 UNWIND probes
 cargo test --release --test stage3a_integration     # end-to-end per sub-stage
