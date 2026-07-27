@@ -327,8 +327,16 @@ impl GraphStore {
         path: &Path,
         config: SystemConfig,
     ) -> Result<Self, String> {
-        let db =
-            Database::new(path, config).map_err(|e| format!("lbug database open failed: {e}"))?;
+        let db = Database::new(path, config).map_err(|e| {
+            // A full disk surfaces here as an opaque lbug abort (e.g.
+            // `unordered_map::at: key not found`); annotate it with the real,
+            // path-naming storage condition so ENOSPC is distinguishable from
+            // a genuine key-not-found (issue #143).
+            crate::write_diagnostics::annotate_write_failure(
+                path,
+                &format!("lbug database open failed: {e}"),
+            )
+        })?;
         // Safety: see comment on the struct. The Database is heap-stable and
         // outlives the Connection because struct fields drop in declaration order.
         let conn: Connection<'static> = unsafe {
@@ -1601,6 +1609,32 @@ fn value_to_u64(v: &Value) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// issue #143: when the store cannot be created because the target's
+    /// directory is unwritable (a full disk in production; a non-existent
+    /// parent as the portable seam here), `open_or_create` must fail with a
+    /// message that names the path and the OS-level write condition — not the
+    /// bare opaque lbug abort. Asserts the emission itself (§13.1-F1/A3).
+    #[test]
+    fn open_or_create_names_the_path_when_the_target_is_unwritable() {
+        let target = Path::new("/no-such-root-ai-architect-143/inner/testdb");
+        let err = GraphStore::open_or_create(target)
+            .err()
+            .expect("opening a store under a non-existent root must fail");
+        assert!(
+            err.contains("/no-such-root-ai-architect-143/inner"),
+            "error must name the unwritable directory, got: {err}"
+        );
+        assert!(
+            err.contains("write probe") && err.contains("failed"),
+            "error must name the OS-level write condition, got: {err}"
+        );
+        // The original lbug text is still present for continuity.
+        assert!(
+            err.contains("lbug database open failed"),
+            "underlying store error preserved, got: {err}"
+        );
+    }
 
     #[test]
     fn test_create_and_query() {

@@ -107,31 +107,31 @@
     {
       "query_id": "q3",
       "input": {
-        "query": "parse_rust_file",
+        "query": "parse_file",
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "parser/rust/mod.rs::parse_rust_file"
+        "qualified_name": "parser/mod.rs::parse_file"
       }
     },
     {
       "query_id": "q3",
       "input": {
-        "query": "parse_python_file",
+        "query": "parse_with_spec",
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "parser/python/mod.rs::parse_python_file"
+        "qualified_name": "parser/spec/walkers/mod.rs::parse_with_spec"
       }
     },
     {
       "query_id": "q3",
       "input": {
-        "query": "parse_typescript_file",
+        "query": "parse_shallow",
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "parser/typescript/mod.rs::parse_typescript_file"
+        "qualified_name": "parser/spec/shallow.rs::parse_shallow"
       }
     },
     {
@@ -700,13 +700,15 @@
     {
       "query_id": "q9",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'prd_input.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'prd_input/mod.rs' RETURN n.path"
       },
       "expected": {
         "imports": [
+          "artifact::ArtifactInputs",
+          "artifact::build_artifact",
           "crate::graph_store::GraphStore",
           "crate::search",
-          "serde_json::json",
+          "matching::MatchOutcome",
           "serde_json::Value",
           "std::fs",
           "std::path::Path",
@@ -717,18 +719,27 @@
     {
       "query_id": "q9",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'prd_validator.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'prd_validator/mod.rs' RETURN n.path"
       },
       "expected": {
         "imports": [
+          "axis_community::communities_for_resolved",
+          "axis_community::distinct_count",
+          "axis_community::emit_community_consistency",
+          "axis_process::emit_process_impact",
+          "axis_process::processes_for_resolved",
+          "axis_symbol::emit_symbol_hallucination",
+          "axis_symbol::emit_unresolved_info",
           "crate::graph_store::GraphStore",
           "crate::search",
-          "serde_json::json",
           "serde_json::Value",
+          "serde_json::json",
           "std::collections::BTreeSet",
           "std::fs",
           "std::path::Path",
-          "std::path::PathBuf"
+          "std::path::PathBuf",
+          "verdict::ClaimVerdict",
+          "verdict::classify_unresolved"
         ]
       }
     },
@@ -762,10 +773,10 @@
     {
       "query_id": "q10",
       "input": {
-        "qualified_name": "parser/rust/mod.rs::parse_rust_file"
+        "qualified_name": "parser/mod.rs::parse_file"
       },
       "expected": {
-        "qualified_name": "parser/rust/mod.rs::parse_rust_file"
+        "qualified_name": "parser/mod.rs::parse_file"
       }
     },
     {
@@ -1017,7 +1028,7 @@
     {
       "query_id": "q11",
       "input": {
-        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'prd_validator.rs::ValidationFinding' RETURN f.name"
+        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'prd_validator/mod.rs::ValidationFinding' RETURN f.name"
       },
       "expected": {
         "fields": [
@@ -1056,15 +1067,15 @@
             "cluster": 1
           },
           {
-            "qn": "parser/rust/mod.rs::parse_rust_file",
+            "qn": "parser/spec/walkers/mod.rs::parse_with_spec",
             "cluster": 1
           },
           {
-            "qn": "parser/python/mod.rs::parse_python_file",
+            "qn": "parser/spec/shallow.rs::parse_shallow",
             "cluster": 1
           },
           {
-            "qn": "parser/typescript/mod.rs::parse_typescript_file",
+            "qn": "parser/spec/walkers/defs.rs::walk_defs",
             "cluster": 1
           },
           {
@@ -1168,19 +1179,19 @@
             "cluster": 5
           },
           {
-            "qn": "prd_input.rs::prepare",
+            "qn": "prd_input/mod.rs::prepare",
             "cluster": 7
           },
           {
-            "qn": "prd_validator.rs::validate_prd",
+            "qn": "prd_validator/mod.rs::validate_prd",
             "cluster": 7
           },
           {
-            "qn": "prd_validator.rs::ValidationReport",
+            "qn": "prd_validator/mod.rs::ValidationReport",
             "cluster": 7
           },
           {
-            "qn": "prd_validator.rs::ValidationFinding",
+            "qn": "prd_validator/mod.rs::ValidationFinding",
             "cluster": 7
           },
           {
@@ -1354,7 +1365,7 @@
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'prd_validator.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'prd_validator/mod.rs' RETURN n.path"
       },
       "expected": {
         "unresolved": [

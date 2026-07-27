@@ -50,6 +50,7 @@ mod stdlib_index;
 mod token_surface;
 mod tool_profile;
 mod tool_schemas;
+mod write_diagnostics;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -6272,6 +6273,17 @@ mod token_surface_tools_tests {
         let resp = run_search_codebase(&json!({
             "graph_path": graph, "query": "process", "format": "tabular"
         }));
+        // Guard the tabular contract behind a success check: a failed search
+        // (e.g. the store could not be opened because the disk is full)
+        // returns `{status:"error", message:...}` with no `format` field, and
+        // asserting on the absent field would mis-report a resource failure as
+        // a tabular-mode regression (issue #143).
+        assert_ne!(
+            resp["status"],
+            json!("error"),
+            "search_codebase failed before the tabular contract could be checked: {}",
+            resp["message"]
+        );
         assert_eq!(resp["format"], json!("tabular"));
         assert!(
             resp["columns"].is_array(),
@@ -6405,7 +6417,12 @@ mod temporal_runtime_tests {
         );
         let graph = idx["graph_path"].as_str().expect("graph_path").to_string();
         // Resolve so the static Calls edge caller->callee exists.
-        let store = graph_store::GraphStore::open_or_create(Path::new(&graph)).expect("open");
+        // Surface the store-open error's full text (which now carries the
+        // storage-condition annotation from write_diagnostics) and name the
+        // path, so an ENOSPC is distinguishable from a genuine key-not-found
+        // (issue #143).
+        let store = graph_store::GraphStore::open_or_create(Path::new(&graph))
+            .unwrap_or_else(|e| panic!("open graph store at {graph}: {e}"));
         resolver::resolve_graph(&store).expect("resolve");
         drop(store);
         (tmp, graph)

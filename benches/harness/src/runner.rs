@@ -36,6 +36,11 @@ pub struct CorpusRun {
     pub labels_run: usize,
     pub labels_skipped: usize,
     pub setup_error: Option<String>,
+    /// Ground-truth references whose source-file path no longer exists under
+    /// the corpus tree (issue #132). Non-empty means the corpus is scoring
+    /// against deleted symbols; the harness fails loudly instead of letting
+    /// those silently score 0.
+    pub stale_ground_truth: Vec<String>,
 }
 
 /// Run one full corpus.  Returns a CorpusRun even on failure — the
@@ -52,7 +57,21 @@ pub fn run_corpus(corpus: &CorpusConfig, binary: &Path) -> CorpusRun {
         labels_run: 0,
         labels_skipped: 0,
         setup_error: None,
+        stale_ground_truth: Vec::new(),
     };
+
+    // Ground-truth staleness guard (issue #132): detect labels that reference
+    // deleted source files BEFORE scoring, so their zeros are never mistaken
+    // for a retrieval regression. Loud + enumerated, per query.
+    run.stale_ground_truth =
+        crate::corpora::stale_ground_truth(&corpus.source_path, &corpus.labels);
+    for rel in &run.stale_ground_truth {
+        eprintln!(
+            "[bench][STALE GROUND TRUTH] corpus={}: references deleted source path {:?} \
+             (this expectation silently scores 0 — fix or remove the label)",
+            corpus.name, rel
+        );
+    }
 
     let tmp = match tempfile::tempdir() {
         Ok(t) => t,
