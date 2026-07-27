@@ -30,7 +30,11 @@ use super::*;
 /// `buf`/`flush` like every other phase: the flush error propagates via
 /// `?` in `resolve_graph`, and duplicates collapse the same way Imports/
 /// Calls/Uses do.
-pub(super) fn resolve_extends(store: &GraphStore, idx: &SymbolIndex, buf: &mut EdgeBuffer) -> PhaseResult {
+pub(super) fn resolve_extends(
+    store: &GraphStore,
+    idx: &SymbolIndex,
+    buf: &mut EdgeBuffer,
+) -> PhaseResult {
     let mut resolved = 0u64;
     let mut total = 0u64;
     let mut unresolved = Vec::new();

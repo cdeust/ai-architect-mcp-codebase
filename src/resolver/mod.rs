@@ -17,9 +17,12 @@ mod extends;
 mod implements;
 mod imports;
 mod uses;
-#[cfg(test)] use imports::resolve_glob_import;
-#[cfg(test)] use extends::resolve_one_extends_base;
-#[cfg(test)] use uses::extract_type_identifiers;
+#[cfg(test)]
+use extends::resolve_one_extends_base;
+#[cfg(test)]
+use imports::resolve_glob_import;
+#[cfg(test)]
+use uses::extract_type_identifiers;
 
 /// Counter of edges dropped because their dynamically-formatted
 /// table name doesn't appear in REL_TABLES. Producers that build
@@ -179,11 +182,14 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     let existing = load_existing_edges(store)?;
     let mut buf = EdgeBuffer::new(existing);
 
-    let (imp_resolved, imp_total, imp_unresolved) = imports::resolve_imports(store, &idx, &mut buf)?;
+    let (imp_resolved, imp_total, imp_unresolved) =
+        imports::resolve_imports(store, &idx, &mut buf)?;
     let (call_resolved, call_total, call_unresolved) =
         calls::resolve_calls(store, &idx, &file_imports, &mut buf)?;
-    let (impl_resolved, impl_total, impl_unresolved) = implements::resolve_implements(store, &idx, &mut buf)?;
-    let (ext_resolved, ext_total, ext_unresolved) = extends::resolve_extends(store, &idx, &mut buf)?;
+    let (impl_resolved, impl_total, impl_unresolved) =
+        implements::resolve_implements(store, &idx, &mut buf)?;
+    let (ext_resolved, ext_total, ext_unresolved) =
+        extends::resolve_extends(store, &idx, &mut buf)?;
     let (uses_resolved, uses_total, uses_unresolved) =
         uses::resolve_uses(store, &idx, &file_imports, &mut buf)?;
 
@@ -402,9 +408,6 @@ fn is_resolution_edge(rel: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 pub(crate) type PhaseResult = Result<(u64, u64, Vec<UnresolvedRef>), String>;
-
-
-
 
 // ---------------------------------------------------------------------------
 // File-import map: file_id -> [import paths]

@@ -279,7 +279,10 @@ pub(crate) fn node_prop_order(
 }
 
 /// Edge prop order — schema-driven, only bind columns present in data.
-pub(crate) fn edge_prop_order(edges: &[PropEdge], schema: ColTypes) -> Vec<(&'static str, LogicalType)> {
+pub(crate) fn edge_prop_order(
+    edges: &[PropEdge],
+    schema: ColTypes,
+) -> Vec<(&'static str, LogicalType)> {
     let mut present: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for e in edges {
         for (k, _) in &e.2 {
@@ -396,7 +399,11 @@ pub(crate) fn build_edge_struct_rows(
 /// typed columns. Parsing preserves the security guarantees of cypher_str
 /// because the string payload is now passed as a typed parameter, not
 /// interpolated into Cypher text.
-pub(crate) fn literal_to_value(lit: Option<&str>, ty: &LogicalType, col: &str) -> Result<Value, String> {
+pub(crate) fn literal_to_value(
+    lit: Option<&str>,
+    ty: &LogicalType,
+    col: &str,
+) -> Result<Value, String> {
     let Some(raw) = lit else {
         return Ok(Value::Null(ty.clone()));
     };

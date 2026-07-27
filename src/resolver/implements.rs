@@ -23,7 +23,11 @@ use super::*;
 /// with a trait method, producing false edges and missing every declared
 /// impl). Mirrors resolve_extends and finally wires the
 /// macro_expansion.emit_implements table (Debug → std::fmt::Debug, …).
-pub(super) fn resolve_implements(store: &GraphStore, idx: &SymbolIndex, buf: &mut EdgeBuffer) -> PhaseResult {
+pub(super) fn resolve_implements(
+    store: &GraphStore,
+    idx: &SymbolIndex,
+    buf: &mut EdgeBuffer,
+) -> PhaseResult {
     let mut resolved = 0u64;
     let mut total = 0u64;
     let mut unresolved = Vec::new();

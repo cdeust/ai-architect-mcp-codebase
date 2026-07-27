@@ -6,7 +6,11 @@
 
 use super::*;
 
-pub(super) fn resolve_imports(store: &GraphStore, idx: &SymbolIndex, buf: &mut EdgeBuffer) -> PhaseResult {
+pub(super) fn resolve_imports(
+    store: &GraphStore,
+    idx: &SymbolIndex,
+    buf: &mut EdgeBuffer,
+) -> PhaseResult {
     let qr = store.execute_query("MATCH (i:Import) RETURN i.id, i.path, i.is_glob, i.language")?;
     let mut resolved = 0u64;
     let mut total = 0u64;
