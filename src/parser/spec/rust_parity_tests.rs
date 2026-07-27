@@ -2,21 +2,22 @@
 // `rust` walker at EXACT parity with the hand-written walker it replaced
 // (ADR-0055 phase 8, §5 step 3).
 //
-// The expected records below ARE the pre-migration `parse_rust_file` output
-// (full 7-tuple per node + full ref triples), captured mechanically from the
-// hand-written walker on this corpus BEFORE it was deleted: **61 nodes, 66 refs,
-// 0 parse errors**. Per-EdgeKind F1(new-vs-groundtruth) = 1.000. The assertion is
-// on the ORDERED sequence, not just the set, so it also pins emission order — a
-// stronger oracle than the set-only pins of phases 3-7, which matters here
-// because Rust is the language AP is written in and its own graph/eval corpora
-// key off these records.
+// The expected records below started as the pre-migration `parse_rust_file`
+// output (full 7-tuple per node + full ref triples), captured mechanically from
+// the hand-written walker on this corpus BEFORE it was deleted: 61 nodes, 66 refs,
+// 0 parse errors. The #130/#131 fixes changed that deliberately to **62 nodes,
+// 67 refs, 0 parse errors** (#131 adds one call site + its edge; #130 re-scopes a
+// method QN in place). The assertion is on the ORDERED sequence, not just the set,
+// so it also pins emission order — a stronger oracle than the set-only pins of
+// phases 3-7, which matters here because Rust is the language AP is written in and
+// its own graph/eval corpora key off these records.
 //
 // The exact-sequence assertion is the mutation oracle: it kills every walker
 // mutant that perturbs any emitted node, ref, property, line, or order.
 //
 // The corpus exercises every Rust concern the walker handles, plus the edge cases
-// that pin specific behaviors (each preserved for parity; the two that are
-// pre-existing defects are filed separately):
+// that pin specific behaviors (all at parity with the hand-written walker except
+// the two defects #130/#131 corrected, called out inline below):
 //   - `extern crate serde;` → an `Import` (`import:serde`) with an **`Imports`**
 //     edge to the crate, versus every `use` leaf's file-local **`Defines`** edge:
 //     one language, two import edge kinds.
@@ -43,17 +44,19 @@
 //     `Failed { code }`); a variant carries no visibility and no properties.
 //   - `trait Handler: Clone + Send` → `Trait` + a `supertraits` property + one
 //     `Extends` per supertrait, and its requirements as `Method`s receiver-typed
-//     to the trait. The defaulted `describe`'s body is NOT scanned — there is no
-//     `String::from` call site under `Handler::describe` (pre-existing gap,
-//     preserved; filed as a follow-up).
+//     to the trait. The defaulted `describe`'s body IS scanned (#131): its one
+//     call site `String::from` appears under `Handler::describe`, exactly as an
+//     `impl` method's body is scanned. A bodiless requirement (`handle`) still
+//     yields no call site — a signature has no body to scan.
 //   - `impl Config` / `impl Handler for Config` → NO node for the block; methods
 //     scope to `src/lib.rs::Config`, the trait impl adds `trait_name=Handler`, and
 //     method bodies ARE scanned. `impl<T> Wrapper<T>` scopes to
 //     `src/lib.rs::Wrapper<T>` — the `type` field text verbatim, generics
 //     included.
-//   - `impl Inner` inside `mod helpers` scopes to `src/lib.rs::Inner`, NOT
-//     `src/lib.rs::helpers::Inner` — the FILE scope regardless of the enclosing
-//     module (pre-existing defect, preserved; filed as a follow-up).
+//   - `impl Inner` inside `mod helpers` scopes to `src/lib.rs::helpers::Inner`
+//     (#130) — the enclosing MODULE's QN, the same QN the `Struct Inner` node
+//     declares, so the `Struct` and its `Method` no longer disagree on the owning
+//     type.
 //   - `async fn` → `is_async=true` on functions and impl methods; a bodiless
 //     trait requirement is reported `is_async=false` unconditionally.
 //   - `pub` / `pub(crate)` / `pub(super)` / (none) → the modifier's verbatim text,
@@ -129,8 +132,10 @@ fn rust_spec_output_is_exact_parity() {
 #[test]
 fn rust_parity_floor_counts_hold() {
     let r = parse();
-    assert_eq!(r.nodes.len(), 61, "pre-migration floor: 61 nodes");
-    assert_eq!(r.refs.len(), 66, "pre-migration floor: 66 refs");
+    // 61/66 pre-migration + 1 node/1 ref from #131 (the `describe` default body's
+    // one call site and its `Defines` edge); #130 re-scoped a QN in place (0 net).
+    assert_eq!(r.nodes.len(), 62, "floor: 62 nodes (61 + #131 call site)");
+    assert_eq!(r.refs.len(), 67, "floor: 67 refs (66 + #131 Defines edge)");
 }
 
 /// Negative assertions: behaviors the ground truth does NOT contain. Without
@@ -151,10 +156,12 @@ fn rust_parity_negatives_hold() {
                 .map(|(_, v)| v.as_str())
         })
         .collect();
-    // A trait requirement's default body is not scanned for calls.
+    // #131: a trait requirement's DEFAULT body IS now scanned for calls — the
+    // pin that used to assert its ABSENCE is inverted here, not deleted, so the
+    // behaviour stays asserted (acceptance criterion 4).
     assert!(
-        !callers.contains(&"src/lib.rs::Handler::describe"),
-        "a trait default body must stay unscanned (preserved pre-existing gap), \
+        callers.contains(&"src/lib.rs::Handler::describe"),
+        "a trait default body must be scanned for calls (#131), \
          got callers {callers:?}"
     );
     // An `impl` block emits no node of its own — only its methods.

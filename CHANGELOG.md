@@ -37,6 +37,28 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Rust extraction: module-scoped `impl` method QNs, and trait default-body
+  call scanning (issues #130, #131).** Two defects the phase-8 LangSpec migration
+  (#136) preserved for exact parity are now deliberately corrected:
+  - An `impl` block nested inside a module now scopes its methods to the enclosing
+    MODULE's QN, not the file path — `mod helpers { impl Inner { fn toggle } }`
+    yields `src/lib.rs::helpers::Inner::toggle` with its `HasMethod` edge from
+    `src/lib.rs::helpers::Inner`, the same QN the `Struct` node already declares.
+    Before, the `Struct` and its `Method` disagreed on the owning type's QN, so
+    `HasMethod` pointed at a QN no node owned and `get_context`/`get_impact` on a
+    module-scoped type missed its methods. This is how Python and Java already
+    scope nested definitions (#130). BREAKING for consumers of Rust method nodes
+    in modules: re-index any Rust repository — a graph built before this release
+    carries the old file-scoped method QNs.
+  - A trait method with a DEFAULT body now has that body scanned for calls exactly
+    as an `impl` method's body is — `fn describe(&self) -> String { String::from(..) }`
+    emits a `CallSite` keyed by `Handler::describe`. A bodiless requirement
+    (`fn handle(&self);`) still emits none. Before, every call a default trait
+    method made was invisible and `get_impact` on a function called only from a
+    trait default reported zero callers. This is the same asymmetry Swift #100
+    (unscanned computed-property getters) and TypeScript #142 (unscanned
+    object-literal bodies) closed, in a different grammar (#131).
+
 - **TypeScript extraction: bare type annotations, abstract methods, and
   object-literal call scanning (issues #140, #141, #142).** Three defects the
   phase-9 LangSpec migration (#144) preserved for exact parity are now

@@ -4,10 +4,10 @@
 // hardcoded `TS_*` constants.
 //
 // Rust fits none of the three existing shapes — not the class-model `walk_defs`
-// (its `impl` blocks emit no node and re-scope their methods to the FILE, not the
-// enclosing module), not the flat `clike` walker (it has modules, traits and
-// variants), and not the hybrid `cpp` walker (it has cross-sibling attribute
-// state and two import edge kinds). So it gets this dedicated walker and
+// (its `impl` blocks emit no node of their own and re-scope their methods onto a
+// receiver type they do not declare), not the flat `clike` walker (it has
+// modules, traits and variants), and not the hybrid `cpp` walker (cross-sibling
+// attribute state and two import edge kinds). So it gets this dedicated walker and
 // `walk_defs` delegates here whenever a `LangSpec` carries
 // `rust_family: Some(_)` — the #109 (`clike`) / #125 (`cpp`) precedent. The seven
 // languages riding `walk_defs`/`clike`/`cpp` stay untouched. Calls and imports
@@ -22,13 +22,13 @@
 // enums with variants, traits with requirements, `impl` blocks with methods —
 // lives in the sibling `rust_types` module (§4.1, 500-line cap).
 //
-// Two pre-existing extraction behaviors are preserved deliberately because parity
-// is the gate, and each is filed as a separate behavior-changing issue:
-//   - an `impl` inside a module scopes its methods to `{file_path}::{Type}`, not
-//     `{module_qn}::{Type}`, so `mod helpers { impl Inner { … } }` yields
-//     `file.rs::Inner::toggle`;
-//   - a trait requirement's default body is never scanned for calls, while an
-//     `impl` method's body is.
+// Two extraction defects the #60 phase-8 migration preserved for parity were
+// fixed deliberately afterward (behavior-changing, ground truth re-captured):
+//   - #130: an `impl` inside a module now scopes its methods to
+//     `{module_qn}::{Type}` (the QN the `Struct`/`Enum` node already uses), so
+//     `mod helpers { impl Inner { … } }` yields `file.rs::helpers::Inner::toggle`;
+//   - #131: a trait requirement's DEFAULT body is now scanned for calls exactly as
+//     an `impl` method's body is (a bodiless requirement stays call-free).
 
 use tree_sitter::Node;
 
@@ -130,7 +130,7 @@ pub(super) fn walk_rust_defs(specs: RustSpecs, ctx: &mut WalkCtx, parent: Node, 
         } else if kind_in(rf.trait_kinds, k) {
             rust_types::emit_trait(specs, ctx, child, scope);
         } else if kind_in(rf.impl_kinds, k) {
-            rust_types::emit_impl(specs, ctx, child);
+            rust_types::emit_impl(specs, ctx, child, scope);
         } else if kind_in(rf.constant_kinds, k) {
             emit_constant(specs.spec, ctx, child, scope);
         } else if kind_in(rf.macro_def_kinds, k) {

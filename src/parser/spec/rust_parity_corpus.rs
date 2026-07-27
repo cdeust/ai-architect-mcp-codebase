@@ -5,9 +5,14 @@
 // (§4.1). The assertions are in `rust_parity_tests`.
 //
 // data table (mechanically captured): the `expected_*` bodies below were printed
-// by a temporary harness running the PRE-migration `parse_rust_file` on `CORPUS`
-// — 61 nodes, 66 refs, 0 parse errors — not written by hand. What each record
-// pins, construct by construct, is documented in `rust_parity_tests`.
+// by a temporary harness running `parse_file` on `CORPUS` — 62 nodes, 67 refs,
+// 0 parse errors — not written by hand. The pre-migration capture was 61 nodes /
+// 66 refs; #130 and #131 changed it deliberately (behavior-changing fixes, not a
+// rebaseline): #131 ADDED one `CallSite` + one `Defines` under
+// `Handler::describe` (net +1 node, +1 ref), and #130 RE-SCOPED `Inner::toggle`'s
+// QN and its `HasMethod` edge from the file to the `helpers` module (0 net,
+// changed in place). What each record pins, construct by construct, is documented
+// in `rust_parity_tests`.
 
 pub(super) const CORPUS: &str = r##"extern crate serde;
 
@@ -155,6 +160,9 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Trait|Handler|src/lib.rs::Handler|44|49|pub|[(\"supertraits\", \"Clone,Send\")]",
         "Method|handle|src/lib.rs::Handler::handle|45|45||[(\"is_async\", \"false\"), (\"receiver_type\", \"src/lib.rs::Handler\")]",
         "Method|describe|src/lib.rs::Handler::describe|46|48||[(\"is_async\", \"false\"), (\"receiver_type\", \"src/lib.rs::Handler\")]",
+        // #131: the defaulted `describe`'s body is now scanned — `String::from` is
+        // its one call site, keyed by the method's own QN.
+        "CallSite|String::from|src/lib.rs::Handler::describe::call@47:8#893-916|47|47||[(\"callee_name\", \"String::from\"), (\"caller_qn\", \"src/lib.rs::Handler::describe\")]",
         "Method|new|src/lib.rs::Config::new|52|54|pub|[(\"is_async\", \"false\"), (\"receiver_type\", \"src/lib.rs::Config\")]",
         "Method|reload|src/lib.rs::Config::reload|56|59|pub(crate)|[(\"is_async\", \"true\"), (\"receiver_type\", \"src/lib.rs::Config\")]",
         "CallSite|validate|src/lib.rs::Config::reload::call@58:8#1109-1129|58|58||[(\"callee_name\", \"validate\"), (\"caller_qn\", \"src/lib.rs::Config::reload\")]",
@@ -180,7 +188,10 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "CallSite|input.trim|src/lib.rs::helpers::normalize::call@91:8#1695-1707|91|91||[(\"callee_name\", \"input.trim\"), (\"caller_qn\", \"src/lib.rs::helpers::normalize\")]",
         "Struct|Inner|src/lib.rs::helpers::Inner|94|96|pub|[]",
         "Field|flag|src/lib.rs::helpers::Inner::flag|95|95|pub|[(\"type_annotation\", \"bool\")]",
-        "Method|toggle|src/lib.rs::Inner::toggle|99|101||[(\"is_async\", \"false\"), (\"receiver_type\", \"src/lib.rs::Inner\")]",
+        // #130: a module-nested `impl`'s method is now scoped to the module, so
+        // its QN and receiver_type carry `helpers::` and match the `Struct` node's
+        // own QN (`src/lib.rs::helpers::Inner`).
+        "Method|toggle|src/lib.rs::helpers::Inner::toggle|99|101||[(\"is_async\", \"false\"), (\"receiver_type\", \"src/lib.rs::helpers::Inner\")]",
         "Module|declared_elsewhere|src/lib.rs::declared_elsewhere|105|105||[]",
     ]
 }
@@ -266,6 +277,13 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "HasMethod",
             "src/lib.rs::Handler",
             "src/lib.rs::Handler::describe",
+        ),
+        // #131: the call site `String::from` inside `describe`'s default body,
+        // owned by the method via a `Defines` edge exactly as an impl method's is.
+        (
+            "Defines",
+            "src/lib.rs::Handler::describe",
+            "src/lib.rs::Handler::describe::call@47:8#893-916",
         ),
         ("HasMethod", "src/lib.rs::Config", "src/lib.rs::Config::new"),
         (
@@ -376,10 +394,12 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "src/lib.rs::helpers::Inner",
             "src/lib.rs::helpers::Inner::flag",
         ),
+        // #130: the `HasMethod` edge now originates from the module-scoped
+        // receiver QN the `Struct` node declares, not the file-scoped one.
         (
             "HasMethod",
-            "src/lib.rs::Inner",
-            "src/lib.rs::Inner::toggle",
+            "src/lib.rs::helpers::Inner",
+            "src/lib.rs::helpers::Inner::toggle",
         ),
         ("Defines", "src/lib.rs", "src/lib.rs::declared_elsewhere"),
     ]

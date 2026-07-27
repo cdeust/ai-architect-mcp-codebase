@@ -214,8 +214,13 @@ pub(super) fn emit_trait(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope:
 
 /// Emits one `Method` + `HasMethod` per trait requirement (a bodiless
 /// `function_signature_item` or a defaulted `function_item`), receiver-typed to
-/// the trait. A requirement's body is NOT scanned for calls — the hand-written
-/// walker never did, and parity is the gate.
+/// the trait, and scans a DEFAULT body for calls exactly as `emit_impl_method`
+/// does (#131). A bodiless `function_signature_item` has no `body` field and
+/// Rust's `function_body_kinds` is empty, so `call_scan_of` returns `None` for it
+/// — a requirement without a default stays call-free, and a signature's parameter
+/// defaults are never scanned. This is the same asymmetry Swift #100 (unscanned
+/// computed-property getters) and TS #142 (unscanned object-literal bodies)
+/// closed, in a different grammar.
 fn emit_trait_methods(specs: RustSpecs, ctx: &mut WalkCtx, trait_node: Node, trait_qn: &str) {
     let (spec, rf) = (specs.spec, specs.rf);
     let body = match decl_list_body(specs, trait_node) {
@@ -254,20 +259,29 @@ fn emit_trait_methods(specs: RustSpecs, ctx: &mut WalkCtx, trait_node: Node, tra
                 edge_from: trait_qn,
             },
         );
+        // A defaulted requirement (`function_item`) has a `body`, so its calls
+        // reach the graph keyed by the method's own QN; a bodiless requirement
+        // (`function_signature_item`) yields `None` here and stays call-free.
+        if let Some(body) = call_scan_of(spec, child) {
+            calls::walk_calls(spec, ctx, body, &mqn);
+        }
     }
 }
 
 /// Walks an `impl` block. The block itself emits NO node: its methods attach to
-/// `{file_path}::{type_text}` — the FILE scope even when the `impl` sits inside a
-/// module, and the type text verbatim including generics (`Wrapper<T>`).
-pub(super) fn emit_impl(specs: RustSpecs, ctx: &mut WalkCtx, node: Node) {
+/// `{scope}::{type_text}` — the QN of the enclosing scope (the module QN when the
+/// `impl` sits inside a module, the file path at file level), matching the QN the
+/// `Struct`/`Enum` node itself already uses (#130). The type text is verbatim
+/// including generics (`Wrapper<T>`), so a nested generic impl composes to
+/// `{module_qn}::Wrapper<T>`.
+pub(super) fn emit_impl(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope: &str) {
     let (spec, rf) = (specs.spec, specs.rf);
     let impl_type = node_field_text(ctx.source, node, spec.type_field);
     if impl_type.is_empty() {
         return;
     }
     let trait_name = node_field_text(ctx.source, node, rf.trait_field);
-    let receiver_qn = qual(ctx.file_path, &impl_type);
+    let receiver_qn = qual(scope, &impl_type);
     let body = match decl_list_body(specs, node) {
         Some(b) => b,
         None => return,

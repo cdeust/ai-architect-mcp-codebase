@@ -282,14 +282,163 @@ pub trait Flusher {
         "false",
         "control: a non-async defaulted trait method"
     );
-    // And the #131 gap stays pinned: the defaulted body is still not scanned, so
-    // `cleanup()` yields no call site. Without this, a future fix to #131 could
-    // land silently.
+    // #131: the defaulted `drain` body IS now scanned, so `cleanup()` yields a
+    // call site keyed by `drain`'s own QN; the bodiless `flush` requirement yields
+    // none. The pin is inverted here, not deleted.
+    let cleanup = result
+        .nodes
+        .iter()
+        .find(|n| n.label == "CallSite" && n.name == "cleanup")
+        .expect("a defaulted trait body must be scanned for calls (#131)");
+    assert_eq!(
+        cleanup
+            .properties
+            .iter()
+            .find(|(k, _)| k == "caller_qn")
+            .map(|(_, v)| v.as_str()),
+        Some("t.rs::Flusher::drain"),
+        "the call site is keyed by the defaulted method's own QN"
+    );
     assert!(
-        !result
+        !result.nodes.iter().any(|n| n.label == "CallSite"
+            && n.properties
+                .iter()
+                .any(|(k, v)| k == "caller_qn" && v == "t.rs::Flusher::flush")),
+        "a bodiless requirement (`flush`) must yield no call site (#131)"
+    );
+}
+
+/// #130: a module-nested `impl`'s methods scope to the enclosing MODULE's QN, and
+/// that QN is IDENTICAL to the one the type's own `Struct`/`Enum` node declares —
+/// so `HasMethod` can never again point at a QN no node owns (acceptance
+/// criterion 4). A file-level impl is unchanged (criterion 2), and a nested
+/// GENERIC impl composes the module prefix with the verbatim generic type text
+/// (criterion 3).
+#[test]
+fn rust_module_nested_impl_scopes_to_the_module_qn() {
+    let src = r#"
+struct Config;
+impl Config {
+    fn new() -> Self { Config }
+}
+pub mod helpers {
+    pub struct Inner { pub flag: bool }
+    impl Inner {
+        fn toggle(&mut self) { self.flag = !self.flag; }
+    }
+    pub struct Wrapper<T>(T);
+    impl<T> Wrapper<T> {
+        fn get(&self) -> &T { &self.0 }
+    }
+}
+"#;
+    let result = parse_file(src, "src/lib.rs", Language::Rust).expect("parse");
+    assert_eq!(result.parse_errors, 0, "corpus must parse clean");
+
+    // The owning type's QN is read off its own definition node, then every one of
+    // its members' receiver QN and its `HasMethod` source are asserted EQUAL to it
+    // — the two can no longer drift.
+    let type_qn = |name: &str| -> String {
+        result
             .nodes
             .iter()
-            .any(|n| n.label == "CallSite" && n.name == "cleanup"),
-        "a trait default body must stay unscanned (preserved gap, issue #131)"
+            .find(|n| (n.label == "Struct" || n.label == "Enum") && n.name == name)
+            .unwrap_or_else(|| panic!("no type named {name}"))
+            .qualified_name
+            .clone()
+    };
+    let assert_owned = |method: &str, owner_qn: &str, expect_method_qn: &str| {
+        let m = result
+            .nodes
+            .iter()
+            .find(|n| n.label == "Method" && n.name == method)
+            .unwrap_or_else(|| panic!("no method named {method}"));
+        assert_eq!(m.qualified_name, expect_method_qn, "{method} QN");
+        let receiver = m
+            .properties
+            .iter()
+            .find(|(k, _)| k == "receiver_type")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            receiver,
+            Some(owner_qn),
+            "{method} receiver_type == owner QN"
+        );
+        assert!(
+            result.refs.iter().any(|r| r.kind == "HasMethod"
+                && r.from_qualified_name == owner_qn
+                && r.to_qualified_name == expect_method_qn),
+            "HasMethod edge from the owner QN {owner_qn} to {expect_method_qn}"
+        );
+    };
+
+    // File-level impl: unchanged.
+    assert_eq!(type_qn("Config"), "src/lib.rs::Config");
+    assert_owned("new", "src/lib.rs::Config", "src/lib.rs::Config::new");
+    // Module-nested plain impl: scoped to the module, equal to the Struct's QN.
+    assert_eq!(type_qn("Inner"), "src/lib.rs::helpers::Inner");
+    assert_owned(
+        "toggle",
+        "src/lib.rs::helpers::Inner",
+        "src/lib.rs::helpers::Inner::toggle",
+    );
+    // Module-nested generic impl: module prefix + verbatim generic type text.
+    assert_eq!(type_qn("Wrapper"), "src/lib.rs::helpers::Wrapper");
+    assert_owned(
+        "get",
+        "src/lib.rs::helpers::Wrapper<T>",
+        "src/lib.rs::helpers::Wrapper<T>::get",
+    );
+}
+
+/// #131: nested constructs inside a defaulted trait method's body are reached on
+/// exactly the same terms as inside an `impl` method — a closure body, a macro
+/// invocation (callee keeps its `!`), and a function-value argument (#87) each
+/// emit their call site, all keyed by the defaulted method's own QN
+/// (acceptance criterion 3).
+#[test]
+fn rust_trait_default_body_reaches_nested_constructs() {
+    let src = r#"
+macro_rules! shout { ($x:expr) => { $x }; }
+fn run_all(check: fn(&str) -> bool, arg: &str) -> bool { check(arg) }
+fn validate(s: &str) -> bool { !s.is_empty() }
+pub trait Handler {
+    fn handle(&self, input: &str) -> bool;
+    fn describe(&self, input: &str) -> bool {
+        let f = |s: &str| s.len();
+        shout!(f(input));
+        run_all(validate, input)
+    }
+}
+"#;
+    let result = parse_file(src, "src/lib.rs", Language::Rust).expect("parse");
+    assert_eq!(result.parse_errors, 0, "corpus must parse clean");
+
+    let callee_under = |caller: &str| -> Vec<&str> {
+        result
+            .nodes
+            .iter()
+            .filter(|n| n.label == "CallSite")
+            .filter(|n| {
+                n.properties
+                    .iter()
+                    .any(|(k, v)| k == "caller_qn" && v == caller)
+            })
+            .map(|n| n.name.as_str())
+            .collect()
+    };
+    let calls = callee_under("src/lib.rs::Handler::describe");
+    // Closure body call, macro invocation (callee keeps `!`), and the two
+    // function-value-argument sites of `run_all(validate, input)` (#87).
+    for expected in ["s.len", "shout!", "run_all", "validate", "input"] {
+        assert!(
+            calls.contains(&expected),
+            "defaulted body must reach {expected}, got {calls:?}"
+        );
+    }
+    // The bodiless requirement `handle` still yields nothing.
+    assert!(
+        callee_under("src/lib.rs::Handler::handle").is_empty(),
+        "a bodiless requirement yields no call site (#131)"
     );
 }
