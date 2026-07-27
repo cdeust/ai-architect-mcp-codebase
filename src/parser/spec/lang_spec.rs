@@ -63,7 +63,6 @@ pub(crate) struct DialectSpec {
     pub ts_language: fn() -> TsLanguage,
 }
 
-
 /// Table-driven description of one language's structural node kinds.
 ///
 /// Consumed by the generic walkers (`walk_defs` / `walk_calls` /

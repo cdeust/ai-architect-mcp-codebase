@@ -31,6 +31,8 @@ mod typescript;
 mod walkers;
 
 #[cfg(test)]
+mod c_parity_expected;
+#[cfg(test)]
 mod c_parity_tests;
 #[cfg(test)]
 mod cpp_parity_tests;
@@ -39,7 +41,11 @@ mod embedded_tests;
 #[cfg(test)]
 mod guard;
 #[cfg(test)]
+mod guard_refs;
+#[cfg(test)]
 mod java_parity_tests;
+#[cfg(test)]
+mod kotlin_parity_expected;
 #[cfg(test)]
 mod kotlin_parity_tests;
 #[cfg(test)]
@@ -50,6 +56,8 @@ mod parity_tests;
 mod python_parity_tests;
 #[cfg(test)]
 mod shallow_tests;
+#[cfg(test)]
+mod swift_parity_expected;
 #[cfg(test)]
 mod swift_parity_tests;
 #[cfg(test)]

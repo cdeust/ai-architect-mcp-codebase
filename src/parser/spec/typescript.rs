@@ -442,6 +442,7 @@ pub(crate) static TS_SPEC: LangSpec = LangSpec {
     conventions: &TS_CONVENTIONS,
     c_family: None,
     cpp_family: None,
+    objc_family: None,
     ts_family: Some(&TS_FAMILY),
     dialect: Some(&TSX_DIALECT),
 };

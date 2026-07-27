@@ -26,7 +26,8 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::lang_spec::{CppFamilySpec, LangSpec};
+use super::families::CppFamilySpec;
+use super::lang_spec::LangSpec;
 use crate::parser::{node_text, qual, Language};
 
 /// The tree-sitter-cpp field naming a call expression's callee. Used only by the

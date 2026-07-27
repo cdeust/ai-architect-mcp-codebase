@@ -32,7 +32,8 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::lang_spec::{LangSpec, ObjcFamilySpec};
+use super::families::ObjcFamilySpec;
+use super::lang_spec::LangSpec;
 use crate::parser::{node_field_text, node_text, qual, Language};
 
 /// The `call_expression` field naming the callee.
@@ -279,4 +280,8 @@ pub(crate) static OBJC_SPEC: LangSpec = LangSpec {
     c_family: None,
     cpp_family: None,
     objc_family: Some(&OBJC_FAMILY),
+    ts_family: None,
+    // One grammar per Objective-C row: no extension-selected dialect. (`.m`,
+    // `.mm` and `.h` all parse with tree-sitter-objc.)
+    dialect: None,
 };

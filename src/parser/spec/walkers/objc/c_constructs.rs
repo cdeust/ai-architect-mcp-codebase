@@ -15,7 +15,8 @@
 
 use tree_sitter::Node;
 
-use super::super::super::lang_spec::{LangSpec, ObjcFamilySpec};
+use super::super::super::families::ObjcFamilySpec;
+use super::super::super::lang_spec::LangSpec;
 use super::super::{end_line_of, kind_in, line_of, WalkCtx};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM,
