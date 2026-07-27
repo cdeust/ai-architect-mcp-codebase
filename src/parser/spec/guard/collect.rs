@@ -1,24 +1,16 @@
-// parser::spec::guard — the spec-validation guard (ADR-0055 Consequences,
-// "the single most important guard in this ADR").
-//
-// A wrong or stale node-kind string in a `LangSpec` does not error at runtime:
-// the walker simply never matches that node, so symbols are silently dropped
-// and the loss surfaces only as an F1 dip in `graph_accuracy` — and only if a
-// fixture happens to cover the construct. This guard converts that silent-drop
-// failure into a loud test failure: it loads each migrated grammar's
-// `NODE_TYPES` (the very `node-types.json` cited as the source for every
-// node-kind string) and asserts every kind and field name in the spec is real
-// for that grammar. It makes the §8 source citation executable.
+// parser::spec::guard::collect — the spec/shallow-row ENUMERATORS the guard
+// asserts over: every node-kind string and field name a LangSpec / ShallowSpec
+// (and its family sub-tables) references, each tagged with its source field for
+// a legible failure message. Split out of `guard` so the enumerators and the
+// #[test] assertions each stay under the §4.1 500-line cap. Pure move.
 
-use super::guard_grammar::{node_types_json, parse_node_types};
-use super::lang_spec::{DeclaratorNaming, LangSpec};
-use super::registry::{MIGRATED_SPECS, SHALLOW_SPECS};
-use super::shallow::ShallowSpec;
+use super::super::lang_spec::{DeclaratorNaming, LangSpec};
+use super::super::shallow::ShallowSpec;
 
 /// Every node-kind string a `DeclaratorNaming` sub-table references, tagged with
 /// its path. One helper for both C-family rows, so adding a family cannot forget
 /// to validate its naming data (issues #106, #123).
-fn naming_node_kinds(
+pub(super) fn naming_node_kinds(
     prefix: &'static str,
     naming: &DeclaratorNaming,
 ) -> Vec<(&'static str, String)> {
@@ -38,7 +30,7 @@ fn naming_node_kinds(
 /// Every node-kind string a spec references (slices + options + value name +
 /// embedded host kinds), each tagged with the field it came from for a
 /// legible failure message.
-fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
+pub(super) fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
     let mut out: Vec<(&'static str, String)> = Vec::new();
     let slices: &[(&'static str, &[&'static str])] = &[
         ("skip_node_kinds", spec.skip_node_kinds),
@@ -306,7 +298,7 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
 /// always-present fields are validated unconditionally; the language-optional
 /// ones (`receiver_field`, `import_path_field`, `extends_field`,
 /// `value_name_field`, `value_type_field`) only when the language sets them.
-fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
+pub(super) fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
     let mut out = vec![
         ("name_field", spec.name_field.to_string()),
         ("type_field", spec.type_field.to_string()),
@@ -379,7 +371,7 @@ fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
 
 /// The field names a `DeclaratorNaming` sub-table references, tagged with its
 /// path. One helper for both C-family rows (mirrors `naming_node_kinds`).
-fn naming_field_names(
+pub(super) fn naming_field_names(
     prefix: &'static str,
     naming: &DeclaratorNaming,
 ) -> Vec<(&'static str, String)> {
@@ -392,7 +384,7 @@ fn naming_field_names(
 /// Every node-kind string a shallow row references, tagged with its field.
 /// Mirrors `spec_node_kinds` for the ADR-0056 path so a shallow language gets
 /// the same executable §8 citation as a deep one.
-fn shallow_node_kinds(spec: &ShallowSpec) -> Vec<(&'static str, String)> {
+pub(super) fn shallow_node_kinds(spec: &ShallowSpec) -> Vec<(&'static str, String)> {
     let slices: &[(&'static str, &[&'static str])] = &[
         ("function_node_kinds", spec.function_node_kinds),
         ("method_node_kinds", spec.method_node_kinds),
@@ -411,7 +403,7 @@ fn shallow_node_kinds(spec: &ShallowSpec) -> Vec<(&'static str, String)> {
 
 /// Every field name a shallow row references. `name_field` is always read;
 /// `body_field` and `callee_field` only when the row sets them.
-fn shallow_field_names(spec: &ShallowSpec) -> Vec<(&'static str, String)> {
+pub(super) fn shallow_field_names(spec: &ShallowSpec) -> Vec<(&'static str, String)> {
     let mut out = vec![("name_field", spec.name_field.to_string())];
     let optional: &[(&'static str, Option<&'static str>)] = &[
         ("body_field", spec.body_field),
@@ -423,99 +415,4 @@ fn shallow_field_names(spec: &ShallowSpec) -> Vec<(&'static str, String)> {
         }
     }
     out
-}
-
-#[test]
-fn every_shallow_spec_node_kind_is_real_for_its_grammar() {
-    let mut failures: Vec<String> = Vec::new();
-    for spec in SHALLOW_SPECS {
-        let (kinds, fields) = parse_node_types(node_types_json(spec.language));
-        for (field, kind) in shallow_node_kinds(spec) {
-            if !kinds.contains(&kind) {
-                failures.push(format!(
-                    "{:?}.{field}: node kind {kind:?} is NOT in the grammar's node-types.json",
-                    spec.language
-                ));
-            }
-        }
-        for (field, name) in shallow_field_names(spec) {
-            if !fields.contains(&name) {
-                failures.push(format!(
-                    "{:?}.{field}: field name {name:?} is NOT a field in the grammar's node-types.json",
-                    spec.language
-                ));
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "shallow spec-validation guard found stale/wrong rows:\n{}",
-        failures.join("\n")
-    );
-}
-
-/// The guard must actually inspect something — an empty `SHALLOW_SPECS` would
-/// make the test above vacuously green, which is the failure mode this repo has
-/// already paid for twice (a static check passing against a file that no longer
-/// holds the code).
-#[test]
-fn shallow_guard_is_not_vacuous() {
-    assert!(
-        !SHALLOW_SPECS.is_empty(),
-        "SHALLOW_SPECS is empty: every_shallow_spec_node_kind_is_real_for_its_grammar \
-         would pass without checking anything"
-    );
-    let checked: usize = SHALLOW_SPECS
-        .iter()
-        .map(|s| shallow_node_kinds(s).len())
-        .sum();
-    assert!(
-        checked > 0,
-        "no shallow node kinds were validated; the guard is asserting nothing"
-    );
-}
-
-#[test]
-fn every_spec_node_kind_is_real_for_its_grammar() {
-    let mut failures: Vec<String> = Vec::new();
-    for spec in MIGRATED_SPECS {
-        let (kinds, fields) = parse_node_types(node_types_json(spec.language));
-
-        for (field, kind) in spec_node_kinds(spec) {
-            if !kinds.contains(&kind) {
-                failures.push(format!(
-                    "{:?}.{field}: node kind {kind:?} is NOT in the grammar's node-types.json",
-                    spec.language
-                ));
-            }
-        }
-        for (field, name) in spec_field_names(spec) {
-            if !fields.contains(&name) {
-                failures.push(format!(
-                    "{:?}.{field}: field name {name:?} is NOT a field in the grammar's node-types.json",
-                    spec.language
-                ));
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "spec-validation guard found stale/wrong spec rows:\n{}",
-        failures.join("\n")
-    );
-}
-
-#[test]
-fn guard_rejects_a_bogus_node_kind() {
-    // Proves the guard actually fails on a wrong row (kills the mutant where
-    // the guard vacuously passes). tree-sitter-go has no `not_a_real_kind`.
-    let (kinds, _fields) = parse_node_types(tree_sitter_go::NODE_TYPES);
-    assert!(
-        !kinds.contains("not_a_real_node_kind"),
-        "sanity: bogus kind must be absent"
-    );
-    assert!(
-        kinds.contains("function_declaration"),
-        "sanity: real Go kind must be present"
-    );
 }
