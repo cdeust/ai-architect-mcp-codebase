@@ -111,3 +111,59 @@ fn ts_extension_keeps_the_typescript_grammar() {
         "a dotless path must still extract symbols"
     );
 }
+
+/// The full export-visibility decision table, including the degraded parses.
+///
+/// `decl_visibility` recognizes exactly ONE export signal: the enclosing
+/// `export_statement` wrapper. The hand-written walker had a second — "my
+/// previous sibling is the `export` token" — which mutation testing flagged as
+/// unreachable; forcing it to `false` changed nothing on any of these seven
+/// inputs, clean or degraded, so it was removed as dead code (§12.1 / §9). This
+/// test is what the redundant branch was obscuring, and it is the regression
+/// pin for the removal: every row below is the pre-migration walker's answer.
+///
+/// The two rows that make the table non-obvious:
+/// - `export\nfunction b() {}` is NOT exported. Automatic semicolon insertion
+///   ends the `export` statement at the newline, so `b` is a separate top-level
+///   declaration with no wrapper — and the old walker agreed (its sibling check
+///   also saw no `export` sibling, because `b` is a child of the program).
+/// - `export export function d() {}` IS exported (with one parse error): the
+///   recovery still nests `d` under an `export_statement`.
+#[test]
+fn export_visibility_decision_table() {
+    // (source, name, expected visibility, expected parse-error count)
+    let cases: &[(&str, &str, &str, u32)] = &[
+        ("export function a() {}\n", "a", "pub", 0),
+        // ASI splits the statement: `b` is NOT exported.
+        ("export\nfunction b() {}\n", "b", "", 0),
+        ("export ; function c() {}\n", "c", "", 0),
+        // Degraded, but the declaration still lands under the wrapper.
+        ("export export function d() {}\n", "d", "pub", 1),
+        ("export default class E {}\n", "E", "pub", 0),
+        ("function plain() {}\n", "plain", "", 0),
+        ("export const k = 1;\n", "k", "pub", 0),
+    ];
+    for (src, name, expected_visibility, expected_errors) in cases {
+        let r = parse_ts(src, "p.ts");
+        assert_eq!(
+            r.parse_errors, *expected_errors,
+            "{src:?}: parse-error count changed"
+        );
+        let node = r
+            .nodes
+            .iter()
+            .find(|n| n.name == *name)
+            .unwrap_or_else(|| panic!("{src:?}: {name} was not extracted at all"));
+        assert_eq!(
+            node.visibility, *expected_visibility,
+            "{src:?}: {name} visibility"
+        );
+    }
+    // A declaration inside a block statement is not a top-level definition at
+    // all — the walker never descends into one (negative control).
+    let nested = parse_ts("{ function h() {} }\n", "p.ts");
+    assert!(
+        !nested.nodes.iter().any(|n| n.name == "h"),
+        "a function inside a block statement must not be extracted"
+    );
+}

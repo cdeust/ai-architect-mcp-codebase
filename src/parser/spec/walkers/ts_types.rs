@@ -42,7 +42,7 @@ pub(super) fn emit_class(
         qualified_name: qn.clone(),
         start_line: line_of(node),
         end_line: end_line_of(node),
-        visibility: decl_visibility(spec, tf, node, &name, exported),
+        visibility: decl_visibility(spec, &name, exported),
         properties: Vec::new(),
     });
     ctx.refs.push(ExtractedRef {
@@ -238,7 +238,7 @@ pub(super) fn emit_interface(
         qualified_name: qn.clone(),
         start_line: line_of(node),
         end_line: end_line_of(node),
-        visibility: decl_visibility(spec, tf, node, &name, exported),
+        visibility: decl_visibility(spec, &name, exported),
         properties: Vec::new(),
     });
     ctx.refs.push(ExtractedRef {
@@ -334,7 +334,7 @@ pub(super) fn emit_enum(
         qualified_name: qn.clone(),
         start_line: line_of(node),
         end_line: end_line_of(node),
-        visibility: decl_visibility(spec, tf, node, &name, exported),
+        visibility: decl_visibility(spec, &name, exported),
         properties: Vec::new(),
     });
     ctx.refs.push(ExtractedRef {
@@ -342,6 +342,21 @@ pub(super) fn emit_enum(
         from_qualified_name: scope.to_string(),
         to_qualified_name: qn.clone(),
     });
+    // mutation note (§12): the `kind_in(tf.enum_body_kinds, …)` guard → `true`
+    // mutant SURVIVES and is a proven EQUIVALENT. tree-sitter-typescript 0.23.2
+    // constrains `enum_declaration.body` to exactly one type (`enum_body`), so
+    // the guard can never reject a present body; and were it relaxed, iterating a
+    // non-enum body would match none of `enum_member_kinds`/
+    // `enum_bare_member_kinds` and emit nothing anyway. The same argument holds
+    // for the `class_body_kinds` / `interface_body_kinds` guards below and in
+    // `emit_class` — each grammar field admits a single body type. The guards are
+    // kept as faithful copies of the hand-written walker's `body.kind() != …`
+    // checks and as the seam a future ECMAScript dialect with a second body kind
+    // would need. Not a coverage gap.
+    // source: tree-sitter-typescript 0.23.2 node-types.json —
+    // enum_declaration.body: [enum_body]; class_declaration.body /
+    // abstract_class_declaration.body: [class_body];
+    // interface_declaration.body: [interface_body].
     let body = match body_of(spec, node) {
         Some(b) if kind_in(tf.enum_body_kinds, b.kind()) => b,
         _ => return,
@@ -398,7 +413,7 @@ pub(super) fn emit_type_alias(
         qualified_name: qn.clone(),
         start_line: line_of(node),
         end_line: end_line_of(node),
-        visibility: decl_visibility(spec, tf, node, &name, exported),
+        visibility: decl_visibility(spec, &name, exported),
         properties: vec![(
             "target_type".to_string(),
             node_field_text(ctx.source, node, tf.value_field),

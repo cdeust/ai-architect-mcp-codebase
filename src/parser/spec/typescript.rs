@@ -361,11 +361,14 @@ static TS_FAMILY: TsFamilySpec = TsFamilySpec {
     type_alias_kinds: &["type_alias_declaration"],
     value_decl_kinds: &["lexical_declaration", "variable_declaration"],
     export_stmt_kinds: &["export_statement"],
-    export_keyword_kind: "export",
     class_body_kinds: &["class_body"],
     method_kinds: &["method_definition"],
     field_kinds: &["public_field_definition"],
-    interface_body_kinds: &["interface_body", "object_type"],
+    // Only `interface_body`: tree-sitter-typescript 0.23.2 constrains
+    // `interface_declaration.body` to that single type. The hand-written walker
+    // also accepted `object_type` here, which the grammar can never put in that
+    // field — dead data, dropped rather than carried (§9).
+    interface_body_kinds: &["interface_body"],
     method_signature_kinds: &["method_signature"],
     property_signature_kinds: &["property_signature"],
     enum_body_kinds: &["enum_body"],

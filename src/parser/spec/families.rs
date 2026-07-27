@@ -222,16 +222,12 @@ pub(crate) struct TsFamilySpec {
     /// (`const`/`let`) and `variable_declaration` (`var`).
     pub value_decl_kinds: &'static [&'static str],
     /// The export-wrapper kinds whose declaration children are walked as
-    /// EXPORTED (TS `export_statement`). Import statements are deliberately not
-    /// dispatched inside the wrapper — the hand-written walker did not either.
+    /// EXPORTED (TS `export_statement`) — the ONLY export signal, since the
+    /// walker's second one (an `export` previous sibling) proved unreachable and
+    /// was removed (see `walkers::ts::decl_visibility`). Import statements are
+    /// deliberately not dispatched inside the wrapper — the hand-written walker
+    /// did not either.
     pub export_stmt_kinds: &'static [&'static str],
-    /// The `export` token kind: a declaration whose PREVIOUS SIBLING is this
-    /// kind is exported (`export function f(){}`), which is how a declaration
-    /// inside an `export_statement` is marked without the wrapper flag. NOT
-    /// consulted for `variable_declarator`s (see the type doc, point 1).
-    /// source: tree-sitter-typescript 0.23.2 — an anonymous token, present in
-    /// both dialects' node-types.json.
-    pub export_keyword_kind: &'static str,
     /// The class-body kinds a class's `body_field` must have for its members to
     /// be walked (TS `class_body`).
     pub class_body_kinds: &'static [&'static str],

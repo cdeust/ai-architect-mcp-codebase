@@ -14,12 +14,11 @@
 // the SHARED generic walkers (`calls::walk_calls`, `imports::walk_imports`) via
 // the conventions — only the definition shapes are TypeScript-specific.
 //
-// `exported` is threaded down from the `export_statement` wrapper. It is the
-// ONLY signal for a `variable_declarator` (`export const f = () => {}`), while a
-// function/class/interface/enum/type-alias ALSO counts as exported when its
-// previous sibling is the `export` token. That asymmetry is the hand-written
-// walker's (`extract_variable_declarator` never called `has_export_keyword`),
-// and parity preserves it.
+// `exported` is threaded down from the `export_statement` wrapper and is the
+// ONLY export signal — see `decl_visibility` for why the hand-written walker's
+// second signal (an `export` previous sibling) is dead and was dropped, and
+// `ts_dialect_tests::export_visibility_decision_table` for the behavior that
+// pins it.
 
 use tree_sitter::Node;
 
@@ -77,7 +76,7 @@ fn emit_declaration(
 ) -> bool {
     let k = node.kind();
     if kind_in(tf.func_decl_kinds, k) {
-        emit_function(spec, tf, ctx, node, scope, exported);
+        emit_function(spec, ctx, node, scope, exported);
     } else if kind_in(tf.class_decl_kinds, k) {
         emit_class(spec, tf, ctx, node, scope, exported);
     } else if kind_in(tf.interface_decl_kinds, k) {
@@ -94,28 +93,25 @@ fn emit_declaration(
     true
 }
 
-/// The visibility of a top-level declaration: `pub` when the enclosing wrapper
-/// marked it exported OR its previous sibling is the `export` token, else the
-/// conventions' name-based rule (empty for TypeScript). The sibling check is
-/// what makes `export function f(){}` public without the wrapper flag, and what
-/// `export default function f(){}` (whose previous sibling is `default`) needs
-/// the wrapper flag for.
-pub(super) fn decl_visibility(
-    spec: &LangSpec,
-    tf: &TsFamilySpec,
-    node: Node,
-    name: &str,
-    exported: bool,
-) -> String {
-    if exported || has_export_sibling(tf, node) {
+/// The visibility of a top-level declaration: `pub` when the enclosing
+/// `export_statement` marked it exported, else the conventions' name-based rule
+/// (empty for TypeScript).
+///
+/// The hand-written walker had a SECOND export signal — "my previous sibling is
+/// the `export` token" — and this walker copied it, until mutation testing
+/// showed the branch is not observable (§12.1: a surviving mutant that marks
+/// dead code is removed, not tested). Forcing it to `false` changed nothing on
+/// the parity corpus NOR on seven deliberately degraded inputs, because the
+/// declaration a stray `export` precedes is still a child of the wrapper that
+/// already passes `exported = true`. That decision table is now pinned by
+/// `ts_dialect_tests::export_visibility_decision_table`, which is what the
+/// redundant branch was obscuring: `export\nfunction b(){}` is NOT exported
+/// (ASI splits it), while the degraded `export export function d(){}` IS.
+pub(super) fn decl_visibility(spec: &LangSpec, name: &str, exported: bool) -> String {
+    if exported {
         return "pub".to_string();
     }
     spec.conventions.visibility_of(name)
-}
-
-fn has_export_sibling(tf: &TsFamilySpec, node: Node) -> bool {
-    node.prev_sibling()
-        .is_some_and(|prev| prev.kind() == tf.export_keyword_kind)
 }
 
 /// The visibility of a class/interface member: the first `visibility_modifier_kinds`
@@ -140,14 +136,7 @@ pub(super) fn body_of<'t>(spec: &LangSpec, node: Node<'t>) -> Option<Node<'t>> {
 /// Emits a `Function` + `Defines`, then scans its body for calls. The QN comes
 /// from the conventions' `def_qn` (TypeScript: `{scope}::{name}`, NOT
 /// deduplicated) and `is_async` from `function_props`.
-fn emit_function(
-    spec: &LangSpec,
-    tf: &TsFamilySpec,
-    ctx: &mut WalkCtx,
-    node: Node,
-    scope: &str,
-    exported: bool,
-) {
+fn emit_function(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, exported: bool) {
     let name = node_field_text(ctx.source, node, spec.name_field);
     if name.is_empty() {
         return;
@@ -161,7 +150,7 @@ fn emit_function(
         qualified_name: qn.clone(),
         start_line: line_of(node),
         end_line: end_line_of(node),
-        visibility: decl_visibility(spec, tf, node, &name, exported),
+        visibility: decl_visibility(spec, &name, exported),
         properties: spec.conventions.function_props(ctx.source, node),
     });
     ctx.refs.push(ExtractedRef {
