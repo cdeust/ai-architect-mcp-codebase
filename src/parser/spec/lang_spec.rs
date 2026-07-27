@@ -22,9 +22,14 @@ use super::conventions::LanguageConventions;
 // re-exported here so every consumer's `super::lang_spec::{CFamilySpec, …}`
 // import — and this module's own `LangSpec` field types — resolve unchanged.
 pub(crate) use super::families::{
-    CFamilySpec, CppFamilySpec, EmbeddedSpec, ObjcFamilySpec, TsFamilySpec,
+    CFamilySpec, CppFamilySpec, DeclaratorNaming, EmbeddedSpec, ObjcFamilySpec, TsFamilySpec,
 };
 use crate::parser::Language;
+
+// The per-family structural sub-tables (EmbeddedSpec, DeclaratorNaming,
+// CFamilySpec, CppFamilySpec, ObjcFamilySpec, TsFamilySpec) live in
+// `families.rs` (§4.1 split, #144) and are re-exported above. The #123/#124
+// field additions landed in `families.rs`, not here.
 
 /// Table-driven description of one language's structural node kinds.
 ///

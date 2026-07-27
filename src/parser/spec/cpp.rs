@@ -26,7 +26,7 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::lang_spec::{CppFamilySpec, LangSpec};
+use super::lang_spec::{CppFamilySpec, DeclaratorNaming, LangSpec};
 use crate::parser::{node_text, qual, Language};
 
 /// The tree-sitter-cpp field naming a call expression's callee. Used only by the
@@ -139,6 +139,27 @@ fn using_entry(source: &str, node: Node, scope: &str) -> Vec<ImportEntry> {
 
 static CPP_CONVENTIONS: CppConventions = CppConventions;
 
+/// How C++ spells a declaration's name (issue #123). The SAME sub-table type C
+/// carries, consumed by the ONE shared `declarator::declarator_name` — this row is
+/// how C++ inherits the #106 fix ("the name is what the declarator binds, never a
+/// parameter") as DATA rather than as a second implementation.
+///
+/// `field_identifier` joins the identifier kinds because a class member's
+/// declarator binds one (`int magnitude() const;` → `magnitude`).
+/// `destructor_name` and `operator_name` are name-BY-TEXT kinds: each wraps an
+/// inner `identifier` whose text is the wrong name (`Point` for `~Point`, and
+/// nothing at all for `operator+`, whose `+` is an anonymous token), so the search
+/// must stop at them.
+/// source: tree-sitter-cpp 0.23.4 node-types.json (function_declarator has
+/// `declarator` + `parameters`; destructor_name's only child is an `identifier`;
+/// operator_name's child list is an optional `identifier`).
+static CPP_NAMING: DeclaratorNaming = DeclaratorNaming {
+    identifier_kinds: &["identifier", "type_identifier", "field_identifier"],
+    name_text_kinds: &["destructor_name", "operator_name"],
+    declarator_field: "declarator",
+    parameters_field: "parameters",
+};
+
 /// The hybrid C-family class-model structural sub-table (ADR-0055 phase 7). All
 /// node kinds: tree-sitter-cpp 0.23.4 node-types.json (validated by the spec
 /// guard). Shared, unchanged, by the future ObjC migration where the shapes
@@ -148,15 +169,19 @@ static CPP_FAMILY: CppFamilySpec = CppFamilySpec {
     class_kinds: &["class_specifier"],
     struct_kinds: &["struct_specifier", "union_specifier"],
     enum_kinds: &["enum_specifier"],
+    enum_member_kinds: &["enumerator"],
     template_kinds: &["template_declaration"],
     func_def_kinds: &["function_definition"],
     field_decl_kinds: &["field_declaration"],
+    member_decl_kinds: &["declaration"],
     typedef_kinds: &["type_definition"],
+    alias_kinds: &["alias_declaration"],
     func_declarator_kind: "function_declarator",
-    declarator_field: "declarator",
+    qualified_declarator_kind: "qualified_identifier",
+    qualified_scope_field: "scope",
     base_clause_kind: "base_class_clause",
     base_type_kinds: &["type_identifier", "qualified_identifier", "template_type"],
-    identifier_kinds: &["identifier", "type_identifier", "field_identifier"],
+    naming: &CPP_NAMING,
 };
 
 /// The C++ language spec row. Class-model slices are empty; the hybrid `cpp`
