@@ -211,3 +211,85 @@ impl MyTrait for S { fn do_it(&self) {} }
         .expect("should find impl method with trait_name property");
     assert!(method.qualified_name.contains("S"));
 }
+
+/// The trait-requirement `is_async` split: a bodiless requirement is reported
+/// NON-async unconditionally, while a defaulted `fn` has its modifiers read.
+///
+/// This test exists because §12 mutation testing found the split unasserted. The
+/// captured parity corpus contains no `async` trait method, so the mutant
+/// `delete ! in emit_trait_methods` — turning `!is_sig && has_async(..)` into
+/// `is_sig && has_async(..)` — SURVIVED the entire suite: with no async trait
+/// method anywhere, both forms evaluate to `false` for every corpus record. That
+/// is a real coverage gap, not an equivalent mutant, so it is closed here rather
+/// than documented away.
+///
+/// The rule asserted is the one the pre-migration `parser::rust::extract`
+/// computed, read from its source before deletion:
+///   `let is_async = if is_fn { has_async_modifier(child) } else { false };`
+/// The corpus could not be re-captured to cover it (the walker it was captured
+/// from is gone), so the coverage lands here as a behavior test instead.
+///
+/// Both directions are needed to kill the mutant and to pin the whole rule:
+///   - `flush` is an `async`-marked SIGNATURE — the original reports `false`
+///     (the signature branch short-circuits before the modifiers are read); the
+///     mutant would report `true`.
+///   - `drain` is an `async` DEFAULTED fn — the original reports `true`; the
+///     mutant would report `false`.
+///   - `plain` is a non-async defaulted fn — `false` either way, the control.
+#[test]
+fn rust_trait_requirement_async_flag_splits_signature_from_default() {
+    let src = r#"
+pub trait Flusher {
+    async fn flush(&self);
+    async fn drain(&self) {
+        cleanup();
+    }
+    fn plain(&self) {}
+}
+"#;
+    let result = parse_file(src, "t.rs", Language::Rust).expect("parse");
+    assert_eq!(
+        result.parse_errors, 0,
+        "the async-trait-method corpus must parse clean, got {} errors at {:?}",
+        result.parse_errors, result.error_ranges
+    );
+    let is_async_of = |name: &str| -> String {
+        result
+            .nodes
+            .iter()
+            .find(|n| n.label == "Method" && n.name == name)
+            .unwrap_or_else(|| panic!("no Method named {name}"))
+            .properties
+            .iter()
+            .find(|(k, _)| k == "is_async")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| panic!("{name} has no is_async property"))
+    };
+    assert_eq!(
+        is_async_of("flush"),
+        "false",
+        "a bodiless trait requirement is reported non-async even when marked \
+         `async` — the pre-migration walker's unconditional `false` for a \
+         signature"
+    );
+    assert_eq!(
+        is_async_of("drain"),
+        "true",
+        "a DEFAULTED async trait method has its modifiers read"
+    );
+    assert_eq!(
+        is_async_of("plain"),
+        "false",
+        "control: a non-async defaulted trait method"
+    );
+    // And the #131 gap stays pinned: the defaulted body is still not scanned, so
+    // `cleanup()` yields no call site. Without this, a future fix to #131 could
+    // land silently.
+    assert!(
+        !result
+            .nodes
+            .iter()
+            .any(|n| n.label == "CallSite" && n.name == "cleanup"),
+        "a trait default body must stay unscanned (preserved gap, issue #131)"
+    );
+}

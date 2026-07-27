@@ -58,6 +58,19 @@ pub(super) fn emit_struct(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, ds: D
 
 /// Emits one `Field` + `HasField` per named member of the node's field-list body.
 fn emit_fields(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, owner_qn: &str) {
+    // mutation note (§12): replacing this match guard with `true` produces a
+    // surviving mutant that is a proven EQUIVALENT, and the proof is the grammar,
+    // not the corpus. `emit_fields` is reachable only from `emit_struct`, i.e. only
+    // for `struct_item` / `union_item`. Their `body` field admits exactly
+    // `field_declaration_list` and `ordered_field_declaration_list`
+    // (`union_item`: only the former), and an `ordered_field_declaration_list` has
+    // NO `field_declaration` children — its named children are `attribute_item`
+    // and `visibility_modifier`. So the loop below emits nothing for the only body
+    // kind the guard rejects, and no Rust source can observe its removal. The guard
+    // is kept as the faithful copy of the pre-migration walker's check and as a
+    // cheap barrier should a future caller pass some other node.
+    // source: tree-sitter-rust 0.23.3 node-types.json (struct_item.body,
+    //   union_item.body, ordered_field_declaration_list.children).
     let body = match spec.body_field.and_then(|f| node.child_by_field_name(f)) {
         Some(b) if kind_in(spec.field_container_kinds, b.kind()) => b,
         _ => return,
@@ -119,6 +132,14 @@ pub(super) fn emit_enum(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, ds: Der
 /// (unit, tuple, or struct-bodied) — the hand-written walker's model.
 fn emit_variants(specs: RustSpecs, ctx: &mut WalkCtx, enum_node: Node, enum_qn: &str) {
     let spec = specs.spec;
+    // mutation note (§12): as in `emit_fields`, replacing this match guard with
+    // `true` yields a surviving EQUIVALENT mutant, proven from the grammar rather
+    // than from the corpus: `emit_variants` is reachable only from `emit_enum`, and
+    // `enum_item`'s `body` field admits exactly ONE kind, `enum_variant_list`. The
+    // guard therefore can never be false when the body is present, so no Rust
+    // source can observe its removal. Kept as the faithful copy of the
+    // pre-migration walker's check.
+    // source: tree-sitter-rust 0.23.3 node-types.json (enum_item.body).
     let body = match spec
         .body_field
         .and_then(|f| enum_node.child_by_field_name(f))
