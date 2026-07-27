@@ -40,7 +40,12 @@ use std::path::{Path, PathBuf};
 
 /// Files allowed to mention the pattern (as documentation of the historical
 /// vulnerability, not as a live call). Relative to `src/`.
-const ALLOWLIST: &[&str] = &["graph_store.rs"];
+///
+/// `graph_store.rs` was split into the `graph_store/` directory module (§4.1
+/// file-size cap); the `cypher_str` documentation of the naive pattern lives in
+/// that module's own files (`mod.rs`/`tests.rs`). The allowlist tracks that
+/// relocation — the exempt owner is still the single graph_store module.
+const ALLOWLIST: &[&str] = &["graph_store/mod.rs", "graph_store/tests.rs"];
 
 /// Builds the exact source text of the forbidden naive-escape idiom,
 /// independent of the surrounding call (`x.replace(...)`,
