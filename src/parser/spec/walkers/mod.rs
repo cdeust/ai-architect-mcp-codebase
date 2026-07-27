@@ -23,6 +23,8 @@ mod calls;
 mod clike;
 mod constants;
 mod cpp;
+mod cpp_members;
+mod declarator;
 mod defs;
 mod embedded;
 mod imports;

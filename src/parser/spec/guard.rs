@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::lang_spec::LangSpec;
+use super::lang_spec::{DeclaratorNaming, LangSpec};
 use super::registry::{MIGRATED_SPECS, SHALLOW_SPECS};
 use super::shallow::ShallowSpec;
 use crate::parser::Language;
@@ -78,6 +78,23 @@ fn parse_node_types(json: &str) -> (BTreeSet<String>, BTreeSet<String>) {
     (kinds, fields)
 }
 
+/// Every node-kind string a `DeclaratorNaming` sub-table references, tagged with
+/// its path. One helper for both C-family rows, so adding a family cannot forget
+/// to validate its naming data (issues #106, #123).
+fn naming_node_kinds(
+    prefix: &'static str,
+    naming: &DeclaratorNaming,
+) -> Vec<(&'static str, String)> {
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    for k in naming.identifier_kinds {
+        out.push((prefix, (*k).to_string()));
+    }
+    for k in naming.name_text_kinds {
+        out.push((prefix, (*k).to_string()));
+    }
+    out
+}
+
 /// Every node-kind string a spec references (slices + options + value name +
 /// embedded host kinds), each tagged with the field it came from for a
 /// legible failure message.
@@ -136,13 +153,13 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             ("c_family.func_def_kinds", cf.func_def_kinds),
             ("c_family.func_decl_kinds", cf.func_decl_kinds),
             ("c_family.field_decl_kinds", cf.field_decl_kinds),
-            ("c_family.identifier_kinds", cf.identifier_kinds),
         ];
         for (field, kinds) in cf_slices {
             for k in *kinds {
                 out.push((field, (*k).to_string()));
             }
         }
+        out.extend(naming_node_kinds("c_family.naming", cf.naming));
         out.push((
             "c_family.func_declarator_kind",
             cf.func_declarator_kind.to_string(),
@@ -163,21 +180,28 @@ fn spec_node_kinds(spec: &LangSpec) -> Vec<(&'static str, String)> {
             ("cpp_family.class_kinds", cf.class_kinds),
             ("cpp_family.struct_kinds", cf.struct_kinds),
             ("cpp_family.enum_kinds", cf.enum_kinds),
+            ("cpp_family.enum_member_kinds", cf.enum_member_kinds),
             ("cpp_family.template_kinds", cf.template_kinds),
             ("cpp_family.func_def_kinds", cf.func_def_kinds),
             ("cpp_family.field_decl_kinds", cf.field_decl_kinds),
+            ("cpp_family.member_decl_kinds", cf.member_decl_kinds),
             ("cpp_family.typedef_kinds", cf.typedef_kinds),
+            ("cpp_family.alias_kinds", cf.alias_kinds),
             ("cpp_family.base_type_kinds", cf.base_type_kinds),
-            ("cpp_family.identifier_kinds", cf.identifier_kinds),
         ];
         for (field, kinds) in cpp_slices {
             for k in *kinds {
                 out.push((field, (*k).to_string()));
             }
         }
+        out.extend(naming_node_kinds("cpp_family.naming", cf.naming));
         out.push((
             "cpp_family.func_declarator_kind",
             cf.func_declarator_kind.to_string(),
+        ));
+        out.push((
+            "cpp_family.qualified_declarator_kind",
+            cf.qualified_declarator_kind.to_string(),
         ));
         out.push((
             "cpp_family.base_clause_kind",
@@ -311,15 +335,18 @@ fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
             out.push((field, v.to_string()));
         }
     }
-    // The C-family declarator field (the struct/function name lives under it).
+    // The C-family naming fields: the declarator chain the name lives under, and
+    // the parameter list the search must SKIP (#106/#123). A stale
+    // `parameters_field` would silently reintroduce the last-parameter defect —
+    // the skip would match nothing — so it is validated like any other field.
     if let Some(cf) = spec.c_family {
-        out.push(("c_family.declarator_field", cf.declarator_field.to_string()));
+        out.extend(naming_field_names("c_family.naming", cf.naming));
     }
-    // The C++ declarator field (the function/method name lives under it).
     if let Some(cf) = spec.cpp_family {
+        out.extend(naming_field_names("cpp_family.naming", cf.naming));
         out.push((
-            "cpp_family.declarator_field",
-            cf.declarator_field.to_string(),
+            "cpp_family.qualified_scope_field",
+            cf.qualified_scope_field.to_string(),
         ));
     }
     // The ObjC field names read by its walker (declarator/category/superclass).
@@ -342,6 +369,18 @@ fn spec_field_names(spec: &LangSpec) -> Vec<(&'static str, String)> {
         out.push(("ts_family.alias_field", tf.alias_field.to_string()));
     }
     out
+}
+
+/// The field names a `DeclaratorNaming` sub-table references, tagged with its
+/// path. One helper for both C-family rows (mirrors `naming_node_kinds`).
+fn naming_field_names(
+    prefix: &'static str,
+    naming: &DeclaratorNaming,
+) -> Vec<(&'static str, String)> {
+    vec![
+        (prefix, naming.declarator_field.to_string()),
+        (prefix, naming.parameters_field.to_string()),
+    ]
 }
 
 /// Every node-kind string a shallow row references, tagged with its field.

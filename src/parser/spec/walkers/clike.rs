@@ -11,13 +11,22 @@
 // SHARED generic walkers (`calls::walk_calls`, `imports::walk_imports`) via the
 // conventions — only the definition shapes are C-specific.
 //
-// This walker is the shared abstraction for the whole C family: C migrates onto
-// it now; C++ and ObjC land as two more `CFamilySpec` rows, collapsing the
-// duplicated `extract_function`/`extract_struct` walkers ADR-0055 names.
+// What this walker is NOT is the whole C family. C++ (phase 7) needs namespaces,
+// class-scoped methods, inheritance, and a single per-file `seq` ordering that a
+// flat walker has no model for, so it rides a sibling walker (`walkers/cpp`) on
+// its own `CppFamilySpec` row. The dedup ADR-0055 asks for is realized at the
+// MECHANISM instead: the name search both walkers use lives once in
+// `walkers/declarator`, driven by the `DeclaratorNaming` sub-table both family
+// rows carry — so the #106 "name from the declarator, never a parameter" fix is
+// inherited by C++ as DATA (#123), not copied. ObjC (phase 8) joins whichever of
+// the two structural models its grammar actually matches.
 
 use tree_sitter::Node;
 
 use super::super::lang_spec::{CFamilySpec, LangSpec};
+use super::declarator::{
+    declarator_field_children, declarator_name, first_identifier, named_or_first_identifier,
+};
 use super::{calls, end_line_of, imports, kind_in, line_of, WalkCtx};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM,
@@ -82,78 +91,12 @@ pub(super) fn walk_c_defs(
     }
 }
 
-/// The first identifier leaf (`identifier_kinds`) found in a right-to-left DFS of
-/// `node`. This reproduces the hand-written `find_identifier`'s stack-DFS order
-/// EXACTLY (children pushed left-to-right onto a LIFO stack, so the last child's
-/// subtree is searched first). That order is load-bearing: for a function
-/// declarator `add(int a, int b)` it returns the LAST parameter name (`b`), not
-/// the function name — a pre-existing defect the migration preserves for parity
-/// (filed as issue #106). Not "the name" — "the name the old walker produced".
-fn find_identifier(cf: &CFamilySpec, source: &str, node: Node) -> String {
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if kind_in(cf.identifier_kinds, n.kind()) {
-            return node_text(source, n);
-        }
-        let mut cursor = n.walk();
-        for c in n.children(&mut cursor) {
-            stack.push(c);
-        }
-    }
-    String::new()
-}
-
-/// The DECLARED name of a declarator: the identifier the declarator actually
-/// binds, never a parameter name (issue #106).
-///
-/// C declarators nest the name inside wrappers — `int *f(void)` is
-/// `pointer_declarator > function_declarator > identifier`, and `int (*h)(int)`
-/// adds a `parenthesized_declarator` — so the name is reached by following the
-/// `declarator_field` chain down to the identifier leaf.
-///
-/// The load-bearing part is what it does NOT do: it never descends into
-/// `parameters_field`. `find_identifier`'s LIFO DFS visited the parameter list
-/// before the declarator's own name, so `int add(int a, int b)` resolved to
-/// `b`. A function whose last parameter is unnamed (`int f(void)`) resolved
-/// correctly, which is why the defect survived — it is invisible on exactly the
-/// signatures a minimal fixture uses.
-///
-/// `parenthesized_declarator` carries no fields at all (verified against
-/// tree-sitter-c 0.23.4 node-types.json), so the field chain is followed first
-/// and a named-children scan is the fallback — still skipping `parameters`.
-fn declarator_name(cf: &CFamilySpec, source: &str, node: Node) -> String {
-    if kind_in(cf.identifier_kinds, node.kind()) {
-        return node_text(source, node);
-    }
-    if let Some(inner) = node.child_by_field_name(cf.declarator_field) {
-        let name = declarator_name(cf, source, inner);
-        if !name.is_empty() {
-            return name;
-        }
-    }
-    // Fieldless wrappers (parenthesized_declarator): scan named children, but
-    // never the parameter list.
-    let params_id = node
-        .child_by_field_name(cf.parameters_field)
-        .map(|p| p.id());
-    let mut cursor = node.walk();
-    let children: Vec<Node> = node.named_children(&mut cursor).collect();
-    for child in children {
-        if Some(child.id()) == params_id {
-            continue;
-        }
-        let name = declarator_name(cf, source, child);
-        if !name.is_empty() {
-            return name;
-        }
-    }
-    String::new()
-}
-
 /// The first `field_identifier` leaf found in a right-to-left DFS of `node`,
 /// unwrapping pointer/array/function declarators to the bare field name
 /// (`int *p` → `p`, `char buf[8]` → `buf`, `int (*h)(int)` → `h`). Same LIFO-DFS
-/// order as `find_identifier` — reproduces the hand-written `find_field_identifier`.
+/// order as `declarator::first_identifier`, but keyed on the single
+/// `field_identifier_kind` rather than the `identifier_kinds` set — reproduces
+/// the hand-written `find_field_identifier`.
 fn find_field_identifier(cf: &CFamilySpec, source: &str, node: Node) -> String {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
@@ -189,23 +132,6 @@ fn is_c_function_prototype(cf: &CFamilySpec, node: Node) -> bool {
     false
 }
 
-/// The declaration's name: the `name` field's text, or — when absent (an
-/// anonymous struct/union/enum) — the first identifier leaf (LIFO DFS). Matches
-/// the hand-written `node_field_text(node,"name")`-then-`find_identifier` fallback.
-fn named_or_first_identifier(
-    cf: &CFamilySpec,
-    spec: &LangSpec,
-    source: &str,
-    node: Node,
-) -> String {
-    let field = node_field_text(source, node, spec.name_field);
-    if field.is_empty() {
-        find_identifier(cf, source, node)
-    } else {
-        field
-    }
-}
-
 /// Emits a struct/union (`Struct` + `Defines`) and, from its `body_field`, one
 /// `Field` + `HasField` per declared member (declarators unwrapped to their
 /// field name; a member with no field name — an anonymous member — is skipped).
@@ -230,7 +156,7 @@ fn emit_struct_named(
 ) {
     let name = match override_name {
         Some(n) => n.to_string(),
-        None => named_or_first_identifier(cf, spec, ctx.source, node),
+        None => named_or_first_identifier(cf.naming, spec, ctx.source, node),
     };
     if name.is_empty() {
         return;
@@ -260,26 +186,6 @@ fn emit_struct_named(
 
 /// Emits one `Field` + `HasField` per declared name in each `field_decl_kinds`
 /// member of `body`. A single `field_declaration` may declare several names
-/// Every `declarator_field` child of `fd`, in source order. A single member
-/// declaration binds several names through repeated `declarator` fields
-/// (`int a, b, c;`), so `child_by_field_name` (first-only) is insufficient — the
-/// cursor walk collects them all, matching the hand-written multi-declarator loop.
-fn declarator_field_children<'t>(cf: &CFamilySpec, fd: Node<'t>) -> Vec<Node<'t>> {
-    let mut declarators: Vec<Node> = Vec::new();
-    let mut dc = fd.walk();
-    if dc.goto_first_child() {
-        loop {
-            if dc.field_name() == Some(cf.declarator_field) {
-                declarators.push(dc.node());
-            }
-            if !dc.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    declarators
-}
-
 /// (`int a, b, c;`), so every `declarator_field` child is emitted; each is
 /// unwrapped (pointer/array/function) to its `field_identifier`. The type
 /// annotation is the shared `type_field` text.
@@ -296,7 +202,7 @@ fn emit_struct_fields(
             continue;
         }
         let type_text = node_field_text(ctx.source, fd, spec.type_field);
-        for declarator in declarator_field_children(cf, fd) {
+        for declarator in declarator_field_children(cf.naming, fd) {
             let fname = find_field_identifier(cf, ctx.source, declarator);
             if fname.is_empty() {
                 continue;
@@ -329,7 +235,7 @@ fn emit_struct_fields(
 /// the enum. An entry with a value (`GREEN = 5`) still resolves to its name — the
 /// value literal is not an identifier leaf.
 fn emit_enum(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
-    let name = named_or_first_identifier(cf, spec, ctx.source, node);
+    let name = named_or_first_identifier(cf.naming, spec, ctx.source, node);
     if name.is_empty() {
         return;
     }
@@ -357,7 +263,7 @@ fn emit_enum(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, s
         if !kind_in(cf.enum_member_kinds, child.kind()) {
             continue;
         }
-        let en = find_identifier(cf, ctx.source, child);
+        let en = first_identifier(cf.naming, ctx.source, child);
         if en.is_empty() {
             continue;
         }
@@ -493,7 +399,7 @@ fn emit_inline_type(
 /// first identifier leaf of the whole `type_definition` (LIFO DFS lands on the
 /// declared alias, which follows the aliased type in child order).
 fn emit_typedef(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
-    let name = find_identifier(cf, ctx.source, node);
+    let name = first_identifier(cf.naming, ctx.source, node);
     if name.is_empty() {
         return;
     }
@@ -534,8 +440,8 @@ fn emit_typedef(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node
 /// name (issue #106).
 fn emit_function(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     let name = node
-        .child_by_field_name(cf.declarator_field)
-        .map(|d| declarator_name(cf, ctx.source, d))
+        .child_by_field_name(cf.naming.declarator_field)
+        .map(|d| declarator_name(cf.naming, ctx.source, d))
         .unwrap_or_default();
     if name.is_empty() {
         return;
@@ -567,8 +473,8 @@ fn emit_function(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Nod
 /// definition — so `int add(int a, int b);` is `add`, not `b` (issue #106).
 fn emit_prototype(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     let name = node
-        .child_by_field_name(cf.declarator_field)
-        .map(|d| declarator_name(cf, ctx.source, d))
+        .child_by_field_name(cf.naming.declarator_field)
+        .map(|d| declarator_name(cf.naming, ctx.source, d))
         .unwrap_or_default();
     if name.is_empty() {
         return;

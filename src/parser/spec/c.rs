@@ -18,7 +18,7 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::lang_spec::{CFamilySpec, LangSpec};
+use super::lang_spec::{CFamilySpec, DeclaratorNaming, LangSpec};
 use crate::parser::Language;
 
 /// The tree-sitter-c field naming a call expression's callee. Used only by the
@@ -88,9 +88,22 @@ impl LanguageConventions for CConventions {
 
 static C_CONVENTIONS: CConventions = CConventions;
 
+/// How C spells a declaration's name (issue #106). The SAME sub-table type C++
+/// carries, consumed by the ONE shared `declarator::declarator_name` — so the
+/// "name from the declarator chain, never from `parameters`" rule is data here,
+/// not a branch in the walker.
+/// source: tree-sitter-c 0.23.4 node-types.json (function_declarator has
+/// `declarator` + `parameters`; C has no operator/destructor name kinds, hence
+/// the empty `name_text_kinds`).
+static C_NAMING: DeclaratorNaming = DeclaratorNaming {
+    identifier_kinds: &["identifier", "type_identifier"],
+    name_text_kinds: &[],
+    declarator_field: "declarator",
+    parameters_field: "parameters",
+};
+
 /// The C-family structural sub-table (ADR-0055 phase 6). All node kinds:
-/// tree-sitter-c 0.23.4 node-types.json (validated by the spec guard). Shared,
-/// unchanged, by the future C++/ObjC migrations.
+/// tree-sitter-c 0.23.4 node-types.json (validated by the spec guard).
 static C_FAMILY: CFamilySpec = CFamilySpec {
     struct_like_kinds: &["struct_specifier", "union_specifier"],
     enum_like_kinds: &["enum_specifier"],
@@ -101,9 +114,7 @@ static C_FAMILY: CFamilySpec = CFamilySpec {
     field_decl_kinds: &["field_declaration"],
     func_declarator_kind: "function_declarator",
     init_declarator_kind: "init_declarator",
-    declarator_field: "declarator",
-    parameters_field: "parameters",
-    identifier_kinds: &["identifier", "type_identifier"],
+    naming: &C_NAMING,
     field_identifier_kind: "field_identifier",
     macro_object_kinds: &["preproc_def"],
     macro_function_kinds: &["preproc_function_def"],
