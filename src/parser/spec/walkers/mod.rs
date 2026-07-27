@@ -28,6 +28,7 @@ mod declarator;
 mod defs;
 mod embedded;
 mod imports;
+mod inline_type;
 mod objc;
 mod types;
 mod typescript;

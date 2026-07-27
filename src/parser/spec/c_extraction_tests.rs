@@ -82,6 +82,29 @@ fn c_named_inline_struct_with_a_typedef_alias_keeps_both_names() {
     );
 }
 
+/// Boy-scout (§14), found while giving C++ and ObjC the same guard: a bodiless
+/// specifier is a forward declaration, not a definition. Before this,
+/// `struct Point;` followed by the real definition emitted TWO `Struct` nodes on
+/// `a.c::Point` — measured on this exact input, which printed
+/// `Struct|Point|a.c::Point|1-1` and `Struct|Point|a.c::Point|2-2`.
+#[test]
+fn c_forward_declaration_emits_nothing() {
+    let (nodes, refs) = parse("struct Point;\nenum E;\nstruct Point { int x; };\n");
+    assert_eq!(
+        records(&nodes),
+        vec![
+            "Field|x|a.c::Point::x|[(\"type_annotation\", \"int\")]".to_string(),
+            "Struct|Point|a.c::Point|[]".to_string(),
+        ],
+        "§14: a bodiless struct/enum specifier declares no type and emits nothing"
+    );
+    assert_eq!(
+        refs_of(&refs, "Defines"),
+        vec!["a.c -> a.c::Point".to_string()],
+        "§14: exactly one Defines edge, not two"
+    );
+}
+
 /// The other diagonal of the same matrix, kept next to it so the pair documents
 /// the whole decision: an ANONYMOUS body with an alias IS emitted under the
 /// alias, and then no separate alias `Constant` is emitted — two nodes on one

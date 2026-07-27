@@ -26,7 +26,8 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::lang_spec::{CppFamilySpec, DeclaratorNaming, LangSpec};
+use super::family_specs::{CppFamilySpec, DeclaratorNaming};
+use super::lang_spec::LangSpec;
 use crate::parser::{node_text, qual, Language};
 
 /// The tree-sitter-cpp field naming a call expression's callee. Used only by the
@@ -177,6 +178,8 @@ static CPP_FAMILY: CppFamilySpec = CppFamilySpec {
     typedef_kinds: &["type_definition"],
     alias_kinds: &["alias_declaration"],
     func_declarator_kind: "function_declarator",
+    pointer_declarator_kinds: &["pointer_declarator", "reference_declarator"],
+    grouping_declarator_kinds: &["parenthesized_declarator"],
     qualified_declarator_kind: "qualified_identifier",
     qualified_scope_field: "scope",
     base_clause_kind: "base_class_clause",

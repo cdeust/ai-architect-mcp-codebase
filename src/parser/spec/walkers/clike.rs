@@ -23,14 +23,17 @@
 
 use tree_sitter::Node;
 
-use super::super::lang_spec::{CFamilySpec, LangSpec};
+use super::super::family_specs::CFamilySpec;
+use super::super::lang_spec::LangSpec;
 use super::declarator::{
-    declarator_field_children, declarator_name, first_identifier, named_or_first_identifier,
+    declarator_field_children, declarator_name, first_field_identifier, first_identifier,
+    named_or_first_identifier,
 };
+use super::inline_type::{defines_a_type, inline_type_definition, InlineName};
 use super::{calls, end_line_of, imports, kind_in, line_of, WalkCtx};
 use crate::parser::{
-    node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM,
-    LABEL_FIELD, LABEL_FUNCTION, LABEL_STRUCT,
+    node_field_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM, LABEL_FIELD,
+    LABEL_FUNCTION, LABEL_STRUCT,
 };
 
 /// Flat C-family definition walker: dispatches each child of `parent` to the
@@ -91,26 +94,6 @@ pub(super) fn walk_c_defs(
     }
 }
 
-/// The first `field_identifier` leaf found in a right-to-left DFS of `node`,
-/// unwrapping pointer/array/function declarators to the bare field name
-/// (`int *p` → `p`, `char buf[8]` → `buf`, `int (*h)(int)` → `h`). Same LIFO-DFS
-/// order as `declarator::first_identifier`, but keyed on the single
-/// `field_identifier_kind` rather than the `identifier_kinds` set — reproduces
-/// the hand-written `find_field_identifier`.
-fn find_field_identifier(cf: &CFamilySpec, source: &str, node: Node) -> String {
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if n.kind() == cf.field_identifier_kind {
-            return node_text(source, n);
-        }
-        let mut cursor = n.walk();
-        for c in n.children(&mut cursor) {
-            stack.push(c);
-        }
-    }
-    String::new()
-}
-
 /// A `func_decl_kinds` node is a function prototype iff it carries a function
 /// declarator directly, or inside an `init_declarator` (`int f(void) = …`).
 /// A plain variable declaration (`int x;`) carries neither and is not a prototype.
@@ -146,6 +129,13 @@ fn emit_struct(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node,
 /// identifier fallback finds nothing (its members are `field_identifier`, not
 /// `identifier`), and the whole struct — fields included — is dropped, which is
 /// the second half of issue #107.
+///
+/// Emits NOTHING for a bodiless specifier: `struct Point;` (a forward
+/// declaration) is the same node kind as the definition, and emitting it put a
+/// second one-line `Struct` node on the definition's qualified name — measured on
+/// `struct Point;\nstruct Point { int x; };` before this guard (boy-scout, §14;
+/// the same defect the C++ and ObjC lanes carried). Pinned by
+/// `c_forward_declaration_emits_nothing`.
 fn emit_struct_named(
     spec: &LangSpec,
     cf: &CFamilySpec,
@@ -154,6 +144,9 @@ fn emit_struct_named(
     scope: &str,
     override_name: Option<&str>,
 ) {
+    if !defines_a_type(spec, node) {
+        return;
+    }
     let name = match override_name {
         Some(n) => n.to_string(),
         None => named_or_first_identifier(cf.naming, spec, ctx.source, node),
@@ -203,7 +196,7 @@ fn emit_struct_fields(
         }
         let type_text = node_field_text(ctx.source, fd, spec.type_field);
         for declarator in declarator_field_children(cf.naming, fd) {
-            let fname = find_field_identifier(cf, ctx.source, declarator);
+            let fname = first_field_identifier(cf.field_identifier_kind, ctx.source, declarator);
             if fname.is_empty() {
                 continue;
             }
@@ -234,7 +227,13 @@ fn emit_struct_fields(
 /// (`enum_entry=true`) + `Defines` per `enum_member_kinds` entry, scoped under
 /// the enum. An entry with a value (`GREEN = 5`) still resolves to its name — the
 /// value literal is not an identifier leaf.
+///
+/// Emits NOTHING for a bodiless specifier — `enum E;` is a forward declaration,
+/// not a definition (same guard and same reason as `emit_struct_named`).
 fn emit_enum(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    if !defines_a_type(spec, node) {
+        return;
+    }
     let name = named_or_first_identifier(cf.naming, spec, ctx.source, node);
     if name.is_empty() {
         return;
@@ -335,8 +334,9 @@ fn emit_macro(
 /// Emitting the inner specifier here is what makes its FIELDS visible — before
 /// this, a typedef'd struct contributed a `Constant` for the alias and nothing
 /// for its members.
-/// What `emit_inline_type` found, so the caller knows whether the alias name has
-/// already been consumed by an anonymous type.
+///
+/// Whether the alias name has been consumed by an anonymous type, so
+/// `emit_typedef` knows not to emit a second node on the same qualified name.
 #[derive(PartialEq, Eq)]
 enum InlineType {
     /// No inline DEFINITION (absent, or a bare reference like `struct Point`).
@@ -347,6 +347,8 @@ enum InlineType {
     Anonymous,
 }
 
+/// The body-presence test — "is this a definition or a reference?" — is the
+/// shared `inline_type::inline_type_definition`; only the EMISSION is C-specific.
 fn emit_inline_type(
     spec: &LangSpec,
     cf: &CFamilySpec,
@@ -355,28 +357,10 @@ fn emit_inline_type(
     scope: &str,
     alias: &str,
 ) -> InlineType {
-    let Some(inner) = node.child_by_field_name(spec.type_field) else {
+    let Some((inner, name_kind)) = inline_type_definition(spec, node) else {
         return InlineType::None;
     };
-    // Only a DEFINITION is emitted, never a reference. `struct_specifier` is
-    // the same node kind for both `struct Point { int x; }` (a definition,
-    // which has a `body`) and the bare `struct Point` naming an existing type
-    // in `typedef struct Point PointT;` (no `body`).
-    //
-    // Without this guard the reference re-emitted `Point` as a second Struct
-    // node with a one-line span, so a typedef of an existing struct silently
-    // produced a duplicate type in the graph. Caught by the parity corpus,
-    // which contains exactly that construct — and pinned below by
-    // `c_typedef_of_an_existing_struct_emits_no_duplicate`.
-    if spec
-        .body_field
-        .and_then(|f| inner.child_by_field_name(f))
-        .is_none()
-    {
-        return InlineType::None;
-    }
-    let is_anonymous = node_field_text(ctx.source, inner, spec.name_field).is_empty();
-    let override_name = if is_anonymous && !alias.is_empty() {
+    let override_name = if name_kind == InlineName::Anonymous && !alias.is_empty() {
         Some(alias)
     } else {
         None

@@ -58,6 +58,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   #124). BREAKING for consumers of C++ nodes: names, labels, and qualified names
   change.** Re-index any C++ repository — a stored graph built before this
   release carries the old names and QNs.
+- **C++ and Objective-C extraction defects (issues #123, #124, #127, #128,
+  #135). BREAKING for consumers of C++ or ObjC nodes: names, labels, and
+  qualified names change.** Re-index any C++/ObjC repository — a stored graph
+  built before this release carries the old names and QNs.
 
   **Names came from the last parameter, not the declaration (#123).** The name
   search was a right-to-left DFS over the whole declarator, so it returned the
@@ -97,17 +101,49 @@ adheres to [Semantic Versioning](https://semver.org/).
   `area`, detached from its class. It is now a `Method` re-attached to the owner
   its qualifier names, with the matching `HasMethod` edge and `receiver_type`.
 
+  **A function-pointer data member was modeled as a method (#135).**
+  `void (*cb)(int);` and `void cb(int);` share the same outermost
+  `function_declarator`, so a subtree scan for one called both methods. Member
+  classification now READS the declarator the way C++ syntax is read: a pointer
+  between the function declarator and the name makes the name a pointer TO a
+  function, i.e. a `Field`. A function returning a pointer (`int *make();`) or a
+  function pointer (`int (*factory(int))(int);`) is still a method.
+
+  **Objective-C: a typedef's inline struct was dropped (#127).**
+  `typedef struct Node { int v; } NodeT;` emitted only `Constant|NodeT` — the
+  struct and its fields were invisible. It now emits `Struct|Node` + `Field|v`
+  (`HasField`) alongside the alias, and an anonymous body
+  (`typedef struct { int a; } AnonT;`) is emitted under the alias with no second
+  node on that name. A bare `typedef struct Node OtherT;` still emits no
+  duplicate `Node`: this reuses the same body-presence decision C's #107 fix
+  introduced, now shared by all three C-family lanes rather than reimplemented.
+
+  **Objective-C: a keyword selector captured only its first keyword (#128).**
+  `- (int)areaWithWidth:(int)w height:(int)h;` was named `areaWithWidth`; it is
+  now the full selector `areaWithWidth:height:`, and `+ (instancetype)
+  shapeNamed:(NSString *)name;` is `shapeNamed:`. A unary selector keeps no colon
+  (`draw`). This closes the asymmetry the issue reports: a method's name now
+  equals what a message SEND to it resolves to, so the two can be connected.
+  The colon tracks the ARGUMENT, not the keyword count — the grammar emits one
+  bare `identifier` per keyword, followed by a `method_parameter` when that
+  keyword takes an argument (verified against the parsed AST, since
+  tree-sitter-objc 3.0.2 declares a `keyword_declarator` node it does not
+  produce here).
+
   Also fixed while in these files (boy-scout rule): a bodiless class/struct/enum
   specifier — a forward declaration such as `class Shape;` — emitted a duplicate
   node on the SAME qualified name as the real definition, spanning only the
-  declaration line. A forward declaration declares no type and now contributes
-  nothing, at file scope and in a class body alike. This is the guard #107 added
-  for C, which C++ lacked.
+  declaration line. This was measured in ALL THREE C-family lanes (C, C++,
+  ObjC); a forward declaration declares no type and now contributes nothing, at
+  file scope and inside a class body alike. A mutation survivor also exposed an
+  unexercised C claim — that `typedef struct Tag { … } T;` keeps both the tag and
+  the alias — now pinned in `c_extraction_tests`.
 
-  C++ ground truth: 41 nodes / 44 refs → 52 / 55. Every changed row was verified
-  in both directions against an issue clause (the derivation is documented in
-  `cpp_ground_truth.rs`); per-edge-kind F1 is 1.000, and `graph_accuracy` stays
-  41/41.
+  Ground truth: C++ 41 nodes / 44 refs → 52 / 55; ObjC 37 / 38 → 39 / 40. Every
+  changed row was verified in BOTH directions against an issue clause (the
+  derivations are documented in `cpp_ground_truth.rs` and
+  `objc_parity_tests.rs`); per-edge-kind F1 is 1.000 for both, and
+  `graph_accuracy` stays 41/41.
 
 - **C preprocessor macros and inline struct definitions reach the graph
   (issue #107).** `#define MAX 10` and `#define SQUARE(x) ((x)*(x))` produced

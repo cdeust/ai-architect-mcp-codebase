@@ -16,7 +16,8 @@
 
 use tree_sitter::Node;
 
-use super::super::lang_spec::{DeclaratorNaming, LangSpec};
+use super::super::family_specs::DeclaratorNaming;
+use super::super::lang_spec::LangSpec;
 use super::kind_in;
 use crate::parser::{node_field_text, node_text};
 
@@ -117,6 +118,35 @@ pub(super) fn declarator_name(naming: &DeclaratorNaming, source: &str, node: Nod
         let name = declarator_name(naming, source, child);
         if !name.is_empty() {
             return name;
+        }
+    }
+    String::new()
+}
+
+/// The first node of kind `field_identifier_kind` in a right-to-left DFS of
+/// `node`, unwrapping pointer/array/function declarators to the bare member name
+/// (`int *p` → `p`, `char buf[8]` → `buf`, `int (*h)(int)` → `h`).
+///
+/// Preconditions: `node` is a member declarator. Postconditions: the member's
+/// name, or `""` when the declarator binds none (an anonymous member).
+///
+/// Keyed on the single kind a grammar uses for a struct member's name, rather
+/// than the `identifier_kinds` SET — that is the only difference from
+/// `first_identifier`, and it is why the two are separate. Shared by the C and
+/// Objective-C lanes, which had byte-identical copies.
+pub(super) fn first_field_identifier(
+    field_identifier_kind: &str,
+    source: &str,
+    node: Node,
+) -> String {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == field_identifier_kind {
+            return node_text(source, n);
+        }
+        let mut cursor = n.walk();
+        for c in n.children(&mut cursor) {
+            stack.push(c);
         }
     }
     String::new()

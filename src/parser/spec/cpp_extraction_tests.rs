@@ -1,12 +1,15 @@
-// parser::spec::cpp_extraction_tests — one targeted pin per acceptance clause of
-// issues #123 (declarator names) and #124 (extraction-shape gaps).
+// parser::spec::cpp_extraction_tests — targeted pins for how a C++ DECLARATOR is
+// read: the name it binds (issue #123) and whether that name is a function or data
+// (issue #135). The extraction-SHAPE pins for issue #124 — enum members,
+// constructors, aliases, data members, out-of-body definitions — live in the
+// sibling `cpp_shape_tests` module; the split is that concern boundary, and it is
+// what holds both files under the 500-line cap (§4.1).
 //
 // The corpus-wide exact-set assertion lives in `cpp_parity_tests`; it proves the
 // WHOLE output is right but says nothing about WHICH clause each row satisfies.
-// These tests are the per-clause ledger: each names the issue item it closes and
-// asserts the minimum observable consequence, so a regression points at one
-// clause instead of a 60-row set diff. Each one was RUN against the pre-fix
-// walker and failed (the failures are quoted in the PR's verification section).
+// These are the per-clause ledger, so a regression points at one clause instead of
+// a 60-row set diff. Each was RUN against the pre-fix walker and failed (the
+// failures are quoted in the PR).
 //
 // Every node kind and field named here is verified against tree-sitter-cpp
 // 0.23.4's src/node-types.json; the AST shapes were dumped from the grammar
@@ -139,221 +142,55 @@ fn cpp_declarator_name_traverses_pointer_and_reference_wrappers() {
     );
 }
 
-// ---- #124.1: enum members surface under their enum -------------------------
-
+/// A function-POINTER data member is DATA, not a method (issue #135).
+///
+/// `void (*cb)(int z);` and `void cb(int z);` share the same OUTERMOST
+/// `function_declarator`, so the old "is there a `function_declarator` anywhere in
+/// the subtree?" test called both methods. What distinguishes them is the
+/// `pointer_declarator` between that function declarator and the name: `cb` is a
+/// pointer TO a function, so it is a `Field`. The name is also right (`cb`, from
+/// the declarator chain — it was `z`, the parameter, before #123).
 #[test]
-fn cpp_enum_members_are_emitted_under_their_enum() {
-    let src = "enum Color { RED, GREEN = 5, BLUE };\nenum class Status { OK, FAIL };\n";
+fn cpp_function_pointer_member_is_a_field_not_a_method() {
+    let src = "class Cb {\n    void (*cb)(int z);\n    void handler(int z);\n};\n";
     let (nodes, refs) = parse(src);
-    assert_eq!(
-        records_named(&nodes, "RED"),
-        vec!["Constant|RED|a.cpp::Color::RED|1|1|public|[(\"enum_entry\", \"true\")]".to_string()],
-        "#124.1: plain-enum member must be a Constant scoped under its enum"
-    );
-    // A valued enumerator still resolves to its NAME, not to the value literal.
-    assert_eq!(
-        records_named(&nodes, "GREEN"),
-        vec![
-            "Constant|GREEN|a.cpp::Color::GREEN|1|1|public|[(\"enum_entry\", \"true\")]"
-                .to_string()
-        ],
-        "#124.1: `GREEN = 5` must resolve to GREEN"
-    );
-    assert_eq!(
-        records_named(&nodes, "OK"),
-        vec!["Constant|OK|a.cpp::Status::OK|2|2|public|[(\"enum_entry\", \"true\")]".to_string()],
-        "#124.1: `enum class` members must surface too (same enum_specifier kind)"
-    );
-    assert!(
-        refs_of(&refs, "Defines").contains(&"a.cpp::Color -> a.cpp::Color::BLUE".to_string()),
-        "#124.1: each member needs a Defines edge from its enum; got {:?}",
-        refs_of(&refs, "Defines")
-    );
-}
-
-// ---- #124.2: constructors and destructors surface as methods ---------------
-
-#[test]
-fn cpp_constructors_and_destructors_are_methods() {
-    let src = "class Shape {\npublic:\n    Shape();\n    virtual ~Shape();\n};\n";
-    let (nodes, refs) = parse(src);
-    assert_eq!(
-        records_named(&nodes, "Shape")
-            .into_iter()
-            .filter(|r| r.starts_with("Method|"))
-            .collect::<Vec<_>>(),
-        vec![
-            "Method|Shape|a.cpp::Shape::Shape#1|3|3|public|[(\"is_prototype\", \"true\"), \
-             (\"receiver_type\", \"a.cpp::Shape\")]"
-                .to_string()
-        ],
-        "#124.2: a constructor declaration must surface as a prototype Method"
-    );
-    assert_eq!(
-        records_named(&nodes, "~Shape"),
-        vec![
-            "Method|~Shape|a.cpp::Shape::~Shape#2|4|4|public|[(\"is_prototype\", \"true\"), \
-             (\"receiver_type\", \"a.cpp::Shape\")]"
-                .to_string()
-        ],
-        "#124.2: a destructor keeps its declared spelling `~Shape` (destructor_name text), \
-         so it is distinguishable from the constructor"
-    );
-    assert_eq!(
-        refs_of(&refs, "HasMethod"),
-        vec![
-            "a.cpp::Shape -> a.cpp::Shape::Shape#1".to_string(),
-            "a.cpp::Shape -> a.cpp::Shape::~Shape#2".to_string(),
-        ],
-        "#124.2: both must be attached to the class"
-    );
-}
-
-/// A ctor/dtor declaration is a `declaration` node, a kind that ALSO appears at
-/// file and namespace scope (`int g;`, `struct S { int x; } v;`). Intercepting
-/// it must stay confined to a class body, and must not consume the
-/// transparent-recursion arm that reaches an inline type at file scope.
-#[test]
-fn cpp_declaration_outside_a_class_body_is_not_a_method() {
-    let src = "int globalVar;\nstruct Wrapped { int x; } inst;\n";
-    let (nodes, _refs) = parse(src);
-    assert_eq!(
-        label_names(&nodes),
-        vec!["Field|x".to_string(), "Struct|Wrapped".to_string(),],
-        "#124.2: a file-scope `declaration` must not become a Method, and the inline \
-         struct it wraps must still be reached by the recursion arm"
-    );
-}
-
-// ---- #124.3: `using X = Y;` surfaces as a type alias ------------------------
-
-#[test]
-fn cpp_alias_declaration_is_a_type_alias() {
-    let src = "namespace geometry {\nusing Distance = double;\n}\n";
-    let (nodes, refs) = parse(src);
-    assert_eq!(
-        records_named(&nodes, "Distance"),
-        vec!["TypeAlias|Distance|a.cpp::geometry::Distance|2|2|public|\
-             [(\"type_annotation\", \"double\")]"
-            .to_string()],
-        "#124.3: `using X = Y;` (alias_declaration) must surface as a TypeAlias"
-    );
-    assert!(
-        refs_of(&refs, "Defines")
-            .contains(&"a.cpp::geometry -> a.cpp::geometry::Distance".to_string()),
-        "#124.3: the alias needs a Defines edge from its scope; got {:?}",
-        refs_of(&refs, "Defines")
-    );
-}
-
-/// `using namespace std;` / `using std::vector;` are `using_declaration`, a
-/// DIFFERENT node kind that must keep its existing `Import` shaping — adding the
-/// alias arm must not reroute them.
-#[test]
-fn cpp_using_declaration_stays_an_import() {
-    let src = "using namespace std;\nusing std::vector;\n";
-    let (nodes, _refs) = parse(src);
     assert_eq!(
         label_names(&nodes),
         vec![
-            "Import|namespace std".to_string(),
-            "Import|std::vector".to_string(),
+            "Field|cb".to_string(),
+            "Method|handler".to_string(),
+            "Struct|Cb".to_string(),
         ],
-        "#124.3: using-directives must stay Imports, not become TypeAliases"
-    );
-}
-
-// ---- #124.4: data members are Fields with a type annotation -----------------
-
-#[test]
-fn cpp_data_members_are_fields_with_type_annotations() {
-    let src = "class Shape {\n    int id;\n    double radius;\n    int a, b;\n\
-               \x20   const char* p;\n    int& r;\n};\n";
-    let (nodes, refs) = parse(src);
-    assert_eq!(
-        records_named(&nodes, "id"),
-        vec!["Field|id|a.cpp::Shape::id|2|2|public|[(\"type_annotation\", \"int\")]".to_string()],
-        "#124.4: a data member must be a Field (the flat C-family model), not a Constant"
-    );
-    // `int a, b;` is ONE field_declaration with TWO declarator fields — the
-    // pre-fix single-name search dropped `a` entirely.
-    assert_eq!(
-        records_named(&nodes, "a"),
-        vec!["Field|a|a.cpp::Shape::a|4|4|public|[(\"type_annotation\", \"int\")]".to_string()],
-        "#124.4: every declarator of a multi-name member declaration must surface"
-    );
-    assert_eq!(
-        records_named(&nodes, "b"),
-        vec!["Field|b|a.cpp::Shape::b|4|4|public|[(\"type_annotation\", \"int\")]".to_string()],
-        "#124.4: second declarator of `int a, b;`"
-    );
-    // Pointer and reference declarators unwrap to the bare member name.
-    assert_eq!(
-        records_named(&nodes, "p"),
-        vec!["Field|p|a.cpp::Shape::p|5|5|public|[(\"type_annotation\", \"char\")]".to_string()],
-        "#124.4: pointer_declarator must unwrap to the member name"
-    );
-    assert_eq!(
-        records_named(&nodes, "r"),
-        vec!["Field|r|a.cpp::Shape::r|6|6|public|[(\"type_annotation\", \"int\")]".to_string()],
-        "#124.4: reference_declarator (fieldless) must unwrap to the member name"
+        "#135: a pointer-to-function member is data; a plain declaration is a method"
     );
     assert_eq!(
         refs_of(&refs, "HasField"),
-        vec![
-            "a.cpp::Shape -> a.cpp::Shape::a".to_string(),
-            "a.cpp::Shape -> a.cpp::Shape::b".to_string(),
-            "a.cpp::Shape -> a.cpp::Shape::id".to_string(),
-            "a.cpp::Shape -> a.cpp::Shape::p".to_string(),
-            "a.cpp::Shape -> a.cpp::Shape::r".to_string(),
-            "a.cpp::Shape -> a.cpp::Shape::radius".to_string(),
-        ],
-        "#124.4: each data member needs a HasField edge (not Defines)"
-    );
-}
-
-/// One member declaration can bind names of DIFFERENT shapes (`int x, f();` —
-/// a data member and a method prototype), so the prototype-vs-field decision is
-/// per declarator. A node-wide test has to pick one answer for the whole
-/// declaration, and either labels `x` a method or drops `f`.
-#[test]
-fn cpp_a_mixed_member_declaration_routes_each_name_separately() {
-    let src = "class Mixed {\n    int x, f();\n};\n";
-    let (nodes, refs) = parse(src);
-    assert_eq!(
-        label_names(&nodes),
-        vec![
-            "Field|x".to_string(),
-            "Method|f".to_string(),
-            "Struct|Mixed".to_string(),
-        ],
-        "#124.4: each declared name is classified by its OWN declarator"
-    );
-    assert_eq!(
-        refs_of(&refs, "HasField"),
-        vec!["a.cpp::Mixed -> a.cpp::Mixed::x".to_string()]
+        vec!["a.cpp::Cb -> a.cpp::Cb::cb".to_string()],
+        "#135: the function pointer attaches as a field"
     );
     assert_eq!(
         refs_of(&refs, "HasMethod"),
-        vec!["a.cpp::Mixed -> a.cpp::Mixed::f#1".to_string()]
+        vec!["a.cpp::Cb -> a.cpp::Cb::handler#1".to_string()],
+        "#135: and only the real method as a method"
     );
 }
 
-/// A function-POINTER data member (`void (*cb)(int z);`) has a
-/// `function_declarator` as its outermost declarator, so the existing
-/// prototype discriminator classifies it as a method prototype. That
-/// classification is UNCHANGED by #123/#124 — neither issue enumerates it — but
-/// the NAME is now right (`cb`, from the declarator chain, not `z` from the
-/// parameter list). Pinned so the classification cannot drift silently; the
-/// modeling question is tracked in issue #135.
+/// The declarator readings that must NOT be swept up by #135's fix: a function
+/// returning a pointer is still a function, and so is a function returning a
+/// function pointer. Both put a `pointer_declarator` in the chain, so a naive
+/// "any pointer ⇒ data" rule would misclassify them.
 #[test]
-fn cpp_function_pointer_member_keeps_its_classification_with_the_right_name() {
-    let src = "class Cb {\n    void (*cb)(int z);\n};\n";
+fn cpp_function_returning_a_pointer_is_still_a_method() {
+    let src = "class R {\n    int *make();\n    int (*factory(int n))(int);\n};\n";
     let (nodes, _refs) = parse(src);
     assert_eq!(
         label_names(&nodes),
-        vec!["Method|cb".to_string(), "Struct|Cb".to_string()],
-        "the parameter name `z` must not be the member's name (#123)"
+        vec![
+            "Method|factory".to_string(),
+            "Method|make".to_string(),
+            "Struct|R".to_string(),
+        ],
+        "#135: the pointer must be read as part of the RETURN type, not the name"
     );
 }
 

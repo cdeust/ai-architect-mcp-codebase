@@ -1,14 +1,23 @@
-// parser::spec::objc_parity_tests — pins the Objective-C migration to the
-// dedicated `objc` walker at EXACT parity with the hand-written walker it
-// replaced (ADR-0055 phase 8, §5 step 3).
+// parser::spec::objc_parity_tests — the exact-multiset ground truth for the
+// Objective-C walker (ADR-0055 phase 8, §5 step 3).
 //
-// The expected records below ARE the pre-migration `parse_objc_file` output
-// (full 7-tuple per node + full ref triples), captured mechanically from the
-// hand-written walker on this corpus BEFORE it was deleted — re-captured on an
-// `origin/main` worktree after the corpus was extended for mutation coverage
-// (37 nodes, 38 refs, 0 parse errors). Per-EdgeKind F1(new-vs-groundtruth) =
-// 1.000 == F1(old-vs-groundtruth). The test parses through the crate's public
-// `parse_file`, so it also covers the ObjC dispatch arm.
+// The table STARTED as the pre-migration `parse_objc_file` output, captured
+// mechanically before that walker was deleted (37 nodes, 38 refs). It is now
+// 39 nodes / 40 refs: issues #127 and #128 corrected two defects the migration
+// had preserved, and every changed row was verified in BOTH directions against an
+// issue clause (the set difference was computed each way):
+//
+//   +2 nodes / +2 refs are symbols the old walker DROPPED (#127): `Struct|Node`
+//     and `Field|v` (+ `Defines`, `HasField`) from `typedef struct Node { int v; }
+//     NodeT;` — the alias `Constant|NodeT` is unchanged, because `Node` is a
+//     tagged type and the tag and the alias are two genuine names.
+//   4 rows are 1:1 REPLACEMENTS (#128): the three keyword-selector methods
+//     `areaWithWidth` -> `areaWithWidth:height:` (its declaration AND its
+//     definition) and `shapeNamed` -> `shapeNamed:`, plus the one `CallSite`
+//     whose QN is keyed on the now-renamed caller.
+//
+// Per-EdgeKind F1 against this table is 1.000. The test parses through the crate's
+// public `parse_file`, so it also covers the ObjC dispatch arm.
 //
 // The exact-multiset assertion (sorted `Vec`, not a set) is the mutation oracle:
 // it kills every walker mutant that perturbs, adds, or drops any emitted node or
@@ -16,10 +25,10 @@
 // interface, implementation, and category each emit (a set would collapse them,
 // so a mutant dropping one would survive; the multiset does not).
 //
-// The corpus exercises every ObjC concern the walker handles, plus the edge
-// cases that pin specific behaviors (each preserved for parity, two documenting
-// a pre-existing defect filed separately) AND the constructs added to kill
-// otherwise-surviving mutants (§12), each noted `[mutant]`:
+// The corpus exercises every ObjC concern the walker handles, plus the edge cases
+// that pin specific behaviors AND the constructs added to kill otherwise-surviving
+// mutants (§12), each noted `[mutant]`. Per-clause pins for #127/#128 live in
+// `objc_extraction_tests`; this module answers "is the whole output exactly right":
 //   - `#import <…>` / `#import "…"` / `#include <…>` → `Import` (display = last
 //     path segment, edge = full path); `@import UIKit;` → `Import` (display =
 //     full module text, NOT a path segment).
@@ -36,9 +45,10 @@
 //   - `enum Dir { NORTH, SOUTH = 5 }` → `Enum` + two `Constant`s (`enum_entry`);
 //     an enumerator WITH a value still resolves to its name.
 //   - `typedef int MyInt;` → `Constant` (`typedef=true`). `typedef struct Node {
-//     int v; } NodeT;` → ONLY `Constant|NodeT`: the inline `Node` struct and its
-//     field `v` are DROPPED (pre-existing defect #127, preserved — the ObjC
-//     walker never recursed a typedef's inline type, unlike C #107).
+//     int v; } NodeT;` → `Struct|Node` + `Field|v` (`HasField`) AND
+//     `Constant|NodeT` (issue #127, fixed): the typedef's inline type definition
+//     is recursed, via the same body-presence decision C uses (#107), so a bare
+//     `typedef struct Node OtherT;` reference still emits no duplicate `Node`.
 //   - `@protocol Drawable` → a `Trait` with NO member extraction (the `- (void)
 //     draw;` inside it emits NOTHING — negative assertion).
 //   - `@interface Shape : NSObject <Drawable>` → a `Struct` keyed `…::Shape`,
@@ -46,12 +56,15 @@
 //     `@implementation Shape` and the category `@interface Shape (Extras)` are
 //     TWO more `Struct` nodes on the SAME QN (three `Defines(→…::Shape)`). The
 //     category carries `is_category=true` + `category=Extras`.
-//   - Methods: instance `- (void)start;` and class `+ (instancetype)shapeNamed:`
-//     both → `Method` (`receiver_type = …::Shape`), keyed `…::{selector}#{seq}`.
-//     The keyword-selector method `- (int)areaWithWidth:(int)w height:(int)h;`
-//     resolves to name `areaWithWidth` — the grammar shapes the selector as a
-//     bare `identifier` + `method_parameter`s (no `keyword_declarator`), so only
-//     the first keyword is captured (pre-existing defect #128, preserved).
+//   - Methods: instance `- (void)start;` and class
+//     `+ (instancetype)shapeNamed:(NSString *)name;` both → `Method`
+//     (`receiver_type = …::Shape`), keyed `…::{selector}#{seq}`, and each carries
+//     its FULL selector (issue #128, fixed): `start` (unary, no colon),
+//     `shapeNamed:` (one keyword WITH an argument), and
+//     `areaWithWidth:height:`. The grammar shapes a selector as one bare
+//     `identifier` per keyword, each followed by a `method_parameter` when it
+//     takes an argument, so the colon is emitted exactly for those — which makes a
+//     method's name agree with what a message SEND to it resolves to.
 //   - Message sends: `[self doThingWith:1 andY:2]` → `Calls doThingWith:andY:`
 //     (keyword send joins `:`), `[self compute:w]` → `Calls compute:`,
 //     `[self refresh]` → `Calls refresh` (UNARY send, no `:`), `NSLog(@"hi")` →
@@ -66,10 +79,11 @@
 //     guard (drops `gated` + its `helper` call), mirroring the C++ `#ifdef`
 //     fixture (#125).
 //   - One per-file `seq` keys methods, functions, AND call sites in one DFS
-//     order (`start#1 areaWithWidth#2 shapeNamed#3` in the interface, then
-//     `start#4` + its calls `#5 #6 #7 #8`, `areaWithWidth#9` + `compute:#10`,
-//     `extra#11`, `freeFunction#12` + `method#13 printf#14`, `gated#15` +
-//     `helper#16`).
+//     order (`start#1 areaWithWidth:height:#2 shapeNamed:#3` in the interface,
+//     then `start#4` + its calls `#5 #6 #7 #8`, `areaWithWidth:height:#9` +
+//     `compute:#10`, `extra#11`, `freeFunction#12` + `method#13 printf#14`,
+//     `gated#15` + `helper#16`). Correcting the selectors (#128) renamed those
+//     QNs but did NOT shift any `seq`: no node was added or removed by it.
 
 use std::collections::BTreeSet;
 
@@ -146,7 +160,7 @@ fn ref_triple(e: &ExtractedRef) -> (String, String, String) {
 fn expected_node_records() -> Vec<&'static str> {
     vec![
         "CallSite|NSLog|app/Shape.m::Shape::start#4::call@28:5#6|28|28|public|[(\"callee_name\", \"NSLog\")]",
-        "CallSite|compute:|app/Shape.m::Shape::areaWithWidth#9::call@32:12#10|32|32|public|[(\"callee_name\", \"compute:\")]",
+        "CallSite|compute:|app/Shape.m::Shape::areaWithWidth:height:#9::call@32:12#10|32|32|public|[(\"callee_name\", \"compute:\")]",
         "CallSite|doThingWith:andY:|app/Shape.m::Shape::start#4::call@26:5#8|26|26|public|[(\"callee_name\", \"doThingWith:andY:\")]",
         "CallSite|helper|app/Shape.m::Shape::start#4::call@29:5#5|29|29|public|[(\"callee_name\", \"helper\")]",
         "CallSite|helper|app/Shape.m::gated#15::call@47:12#16|47|47|public|[(\"callee_name\", \"helper\")]",
@@ -160,6 +174,7 @@ fn expected_node_records() -> Vec<&'static str> {
         "Enum|Dir|app/Shape.m::Dir|8|8|public|[]",
         "Field|f|app/Shape.m::Value::f|7|7|public|[(\"type_annotation\", \"float\")]",
         "Field|i|app/Shape.m::Value::i|7|7|public|[(\"type_annotation\", \"int\")]",
+        "Field|v|app/Shape.m::Node::v|10|10|public|[(\"type_annotation\", \"int\")]",
         "Field|x|app/Shape.m::Point::x|6|6|public|[(\"type_annotation\", \"int\")]",
         "Field|y|app/Shape.m::Point::y|6|6|public|[(\"type_annotation\", \"int\")]",
         "Field|z|app/Shape.m::Wrapper::z|11|11|public|[(\"type_annotation\", \"int\")]",
@@ -169,12 +184,13 @@ fn expected_node_records() -> Vec<&'static str> {
         "Import|MyHeader.h|app/Shape.m::import:MyHeader.h|2|3|public|[(\"path\", \"MyHeader.h\")]",
         "Import|UIKit|app/Shape.m::import:UIKit|4|4|public|[(\"path\", \"UIKit\")]",
         "Import|stdio.h|app/Shape.m::import:stdio.h|3|4|public|[(\"path\", \"stdio.h\")]",
-        "Method|areaWithWidth|app/Shape.m::Shape::areaWithWidth#2|20|20|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
-        "Method|areaWithWidth|app/Shape.m::Shape::areaWithWidth#9|31|33|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
+        "Method|areaWithWidth:height:|app/Shape.m::Shape::areaWithWidth:height:#2|20|20|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
+        "Method|areaWithWidth:height:|app/Shape.m::Shape::areaWithWidth:height:#9|31|33|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
         "Method|extra|app/Shape.m::Shape::extra#11|37|37|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
-        "Method|shapeNamed|app/Shape.m::Shape::shapeNamed#3|21|21|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
+        "Method|shapeNamed:|app/Shape.m::Shape::shapeNamed:#3|21|21|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
         "Method|start|app/Shape.m::Shape::start#1|19|19|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
         "Method|start|app/Shape.m::Shape::start#4|25|30|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
+        "Struct|Node|app/Shape.m::Node|10|10|public|[]",
         "Struct|Point|app/Shape.m::Point|6|6|public|[]",
         "Struct|Shape|app/Shape.m::Shape|18|22|public|[]",
         "Struct|Shape|app/Shape.m::Shape|24|34|public|[]",
@@ -190,7 +206,11 @@ fn expected_node_records() -> Vec<&'static str> {
 /// `Vec` to keep the duplicates.
 fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        ("Calls", "app/Shape.m::Shape::areaWithWidth#9", "compute:"),
+        (
+            "Calls",
+            "app/Shape.m::Shape::areaWithWidth:height:#9",
+            "compute:",
+        ),
         ("Calls", "app/Shape.m::Shape::start#4", "NSLog"),
         ("Calls", "app/Shape.m::Shape::start#4", "doThingWith:andY:"),
         ("Calls", "app/Shape.m::Shape::start#4", "helper"),
@@ -198,11 +218,10 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         ("Calls", "app/Shape.m::freeFunction#12", "method"),
         ("Calls", "app/Shape.m::freeFunction#12", "printf"),
         ("Calls", "app/Shape.m::gated#15", "helper"),
-        ("Defines", "app/Shape.m::Dir", "app/Shape.m::Dir::NORTH"),
-        ("Defines", "app/Shape.m::Dir", "app/Shape.m::Dir::SOUTH"),
         ("Defines", "app/Shape.m", "app/Shape.m::Dir"),
         ("Defines", "app/Shape.m", "app/Shape.m::Drawable"),
         ("Defines", "app/Shape.m", "app/Shape.m::MyInt"),
+        ("Defines", "app/Shape.m", "app/Shape.m::Node"),
         ("Defines", "app/Shape.m", "app/Shape.m::NodeT"),
         ("Defines", "app/Shape.m", "app/Shape.m::Point"),
         ("Defines", "app/Shape.m", "app/Shape.m::Shape"),
@@ -212,7 +231,10 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         ("Defines", "app/Shape.m", "app/Shape.m::Wrapper"),
         ("Defines", "app/Shape.m", "app/Shape.m::freeFunction#12"),
         ("Defines", "app/Shape.m", "app/Shape.m::gated#15"),
+        ("Defines", "app/Shape.m::Dir", "app/Shape.m::Dir::NORTH"),
+        ("Defines", "app/Shape.m::Dir", "app/Shape.m::Dir::SOUTH"),
         ("Extends", "app/Shape.m::Shape", "NSObject"),
+        ("HasField", "app/Shape.m::Node", "app/Shape.m::Node::v"),
         ("HasField", "app/Shape.m::Point", "app/Shape.m::Point::x"),
         ("HasField", "app/Shape.m::Point", "app/Shape.m::Point::y"),
         ("HasField", "app/Shape.m::Value", "app/Shape.m::Value::f"),
@@ -225,12 +247,12 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         (
             "HasMethod",
             "app/Shape.m::Shape",
-            "app/Shape.m::Shape::areaWithWidth#2",
+            "app/Shape.m::Shape::areaWithWidth:height:#2",
         ),
         (
             "HasMethod",
             "app/Shape.m::Shape",
-            "app/Shape.m::Shape::areaWithWidth#9",
+            "app/Shape.m::Shape::areaWithWidth:height:#9",
         ),
         (
             "HasMethod",
@@ -240,7 +262,7 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         (
             "HasMethod",
             "app/Shape.m::Shape",
-            "app/Shape.m::Shape::shapeNamed#3",
+            "app/Shape.m::Shape::shapeNamed:#3",
         ),
         (
             "HasMethod",
@@ -267,14 +289,18 @@ fn parse() -> ParseResult {
 fn objc_spec_output_is_exact_parity() {
     let r = parse();
     assert_eq!(r.parse_errors, 0, "clean ObjC must report 0 parse errors");
+    // Counts come FROM the expected tables, not from a second hardcoded literal:
+    // two sources of truth for the same number drift independently, and the count
+    // assertion exists only to fail with a legible number before the multiset
+    // comparison prints two 40-row lists.
     assert_eq!(
         r.nodes.len(),
-        37,
+        expected_node_records().len(),
         "ObjC node count diverged from ground truth"
     );
     assert_eq!(
         r.refs.len(),
-        38,
+        expected_refs().len(),
         "ObjC ref count diverged from ground truth"
     );
 

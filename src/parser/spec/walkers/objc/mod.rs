@@ -33,7 +33,8 @@ mod c_constructs;
 
 use tree_sitter::Node;
 
-use super::super::lang_spec::{LangSpec, ObjcFamilySpec};
+use super::super::family_specs::ObjcFamilySpec;
+use super::super::lang_spec::LangSpec;
 use super::{calls, end_line_of, imports, kind_in, line_of, WalkCtx};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_FUNCTION, LABEL_METHOD,
@@ -62,9 +63,9 @@ pub(super) fn walk_objc_defs(
         } else if kind_in(of.func_def_kinds, k) {
             emit_function(spec, of, ctx, child, scope);
         } else if kind_in(of.struct_kinds, k) {
-            c_constructs::emit_c_struct(spec, of, ctx, child, scope);
+            c_constructs::emit_c_struct(spec, of, ctx, child, scope, None);
         } else if kind_in(of.enum_kinds, k) {
-            c_constructs::emit_c_enum(spec, of, ctx, child, scope);
+            c_constructs::emit_c_enum(spec, of, ctx, child, scope, None);
         } else if kind_in(of.typedef_kinds, k) {
             c_constructs::emit_c_typedef(spec, of, ctx, child, scope);
         } else if kind_in(spec.import_node_kinds, k) {
@@ -184,31 +185,48 @@ fn emit_protocol(spec: &LangSpec, of: &ObjcFamilySpec, ctx: &mut WalkCtx, node: 
     });
 }
 
-/// The method's selector name: the FIRST bare `plain_identifier_kind`
-/// (`identifier`) direct child of the method node.
+/// The method's FULL selector (issue #128): every selector keyword, each followed
+/// by `:` when it takes an argument.
 ///
-/// tree-sitter-objc 3.0.2 shapes `- (int)areaWithWidth:(int)w height:(int)h;`
-/// as `identifier("areaWithWidth")` followed by `method_parameter` nodes and a
-/// second bare `identifier("height")` — there is NO `keyword_declarator` (the
-/// grammar's selector keywords surface as bare identifiers + `method_parameter`s,
-/// verified against the AST). The hand-written `method_selector` LOOKED for
-/// `keyword_declarator` children and, finding none, fell through to its unary
-/// branch (the first bare identifier), so a keyword selector resolved to its
-/// FIRST keyword only (`areaWithWidth`, not `areaWithWidth:height:`) — a
-/// pre-existing defect (issue #128). This reproduces that EXACT output; the dead
-/// `keyword_declarator` branch is removed (§9/§12: every mutant of an unreachable
-/// branch survives — remove it, don't test it), which is behavior-preserving
-/// (the ObjC parity suite proves the selectors are unchanged).
+/// Preconditions: `node` is a `method_kinds` declaration/definition.
+/// Postconditions: `"draw"` for a unary selector, `"setX:y:z:"` for a keyword
+/// selector, `""` when no selector keyword is present. The result is the ObjC
+/// selector as the language spells it, so it matches what a message SEND resolves
+/// to — the asymmetry #128 reports.
+///
+/// The shape, dumped from tree-sitter-objc 3.0.2 rather than inferred:
+/// `- (void)setX:(int)x y:(int)y;` is a `method_declaration` whose DIRECT children
+/// are, in order, `method_type`, `identifier("setX")`, `method_parameter(":(int)x")`,
+/// `identifier("y")`, `method_parameter(":(int)y")`. So each selector keyword is a
+/// bare `identifier` child, and it takes an argument exactly when the NEXT direct
+/// child is a `method_parameter`. `- (void)draw;` has the single `identifier`
+/// child and no `method_parameter`, hence no colon.
+///
+/// Only DIRECT children are considered: a `method_parameter` contains its own
+/// `identifier` (the parameter's name, `x`), which is not part of the selector.
+///
+/// The pre-#128 code took the FIRST bare identifier and stopped, yielding `setX`.
+/// The grammar also declares a `keyword_declarator` node, but this version does
+/// NOT produce one for either form (verified on both a declaration and a
+/// definition), so no branch is written for it (§9: no unreachable code).
+/// source: tree-sitter-objc 3.0.2 src/node-types.json + the parsed AST.
 fn method_selector(of: &ObjcFamilySpec, source: &str, node: Node) -> String {
     let mut cursor = node.walk();
-    // Bind before returning so the `children` iterator temporary (which borrows
-    // `cursor`) drops before `cursor` itself (E0597).
-    let sel = node
-        .children(&mut cursor)
-        .find(|c| c.kind() == of.plain_identifier_kind)
-        .map(|c| node_text(source, c))
-        .unwrap_or_default();
-    sel
+    let children: Vec<Node> = node.children(&mut cursor).collect();
+    let mut selector = String::new();
+    for (i, child) in children.iter().enumerate() {
+        if child.kind() != of.plain_identifier_kind {
+            continue;
+        }
+        selector.push_str(&node_text(source, *child));
+        let takes_argument = children
+            .get(i + 1)
+            .is_some_and(|next| kind_in(of.method_parameter_kinds, next.kind()));
+        if takes_argument {
+            selector.push(':');
+        }
+    }
+    selector
 }
 
 /// Emits a method (`Method` + `HasMethod`, `receiver_type` = the class QN),

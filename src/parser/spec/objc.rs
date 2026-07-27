@@ -32,7 +32,8 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::lang_spec::{LangSpec, ObjcFamilySpec};
+use super::family_specs::ObjcFamilySpec;
+use super::lang_spec::LangSpec;
 use crate::parser::{node_field_text, node_text, qual, Language};
 
 /// The `call_expression` field naming the callee.
@@ -223,6 +224,7 @@ static OBJC_FAMILY: ObjcFamilySpec = ObjcFamilySpec {
     // reference); the ObjC parity suite proves the output is unchanged.
     identifier_kinds: &["identifier", "type_identifier"],
     plain_identifier_kind: "identifier",
+    method_parameter_kinds: &["method_parameter"],
     typedef_name_kind: "type_identifier",
 };
 

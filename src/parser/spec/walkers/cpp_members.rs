@@ -20,9 +20,11 @@
 
 use tree_sitter::Node;
 
-use super::super::lang_spec::{CppFamilySpec, LangSpec};
-use super::cpp::{emit_class_like, has_function_declarator};
+use super::super::family_specs::CppFamilySpec;
+use super::super::lang_spec::LangSpec;
+use super::cpp::{declarator_declares, emit_class_like, Declares};
 use super::declarator::{declarator_field_children, declarator_name, named_or_first_identifier};
+use super::inline_type::defines_a_type;
 use super::{end_line_of, kind_in, line_of, WalkCtx};
 use crate::parser::{
     node_field_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM, LABEL_FIELD,
@@ -53,9 +55,9 @@ pub(super) fn emit_enum(
     node: Node,
     scope: &str,
 ) {
-    let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) else {
+    if !defines_a_type(spec, node) {
         return;
-    };
+    }
     let name = named_or_first_identifier(cf.naming, spec, ctx.source, node);
     if name.is_empty() {
         return;
@@ -75,6 +77,9 @@ pub(super) fn emit_enum(
         from_qualified_name: scope.to_string(),
         to_qualified_name: qn.clone(),
     });
+    let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) else {
+        return;
+    };
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
         if !kind_in(cf.enum_member_kinds, child.kind()) {
@@ -115,9 +120,14 @@ pub(super) fn emit_enum(
 /// The shapes are disjoint per NAME but share one node kind, and one declaration
 /// can mix them (`int x, f();`), which is why the decision is per declarator
 /// rather than per node — a node-wide test would label `x` a method or drop `f`:
-///   - `int f() const;` / `Point(int,int);` → function declarator ⇒ prototype
-///   - `int a, b;` / `int& r;`              → plain declarators   ⇒ data members
-///   - `class Inner { int z; };`            → `type` specifier    ⇒ nested type
+///   - `int f() const;` / `Point(int,int);` → declares a function ⇒ prototype
+///   - `int a, b;` / `int& r;` / `void (*cb)(int);` → declares data ⇒ Field
+///   - `class Inner { int z; };`            → `type` specifier     ⇒ nested type
+///
+/// "Declares a function" is `cpp::declarator_declares`, which reads the declarator
+/// the way C++ syntax is read rather than scanning the subtree for a
+/// `function_declarator` — that scan classified the function-POINTER member
+/// `void (*cb)(int);` as a method prototype (issue #135).
 pub(super) fn emit_member(
     spec: &LangSpec,
     cf: &CppFamilySpec,
@@ -132,7 +142,7 @@ pub(super) fn emit_member(
         if name.is_empty() {
             continue;
         }
-        if has_function_declarator(cf, declarator) {
+        if declarator_declares(cf, declarator) == Declares::Function {
             emit_member_proto(spec, ctx, node, scope, &name);
         } else {
             emit_member_field(spec, cf, ctx, node, scope, &name, &type_text);
@@ -149,10 +159,10 @@ pub(super) fn emit_member(
 /// class/struct/union/enum specifier with a body; emits nothing otherwise.
 ///
 /// A member whose `type_field` is a bare forward declaration (`class Inner;`) is
-/// the same node shape as a definition, and must contribute nothing — the
-/// body-presence guard that enforces that lives in the two emitters below, so
-/// this dispatch does not repeat it (#107's lesson, one implementation). Pinned by
-/// `cpp_forward_declaration_in_a_class_body_emits_nothing`.
+/// the same node shape as a definition and must contribute nothing. That test is
+/// NOT repeated here: it lives in `emit_class_like` / `emit_enum` (the shared
+/// `inline_type::defines_a_type`), so every route into an emitter is covered by one
+/// guard. Pinned by `cpp_forward_declaration_in_a_class_body_emits_nothing`.
 fn emit_nested_type(
     spec: &LangSpec,
     cf: &CppFamilySpec,

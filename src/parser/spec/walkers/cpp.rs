@@ -32,7 +32,8 @@
 
 use tree_sitter::Node;
 
-use super::super::lang_spec::{CppFamilySpec, LangSpec};
+use super::super::family_specs::CppFamilySpec;
+use super::super::lang_spec::LangSpec;
 use super::cpp_members;
 use super::declarator::{declarator_name, named_or_first_identifier};
 use super::{calls, end_line_of, imports, kind_in, line_of, WalkCtx};
@@ -45,9 +46,9 @@ use crate::parser::{
 /// and transparently through templates and any unmatched wrapper with named
 /// children. All dispatched kinds are disjoint EXCEPT `member_decl_kinds`, whose
 /// `declaration` also occurs at file/namespace scope — its arm is therefore
-/// guarded on a class scope plus a function declarator, and falls through to the
-/// recursion arm otherwise (which is how `struct S { int x; } v;` at file scope
-/// is still reached).
+/// guarded on being inside a class scope, and falls through to the recursion arm
+/// otherwise (which is how `struct S { int x; } v;` at file scope is still
+/// reached).
 pub(super) fn walk_cpp_defs(
     spec: &LangSpec,
     cf: &CppFamilySpec,
@@ -82,15 +83,18 @@ pub(super) fn walk_cpp_defs(
             if enclosing_type.is_some() {
                 cpp_members::emit_member(spec, cf, ctx, child, scope);
             }
-        } else if kind_in(cf.member_decl_kinds, k)
-            && enclosing_type.is_some()
-            && has_function_declarator(cf, child)
-        {
+        } else if kind_in(cf.member_decl_kinds, k) && enclosing_type.is_some() {
             // A constructor/destructor declaration: the grammar spells it as a
             // bare `declaration` (no return type), which is why the pre-#124
             // walker emitted nothing for `Point(int,int);` / `~Point();`. It goes
             // through the same per-declarator member path as a `field_declaration`
             // — the shapes differ only in whether the grammar supplies a `type`.
+            //
+            // No "does it carry a function declarator?" pre-filter: `emit_member`
+            // already decides per declared name and emits nothing for a declarator
+            // that binds no name, so a second, coarser test upstream would be a
+            // branch no input can distinguish (§9 — mutation testing found exactly
+            // that: every mutant of the filter survived).
             cpp_members::emit_member(spec, cf, ctx, child, scope);
         } else if kind_in(cf.typedef_kinds, k) {
             cpp_members::emit_typedef(spec, cf, ctx, child, scope);
@@ -114,22 +118,91 @@ pub(super) fn walk_cpp_defs(
     }
 }
 
-/// Whether `node` carries a function declarator anywhere in its subtree — the
-/// test that distinguishes a member declaration that is a method prototype
-/// (`int f() const;`, `Point(int,int);`) from a data member (`int x;`) or a
-/// nested-type declaration (`class Inner;`). DFS over the whole node.
-pub(super) fn has_function_declarator(cf: &CppFamilySpec, node: Node) -> bool {
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if n.kind() == cf.func_declarator_kind {
-            return true;
-        }
-        let mut cursor = n.walk();
-        for c in n.children(&mut cursor) {
-            stack.push(c);
-        }
+/// What a declarator DECLARES, read the way C++ declarator syntax is read:
+/// inside-out from the name.
+#[derive(PartialEq, Eq, Debug)]
+pub(super) enum Declares {
+    /// A function: `area()`, `Point(int,int)`, `int *f()` (a function returning a
+    /// pointer), `int (*table(int))(int)` (a function returning a function
+    /// pointer). ⇒ a method prototype when it is a class member.
+    Function,
+    /// Data: `int *p`, `int& r`, and `void (*cb)(int)` — a POINTER to a function
+    /// is data, not a function (issue #135). ⇒ a `Field`.
+    Data,
+    /// Only the bare name, with nothing said about it yet.
+    Name,
+}
+
+/// Reads a declarator and reports whether the name it binds is a function or data.
+///
+/// Preconditions: `declarator` is a declaration's `declarator_field` child (or a
+/// nested declarator). Postconditions: `Function` iff the outermost construct
+/// applied to the name is a call signature; `Data` iff it is a pointer or
+/// reference; `Name` for a bare identifier. Terminates because every recursion
+/// descends to a strictly smaller subtree.
+///
+/// This replaces a whole-subtree "is there a `function_declarator` anywhere?" scan,
+/// which could not tell `void cb(int z);` (a method) from `void (*cb)(int z);` (a
+/// data member of function-pointer type) — both have a `function_declarator` as the
+/// OUTERMOST declarator, and only what sits between it and the name differs
+/// (issue #135):
+///
+///   `area()`              function_declarator{field_identifier}          → Function
+///   `(*cb)(int)`          function_declarator{paren{pointer{name}}}      → Data
+///   `int *f()`            pointer{function_declarator{name}}             → Function
+///   `int (*table(int))()` function_declarator{paren{pointer{fn{name}}}}  → Function
+///
+/// The rule that produces all four: a function declarator asks what its OWN
+/// declarator field declares — if that is a pointer, the name is a pointer TO a
+/// function (data); otherwise the name IS the function.
+/// source: tree-sitter-cpp 0.23.4 node-types.json (function_declarator,
+/// pointer_declarator and array_declarator declare a required `declarator` field;
+/// parenthesized_declarator and reference_declarator are fieldless).
+pub(super) fn declarator_declares(cf: &CppFamilySpec, declarator: Node) -> Declares {
+    let kind = declarator.kind();
+    let inner = || {
+        declarator
+            .child_by_field_name(cf.naming.declarator_field)
+            .or_else(|| first_declarator_child(cf, declarator))
+    };
+    if kind == cf.func_declarator_kind {
+        return match inner().map(|d| declarator_declares(cf, d)) {
+            // `(*cb)(int)`: the inner declarator makes the name a pointer, so the
+            // whole thing is a pointer to a function — data.
+            Some(Declares::Data) => Declares::Data,
+            // `area()` (bare name) or `(*table(int))(int)` (inner is itself a
+            // function): the name is a function.
+            _ => Declares::Function,
+        };
     }
-    false
+    if kind_in(cf.pointer_declarator_kinds, kind) {
+        return match inner().map(|d| declarator_declares(cf, d)) {
+            // `int *f()` — a function returning a pointer is still a function.
+            Some(Declares::Function) => Declares::Function,
+            _ => Declares::Data,
+        };
+    }
+    if kind_in(cf.grouping_declarator_kinds, kind) {
+        return inner()
+            .map(|d| declarator_declares(cf, d))
+            .unwrap_or(Declares::Name);
+    }
+    Declares::Name
+}
+
+/// The first named child of a FIELDLESS declarator wrapper
+/// (`parenthesized_declarator`, `reference_declarator`), skipping the parameter
+/// list. Those two kinds carry no `declarator` field at all, so the chain is
+/// followed through children instead.
+fn first_declarator_child<'t>(cf: &CppFamilySpec, node: Node<'t>) -> Option<Node<'t>> {
+    let params_id = node
+        .child_by_field_name(cf.naming.parameters_field)
+        .map(|p| p.id());
+    let mut cursor = node.walk();
+    let found = node
+        .named_children(&mut cursor)
+        .find(|c| Some(c.id()) != params_id);
+    found
 }
 
 /// Emits a namespace (`Struct`, `is_namespace=true`) + `Defines`, then recurses
