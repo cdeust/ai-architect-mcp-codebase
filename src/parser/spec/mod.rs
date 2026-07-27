@@ -53,6 +53,8 @@ mod guard_grammar;
 #[cfg(test)]
 mod java_parity_tests;
 #[cfg(test)]
+mod kotlin_ground_truth;
+#[cfg(test)]
 mod kotlin_parity_tests;
 #[cfg(test)]
 mod objc_extraction_tests;
