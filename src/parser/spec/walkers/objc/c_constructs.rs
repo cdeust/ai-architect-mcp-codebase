@@ -22,8 +22,7 @@
 
 use tree_sitter::Node;
 
-use super::super::super::family_specs::ObjcFamilySpec;
-use super::super::super::lang_spec::LangSpec;
+use super::super::super::lang_spec::{LangSpec, ObjcFamilySpec};
 use super::super::declarator::first_field_identifier;
 use super::super::inline_type::{defines_a_type, inline_type_definition, InlineName};
 use super::super::{end_line_of, kind_in, line_of, WalkCtx};

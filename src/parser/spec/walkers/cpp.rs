@@ -32,8 +32,7 @@
 
 use tree_sitter::Node;
 
-use super::super::family_specs::CppFamilySpec;
-use super::super::lang_spec::LangSpec;
+use super::super::lang_spec::{CppFamilySpec, LangSpec};
 use super::cpp_members;
 use super::declarator::{declarator_name, named_or_first_identifier};
 use super::{calls, end_line_of, imports, kind_in, line_of, WalkCtx};

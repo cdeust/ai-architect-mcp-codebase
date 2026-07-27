@@ -18,8 +18,7 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::family_specs::{CFamilySpec, DeclaratorNaming};
-use super::lang_spec::LangSpec;
+use super::lang_spec::{CFamilySpec, DeclaratorNaming, LangSpec};
 use crate::parser::Language;
 
 /// The tree-sitter-c field naming a call expression's callee. Used only by the

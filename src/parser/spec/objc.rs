@@ -32,8 +32,7 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::family_specs::ObjcFamilySpec;
-use super::lang_spec::LangSpec;
+use super::lang_spec::{LangSpec, ObjcFamilySpec};
 use crate::parser::{node_field_text, node_text, qual, Language};
 
 /// The `call_expression` field naming the callee.

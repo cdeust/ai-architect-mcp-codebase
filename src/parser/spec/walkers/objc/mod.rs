@@ -33,8 +33,7 @@ mod c_constructs;
 
 use tree_sitter::Node;
 
-use super::super::family_specs::ObjcFamilySpec;
-use super::super::lang_spec::LangSpec;
+use super::super::lang_spec::{LangSpec, ObjcFamilySpec};
 use super::{calls, end_line_of, imports, kind_in, line_of, WalkCtx};
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_FUNCTION, LABEL_METHOD,

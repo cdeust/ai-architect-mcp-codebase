@@ -14,8 +14,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::family_specs::DeclaratorNaming;
-use super::lang_spec::LangSpec;
+use super::lang_spec::{DeclaratorNaming, LangSpec};
 use super::registry::{MIGRATED_SPECS, SHALLOW_SPECS};
 use super::shallow::ShallowSpec;
 use crate::parser::Language;

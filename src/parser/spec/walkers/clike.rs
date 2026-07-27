@@ -23,8 +23,7 @@
 
 use tree_sitter::Node;
 
-use super::super::family_specs::CFamilySpec;
-use super::super::lang_spec::LangSpec;
+use super::super::lang_spec::{CFamilySpec, LangSpec};
 use super::declarator::{
     declarator_field_children, declarator_name, first_field_identifier, first_identifier,
     named_or_first_identifier,

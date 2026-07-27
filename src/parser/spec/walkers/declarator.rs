@@ -16,8 +16,7 @@
 
 use tree_sitter::Node;
 
-use super::super::family_specs::DeclaratorNaming;
-use super::super::lang_spec::LangSpec;
+use super::super::lang_spec::{DeclaratorNaming, LangSpec};
 use super::kind_in;
 use crate::parser::{node_field_text, node_text};
 

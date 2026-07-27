@@ -22,7 +22,7 @@ use super::conventions::LanguageConventions;
 // re-exported here so every consumer's `super::lang_spec::{CFamilySpec, …}`
 // import — and this module's own `LangSpec` field types — resolve unchanged.
 pub(crate) use super::families::{
-    CFamilySpec, CppFamilySpec, EmbeddedSpec, ObjcFamilySpec, TsFamilySpec,
+    CFamilySpec, CppFamilySpec, DeclaratorNaming, EmbeddedSpec, ObjcFamilySpec, TsFamilySpec,
 };
 use crate::parser::Language;
 

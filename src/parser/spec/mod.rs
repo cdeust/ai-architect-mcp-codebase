@@ -40,6 +40,8 @@ mod cpp_ground_truth;
 #[cfg(test)]
 mod cpp_parity_tests;
 #[cfg(test)]
+mod cpp_shape_tests;
+#[cfg(test)]
 mod embedded_tests;
 #[cfg(test)]
 mod guard;
@@ -47,6 +49,8 @@ mod guard;
 mod java_parity_tests;
 #[cfg(test)]
 mod kotlin_parity_tests;
+#[cfg(test)]
+mod objc_extraction_tests;
 #[cfg(test)]
 mod objc_parity_tests;
 #[cfg(test)]

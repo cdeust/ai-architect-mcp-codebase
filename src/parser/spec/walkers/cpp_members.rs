@@ -20,8 +20,7 @@
 
 use tree_sitter::Node;
 
-use super::super::family_specs::CppFamilySpec;
-use super::super::lang_spec::LangSpec;
+use super::super::lang_spec::{CppFamilySpec, LangSpec};
 use super::cpp::{declarator_declares, emit_class_like, Declares};
 use super::declarator::{declarator_field_children, declarator_name, named_or_first_identifier};
 use super::inline_type::defines_a_type;
