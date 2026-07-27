@@ -39,9 +39,8 @@
 //     transparent-recursion arm; `struct { int q; } anon;` — an ANONYMOUS struct
 //     (also `declaration`-wrapped) that resolves to an empty name and emits
 //     NOTHING. [mutant] Wrapper kills `walk_objc_defs`'s `named_child_count() >
-//     0` → `<`/`==` (they stop recursing, dropping Wrapper+z); anon kills
-//     `first_identifier`'s `-> "xyzzy"` (would emit `Struct|xyzzy`) and its
-//     `== ` → `!=` (would emit `Struct|struct`).
+//     0` → `<`/`==` (they stop recursing, dropping Wrapper+z); anon pins that an
+//     anonymous specifier contributes nothing.
 //   - `enum Dir { NORTH, SOUTH = 5 }` → `Enum` + two `Constant`s (`enum_entry`);
 //     an enumerator WITH a value still resolves to its name.
 //   - `typedef int MyInt;` → `Constant` (`typedef=true`). `typedef struct Node {
