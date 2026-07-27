@@ -43,8 +43,8 @@ use tree_sitter::{Node, Parser};
 
 use super::lang_spec::LangSpec;
 use crate::parser::{
-    collect_error_ranges, count_parse_errors, parse_with_timeout, ExtractedNode, ExtractedRef,
-    ParseResult,
+    collect_error_ranges, count_parse_errors, parse_tree_too_deep, parse_with_timeout,
+    ExtractedNode, ExtractedRef, ParseResult, MAX_TREE_DEPTH,
 };
 
 /// Mutable state threaded through a single file's walk. `next_seq` is the
@@ -112,6 +112,15 @@ pub(crate) fn parse_with_spec(
         .set_language(&lang)
         .map_err(|e| format!("failed to set {:?} language: {e}", spec.language))?;
     let tree = parse_with_timeout(&mut parser, source)?;
+    // Depth guard (issue #148): the definition walkers recurse one frame per tree
+    // level, so a pathologically deep error-recovery tree would overflow the
+    // stack or exhaust the heap. Reject before walking — a clean `Err` the
+    // indexer maps to a Skipped file.
+    if parse_tree_too_deep(tree.root_node(), MAX_TREE_DEPTH) {
+        return Err(format!(
+            "parse_tree_too_deep: exceeds {MAX_TREE_DEPTH} levels (adversarial or generated nesting)"
+        ));
+    }
 
     let mut ctx = WalkCtx {
         source,

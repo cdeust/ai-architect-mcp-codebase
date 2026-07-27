@@ -18,6 +18,65 @@ mod spec;
 // CLI (`--time-limit 5`). Parser::parse returns None when this is exceeded.
 pub(crate) const PARSE_TIMEOUT_MICROS: u64 = 5_000_000;
 
+/// Per-parse byte cap enforced at the `parse_file` boundary — the tool's only
+/// untrusted-input entry point (the indexer hands it every file it walks; the
+/// fuzz harness hands it arbitrary bytes). Inputs above this are rejected with a
+/// clean `Err` BEFORE tree-sitter runs.
+///
+/// **Why a byte cap and not only the parse timeout (issue #148).** The 5 s
+/// timeout above bounds a single parse's *time*, and with it a single parse's
+/// RSS (~20 MB even for a 2.6 MB adversarial input — measured, see the
+/// `oversized_input_is_rejected_before_the_expensive_parse` regression). It does
+/// NOT bound the *accumulation* the scheduled 900 s libFuzzer search hits: with
+/// no size cap, libFuzzer grows inputs without bound, each large adversarial
+/// unit costs up to the full 5 s in tree-sitter's superlinear error recovery,
+/// and libFuzzer retains it in its in-memory corpus (the `std::vector` the OOM
+/// heap dump attributed 78 % of live heap to) until RSS crosses the 4096 MB
+/// limit. Rejecting oversized inputs before the parse converges every oversized
+/// mutant onto one early-return path — no tree-sitter work, no new coverage to
+/// reward input growth, bounded corpus-unit size — so the search stays flat.
+///
+/// This is the same 1 MiB bound the indexer already applies on its file-read
+/// path (`indexer::persist`); moving the canonical constant here puts it at the
+/// true parse boundary so a *direct* caller of `parse_file` gets the same
+/// defense-in-depth, and the indexer now references this constant rather than
+/// duplicating it.
+///
+/// source: measured — the largest real source file in the eval corpus is
+/// `tests/fixtures/graph_accuracy/server-transport/http_standalone_graph.py` at
+/// 47 641 bytes; 1 MiB is a 22× margin over it, so no real file is dropped. The
+/// upper bound matches the pre-existing indexer rationale (sqlite3.c ~7 MB, the
+/// largest realistic hand-written file, is intentionally excluded — files above
+/// 1 MiB are generated/minified and bring no graph value).
+pub const MAX_PARSE_BYTES: u64 = 1_048_576;
+
+/// Maximum tree-sitter parse-tree depth the recursive definition walkers will
+/// descend. A tree deeper than this is rejected at the parse boundary with a
+/// clean `Err` (mapped to a Skipped file by the indexer) BEFORE any walker runs.
+///
+/// **Why this is the load-bearing fix for issue #148.** The definition walkers
+/// (`walk_defs`, `walk_c_defs`, `walk_cpp_defs`, `walk_ts_defs`, …) recurse one
+/// stack frame per tree level. tree-sitter's error recovery on adversarial input
+/// produces pathologically deep trees — a 1 KiB run of unbalanced C punctuation
+/// parses to depth 853, a 4 KiB run to 3403 (measured) — so an unbounded walk
+/// either overflows the stack (a SIGSEGV/abort `catch_unwind` cannot trap; this
+/// is what a local ASAN fuzz run hits in `walk_c_defs` at a 4 KiB input) or, on a
+/// larger stack, recurses far enough to exhaust the heap one frame at a time
+/// (node-text `String`s, growing node/ref vecs) — the 4 GB libFuzzer OOM the
+/// scheduled `parse_file_utf8` job reported. The pre-existing 5 s parse timeout
+/// bounds a single parse's *time*, and the `MAX_PARSE_BYTES` cap bounds its
+/// *size*, but neither bounds *depth*: the offending inputs are small (≤ 4 KiB,
+/// libFuzzer's input ceiling) and parse in well under 5 s. Rejecting a too-deep
+/// tree before the walk is the bound the reproducer actually needs.
+///
+/// source: measured — the deepest real source file in the eval corpus (a 47 KB
+/// Python module) is depth 26; real code ceilings there. 512 is a ~20× margin
+/// over real code (covering deeply-nested generated data-in-code) while sitting
+/// far below the depth at which the recursive walkers exhaust the smallest
+/// production thread stack (a 2 MiB tokio worker: ~512 frames ≈ 0.5 MiB) and far
+/// below the pathological depths the fuzzer reaches at its 4 KiB size ceiling.
+pub const MAX_TREE_DEPTH: usize = 512;
+
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
@@ -89,7 +148,29 @@ pub struct ExtractedRef {
 
 /// Parses a source file and extracts typed symbols and relationships.
 /// Dispatches to the appropriate language-specific parser.
+///
+/// # Contract
+/// - **pre:** `source` is UTF-8 (guaranteed by `&str`); `lang` is a supported
+///   language.
+/// - **post:** returns `Ok(ParseResult)` with the extracted symbols/refs and the
+///   parse-error signals, OR a clean `Err` — never panics. Two `Err` cases:
+///   `source` exceeds `MAX_PARSE_BYTES` (rejected before tree-sitter runs), or
+///   the parse was cancelled by the per-file timeout / rejected by tree-sitter.
+/// - **invariant (issue #148):** the work done is bounded independently of how
+///   adversarial `source` is — by `MAX_PARSE_BYTES` in size (checked here) and
+///   `PARSE_TIMEOUT_MICROS` in time (checked in `parse_with_deadline`).
 pub fn parse_file(source: &str, file_path: &str, lang: Language) -> Result<ParseResult, String> {
+    // Byte-size cap at the untrusted-input boundary (issue #148). Rejected here,
+    // before any tree-sitter allocation, so an oversized adversarial input cannot
+    // drive a superlinear parse or bloat libFuzzer's retained corpus. The message
+    // matches the indexer's oversized-skip wording for a uniform signal.
+    if source.len() as u64 > MAX_PARSE_BYTES {
+        return Err(format!(
+            "oversized: {} bytes > MAX_PARSE_BYTES {}",
+            source.len(),
+            MAX_PARSE_BYTES
+        ));
+    }
     match lang {
         // All migrated to the table-driven spec walkers (ADR-0055).
         // Go: phase 1 (#85). Python: phase 2 (#89). Java: phase 3 (#91).
@@ -198,6 +279,27 @@ pub(crate) fn collect_error_ranges(root: Node) -> Vec<(u32, u32)> {
     }
     merged.truncate(MAX_ERROR_RANGES);
     merged
+}
+
+/// Returns `true` as soon as any root-to-node path in the tree rooted at `root`
+/// is deeper than `limit` levels (root itself is level 1). The traversal is an
+/// explicit heap stack, not recursion, so this check cannot itself overflow on
+/// the very trees it exists to reject. For a shallow tree it is a full O(nodes)
+/// walk (the same cost as `count_parse_errors`); for a deep one it returns early
+/// the moment a node past `limit` is reached. See `MAX_TREE_DEPTH` (issue #148)
+/// for why the definition walkers must not be handed a tree deeper than this.
+pub(crate) fn parse_tree_too_deep(root: Node, limit: usize) -> bool {
+    let mut stack = vec![(root, 1usize)];
+    while let Some((node, depth)) = stack.pop() {
+        if depth > limit {
+            return true;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push((child, depth + 1));
+        }
+    }
+    false
 }
 
 /// Parses `source`, cancelling once `deadline` passes, and returns the tree.

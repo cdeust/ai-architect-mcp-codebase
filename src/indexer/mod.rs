@@ -52,10 +52,13 @@ const MAX_TOTAL_BYTES: u64 = 2_147_483_648;
 // via symlinked/pathological directory structures.
 const MAX_DEPTH: usize = 64;
 
-// source: security hardening — per-file byte cap BEFORE handing to tree-sitter.
-// Even within MAX_FILE_BYTES, 1 MB is sufficient for any realistic source file
-// and bounds tree-sitter parse work per file.
-pub const MAX_PARSE_BYTES: u64 = 1_048_576;
+// Per-file byte cap before handing to tree-sitter. The canonical definition now
+// lives at the parse boundary (`parser::MAX_PARSE_BYTES`, issue #148); it is
+// re-exported so the indexer's read-path checks keep sharing one source of truth
+// with the parser's own boundary check. Those checks remain as defense-in-depth:
+// they map an oversized file to a `Skipped` coverage outcome (distinct from
+// `parse_failed`) before the read.
+pub use crate::parser::MAX_PARSE_BYTES;
 
 // ---------------------------------------------------------------------------
 // Public types

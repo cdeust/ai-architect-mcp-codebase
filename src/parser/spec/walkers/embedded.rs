@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 
 use super::super::lang_spec::LangSpec;
 use super::{walk_defs, WalkCtx};
-use crate::parser::{node_text, parse_with_timeout};
+use crate::parser::{node_text, parse_tree_too_deep, parse_with_timeout, MAX_TREE_DEPTH};
 
 /// Embedded-language walker: for each embedded rule, locate every script node
 /// under `parent`, re-parse its content child with the embedded language's
@@ -57,6 +57,11 @@ fn reparse_embedded(inner_spec: &LangSpec, ctx: &mut WalkCtx, content: Node, sco
         Ok(t) => t,
         Err(_) => return,
     };
+    // Depth guard (issue #148): an embedded region is re-parsed and walked like a
+    // top-level file, so a pathologically deep inner tree is skipped too.
+    if parse_tree_too_deep(tree.root_node(), MAX_TREE_DEPTH) {
+        return;
+    }
     // Inner walk runs on a scoped sub-context so the embedded source's byte
     // offsets resolve against `text`, then its output is merged into `ctx`.
     let mut inner = WalkCtx {

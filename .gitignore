@@ -37,6 +37,19 @@ mutants.out*.log
 # A corpus is machine-generated search state, not source; crash artifacts are
 # attached to their failing CI run and reproduced locally on demand.
 fuzz/target/
-fuzz/corpus/
+fuzz/corpus/**
 fuzz/artifacts/
 fuzz/coverage/
+# Exception (issue #148): a few hand-curated libFuzzer artifacts are committed as
+# PERMANENT regression seeds — source, not generated search state — so the
+# scheduled runs replay them at startup and can never lose the inputs that
+# surfaced the failure: the two `parse_file_utf8` artifacts from the OOM report,
+# and the `parse_file` input that reproduces the deep-recursion crash the depth
+# guard fixes. Everything else under fuzz/corpus/ stays ignored; only these named
+# files (and the directories on their path) are tracked.
+!fuzz/corpus/
+!fuzz/corpus/parse_file_utf8/
+!fuzz/corpus/parse_file_utf8/1a9ad06029faf8a98fc125dac137a01def004380
+!fuzz/corpus/parse_file_utf8/ae4da5a379eebe86c21aaeb63e0e01c1659472db
+!fuzz/corpus/parse_file/
+!fuzz/corpus/parse_file/2f76b08c2590a629c2fcbc8839a19e92e2bfc143

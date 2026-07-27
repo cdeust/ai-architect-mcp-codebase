@@ -34,9 +34,9 @@ use std::collections::HashSet;
 use tree_sitter::{Language as TsLanguage, Node, Parser};
 
 use crate::parser::{
-    collect_error_ranges, count_parse_errors, node_field_text, node_text, parse_with_timeout, qual,
-    ExtractedNode, ExtractedRef, Language, ParseResult, LABEL_CALL_SITE, LABEL_FUNCTION,
-    LABEL_IMPORT, LABEL_METHOD, LABEL_STRUCT,
+    collect_error_ranges, count_parse_errors, node_field_text, node_text, parse_tree_too_deep,
+    parse_with_timeout, qual, ExtractedNode, ExtractedRef, Language, ParseResult, LABEL_CALL_SITE,
+    LABEL_FUNCTION, LABEL_IMPORT, LABEL_METHOD, LABEL_STRUCT, MAX_TREE_DEPTH,
 };
 
 /// Qualified-name separator, shared with the deep path's `qual`.
@@ -413,6 +413,13 @@ pub(crate) fn parse_shallow(
         .set_language(&lang)
         .map_err(|e| format!("failed to set {:?} language: {e}", spec.language))?;
     let tree = parse_with_timeout(&mut parser, source)?;
+    // Depth guard (issue #148): the shallow walker recurses per tree level too;
+    // reject a pathologically deep tree before walking it.
+    if parse_tree_too_deep(tree.root_node(), MAX_TREE_DEPTH) {
+        return Err(format!(
+            "parse_tree_too_deep: exceeds {MAX_TREE_DEPTH} levels (adversarial or generated nesting)"
+        ));
+    }
 
     let mut ctx = ShallowCtx {
         source,

@@ -37,6 +37,33 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Parser: bound recursion depth (and input size) at the parse boundary
+  (issue #148).** The scheduled 900 s `Fuzz` job OOMed (used 4136 MB > the
+  4096 MB limit) — pre-existing on `main`, not introduced by any feature PR.
+  Root cause: the recursive definition walkers (`walk_defs`, `walk_c_defs`,
+  `walk_cpp_defs`, …) descend one stack frame per parse-tree level with **no
+  depth bound**, and tree-sitter's error recovery on adversarial input produces
+  pathologically deep trees — a 1 KiB run of unbalanced C punctuation parses to
+  tree depth 853, a 4 KiB run to 3403 (measured), while the deepest real source
+  file in the eval corpus is depth 26. On the fuzzer's platform the unbounded
+  walk either overflows the stack (a local ASAN run reproduces this in
+  `walk_c_defs` at a 4 KiB input) or, on a larger stack, recurses deep enough to
+  exhaust the heap one frame at a time — the OOM. The existing 5 s timeout bounds
+  a single parse's *time* and the new byte cap bounds its *size*, but the
+  offending inputs are small (≤ 4 KiB, libFuzzer's ceiling) and parse in well
+  under 5 s, so neither catches them — a **depth** bound does. `parse_file` now
+  rejects any tree deeper than `MAX_TREE_DEPTH` (512, a ~20× margin over real
+  code) with a clean `Err` **before** the walk, at all three entry points
+  (`parse_with_spec`, `parse_shallow`, embedded re-parse). Complementary
+  hardening: a byte-size cap (`MAX_PARSE_BYTES`, 1 MiB) rejects oversized inputs
+  before tree-sitter — the same bound the indexer already applied on its
+  file-read path, now hoisted to the parse boundary so a direct caller of
+  `parse_file` gets the same defense-in-depth and the indexer references one
+  canonical constant. No behavior change for real files: graph_accuracy stays
+  41/41 and the largest corpus file (47 KB, depth 26) is far inside both bounds.
+  The libFuzzer artifacts from the failing runs are committed as permanent
+  regression seeds under `fuzz/corpus/`.
+
 - **Rust extraction: module-scoped `impl` method QNs, and trait default-body
   call scanning (issues #130, #131).** Two defects the phase-8 LangSpec migration
   (#136) preserved for exact parity are now deliberately corrected:
