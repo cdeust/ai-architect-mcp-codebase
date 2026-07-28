@@ -28,7 +28,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   | `prd_handlers.rs` | 363 | 7 | 0.00% → **98.07%** |
   | `search_context_handlers.rs` | 308 | 26 | 43.83% → **91.56%** |
   | `symbol_handlers.rs` | 342 | 33 | 0.00% → **90.35%** |
-  | *workspace* | 27,999 | 3,688 | 81.07% → **86.83%** |
+  | *workspace* | 27,999 | 3,688 | 81.07% → **86.83%** (macOS); 81.56% → **87.73%** on the Linux CI runner, which is what the badge answers to |
 
   Two things are asserted throughout rather than "an error happened": the
   **reason code**, because an agent picks its next move from it (`no_session`,
@@ -43,7 +43,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   silently drop that whole edge class from `get_symbol`'s answer. A test now
   executes every triple's own query against a real graph.
 
-  The coverage badge moves 81% → 86% and the test badge 900+ → 1000+; the
+  The coverage badge moves 81% → 87% and the test badge 900+ → 1000+; the
   #161 gate is what required both.
 
 - **Every numeric claim in the README is now machine-checked, and four of them
