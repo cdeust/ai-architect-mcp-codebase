@@ -496,3 +496,7 @@ pub(crate) fn run_abort_verification(arguments: &Value) -> Value {
         Err((code, msg)) => stage2_error_response(code, msg),
     }
 }
+
+#[cfg(test)]
+#[path = "verification_ops_tests.rs"]
+mod tests;

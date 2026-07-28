@@ -432,3 +432,7 @@ pub(crate) fn rel_table_triples() -> &'static [(&'static str, &'static str, &'st
         ("ParticipatesIn_Method_Process", "Method", "Process"),
     ]
 }
+
+#[cfg(test)]
+#[path = "symbol_handlers_tests.rs"]
+mod tests;

@@ -426,3 +426,7 @@ pub(crate) fn maybe_write_security(
     let written = security_gates::write_security(&dest, &value)?;
     Ok(Some(written))
 }
+
+#[cfg(test)]
+#[path = "prd_handlers_tests.rs"]
+mod tests;

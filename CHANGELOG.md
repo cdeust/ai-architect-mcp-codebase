@@ -8,6 +8,44 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The five MCP handler modules that no test executed are now covered
+  (issue #169).** Four modules behind advertised tools sat at **exactly 0%**
+  line coverage and a fifth at 43.83% — together 1,242 uncovered lines, 23% of
+  every uncovered line in the workspace. These are not helpers: they are the
+  bodies behind `get_symbol`, `resolve_graph`, `cluster_graph`,
+  `search_codebase`, `get_context`, `index_history`, `prepare_prd_input`,
+  `validate_prd_against_graph`, `check_security_gates`,
+  `verify_semantic_diff`, and the whole `start` → `append` → `finalize` /
+  `abort` verification lifecycle. Every error arm, early return and degraded
+  mode in them was unasserted.
+
+  134 new tests (947 → **1081**), and the modules now measure:
+
+  | Module | Lines | Missed | Line coverage |
+  |---|---|---|---|
+  | `verification_ops.rs` | 401 | 1 | 0.00% → **99.75%** |
+  | `verification_core.rs` | 136 | 1 | 0.00% → **99.26%** |
+  | `prd_handlers.rs` | 363 | 7 | 0.00% → **98.07%** |
+  | `search_context_handlers.rs` | 308 | 26 | 43.83% → **91.56%** |
+  | `symbol_handlers.rs` | 342 | 33 | 0.00% → **90.35%** |
+  | *workspace* | 27,999 | 3,688 | 81.07% → **86.83%** |
+
+  Two things are asserted throughout rather than "an error happened": the
+  **reason code**, because an agent picks its next move from it (`no_session`,
+  `already_finalized`, `unanswered_question` and `no_clarification_round` are
+  four different instructions), and, wherever a handler writes, **whether the
+  file appeared** — a response claiming `verified: true` while no receipt was
+  persisted is the exact bug stage 2 exists to prevent.
+
+  Found and fixed while writing them: `rel_table_triples()` is mirrored by hand
+  from `graph_store`'s private `REL_TABLES` and `collect_edge_rows` swallows
+  query errors by design, so a row naming a table that does not exist would
+  silently drop that whole edge class from `get_symbol`'s answer. A test now
+  executes every triple's own query against a real graph.
+
+  The coverage badge moves 81% → 86% and the test badge 900+ → 1000+; the
+  #161 gate is what required both.
+
 - **Every numeric claim in the README is now machine-checked, and four of them
   were wrong (issue #161).** The coverage badge got a gate in #160; the rest of
   the README's numbers were still hand-typed, and hand-typed numbers rot. As

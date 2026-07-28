@@ -285,3 +285,7 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "verification_core_tests.rs"]
+mod tests;

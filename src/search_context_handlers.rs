@@ -413,3 +413,7 @@ pub(crate) fn do_get_context(arguments: &Value) -> Result<Value, String> {
         "next_steps": next_steps,
     }))
 }
+
+#[cfg(test)]
+#[path = "search_context_handlers_tests.rs"]
+mod tests;
