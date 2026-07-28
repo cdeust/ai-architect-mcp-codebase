@@ -39,7 +39,7 @@ Three properties shape the whole threat model:
 | B3 | Parsed data → graph store | Symbol names and paths derived from untrusted files | `graph_store::cypher_str` (single escaping choke point) + prepared statements |
 | B4 | Server → response | Query results of unbounded natural size | `src/response_budget.rs` |
 | B5 | crates.io + GitHub Actions → build | Dependency code, action code | `Cargo.lock`, `deny.toml`, SHA-pinned actions, Dependabot |
-| B6 | Release artifact → user | The binary you actually run | SHA-256 per asset today; provenance attestation **not yet on a published release** (see Claim 5) |
+| B6 | Release artifact → user | The binary you actually run | SHA-256 per asset, a verified provenance attestation, and a published Sigstore bundle, from v0.8.3 (see Claim 5) |
 
 There is no network boundary: the crate has no HTTP client, no async runtime,
 and no telemetry. Verified rather than assumed — `cargo tree -e normal` resolves
@@ -149,7 +149,7 @@ map to code.
 with the user's own file-system rights by design, and nothing constrains it to
 a subtree beyond the path it is given.
 
-## Claim 5 — What you install is what we built — *not yet true, and stated as such*
+## Claim 5 — What you install is what we built — *true from v0.8.3, with one part still missing*
 
 **Argument.** A binary distributed as a prebuilt tarball is a supply-chain
 target. The user needs to be able to prove which commit produced which bytes.
@@ -166,17 +166,33 @@ target. The user needs to be able to prove which commit produced which bytes.
   source and target path produced a bit-for-bit identical binary (measured
   2026-07-27, rustc 1.95.0, macOS aarch64).
 - Every release asset ships a published SHA-256 companion.
-- Provenance attestation and CycloneDX SBOM jobs exist in
-  `.github/workflows/release.yml`.
+- From **v0.8.3**, every asset also carries a provenance attestation and a
+  published Sigstore bundle. Measured 2026-07-29 against release run
+  30402899199: `gh attestation verify` succeeds for all three platform
+  tarballs, the `.mcpb` and the CycloneDX SBOM, and every `.sha256` companion
+  checks out.
+- The bundle is published as a release **asset** (`<asset>.sigstore.json`), not
+  only recorded in GitHub's attestation API. That distinction is the whole
+  difference between a signature a consumer can keep and one they can only
+  borrow while GitHub is answering — and it is what OpenSSF Scorecard's
+  `Signed-Releases` check actually scores.
 
-**Where the argument fails today.** Those last jobs were merged **after**
-`v0.8.2` was cut. No published release carries an attestation: `gh attestation
-verify` against the latest release returns HTTP 404, and OpenSSF Scorecard's
-`Signed-Releases` check scores **0**. Until a release is cut from `main`, a user
-can verify that the bytes they downloaded match a checksum published on the same
-page — which defends against corruption, not against whoever could publish the
-page. This is why the silver criterion `signed_releases` is answered **Unmet**
-rather than argued around.
+**Where the argument still fails.** Two gaps, neither papered over.
+
+The **release tag is not signed**. `v0.8.3` is annotated rather than lightweight,
+and the signing configuration is committed, but `user.signingkey` is unset on the
+maintainer machine, so `git tag -v v0.8.3` reports `no signature found`. The
+artifact chain is therefore anchored at the workflow, not at a human: provenance
+proves *this workflow, from this commit, built these bytes*, and says nothing
+about who was entitled to cut the tag that triggered it. Tracked as issue #174,
+and `version_tags_signed` stays **Unmet**.
+
+The **windows-x86_64 asset is missing**. `v0.8.2` shipped one; the `v0.8.3`
+build failed at MSVC link time (`LNK1181: cannot open input file 'ssl.lib'`,
+from the native `lbug` side — no OpenSSL crate is in the graph). The leg is
+`continue-on-error`, so the release succeeded without it. Claim 5 is therefore
+answered for the assets that shipped, not for a platform that did not. Tracked
+as issue #176.
 
 ## Common implementation weaknesses, and how each is countered
 
@@ -188,7 +204,7 @@ rather than argued around.
 | Uncontrolled resource consumption (CWE-400) | Response budget, `max_db_size` bound, parse bounds from #148 | No global quota on indexing time or disk |
 | Silent failure of a check | Coverage sidecar records what it could not parse; the graph-accuracy gate is a blocking CI check with a ratcheting floor | Only the failure modes we have found are instrumented |
 | Vulnerable dependency (CWE-1104) | Daily `cargo audit` + `cargo deny`, Dependabot, `Cargo.lock` | One `unsound` advisory is blocked upstream by an exact pin, documented in `deny.toml` |
-| Tampered artifact | SHA-256 per asset; attestation machinery merged | **Open** until a release is cut from `main` (Claim 5) |
+| Tampered artifact | SHA-256 per asset; verified provenance attestation + published Sigstore bundle from v0.8.3 | The tag that triggers the build is unsigned (#174), so the chain is anchored at the workflow, not at a person |
 
 ## What this case does not claim
 
