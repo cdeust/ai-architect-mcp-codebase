@@ -6,6 +6,46 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **Release integrity: the provenance a release page shows, not just the one an
+  API remembers (issue #158).** The attestation and SBOM jobs had been merged
+  since before `v0.8.2`, but no published release carried either, because no
+  tag had been cut since. Cutting one was necessary and, on its own, would not
+  have been sufficient: `actions/attest-build-provenance` records the
+  attestation in GitHub's attestation API and leaves **nothing on the release**,
+  while OpenSSF Scorecard's `Signed-Releases` check scores by the presence of a
+  release *asset* matching `*.sigstore.json` / `*.intoto.jsonl` / `*.sig` /
+  `*.asc` (ossf/scorecard `docs/checks.md`, read 2026-07-28). A release cut from
+  the workflow as it stood would have produced verifiable artifacts and still
+  scored **0**.
+
+  Each attest step now captures its `bundle-path` output and publishes the
+  Sigstore bundle beside the artifact it signs — `<asset>.sigstore.json` for
+  all four platform tarballs, the `.mcpb`, and the CycloneDX SBOM. That also
+  buys a property the API never could: `gh attestation verify` needs the network
+  and needs GitHub to answer, whereas the bundle is the same signed statement as
+  a file an archival or air-gapped consumer can keep.
+
+- **Release tags are SSH-signed from `v0.8.3` onward.** `v0.8.0` was annotated
+  but unsigned and `v0.8.1`/`v0.8.2` were lightweight, so nothing tied a tag to
+  the maintainer rather than to whoever can push. The authorized key ships as
+  `.github/allowed_signers` and `SECURITY.md` documents the verification —
+  including why a key committed to the repository it verifies is a continuity
+  guarantee rather than, by itself, an identity one. Earlier tags are **not**
+  retro-signed: re-tagging would change objects users have already fetched.
+
+### Fixed
+
+- **`manifest.json` had been stuck at `0.8.0` for two releases.** The pin gate
+  (`scripts/check_marketplace_pins.py`) covers `.claude-plugin/marketplace.json`,
+  `plugin.json` and `server.json` — its `SERVER_JSON_SPLIT` class exists for
+  exactly this failure — but not the root `manifest.json`, so the drift passed
+  every check while shipping a wrong version inside every `.mcpb` bundle. Bumped
+  with the rest; closing the gate hole is filed as **#172**, because the gate is
+  a byte-identical copy of the canonical file in `cdeust/Cortex` and CI fails on
+  any local divergence, so the fix has to land there first.
+
 ### Added
 
 - **The five MCP handler modules that no test executed are now covered
