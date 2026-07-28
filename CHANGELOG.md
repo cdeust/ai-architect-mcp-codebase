@@ -695,6 +695,33 @@ adheres to [Semantic Versioning](https://semver.org/).
   the entry above was corrected with it (93/7 → 94/6 overall, and the
   passing tier from 59 Met / 1 Unmet to 60 Met / 0 Unmet).
 
+- **GitHub-native supply-chain controls enabled on the repository (issue
+  #162).** Three controls that were switched off are now on, each verified
+  through the API rather than the settings page:
+  - **Secret scanning** and **push protection** — the previous evidence for
+    "no leaked credential" was a manual scan run on one day, which is a
+    snapshot. Push protection is the standing control: it rejects the push
+    that would introduce a secret, instead of finding it afterwards. The
+    first full-history scan raised **zero** alerts.
+  - **Dependabot alerts** and **Dependabot security updates** — the daily
+    `cargo audit` / `cargo deny` job stays the load-bearing advisory gate,
+    but it only runs on its schedule; GitHub's security-update PRs are
+    raised as soon as an advisory is published. Alerts had to be enabled
+    first: security updates depend on them and the endpoint returned 404.
+
+  Verification (`gh api repos/cdeust/automatised-pipeline --jq
+  '.security_and_analysis'`): `secret_scanning`,
+  `secret_scanning_push_protection` and `dependabot_security_updates` all
+  report `enabled`. `.bestpractices.json` drops the two
+  "currently disabled" disclosure clauses this closed, in
+  `no_leaked_credentials` and `dependency_monitoring`.
+
+  Not enabled, and not claimed: `secret_scanning_non_provider_patterns` and
+  `secret_scanning_validity_checks`. Validity checks transmit candidate
+  secrets to the issuing provider to test whether they are live, which is a
+  different privacy posture than this repository documents, and neither is
+  part of issue #162's acceptance criteria.
+
 ## [0.8.2] — First complete four-platform release (Windows asset ships)
 
 A CI-only patch release (PR #52). No library or server code changes.
