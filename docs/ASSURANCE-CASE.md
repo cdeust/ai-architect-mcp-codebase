@@ -11,7 +11,7 @@ requirements; this document argues that they are met.*
 ## What this software is, in threat terms
 
 `automatised-pipeline` is a **local MCP server**. An agent host (Claude Code or
-another MCP client) starts it over stdio and calls its 24 tools. It parses a
+another MCP client) starts it over stdio and calls its 26 tools. It parses a
 source tree into a LadybugDB property graph, resolves relationships across
 files, and answers structural questions about the code.
 

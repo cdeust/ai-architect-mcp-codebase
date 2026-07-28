@@ -8,6 +8,60 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Every numeric claim in the README is now machine-checked, and four of them
+  were wrong (issue #161).** The coverage badge got a gate in #160; the rest of
+  the README's numbers were still hand-typed, and hand-typed numbers rot. As
+  measured on 2026-07-28: the tool badge advertised **24** against a registry of
+  **26**, the language badge **10** against **11**, and the "hidden tools" note
+  **16** against **18**. The tool *list* was worse than the count — it documented
+  24 tools while the server registered 26, so `index_status` and `ingest_traces`
+  were shipped but undocumented. Both are now listed. The same four counts were
+  stale in `server.json`, `manifest.json`, `.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json` and `docs/ASSURANCE-CASE.md`, none of which
+  anything read; all five are now gated too.
+
+  The test count was the one claim that held up: **947**, exactly what `cargo
+  test` reports. Worth recording why it briefly looked wrong — `cargo test
+  --workspace` reports **1035**, because it pulls in the benchmark and `zera`
+  workspace members that the documented command does not. The gate measures the
+  log of the same `cargo test` the required CI job runs, so the advertised
+  number answers the command a reader is told to type.
+
+  `scripts/check_doc_claims.py` grew from one claim to six, split at the
+  measurement seam into `scripts/doc_claim_sources.py` (what the repository
+  produces) and the checker (what the README asserts, and how the two are
+  compared). 51 unit tests, stdlib-only, every arm exercised.
+
+  Two comparison policies, chosen by how often the quantity moves. **Exact** for
+  tool, core-profile, hidden-tool and language counts — each changes only when
+  someone deliberately adds a tool or a language, which already owes a doc update
+  in the same PR. **Floored** for coverage and test count, which move on nearly
+  every commit: the README advertises a round value that floors the measurement,
+  so the badge stays honest for a whole bucket and needs a human only when the
+  true value leaves it. The test badge now reads **900+** against a measured 947.
+
+  Counting is not enough on its own, so the gate also compares tool **names**
+  against `FULL_TOOL_NAMES` — a count-only check would have been satisfied by
+  editing the heading to 26 while leaving two tools undocumented — and checks
+  that every path in the Repository-layout tree exists. That tree had shown
+  `src/graph_store.rs`, `src/indexer.rs`, `src/resolver.rs` and
+  `src/clustering.rs` as files for months after each became a directory.
+
+  Runs in the `cargo test (graph accuracy gate)` job, which is a required status
+  check on `main`.
+
+### Changed
+
+- **The Scale table is re-measured on the dependency actually in use (#161).**
+  It cited `lbug 0.15.3` while `Cargo.toml` has depended on `0.18`. Re-running
+  the `dba` agent's nine probes (`cargo test --release --test
+  lbug_bulk_investigation`, 199 edges per strategy, 2026-07-28, rustc 1.95.0,
+  macOS 26.5.1 arm64) confirms the ranking that drove the design and replaces
+  every figure: UNWIND + typed `LogicalType::Struct` at **0.127 ms/edge** against
+  **9.658** for the naive raw-string path — **76× faster**. The absolute numbers
+  are not comparable to the 0.15.3 run, since both the engine and the machine
+  changed, and the table now says so.
+
 - **OpenSSF Best Practices answers, and the documents the silver criteria
   require (`.bestpractices.json`).** Every passing and silver criterion is
   answered with a status and a justification that cites a file in this

@@ -103,8 +103,17 @@ jobs:
       # Full suite (stage3a-d integrations, etc.). Kept separate so a
       # graph-accuracy regression fails the build with a clear signal even
       # if other tests are broken for unrelated reasons.
+      # The log is captured because the suite's own tally is the only honest
+      # source for the advertised test count — counting `#[test]` attributes
+      # undercounts by every test our macros generate (AP #161).
       - name: Run full test suite
-        run: cargo test
+        run: set -o pipefail && cargo test 2>&1 | tee test-output.log
+
+      # Static claims (tool names and counts, language count, layout tree) need
+      # no run and are checked here too, so a stale README fails the fastest
+      # required job rather than waiting on the coverage build.
+      - name: Check README claims against the suite and the tool registry
+        run: python3 scripts/check_doc_claims.py --test-log test-output.log
 
   clippy:
     name: cargo clippy (-D warnings, workspace-wide)
@@ -182,7 +191,10 @@ jobs:
       # is worse than no gate, and finding that out after a 90-minute
       # instrumented build wastes the run. Stdlib-only, so it needs no setup.
       - name: Unit tests (doc-claims gate logic, all arms)
-        run: python3 -m unittest scripts/tests/test_check_doc_claims.py -v 2>&1 | tail -5
+        run: |
+          python3 -m unittest \
+            scripts/tests/test_check_doc_claims.py \
+            scripts/tests/test_doc_claim_sources.py -v 2>&1 | tail -5
 
       - name: Install Linux build deps
         run: |
@@ -242,7 +254,7 @@ jobs:
         run: |
           if [ -f coverage.json ]; then
             python3 scripts/check_doc_claims.py --coverage-json coverage.json \
-              --print-only >> "$GITHUB_STEP_SUMMARY"
+              --print-coverage >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No coverage.json — the instrumented run did not reach report stage." \
               >> "$GITHUB_STEP_SUMMARY"

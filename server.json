@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cdeust/automatised-pipeline",
-  "description": "Codebase intelligence MCP server \u2014 index any repo into a property graph; 24 tools for agents.",
+  "description": "Codebase intelligence MCP server \u2014 index any repo into a property graph; 26 tools for agents.",
   "repository": {
     "url": "https://github.com/cdeust/automatised-pipeline",
     "source": "github"

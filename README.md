@@ -7,16 +7,16 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
-  <img src="https://img.shields.io/badge/Tools-24-orange" alt="24 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-947_passing-brightgreen" alt="947 tests">
+  <img src="https://img.shields.io/badge/Tools-26-orange" alt="26 MCP tools">
+  <img src="https://img.shields.io/badge/Tests-900+_passing-brightgreen" alt="900+ tests">
   <img src="https://img.shields.io/badge/Coverage-81%25-brightgreen" alt="81% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
-  <img src="https://img.shields.io/badge/Languages-10-blueviolet" alt="10 languages">
+  <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
   <img src="https://img.shields.io/badge/Stages-0_through_9-8A2BE2" alt="Stages">
 </p>
 
 <p align="center">
-  <a href="#what-an-agent-can-ask-it">What An Agent Can Ask</a> · <a href="#getting-started">Getting Started</a> · <a href="#the-pipeline">Pipeline</a> · <a href="#24-mcp-tools">Tools</a> · <a href="#architecture">Architecture</a> · <a href="#the-zetetic-standard">Zetetic Standard</a>
+  <a href="#what-an-agent-can-ask-it">What An Agent Can Ask</a> · <a href="#getting-started">Getting Started</a> · <a href="#the-pipeline">Pipeline</a> · <a href="#26-mcp-tools">Tools</a> · <a href="#architecture">Architecture</a> · <a href="#the-zetetic-standard">Zetetic Standard</a>
 </p>
 
 <p align="center">
@@ -30,11 +30,11 @@
 
 Every AI coding assistant hits the same wall: you ask it to change `handle_tool_call`, and it either hallucinates a function that was renamed last week, edits something in the wrong community of the codebase, or silently breaks a call chain three modules away. Agents operate on strings; codebases have structure. The gap is where bugs live.
 
-**automatised-pipeline** is a Rust MCP server that indexes any Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, or Go codebase into a LadybugDB property graph, resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it to AI agents through 24 MCP tools.
+**automatised-pipeline** is a Rust MCP server that indexes any Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, or Go codebase into a LadybugDB property graph (Ruby is dispatched on the shallow path — node-kind rows, no deep extraction — for 11 languages in total), resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it to AI agents through 26 MCP tools.
 
 It is the **codebase intelligence layer** that sits between a finding ("this bug exists") and a PRD ("here is the fix, here is what it affects, here is what it must never break"). It is **read-only intelligence** — it never writes code, opens PRs, or runs CI. It tells the system what is true about the code so the next stage can reason without guessing.
 
-**One pipeline stage = one MCP tool. 10 stages. 24 tools. 12,000+ lines of Rust. 947 tests. Zero warnings. Every constant sourced.**
+**One pipeline stage = one MCP tool. 10 stages. 26 tools. 12,000+ lines of Rust. 900+ tests. Zero warnings. Every constant sourced.**
 
 ---
 
@@ -123,17 +123,17 @@ The server registers one of two tool sets, chosen once at startup:
 | Profile | Tools | Who it's for |
 |---|---|---|
 | `core` | 8 — `health_check` · `analyze_codebase` · `search_codebase` · `get_context` · `get_symbol` · `get_impact` · `query_graph` · `detect_changes` | **Recommended for agents.** The read-only code-intelligence surface: analyze once, then search, inspect symbols, and measure blast radius. |
-| `full` | all 24 | The ai-architect pipeline orchestrator — adds the internal finding → PRD stages (1/2/4/6/8/9) and the manual graph passes (`index_codebase`, `resolve_graph`, `cluster_graph`, `lsp_resolve`, `get_processes`, `index_history`). |
+| `full` | all 26 | The ai-architect pipeline orchestrator — adds the internal finding → PRD stages (1/2/4/6/8/9) and the manual graph passes (`index_codebase`, `resolve_graph`, `cluster_graph`, `lsp_resolve`, `get_processes`, `index_history`). |
 
 Select with the `--profile` flag or the `AP_PROFILE` environment variable (the flag wins):
 
 ```bash
 automatised-pipeline --profile core   # agent-facing 8
 AP_PROFILE=core automatised-pipeline  # same, via env
-automatised-pipeline                  # default: full (all 24)
+automatised-pipeline                  # default: full (all 26)
 ```
 
-The default stays `full` until the next major version — shrinking the default tool surface is a breaking change. New agent installations should opt into `core`: `analyze_codebase` already runs index + resolve + cluster in one call, so the 16 hidden tools are pipeline plumbing an agent never needs, and hiding them keeps the tool prompt small.
+The default stays `full` until the next major version — shrinking the default tool surface is a breaking change. New agent installations should opt into `core`: `analyze_codebase` already runs index + resolve + cluster in one call, so the 18 hidden tools are pipeline plumbing an agent never needs, and hiding them keeps the tool prompt small.
 
 ### First run
 
@@ -281,7 +281,7 @@ Every stage is a tool. Stages build on each other but are independently callable
 
 ---
 
-## 24 MCP Tools
+## 26 MCP Tools
 
 Every tool takes structured JSON arguments via the MCP protocol and returns a structured JSON response. No LLM is called from inside any tool — intelligence is the agent's job; the tool's job is safe, fast data movement with invariants.
 
@@ -289,7 +289,8 @@ Every tool takes structured JSON arguments via the MCP protocol and returns a st
 Stage 0:  health_check
 Stage 1:  extract_finding · refine_finding
 Stage 2:  start_verification · append_clarification · finalize_verification · abort_verification
-Stage 3a: index_codebase · query_graph · get_symbol
+Stage 3:  ingest_traces
+Stage 3a: index_codebase · index_status · query_graph · get_symbol
 Stage 3b: resolve_graph · lsp_resolve
 Stage 3c: cluster_graph · get_processes · get_impact
 Stage 3d: search_codebase · get_context · analyze_codebase · detect_changes
@@ -302,7 +303,7 @@ Stage 9:  verify_semantic_diff
 
 Each tool has a JSON Schema enforced at the wire, reason codes on error (no cryptic protocol errors), and a receipt-style response with timing and counts.
 
-> Agent installs rarely need all 24 — the `core` profile (see [Tool profiles](#tool-profiles)) registers just the 8 code-intelligence tools.
+> Agent installs rarely need all 26 — the `core` profile (see [Tool profiles](#tool-profiles)) registers just the 8 code-intelligence tools.
 
 ### Team-shared graph artifact (optional)
 
@@ -451,7 +452,7 @@ Four CRITICAL, four HIGH, three MEDIUM findings were surfaced by a `security-aud
 - LSP `rootUri` → RFC 3986 percent-encoding
 - Diff line overflow → `DIFF_LINE_MAX = u64::MAX / 2` guard
 
-Each fix has a test that asserts the exploit is now rejected. Run `cargo test` to see 947 tests pass including the exploit-regression suite.
+Each fix has a test that asserts the exploit is now rejected. Run `cargo test` to see 900+ tests pass including the exploit-regression suite.
 
 The full security argument — threat model, trust boundaries, what each claim
 rests on, and where it stops — is in
@@ -465,14 +466,21 @@ criterion: [.bestpractices.json](.bestpractices.json).
 
 ## Scale
 
-Verified by the `dba` agent through compile-and-run probes against lbug 0.15.3:
+Re-measured 2026-07-28 on the current dependency (`lbug 0.18`, rustc 1.95.0,
+macOS 26.5.1 arm64) by re-running the `dba` agent's nine compile-and-run probes
+— `cargo test --release --test lbug_bulk_investigation -- --nocapture`, 199
+edges per strategy. The ranking is the same one the original 0.15.3 run found;
+the absolute figures are not comparable across the two runs, because both the
+engine version and the machine changed.
 
 | Strategy | ms/edge |
 |---|---|
-| Raw string per edge (naive) | 5.36 |
-| Prepared statement, no transaction | 5.48 |
-| `BEGIN TRANSACTION` + prepared + `COMMIT` | 0.70 |
-| **UNWIND + typed `LogicalType::Struct`** | **0.143** |
+| Raw string per edge (naive) | 9.658 |
+| Prepared statement, no transaction | 6.924 |
+| `BEGIN TRANSACTION` + prepared + `COMMIT` | 0.328 |
+| **UNWIND + typed `LogicalType::Struct`** | **0.127** |
+
+The chosen path is **76× faster than the naive one** on this measurement.
 
 The bulk-insert path uses UNWIND with a typed struct schema (the engineer who wrote the first version used `LogicalType::Any` which fails the binder — the typed struct form works). Prepared statements are cached in a `RefCell<HashMap<query, PreparedStatement>>` on the `GraphStore`. Sparse TF-IDF replaces the dense `N × V × 4B` matrix — **30.5× smaller** on our own codebase (108 KB vs 3.2 MB) and scales linearly with non-zero terms rather than vocab size. Clustering eliminated `probe_node_label_for_process` (per-node Cypher round-trip) in favor of a single in-memory `HashMap<id, label>` population pass.
 
@@ -554,7 +562,7 @@ precision/recall/token/tool-call numbers above stand on their own.
 ## Testing
 
 ```bash
-cargo test                                          # 947 tests, full suite
+cargo test                                          # 900+ tests, full suite
 cargo test --release --test scalability_bench       # 500-file synthetic fixture
 cargo test --release --test lbug_bulk_investigation # dba's 9 UNWIND probes
 cargo test --release --test stage3a_integration     # end-to-end per sub-stage
@@ -572,25 +580,37 @@ Every stage has an integration test with fixture data. The `lbug_bulk_investigat
 ```
 automatised-pipeline/
 ├── src/
-│   ├── main.rs                    ← MCP server, 24 tool handlers
+│   ├── main.rs                    ← MCP server entry point
+│   ├── cli.rs                     ← argument parsing + startup wiring
 │   ├── tool_schemas.rs            ← JSON Schemas for every tool
+│   ├── tool_profile.rs            ← core/full profile selection
 │   ├── lib.rs                     ← re-exports for integration tests
-│   ├── graph_store.rs             ← LadybugDB port (UNWIND + prepared + cached)
+│   ├── analyze_handlers.rs        ← one file per tool-handler group
+│   ├── indexing_handlers.rs · query_handlers.rs · symbol_handlers.rs
+│   ├── search_context_handlers.rs · process_impact_handlers.rs
+│   ├── history_handlers.rs · prd_handlers.rs
+│   ├── verification_core.rs · verification_ops.rs
+│   ├── graph_store/               ← LadybugDB port (UNWIND + prepared + cached)
+│   │   ├── mod.rs · config.rs · ddl.rs · schema.rs · serialize.rs
 │   ├── parser/
 │   │   ├── mod.rs                 ← language dispatch
-│   │   ├── rust.rs · python.rs · typescript.rs
-│   ├── indexer.rs                 ← walk + parse + persist
-│   ├── resolver.rs                ← cross-file resolution
-│   ├── lsp_client.rs              ← minimal LSP probe + client
-│   ├── lsp_resolver.rs            ← LSP-backed deep resolution
-│   ├── clustering.rs              ← Louvain + C2 repair + BFS process tracing
+│   │   ├── language.rs            ← the Language enum — 11 variants
+│   │   └── spec/                  ← per-language specs + shared walkers/
+│   ├── indexer/                   ← walk + parse + persist (+ iac/, persist/)
+│   ├── resolver/                  ← cross-file resolution
+│   │   ├── imports.rs · calls.rs · extends.rs · implements.rs · uses.rs
+│   ├── resolver_layers.rs · lsp_client.rs · lsp_resolver.rs
+│   ├── clustering/                ← Louvain + C2 repair + BFS process tracing
+│   │   ├── community.rs · process.rs · impact.rs
 │   ├── search/
 │   │   ├── mod.rs                 ← orchestration, get_context, 3-layer qn lookup
 │   │   ├── bm25.rs · vector.rs · rrf.rs
-│   ├── prd_input.rs               ← stage 4
-│   ├── prd_validator.rs           ← stage 6
+│   ├── prd_input/                 ← stage 4
+│   ├── prd_validator/             ← stage 6
 │   ├── security_gates.rs          ← stage 8
 │   ├── semantic_diff.rs           ← stage 9
+│   ├── history/ · cochange.rs     ← stage 3e
+│   ├── macro_expansion/ · stdlib_index/ · language_provider/
 │   └── git_diff.rs                ← diff parsing + symbol mapping
 ├── stages/                        ← locked spec per stage (Shannon, then engineer implements)
 │   ├── stage-1.md · stage-2.md · stage-3.md · stage-3b.md · stage-3c.md
@@ -598,13 +618,19 @@ automatised-pipeline/
 │   ├── stage-1.review.md · stage-3-db-evaluation.md · stage-3-research.md
 │   └── decisions/                 ← Popper / Lamport / Simon verdicts per decision
 ├── tests/
-│   ├── stage{3a,3b,3c,3d,4,6,8,9}_integration.rs
-│   ├── multilang_integration.rs
+│   ├── stage3a_integration.rs · stage3b_integration.rs
+│   ├── stage3c_integration.rs · stage3d_integration.rs
+│   ├── stage4_integration.rs · stage6_integration.rs
+│   ├── stage8_integration.rs · stage9_integration.rs
+│   ├── multilang_integration.rs · graph_accuracy.rs
 │   ├── stage3d_hybrid_search.rs
 │   ├── scalability_bench.rs
 │   ├── lbug_bulk_investigation.rs
 │   ├── tfidf_size_report.rs
 │   └── fixtures/multilang/        ← sample.rs · sample.py · sample.ts
+├── scripts/                       ← doc-claim and pin gates, both CI-enforced
+│   ├── check_doc_claims.py · check_marketplace_pins.py
+│   └── tests/
 ├── .claude/
 │   ├── agents/                    ← 18 specialists + 97 genius agents
 │   ├── skills/ · commands/ · tools/ · hooks/
@@ -626,7 +652,7 @@ Every major architectural decision was made by a genius agent with a specific pr
 | Rust vs C/C++ for the glue layer | **Popper** | Conjecture "Rust is the right language" is unfalsified. `lbug` + `tree-sitter` already run native C/C++; Rust is the glue where the borrow checker pays the most. |
 | Graph-per-finding vs graph-per-codebase | **Lamport** | Per-finding. Isolation holds by construction with zero coordination; the redundant-indexing cost is mitigable in an optional cache layer later. |
 | Stage 3a decomposition | **Simon** | Five steps, satisficed against the growth rule; first useful query at step 4. |
-| DB backend choice | **dba** | LadybugDB (`lbug 0.15.3`) — only option simultaneously maintained, native Cypher, embedded, with FTS + vector + algo extensions. |
+| DB backend choice | **dba** | LadybugDB (evaluated at `lbug 0.15.3`, now on `0.18`) — only option simultaneously maintained, native Cypher, embedded, with FTS + vector + algo extensions. |
 | Stage 2 clarification loop shape | **Shannon** | Four-tool state machine with atomic single-file session (no crash window between separate files), unconditional one-round-minimum before finalize. |
 | lbug UNWIND pattern | **dba** | `LogicalType::Struct { fields }` works; `LogicalType::Any` fails the binder — 38× speedup verified by compile-and-run probes. |
 

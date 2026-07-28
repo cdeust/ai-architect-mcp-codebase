@@ -118,7 +118,7 @@ is tested against published reference implementations. Changes here:
 ## Testing
 
 ```bash
-cargo test                              # full suite (947 tests as of v0.8.2)
+cargo test                              # full suite (947 tests, measured 2026-07-28)
 cargo test --release                    # same suite, release profile
 cargo test --release -- --test-threads=1   # serial mode (debugging flakes)
 cargo bench                             # micro-benchmarks
