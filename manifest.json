@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "automatised-pipeline",
   "display_name": "automatised-pipeline — Codebase Intelligence",
-  "version": "0.8.0",
+  "version": "0.8.3",
   "license": "MIT",
   "author": {
     "name": "Clement Deust",

@@ -20,7 +20,7 @@ exclude = ["fuzz"]
 # `ai-architect`, and carries the discoverable `-mcp` suffix). The binary
 # stays `automatised-pipeline` — cargo install installs it by [[bin]] name.
 name = "ai-architect-mcp"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2021"
 description = "Codebase-intelligence MCP server: tree-sitter parsing into a LadybugDB code graph, cross-file resolution, community detection, hybrid search, and impact analysis for AI agents."
 license = "MIT"
