@@ -27,13 +27,17 @@ adheres to [Semantic Versioning](https://semver.org/).
   and needs GitHub to answer, whereas the bundle is the same signed statement as
   a file an archival or air-gapped consumer can keep.
 
-- **Release tags are SSH-signed from `v0.8.3` onward.** `v0.8.0` was annotated
-  but unsigned and `v0.8.1`/`v0.8.2` were lightweight, so nothing tied a tag to
-  the maintainer rather than to whoever can push. The authorized key ships as
+- **Tag-signing is configured, and `v0.8.3` is still unsigned — stated rather
+  than implied.** `v0.8.0` was annotated but unsigned and `v0.8.1`/`v0.8.2` were
+  lightweight, so nothing ties a tag to the maintainer rather than to whoever can
+  push; that is still true of `v0.8.3`. The repository now sets `gpg.format=ssh`,
+  `tag.gpgsign=true` and `gpg.ssh.allowedSignersFile`, and the authorized key ships as
   `.github/allowed_signers` and `SECURITY.md` documents the verification —
   including why a key committed to the repository it verifies is a continuity
-  guarantee rather than, by itself, an identity one. Earlier tags are **not**
-  retro-signed: re-tagging would change objects users have already fetched.
+  guarantee rather than, by itself, an identity one. What is missing is
+  `user.signingkey` on the maintainer's machine — tracked as **#174**. Earlier
+  tags are **not** retro-signed: re-tagging would change objects users have
+  already fetched.
 
 ### Fixed
 

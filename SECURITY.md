@@ -71,7 +71,7 @@ network calls during indexing; all processing is local.
 |---|---|
 | The artifact was built by our workflow, from this source | `gh attestation verify <file> --repo cdeust/automatised-pipeline` |
 | The bytes were not altered in transit | `sha256sum -c <file>.sha256` |
-| The release tag was cut by the maintainer, not by whoever can push | `git tag -v <tag>` |
+| The release tag was cut by the maintainer, not by whoever can push | **not yet available** — no tag is signed; see below and issue #174 |
 | What is inside the binary | the CycloneDX SBOM asset, `automatised-pipeline.cdx.json` |
 | Dependencies carry no known advisory | `cargo audit` / `cargo deny`, run daily in CI |
 | Repo-level supply-chain posture | OpenSSF Scorecard, published weekly |
@@ -92,10 +92,16 @@ an air-gapped or archival consumer can verify the artifact without either.
 
 ### Verifying the release tag
 
-Release tags are annotated and **SSH-signed**. The authorized signing key is
-committed at [`.github/allowed_signers`](.github/allowed_signers) — one line,
-the maintainer identity `cdeust@icloud.com` bound to an `ssh-ed25519`
-key, scoped to the `git` namespace. Point git at it once, then verify:
+**`v0.8.3` is annotated but NOT signed.** Tag signing is configured but not yet
+exercised: the authorized key is committed at
+[`.github/allowed_signers`](.github/allowed_signers) — one line, the maintainer
+identity `cdeust@icloud.com` bound to an `ssh-ed25519` key, scoped to the `git`
+namespace — and the repository sets `gpg.format=ssh`, `tag.gpgsign=true` and
+`gpg.ssh.allowedSignersFile`. What is missing is `user.signingkey` on the
+maintainer's machine, so no tag has been signed yet. Tracked in issue #174.
+
+Do not read the presence of `allowed_signers` as a signed release. Once a tag
+is signed, this is how you check it:
 
 ```bash
 git config gpg.ssh.allowedSignersFile .github/allowed_signers
@@ -108,10 +114,11 @@ is the maintainer's. Cross-check it against the same file in an independently
 obtained clone, or against the key published on the GitHub account, before
 treating it as an identity rather than a continuity guarantee.
 
-Tags before **v0.8.3** are unsigned — `v0.8.0` is annotated but carries no
-signature, and `v0.8.1`/`v0.8.2` are lightweight tags with no object to sign.
-They are not retro-signed: re-tagging would change the tag objects users have
-already fetched. Only v0.8.3 onward is verifiable this way.
+**No tag is signed today.** `v0.8.0` is annotated but carries no signature,
+`v0.8.1` and `v0.8.2` are lightweight tags with no object to sign, and `v0.8.3`
+is annotated but unsigned. Earlier tags will not be retro-signed — re-tagging
+would change objects users have already fetched — so the first verifiable tag
+will be the first one cut after #174 closes.
 
 **Limits, stated rather than implied.** Provenance proves *who built it and
 from which commit*; it does not prove the source is free of defects, and it is
