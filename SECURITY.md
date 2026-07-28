@@ -5,7 +5,24 @@
 If you discover a security issue in this project, **do not** open a public
 issue. Instead, send a private report to the maintainer.
 
-**Disclosure channel:** open a [private security advisory on GitHub](https://github.com/cdeust/automatised-pipeline/security/advisories/new).
+**Preferred channel:** open a [private security advisory on
+GitHub](https://github.com/cdeust/automatised-pipeline/security/advisories/new).
+It keeps the report, the discussion and the eventual CVE in one place, and it
+is private to you and the maintainer.
+
+**Fallback channel:** email **hello@ai-architect.tools**.
+
+Use the fallback whenever the advisory form does not work for you — you are
+not signed in to GitHub, you do not have a GitHub account, or the form is
+simply unavailable. The advisory form is a GitHub feature that a repository
+setting can switch off; this document previously named it as the *only* way
+in, so turning that setting off silently left reporters with no private
+channel at all (issue #159). The mailbox does not depend on that setting, and
+the SLA below applies identically to both channels.
+
+Please do not send encrypted mail unless you have agreed a key with the
+maintainer first — no OpenPGP key is advertised here, because publishing one
+the maintainer cannot reliably decrypt with would be worse than plaintext.
 
 Include:
 
@@ -28,7 +45,7 @@ Only the latest minor release on `main` receives security patches.
 
 ## Disclosure Timeline
 
-1. Reporter sends private advisory.
+1. Reporter sends a private advisory, or emails the fallback address.
 2. Maintainer acknowledges receipt within the first-response SLA.
 3. Maintainer + reporter agree on a coordinated disclosure date (default
    30 days from the patched release).

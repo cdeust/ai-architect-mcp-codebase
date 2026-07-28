@@ -11,8 +11,8 @@ adheres to [Semantic Versioning](https://semver.org/).
 - **OpenSSF Best Practices answers, and the documents the silver criteria
   require (`.bestpractices.json`).** Every passing and silver criterion is
   answered with a status and a justification that cites a file in this
-  repository or a dated measurement: 115 criteria, 93 Met / 7 Unmet / 15 N/A.
-  Passing is 59 Met / 1 Unmet / 7 N/A; silver is 40 Met / 6 Unmet / 9 N/A. The
+  repository or a dated measurement: 115 criteria, 94 Met / 6 Unmet / 15 N/A.
+  Passing is 60 Met / 0 Unmet / 7 N/A; silver is 40 Met / 6 Unmet / 9 N/A. The
   answers are read by bestpractices.dev for project 13845, whose badge is now in
   the README badge row.
 
@@ -24,12 +24,13 @@ adheres to [Semantic Versioning](https://semver.org/).
   with its evidence and its stated limit, and a weakness-class table).
   `CONTRIBUTING.md` gained an explicit, mandatory testing policy.
 
-  Two criteria are answered Unmet with a filed issue rather than argued around:
-  the private disclosure channel SECURITY.md points at is disabled (#159, a
-  passing MUST), and no published release carries a provenance attestation, an
-  SBOM or a signed tag (#158, the only silver MUST not met). Also filed: the
-  ungated coverage measurement (#160), README claim drift (#161), and the three
-  disabled repository security settings (#162).
+  Two criteria were answered Unmet with a filed issue rather than argued
+  around: the private disclosure channel SECURITY.md points at was disabled
+  (#159, a passing MUST — now closed, see below), and no published release
+  carries a provenance attestation, an SBOM or a signed tag (#158, the only
+  silver MUST not met). Also filed: the ungated coverage measurement (#160),
+  README claim drift (#161), and the three disabled repository security
+  settings (#162).
 
 - **Cross-language type-usage (`Uses`) edges for return types and type
   construction (issue #92).** The code graph now captures a function/method that
@@ -670,6 +671,29 @@ adheres to [Semantic Versioning](https://semver.org/).
     import* is blocked on AP having no incremental (changed-files-only) indexer;
     filed as #62. Until then, a stale artifact triggers a full re-index (or an
     explicit `accept_stale` import), which is correct but not yet optimal.
+
+### Security
+
+- **A private disclosure path that survives a settings change (issue #159).**
+  SECURITY.md named exactly one way to report a vulnerability — GitHub's
+  private advisory form — and that feature was switched off, so a reporter
+  without write access who followed the instructions arrived at a page they
+  could not use. Private advisories are now enabled
+  (`gh api repos/cdeust/automatised-pipeline/private-vulnerability-reporting`
+  → `{"enabled":true}`), and SECURITY.md names a **fallback that does not
+  depend on a GitHub feature flag**: `hello@ai-architect.tools`, under the
+  same per-severity SLA. The disclosure timeline accepts either channel.
+
+  No OpenPGP key is advertised alongside the address. Publishing one the
+  maintainer cannot reliably decrypt with would turn a working plaintext
+  channel into a broken encrypted one, so the document says so explicitly
+  rather than leaving a reporter to guess.
+
+  `.bestpractices.json`: `vulnerability_report_private` cites the fallback,
+  and `achieve_passing` no longer names it as the outstanding exception —
+  every passing-level criterion is now Met or N/A. The criterion tally in
+  the entry above was corrected with it (93/7 → 94/6 overall, and the
+  passing tier from 59 Met / 1 Unmet to 60 Met / 0 Unmet).
 
 ## [0.8.2] — First complete four-platform release (Windows asset ships)
 
