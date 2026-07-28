@@ -722,6 +722,35 @@ adheres to [Semantic Versioning](https://semver.org/).
   different privacy posture than this repository documents, and neither is
   part of issue #162's acceptance criteria.
 
+### Added
+
+- **A coverage floor that actually fails the build, and a README badge that
+  cannot lie about it (issue #160).** Statement coverage was measured but
+  ungated: the figure came from a hand-run command, so a change dropping it
+  to 74% would have merged green while `.bestpractices.json` went on
+  answering the OpenSSF silver criterion `test_statement_coverage80` **Met**.
+
+  New CI job `cargo llvm-cov (80% line floor)` runs `cargo llvm-cov
+  --workspace` on every pull request and push to main and fails below
+  `--fail-under-lines 80`. It is a required status check on `main`. 80 is not
+  a tuning knob — it is the threshold the OpenSSF criterion names.
+
+  New gate `scripts/check_doc_claims.py` (stdlib-only, 20 unit tests covering
+  every arm) compares the README's advertised coverage against what that job
+  just measured, and fails when the badge **overstates**. It caught the badge
+  on its first run: advertised 81.59%, measured 81.56%.
+
+  The badge is now required to be a **whole** percentage. Pinning it at
+  81.56 would have been exact for one commit and overstated by the next
+  hundredth-point dip — a gate that reddens for no reason gets disabled. A
+  whole-percent badge is honest for a full point of movement, which is also
+  where the one-point staleness tolerance comes from rather than being picked.
+  Badge now reads **81%** against a measured 81.56%.
+
+  Worth recording: the same workspace measures **81.07%** on macOS aarch64 and
+  **81.56%** on the Linux CI runner. The advertised number is the Linux CI
+  figure, because that is the one a gate re-measures on every change.
+
 ## [0.8.2] — First complete four-platform release (Windows asset ships)
 
 A CI-only patch release (PR #52). No library or server code changes.

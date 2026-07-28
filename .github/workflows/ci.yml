@@ -154,3 +154,96 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all --check
+
+  coverage:
+    name: cargo llvm-cov (80% line floor)
+    runs-on: ubuntu-latest
+    # source: issue #160 — statement coverage was MEASURED (81.59% lines,
+    # cargo-llvm-cov 0.8.7, 2026-07-27) but nothing enforced it, so a change
+    # dropping it to 74% would have merged green while .bestpractices.json
+    # went on answering the OpenSSF silver criterion `test_statement_coverage80`
+    # Met on the strength of a hand-run command. A measurement that nothing
+    # re-runs is a claim with an expiry date nobody is watching.
+    #
+    # 80 is not a tuning knob: it is the threshold the OpenSSF criterion names
+    # (https://www.bestpractices.dev/en/criteria/1 — test_statement_coverage80).
+    # The floor is what the badge answer is allowed to assert, not a target.
+    timeout-minutes: 90
+
+    # Same zstd/lbug static-link conflict as the test job — see its env
+    # comment above for the root cause.
+    env:
+      ZSTD_SYS_USE_PKG_CONFIG: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # First, and before anything expensive: a gate whose own logic is broken
+      # is worse than no gate, and finding that out after a 90-minute
+      # instrumented build wastes the run. Stdlib-only, so it needs no setup.
+      - name: Unit tests (doc-claims gate logic, all arms)
+        run: python3 -m unittest scripts/tests/test_check_doc_claims.py -v 2>&1 | tail -5
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libzstd-dev pkg-config cmake
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.95.0"
+          # llvm-tools ships llvm-profdata/llvm-cov, which cargo-llvm-cov
+          # drives; without it the run fails at report time, after paying
+          # for the whole instrumented build.
+          components: llvm-tools-preview
+
+      # ~/.cargo/bin is in the cache path here (unlike the test/clippy jobs)
+      # so cargo-llvm-cov is not recompiled on every run; `cargo install`
+      # is a no-op when the cached binary already satisfies the version req.
+      - name: Cache cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-llvmcov-zstd-pkgconfig-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-llvmcov-zstd-pkgconfig-v1-
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked --version ^0.8
+
+      # Split into run / report / gate so the instrumented suite is executed
+      # exactly once: --no-report leaves the profraw data in place, and both
+      # the machine-readable export and the human summary are generated from
+      # it. Collapsing these would either run the suite twice or leave the
+      # doc-claims check with no number to compare against.
+      - name: Run instrumented test suite
+        run: cargo llvm-cov --workspace --no-report
+
+      - name: Export coverage (machine-readable)
+        run: cargo llvm-cov report --json --output-path coverage.json
+
+      - name: Enforce the 80% line floor
+        run: cargo llvm-cov report --summary-only --fail-under-lines 80
+
+      # The README badge asserted 81.59% because a human typed it. This step
+      # makes the advertised number answerable to the measurement: it fails
+      # when the badge overstates what this job just measured.
+      - name: Check README coverage claim against the measurement
+        run: python3 scripts/check_doc_claims.py --coverage-json coverage.json
+
+      - name: Publish the measured number to the run summary
+        if: always()
+        run: |
+          if [ -f coverage.json ]; then
+            python3 scripts/check_doc_claims.py --coverage-json coverage.json \
+              --print-only >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No coverage.json — the instrumented run did not reach report stage." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
