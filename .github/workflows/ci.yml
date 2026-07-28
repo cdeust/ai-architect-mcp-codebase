@@ -226,8 +226,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-llvmcov-zstd-pkgconfig-v1-
 
+      # Idempotent by necessity. The cargo cache restores ~/.cargo/bin, so on
+      # every run after the first this binary is ALREADY there, and plain
+      # `cargo install` treats that as a hard error ("binary `cargo-llvm-cov`
+      # already exists in destination", exit 101) rather than as success. That
+      # turned a required check into one that passed exactly once — the first
+      # run on a cold cache — and failed for every pull request afterwards.
+      # Reuse the cached binary when it satisfies the constraint; install only
+      # when it does not, so a version bump still takes effect.
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked --version ^0.8
+        run: |
+          if cargo llvm-cov --version 2>/dev/null | grep -qE '^cargo-llvm-cov 0\.8\.'; then
+            echo "reusing cached $(cargo llvm-cov --version)"
+          else
+            cargo install cargo-llvm-cov --locked --version '^0.8' --force
+          fi
 
       # Split into run / report / gate so the instrumented suite is executed
       # exactly once: --no-report leaves the profraw data in place, and both
