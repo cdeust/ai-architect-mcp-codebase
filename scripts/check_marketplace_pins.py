@@ -17,6 +17,12 @@ manifests sat a three-way split with its tag (AP #67). Failure classes:
   SELF_PIN_MISMATCH    local-source pin != the plugin's own plugin.json.
   SERVER_JSON_SPLIT    root server.json version != the primary local pin
                        (the unguarded third leg of AP's three-way split).
+  MANIFEST_JSON_SPLIT  root manifest.json version != the primary local pin.
+                       AP shipped manifest.json stuck at 0.8.0 for TWO releases
+                       while every other pin read 0.8.2 and this gate exited 0,
+                       because it only ever read server.json (AP #172). The
+                       file is copied verbatim into the .mcpb bundle, so the
+                       wrong version shipped to every install.
 
 Network failures DEGRADE TO SILENCE (NOTICE + exit 0): a gate that reddens
 every PR during a GitHub outage gets disabled, and then the six-release gap
@@ -90,6 +96,10 @@ def _headers() -> dict[str, str]:
     return headers
 
 
+# source: RFC 9110 §15.5.5 — HTTP 404 Not Found
+_HTTP_NOT_FOUND = 404
+
+
 def latest_release_tag(repo: str) -> str | None:
     """Latest release tag; None when the repo has no releases (404)."""
     req = urllib.request.Request(
@@ -99,7 +109,7 @@ def latest_release_tag(repo: str) -> str | None:
         with urllib.request.urlopen(req, timeout=API_TIMEOUT_S) as resp:
             return json.load(resp).get("tag_name")
     except urllib.error.HTTPError as e:
-        if e.code == 404:
+        if e.code == _HTTP_NOT_FOUND:
             return None
         raise
 
@@ -130,7 +140,8 @@ def check_github_pin(
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         return (
             None,
-            f"NOTICE: {name}: network degraded ({e.__class__.__name__}); pin not verified this run",
+            f"NOTICE: {name}: network degraded ({e.__class__.__name__}); "
+            f"pin not verified this run",
         )
     if tag is None:
         return (
@@ -144,7 +155,8 @@ def check_github_pin(
         n = count(repo, pinned, latest)
         behind = f"{n} release(s)" if n is not None else "release(s)"
         return (
-            f"PIN_BEHIND_RELEASE: {name}: pins {pin}, {repo} latest is {tag} ({behind} never delivered)",
+            f"PIN_BEHIND_RELEASE: {name}: pins {pin}, {repo} latest is {tag} "
+            f"({behind} never delivered)",
             None,
         )
     return None, None
@@ -159,10 +171,12 @@ def check_self_pin(name: str, source: str, pin: str, root: Path) -> list[str]:
         actual = json.loads(plugin_json.read_text()).get("version", "")
         if actual and actual != pin:
             failures.append(
-                f"SELF_PIN_MISMATCH: {name}: pins {pin} but {plugin_json.relative_to(root)} says {actual}"
+                f"SELF_PIN_MISMATCH: {name}: pins {pin} "
+                f"but {plugin_json.relative_to(root)} says {actual}"
             )
     if name in FROZEN_PINS:
-        return failures  # frozen: manifest coherence still checked, tag advance is by-design
+        # frozen: manifest coherence still checked, tag advance is by-design
+        return failures
     tag = latest_local_tag(root)
     pinned = parse_semver(pin)
     if tag and pinned and (latest := parse_semver(tag)) and pinned < latest:
@@ -174,14 +188,36 @@ def check_self_pin(name: str, source: str, pin: str, root: Path) -> list[str]:
     return failures
 
 
-def check_server_json(root: Path, primary_pin: str) -> str | None:
-    server = root / "server.json"
-    if not server.is_file():
-        return None
-    version = json.loads(server.read_text()).get("version", "")
-    if version and version != primary_pin:
-        return f"SERVER_JSON_SPLIT: server.json says {version} but the primary marketplace pin is {primary_pin}"
-    return None
+# Root manifests that carry a version which must agree with the primary
+# marketplace pin. One row per file: adding a manifest never adds a branch to
+# the check below, which is what let manifest.json go unguarded for two
+# releases when the check was hardcoded to server.json alone (AP #172).
+ROOT_VERSION_MANIFESTS: tuple[tuple[str, str, str], ...] = (
+    ("server.json", "version", "SERVER_JSON_SPLIT"),
+    ("manifest.json", "version", "MANIFEST_JSON_SPLIT"),
+)
+
+
+def check_root_manifests(root: Path, primary_pin: str) -> list[str]:
+    """Flag every root manifest whose version disagrees with the primary pin.
+
+    An absent file is not a failure and neither is a missing version key: the
+    canonical repo has no manifest.json, automatised-pipeline has both, and a
+    gate that demanded every row exist everywhere would be a false positive in
+    one repo or the other rather than a guard in both.
+    """
+    failures: list[str] = []
+    for filename, key, failure_class in ROOT_VERSION_MANIFESTS:
+        path = root / filename
+        if not path.is_file():
+            continue
+        version = json.loads(path.read_text()).get(key, "")
+        if version and version != primary_pin:
+            failures.append(
+                f"{failure_class}: {filename} says {version} "
+                f"but the primary marketplace pin is {primary_pin}"
+            )
+    return failures
 
 
 def main() -> int:
@@ -211,15 +247,17 @@ def main() -> int:
             failures.extend(check_self_pin(name, source, pin, root))
             if source.strip("/") in ("", "."):
                 primary_pin = pin
-    if primary_pin and (split := check_server_json(root, primary_pin)):
-        failures.append(split)
+    if primary_pin:
+        failures.extend(check_root_manifests(root, primary_pin))
     for line in notices:
         print(line)
     for line in failures:
         print(line)
     if failures:
         print(
-            f"\n{len(failures)} stale pin(s). A release is not shipped until its pin moves — bump .claude-plugin/marketplace.json (and server.json)."
+            f"\n{len(failures)} stale pin(s). A release is not shipped until "
+            f"its pin moves — bump .claude-plugin/marketplace.json "
+            f"(and server.json / manifest.json)."
         )
         return 1
     print(
