@@ -1,0 +1,87 @@
+name: Windows build
+
+# The windows-x86_64 leg of release.yml only ever runs on a `v*` tag, and it is
+# `continue-on-error`. Both together are why a broken Windows build reached
+# v0.8.3 and silently dropped the platform: no pre-merge signal existed, and the
+# failure did not redden the release (#176). This job is that missing signal —
+# same target, same pinned toolchain, same OpenSSL shim as the release leg, run
+# on every pull request so a break costs a red check instead of a published
+# release.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build:
+    name: cargo build (windows-x86_64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain (pinned)
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.95.0"
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-x86_64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            windows-x86_64-cargo-
+
+      # lbug 0.18's Kuzu core asks the linker for `ssl` and `crypto`. Those are
+      # Unix-style names: MSVC turns them into ssl.lib / crypto.lib, and no
+      # OpenSSL distribution for Windows ships those filenames — the runner
+      # image provides libssl.lib / libcrypto.lib. lbug 0.15, which v0.8.2 built
+      # against, did not link OpenSSL at all, which is why the break arrived
+      # with the 0.15 → 0.18 upgrade rather than with any workflow change (#176).
+      #
+      # Copies under the expected names into a scratch dir and puts that dir on
+      # rustc's native search path. `-L native=` is additive, unlike overwriting
+      # LIB, which would clobber the MSVC library paths cc-rs discovers.
+      - name: Provide ssl.lib / crypto.lib to the MSVC linker
+        run: |
+          set -euo pipefail
+          SHIM="$RUNNER_TEMP/openssl-shim"
+          mkdir -p "$SHIM"
+          for d in \
+            "/c/Program Files/OpenSSL/lib/VC/x64/MD" \
+            "/c/Program Files/OpenSSL/lib/VC" \
+            "/c/Program Files/OpenSSL/lib" \
+            "/c/vcpkg/installed/x64-windows/lib"
+          do
+            if [ -f "$d/libssl.lib" ] && [ -f "$d/libcrypto.lib" ]; then
+              cp "$d/libssl.lib" "$SHIM/ssl.lib"
+              cp "$d/libcrypto.lib" "$SHIM/crypto.lib"
+              echo "shimmed OpenSSL import libs from: $d"
+              ls -la "$SHIM"
+              echo "RUSTFLAGS=-L native=$(cygpath -w "$SHIM")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          # Fail loudly with the evidence rather than letting the build reach a
+          # link error whose cause is one directory listing away.
+          echo "::error::no libssl.lib/libcrypto.lib found in any known location"
+          find "/c/Program Files/OpenSSL" -name '*.lib' 2>/dev/null | head -20 || true
+          exit 1
+
+      - name: Build
+        run: cargo build --release --bin automatised-pipeline --target x86_64-pc-windows-msvc
+
+      - name: Confirm the binary exists
+        run: ls -la target/x86_64-pc-windows-msvc/release/automatised-pipeline.exe
