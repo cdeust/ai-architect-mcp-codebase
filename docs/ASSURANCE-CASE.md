@@ -179,13 +179,16 @@ target. The user needs to be able to prove which commit produced which bytes.
 
 **Where the argument still fails.** Two gaps, neither papered over.
 
-The **release tag is not signed**. `v0.8.3` is annotated rather than lightweight,
-and the signing configuration is committed, but `user.signingkey` is unset on the
-maintainer machine, so `git tag -v v0.8.3` reports `no signature found`. The
-artifact chain is therefore anchored at the workflow, not at a human: provenance
-proves *this workflow, from this commit, built these bytes*, and says nothing
-about who was entitled to cut the tag that triggered it. Tracked as issue #174,
-and `version_tags_signed` stays **Unmet**.
+The **release tag is not signed**, and that is a decision rather than a gap.
+`git tag -v` reports `no signature found`. The chain is anchored at the
+workflow rather than at a human: provenance proves *this workflow, from this
+commit, produced these exact bytes*, and says nothing about who was entitled to
+cut the tag that triggered it. A tag signature would answer that narrower
+question and is the weaker of the two statements, so the assurance is spent on
+the artifact instead. `version_tags_signed` therefore stays **Unmet** — reported
+honestly rather than argued around — while `signed_releases` is **Met** on
+artifact evidence. The sibling project cdeust/prd-spec-generator answers both
+criteria the same way.
 
 The **windows-x86_64 asset is missing**. `v0.8.2` shipped one; the `v0.8.3`
 build failed at MSVC link time (`LNK1181: cannot open input file 'ssl.lib'`,
@@ -204,7 +207,7 @@ as issue #176.
 | Uncontrolled resource consumption (CWE-400) | Response budget, `max_db_size` bound, parse bounds from #148 | No global quota on indexing time or disk |
 | Silent failure of a check | Coverage sidecar records what it could not parse; the graph-accuracy gate is a blocking CI check with a ratcheting floor | Only the failure modes we have found are instrumented |
 | Vulnerable dependency (CWE-1104) | Daily `cargo audit` + `cargo deny`, Dependabot, `Cargo.lock` | One `unsound` advisory is blocked upstream by an exact pin, documented in `deny.toml` |
-| Tampered artifact | SHA-256 per asset; verified provenance attestation + published Sigstore bundle from v0.8.3 | The tag that triggers the build is unsigned (#174), so the chain is anchored at the workflow, not at a person |
+| Tampered artifact | SHA-256 per asset; verified provenance attestation + published Sigstore bundle from v0.8.3 | The tag that triggers the build is unsigned by design, so the chain is anchored at the workflow, not at a person |
 
 ## What this case does not claim
 
