@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The windows-x86_64 asset ships again, and a broken windows build can no
+  longer hide (issue #176).** `v0.8.2` published a windows tarball; `v0.8.3`
+  did not, and the release still went green. Two independent causes had to line
+  up for that: the leg builds only on a `v*` tag, so nothing tested it before a
+  release existed, and it was `continue-on-error`, so its failure did not redden
+  the release either. A platform disappeared and nothing announced it.
+
+  The break itself was **`lbug` 0.15 → 0.18**. lbug 0.18's Kuzu core asks the
+  linker for `ssl` and `crypto` — Unix-style names MSVC resolves to `ssl.lib`
+  and `crypto.lib`, filenames no OpenSSL distribution for Windows ships (the
+  runner image provides `libssl.lib`/`libcrypto.lib`), so `link.exe` failed
+  `LNK1181`. No OpenSSL *crate* is involved — `cargo tree -e normal -i
+  openssl-sys` matches nothing — so the dependency-graph claims in
+  `ASSURANCE-CASE.md` are unaffected; this is a native-side link requirement.
+
+  It was invisible in the obvious place to look: `Cargo.lock` did not exist at
+  `v0.8.2` (added later in `73569fb`), so `git diff v0.8.2..v0.8.3 -- Cargo.lock`
+  renders every package as an addition and buries the one line that moved.
+
+  Fixed on three levels rather than one: the import libraries are copied under
+  the names the linker asks for and exposed via `-L native=` (additive, unlike
+  overwriting `LIB`, which would clobber the MSVC paths cc-rs discovers); a new
+  `windows-build.yml` builds the target on **every pull request**, so a break
+  now costs a red check instead of a published release; and the leg is promoted
+  out of `continue-on-error`, with the dead `matrix.experimental` expression
+  removed rather than left implying an exemption.
+
 ### Security
 
 - **Release integrity: the provenance a release page shows, not just the one an

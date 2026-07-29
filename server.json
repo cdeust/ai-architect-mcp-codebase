@@ -6,13 +6,13 @@
     "url": "https://github.com/cdeust/automatised-pipeline",
     "source": "github"
   },
-  "version": "0.8.3",
+  "version": "0.8.4",
   "websiteUrl": "https://github.com/cdeust/automatised-pipeline#readme",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/cdeust/automatised-pipeline/releases/download/v0.8.3/automatised-pipeline.mcpb",
-      "version": "0.8.3",
+      "identifier": "https://github.com/cdeust/automatised-pipeline/releases/download/v0.8.4/automatised-pipeline.mcpb",
+      "version": "0.8.4",
       "fileSha256": "662b2619ea31f09254ec66ab2b653204bb222646d191196a4a44237ad428ecf1",
       "transport": {
         "type": "stdio"
