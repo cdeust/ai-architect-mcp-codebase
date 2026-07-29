@@ -79,21 +79,24 @@ jobs:
           - target_tag: linux-aarch64
             rust_target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm  # native ARM runner — no cross
-          # EXPERIMENTAL: lbug (LadybugDB/Kuzu) compiles its C++ core via
-          # CMake, and that build is unverified under MSVC — the zstd
-          # static-link workaround below is Linux-specific, and Windows may
-          # hit its own toolchain/link failures. `experimental: true` maps
-          # to continue-on-error so a Windows breakage never blocks the
-          # macOS/Linux release. Promote to a required leg once a tagged
-          # release has produced a working artifact.
+          # Promoted from EXPERIMENTAL to a required leg (#176). It was
+          # continue-on-error because the MSVC build of lbug's C++ core was
+          # unverified and a breakage should not block the macOS/Linux
+          # release. That reasoning inverted once it started failing: with no
+          # pre-merge signal AND continue-on-error, v0.8.3 shipped with the
+          # windows asset silently missing while the release went green — worse
+          # than a blocked release, because nothing announced the loss.
+          # windows-build.yml now builds this target on every pull request, so a
+          # break is caught before a tag exists and this leg can be required.
           - target_tag: windows-x86_64
             rust_target: x86_64-pc-windows-msvc
             runner: windows-latest
             bin_suffix: .exe
-            experimental: true
     runs-on: ${{ matrix.runner }}
-    # Only the experimental windows leg is allowed to fail (see matrix).
-    continue-on-error: ${{ matrix.experimental == true }}
+    # No leg is allowed to fail: every platform in the matrix is now required
+    # (#176). Nothing sets `experimental` any more, so the old
+    # `continue-on-error: ${{ matrix.experimental == true }}` was dead config
+    # that read as if some leg were still exempt.
 
     # Uploads the platform tarball + sha256 and records signed provenance.
     permissions:
@@ -139,6 +142,37 @@ jobs:
           key: ${{ matrix.target_tag }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ matrix.target_tag }}-cargo-
+
+      # lbug 0.18's Kuzu core asks the linker for `ssl` and `crypto` — Unix-style
+      # names MSVC resolves to ssl.lib / crypto.lib, filenames no OpenSSL build
+      # for Windows ships (the image has libssl.lib / libcrypto.lib). That is
+      # what broke the v0.8.3 windows leg with LNK1181 (#176); lbug 0.15, which
+      # v0.8.2 built against, did not link OpenSSL at all. Kept byte-identical
+      # with the same step in windows-build.yml, which is what proves it works
+      # before a tag exists.
+      - name: Provide ssl.lib / crypto.lib to the MSVC linker (windows)
+        if: startsWith(matrix.runner, 'windows')
+        run: |
+          set -euo pipefail
+          SHIM="$RUNNER_TEMP/openssl-shim"
+          mkdir -p "$SHIM"
+          for d in \
+            "/c/Program Files/OpenSSL/lib/VC/x64/MD" \
+            "/c/Program Files/OpenSSL/lib/VC" \
+            "/c/Program Files/OpenSSL/lib" \
+            "/c/vcpkg/installed/x64-windows/lib"
+          do
+            if [ -f "$d/libssl.lib" ] && [ -f "$d/libcrypto.lib" ]; then
+              cp "$d/libssl.lib" "$SHIM/ssl.lib"
+              cp "$d/libcrypto.lib" "$SHIM/crypto.lib"
+              echo "shimmed OpenSSL import libs from: $d"
+              echo "RUSTFLAGS=-L native=$(cygpath -w "$SHIM")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "::error::no libssl.lib/libcrypto.lib found in any known location"
+          find "/c/Program Files/OpenSSL" -name '*.lib' 2>/dev/null | head -20 || true
+          exit 1
 
       # zstd-sys + lbug both statically link libzstd, producing duplicate
       # symbols on Linux (rust-lld is strict; macOS ld64 silently dedupes).
