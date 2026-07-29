@@ -3,7 +3,7 @@ name: Release binaries
 # Triggered when the maintainer pushes a tag matching v*. Builds the
 # automatised-pipeline binary for the three platforms Cortex's installer
 # fast-path knows how to consume (macos-aarch64, linux-x86_64,
-# linux-aarch64) plus an experimental windows-x86_64 leg, tarballs each,
+# linux-aarch64) plus a windows-x86_64 leg, tarballs each,
 # computes a SHA256 companion, and attaches everything to the GitHub
 # Release.
 #
@@ -326,8 +326,8 @@ jobs:
           fail_on_unmatched_files: true
 
   # Pack and publish the .mcpb bundle after all three platform binaries
-  # are available on the GitHub Release. The experimental windows binary
-  # is deliberately NOT bundled: .mcpb consumers (Claude Desktop installer
+  # are available on the GitHub Release. The windows binary is deliberately
+  # NOT bundled: .mcpb consumers (Claude Desktop installer
   # contract) only resolve the macos/linux bin/<platform>/ layout today.
   package_mcpb:
     name: package .mcpb bundle
