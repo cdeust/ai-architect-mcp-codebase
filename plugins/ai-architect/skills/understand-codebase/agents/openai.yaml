@@ -1,0 +1,4 @@
+interface:
+  display_name: "Understand Codebase"
+  short_description: "Map a codebase with graph evidence"
+  default_prompt: "Use $understand-codebase to map this repository before proposing changes."

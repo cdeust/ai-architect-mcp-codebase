@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Native Codex plugin and Gemini workflows over the unchanged eight-tool
+  `core` profile.** A repo marketplace now exposes an isolated
+  `plugins/ai-architect` package with its own MCP manifest, while the Gemini
+  extension version tracks the crate and discovers the same three portable
+  skills: codebase understanding, impact analysis, and structural change-plan
+  validation. Distribution tests lock versions, profile arguments, marketplace
+  paths, skill parity, and the existing Claude/full project manifest.
+
 ### Fixed
 
 - **The windows-x86_64 asset ships again, and a broken windows build can no

@@ -1,0 +1,20 @@
+{
+  "name": "automatised-pipeline",
+  "interface": {
+    "displayName": "Automatised Pipeline"
+  },
+  "plugins": [
+    {
+      "name": "ai-architect",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ai-architect"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

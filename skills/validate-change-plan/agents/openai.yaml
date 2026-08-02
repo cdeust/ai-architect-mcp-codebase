@@ -1,0 +1,4 @@
+interface:
+  display_name: "Validate Change Plan"
+  short_description: "Check a change plan against the graph"
+  default_prompt: "Use $validate-change-plan to check whether this plan matches the codebase."

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ai-architect": {
+      "command": "automatised-pipeline",
+      "args": ["--profile", "core"]
+    }
+  }
+}

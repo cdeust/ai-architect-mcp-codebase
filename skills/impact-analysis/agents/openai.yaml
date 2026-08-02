@@ -1,0 +1,4 @@
+interface:
+  display_name: "Impact Analysis"
+  short_description: "Trace a code change's blast radius"
+  default_prompt: "Use $impact-analysis to trace the blast radius of this change."

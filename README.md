@@ -202,6 +202,11 @@ Or install as an extension (this repo ships a `gemini-extension.json`):
 gemini extensions install https://github.com/cdeust/automatised-pipeline
 ```
 
+The extension also exposes three host-native workflows from `skills/`:
+`understand-codebase`, `impact-analysis`, and `validate-change-plan`.
+They use only the eight tools in the `core` profile and explicitly surface
+index coverage gaps before accepting negative graph results.
+
 **OpenAI Codex CLI** (also picked up by the ChatGPT desktop app and Codex IDE extension — they share `~/.codex/config.toml`)
 
 ```bash
@@ -215,6 +220,20 @@ Or in `~/.codex/config.toml`:
 command = "automatised-pipeline"
 args = ["--profile", "core"]
 ```
+
+Or install the packaged Codex plugin and its three matching skills from this
+repository's marketplace:
+
+```bash
+cargo install ai-architect-mcp
+codex plugin marketplace add cdeust/automatised-pipeline
+codex plugin add ai-architect@automatised-pipeline
+```
+
+The Codex package lives under `plugins/ai-architect/`, with its own
+`.mcp.json` fixed to `--profile core`. This isolation is intentional: the
+root `.mcp.json` remains the existing Claude project configuration and keeps
+the server's backward-compatible `full` default.
 
 **Cursor** — `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
 
