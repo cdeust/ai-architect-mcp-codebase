@@ -9,7 +9,7 @@
 #   Release, this script:
 #     1. Downloads the released .mcpb bundle.
 #     2. Computes its sha256.
-#     3. Writes the sha256 into server.json .packages[0].file_sha256.
+#     3. Writes the sha256 into server.json .packages[0].fileSha256.
 #     4. Prints the exact mcp-publisher commands for the maintainer to run.
 #
 #   It does NOT run mcp-publisher automatically. The maintainer reviews
@@ -88,8 +88,14 @@ echo "    sha256: ${SHA256}"
 
 echo "==> Writing sha256 into server.json..."
 TMP_JSON="$TMP_DIR/server.json"
+# The 2025-12-11 server schema names this field `fileSha256` (camelCase);
+# a snake_case `file_sha256` is not in Package.properties, so the registry
+# ignored it and served whatever stale `fileSha256` the file already carried.
+# source: definitions.Package.properties in
+#   https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json
+#   (measured 2026-08-02; v0.8.4 shipped sha 662b2619… against the real bf9cb117…)
 jq --arg sha "$SHA256" \
-   '.packages[0].file_sha256 = $sha' \
+   '.packages[0].fileSha256 = $sha | del(.packages[0].file_sha256)' \
    "$SERVER_JSON" > "$TMP_JSON"
 mv "$TMP_JSON" "$SERVER_JSON"
 
