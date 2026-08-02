@@ -62,7 +62,7 @@ fn codex_marketplace_points_at_the_isolated_plugin() {
 }
 
 #[test]
-fn portable_skills_are_identical_for_gemini_and_codex() {
+fn generated_codex_skills_match_the_canonical_gemini_sources() {
     for skill in PORTABLE_SKILLS {
         let gemini_root = root().join("skills").join(skill);
         let codex_root = root().join("plugins/ai-architect/skills").join(skill);
@@ -71,10 +71,13 @@ fn portable_skills_are_identical_for_gemini_and_codex() {
         let gemini_interface = read(gemini_root.join("agents/openai.yaml"));
         let codex_interface = read(codex_root.join("agents/openai.yaml"));
 
-        assert_eq!(gemini_skill, codex_skill, "{skill} workflow drifted");
+        assert_eq!(
+            gemini_skill, codex_skill,
+            "{skill} generated workflow drifted"
+        );
         assert_eq!(
             gemini_interface, codex_interface,
-            "{skill} interface metadata drifted"
+            "{skill} generated interface metadata drifted"
         );
         assert!(gemini_skill.starts_with("---\nname: "));
         assert!(!gemini_skill.contains("[TODO:"));

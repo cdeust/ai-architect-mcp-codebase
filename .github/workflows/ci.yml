@@ -109,6 +109,30 @@ jobs:
       - name: Run full test suite
         run: set -o pipefail && cargo test 2>&1 | tee test-output.log
 
+      - name: Check generated Codex skills are current
+        run: python3 scripts/sync_portable_skills.py --check
+
+      - name: Build and start the shipped Codex and Gemini commands
+        # cargo install builds this release target for end users. The smoke
+        # script reads command + args from both manifests, performs the MCP
+        # handshake and calls health_check through the core profile.
+        run: |
+          cargo build --release --bin automatised-pipeline
+          PATH="$PWD/target/release:$PATH" python3 scripts/smoke_portable_hosts.py
+
+      - name: Run pinned OpenAI Codex validators
+        # The validators are fetched from immutable commits; PyYAML is the
+        # validator's only external import and is exact-version pinned.
+        run: |
+          python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+          bash scripts/run-codex-validators.sh \
+            plugins/ai-architect \
+            plugins/ai-architect/skills/understand-codebase \
+            plugins/ai-architect/skills/impact-analysis \
+            plugins/ai-architect/skills/validate-change-plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       # Static claims (tool names and counts, language count, layout tree) need
       # no run and are checked here too, so a stale README fails the fastest
       # required job rather than waiting on the coverage build.
