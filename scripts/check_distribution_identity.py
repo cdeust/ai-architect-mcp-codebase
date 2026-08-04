@@ -34,9 +34,18 @@ def main() -> None:
     claude_marketplace = load(".claude-plugin/marketplace.json")
     plugin_name = claude_plugin["name"]
     marketplace_name = claude_marketplace["name"]
-    server_keys = list(load(".mcp.json")["mcpServers"])
+    mcp_servers = load(".mcp.json")["mcpServers"]
+    server_keys = list(mcp_servers)
     require(len(server_keys) == 1, f"expected one Claude MCP server key, got {server_keys}")
     server_key = server_keys[0]
+    # An `env` block in the shipped manifest could set AI_ARCHITECT_SOURCE_CHECKOUT
+    # and disable bootstrap verification without touching a single script, so the
+    # declaration is restricted to the fields the launcher actually needs.
+    declared_fields = set(mcp_servers[server_key])
+    require(
+        declared_fields <= {"command", "args"},
+        f"MCP server declaration carries unexpected fields: {sorted(declared_fields - {'command', 'args'})}",
+    )
     derived_prefix = f"mcp__plugin_{plugin_name}_{server_key}__"
 
     assertions = {

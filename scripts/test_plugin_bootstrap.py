@@ -49,6 +49,10 @@ def fixture(
     (plugin / "bin").mkdir(parents=True)
     (plugin / ".claude-plugin").mkdir()
     (plugin / "src").mkdir()
+    # A real developer clone: the source-checkout escape hatch is only honoured
+    # here, so the negative case below removes it to prove a packaged plugin
+    # cannot opt itself out of verification.
+    (plugin / ".git").mkdir()
     fake_bin.mkdir()
     shutil.copy2(ROOT / "bin/ensure-binary.sh", plugin / "bin/ensure-binary.sh")
     if repository is None and version is None:
@@ -70,7 +74,7 @@ def fixture(
     (fake_bin / "cargo").write_text("#!/bin/sh\necho COLD_BUILD_STARTED >&2\nexit 99\n", encoding="utf-8")
     (fake_bin / "gh").write_text(
         f'''#!/bin/sh
-if [ "$*" = "attestation verify --help" ]; then exit 0; fi
+if [ "$*" = "attestation verify --help" ]; then echo "      --source-ref string"; exit 0; fi
 printf '%s\\n' "$*" >> {str(gh_calls)!r}
 case "${{TEST_GH_MODE:-success}}" in
   success) exit 0 ;;
@@ -194,6 +198,10 @@ def main() -> None:
         require(f"--repo {EXPECTED_REPO}" in gh_args, "gh verification lacks fixed repository")
         require(f"--signer-workflow {EXPECTED_SIGNER}" in gh_args, "gh verification lacks fixed signer workflow")
         require("--bundle " in gh_args, "gh verification lacks offline bundle")
+        require(
+            f"--source-ref refs/tags/v{PLUGIN['version']}" in gh_args,
+            "gh verification lacks the versioned source ref",
+        )
 
         # Cached control: digest is rechecked; no network. Tampering fails closed.
         curl_calls.unlink()
@@ -205,13 +213,23 @@ def main() -> None:
         result = run(plugin, fake_bin)
         require(result.returncode != 0 and "digest mismatch" in result.stderr, "tampered cache was accepted")
 
-        # Version is part of the cache record; a reused directory cannot mask a bump.
-        shutil.copy2(release.archive, binary)
-        binary.chmod(0o755)
-        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        (binary.parent / f"{binary.name}.sha256").write_text(f"0.8.4  {digest}  {binary}\n", encoding="utf-8")
-        result = run(plugin, fake_bin)
-        require(result.returncode != 0 and "version mismatch" in result.stderr, "stale cache version was accepted")
+        # Version is part of the cache record; a reused directory cannot mask a
+        # bump. A stale or unreadable record is discarded and reinstalled through
+        # the fully verified download path rather than bricking the plugin — only
+        # a digest mismatch at the expected version stays fatal (tampering).
+        for label, record in (
+            ("stale version", f"0.8.4  {'0' * 64}  {binary}\n"),
+            ("legacy two-field record", f"{'0' * 64}  {binary}\n"),
+            ("truncated record", ""),
+        ):
+            shutil.copy2(release.archive, binary)
+            binary.chmod(0o755)
+            (binary.parent / f"{binary.name}.sha256").write_text(record, encoding="utf-8")
+            curl_calls.unlink(missing_ok=True)
+            result = run(plugin, fake_bin)
+            require(result.returncode == 0, f"{label}: {result.stderr}")
+            require(curl_calls.exists(), f"{label} was not reinstalled")
+            require("reinstalling" in result.stderr, f"{label} was discarded silently")
 
         # Negative controls protect each independent integrity boundary.
         for label, release, gh_mode in (
@@ -246,7 +264,13 @@ def main() -> None:
         require_not_installed(plugin, result, "hostile repository")
         require(not curl_calls.exists(), "hostile repository reached download path")
 
-        for label, malicious_version in (("downgrade", "0.8.4"), ("traversal", "../../attacker/repo")):
+        # The traversal payload starts with a valid triple on purpose: a bare
+        # "../../" is rejected by the version floor, which would let the SemVer
+        # regex be deleted without the suite noticing.
+        for label, malicious_version in (
+            ("downgrade", "0.8.4"),
+            ("traversal", "9.9.9/../../../../attacker/evil"),
+        ):
             plugin, fake_bin, curl_calls, _ = fixture(
                 tmp / label, version=malicious_version, cargo_version=malicious_version
             )
@@ -264,15 +288,64 @@ def main() -> None:
         require_not_installed(plugin, result, "old gh")
         require(not curl_calls.exists(), "old gh reached download path")
 
+        # gh 2.49-2.67 exposes `attestation verify` but rejects --source-ref.
+        # Probing the subcommand alone would let it through and surface as an
+        # unexplained provenance failure, so the flag itself must be probed.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "midgh")
+        (fake_bin / "gh").write_text(
+            '#!/bin/sh\n'
+            'if [ "$*" = "attestation verify --help" ]; then\n'
+            '  echo "      --predicate-type string"\n'
+            '  exit 0\n'
+            'fi\n'
+            'echo "unknown flag: --source-ref" >&2\n'
+            'exit 1\n',
+            encoding="utf-8",
+        )
+        (fake_bin / "gh").chmod(0o755)
+        install_curl(fake_bin, curl_calls, make_release(tmp / "midgh-release"))
+        result = run(plugin, fake_bin)
+        require_not_installed(plugin, result, "gh without --source-ref")
+        require(not curl_calls.exists(), "gh without --source-ref reached download path")
+
+        # PATH must be hermetic: GitHub-hosted runners ship gh in /usr/bin, so
+        # borrowing the system directories would silently make gh present and
+        # turn this negative control into a false green (it fails instead).
         plugin, fake_bin, curl_calls, _ = fixture(tmp / "nogh")
         (fake_bin / "gh").unlink()
-        node = shutil.which("node")
-        require(node is not None, "node is required by the bootstrap test")
-        (fake_bin / "node").symlink_to(node)
+        for tool in ("bash", "env", "node"):
+            resolved = shutil.which(tool)
+            require(resolved is not None, f"{tool} is required by the bootstrap test")
+            (fake_bin / tool).symlink_to(resolved)
         install_curl(fake_bin, curl_calls, make_release(tmp / "nogh-release"))
-        result = run(plugin, fake_bin, path=f"{fake_bin}:/usr/bin:/bin")
+        result = run(plugin, fake_bin, path=str(fake_bin))
         require_not_installed(plugin, result, "missing gh")
         require(not curl_calls.exists(), "missing gh reached download path")
+
+        # A packaged plugin must not be able to opt out of verification: the
+        # escape hatch requires a real git checkout, which a payload lacks.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "optout")
+        (plugin / ".git").rmdir()
+        binary = plugin / "target/release/ai-architect-mcp-codebase"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o755)
+        install_curl(fake_bin, curl_calls, make_release(tmp / "optout-release"))
+        result = run(plugin, fake_bin, source_checkout=True)
+        require(result.returncode == 0, result.stderr)
+        require(
+            curl_calls.exists(),
+            "source-checkout opt-out honoured without a git checkout",
+        )
+
+        # A drifted plugin/Cargo version pair must never reach the network.
+        plugin, fake_bin, curl_calls, _ = fixture(
+            tmp / "cargo-drift", version="0.9.1", cargo_version=PLUGIN["version"]
+        )
+        install_curl(fake_bin, curl_calls, make_release(tmp / "cargo-drift-release"))
+        result = run(plugin, fake_bin)
+        require_not_installed(plugin, result, "version drift")
+        require(not curl_calls.exists(), "version drift reached download path")
 
         # The watchdog must terminate a process that explicitly ignores SIGALRM.
         plugin, fake_bin, curl_calls, _ = fixture(tmp / "hanging-gh")

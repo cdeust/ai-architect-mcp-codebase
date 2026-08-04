@@ -219,14 +219,23 @@ claude plugin marketplace add cdeust/ai-architect-mcp-codebase
 claude plugin install ai-architect-mcp-codebase@ai-architect-mcp-codebase-marketplace
 ```
 
-Fresh marketplace installs require GitHub CLI 2.49 or newer. The bootstrap
-verifies the release's offline Sigstore bundle against the fixed
+Fresh marketplace installs require GitHub CLI 2.68 or newer (`--source-ref`
+landed in 2.68.0) and Node.js, which the bootstrap uses to parse plugin
+metadata and to bound the provenance check. The bootstrap verifies the
+release's Sigstore bundle — shipped as a release asset, so no transparency-log
+lookup is needed, though trusted-root retrieval still requires network —
+against the fixed
 `cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml` signer before
 installing any executable; it never accepts a manifest-provided trust anchor.
 This protects the official package and makes a minimal-diff fork that changes
 only metadata fail closed; it cannot make arbitrary code from a hostile fork
 trustworthy, because such a fork can also replace the bootstrap itself. Verify
 that the marketplace slug is exactly `cdeust/ai-architect-mcp-codebase`.
+
+Contributors working on a clone can set `AI_ARCHITECT_SOURCE_CHECKOUT=1` to
+build from local sources instead of downloading a release. It is honoured only
+inside a real git checkout, so a packaged plugin cannot use it to skip
+verification, and skipping is always announced on stderr.
 
 If the former Automatised Pipeline plugin is installed, remove it before
 installing the canonical package:

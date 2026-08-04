@@ -63,6 +63,7 @@ download() {
 verify_provenance() {
     local artifact=$1
     local bundle=$2
+    local ref=$3
     # gh is a Go binary and ignores SIGALRM on macOS. Node is already required
     # by Claude Code; this watchdog sends SIGTERM after 15 s (over 3x the
     # measured 4.5 s cold TUF-root lookup), then SIGKILL two seconds later.
@@ -80,16 +81,25 @@ verify_provenance() {
     ' gh attestation verify "$artifact" \
         --repo "$EXPECTED_REPO" \
         --signer-workflow "$EXPECTED_SIGNER_WORKFLOW" \
-        --source-ref "refs/tags/v$version" \
+        --source-ref "$ref" \
         --bundle "$bundle" >&2
 }
 
 [ -f "$MANIFEST" ] || fatal "Cargo.toml missing at $MANIFEST"
 [ -f "$PLUGIN_MANIFEST" ] || fatal "plugin.json missing at $PLUGIN_MANIFEST"
 
+# AI_ARCHITECT_SOURCE_CHECKOUT is a developer escape hatch, never a security
+# decision a package can make for the user: it is honoured only inside a real
+# git checkout, so a marketplace payload cannot opt itself out of verification
+# by declaring the variable (a plugin manifest may carry an `env` block).
+# Skipping verification is always announced on stderr, even in quiet mode.
 marketplace_install="no"
-if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ "${AI_ARCHITECT_SOURCE_CHECKOUT:-0}" != "1" ]; then
-    marketplace_install="yes"
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    if [ "${AI_ARCHITECT_SOURCE_CHECKOUT:-0}" = "1" ] && [ -d "$ROOT/.git" ]; then
+        err "bootstrap verification skipped (source-checkout mode)"
+    else
+        marketplace_install="yes"
+    fi
 fi
 
 if [ "$marketplace_install" = "yes" ]; then
@@ -115,22 +125,35 @@ if [ "$marketplace_install" = "yes" ]; then
     [ "$manifest_repository" = "$EXPECTED_REPOSITORY_URL" ] \
         || fatal "plugin repository is not the trusted producer $EXPECTED_REPOSITORY_URL"
 
+    # A cache that cannot be trusted is discarded, not fatal: the download path
+    # re-verifies SHA-256 and provenance, so falling through is strictly safer
+    # than leaving the host with a plugin that refuses to start. Only a digest
+    # mismatch at the expected version stays fatal — that is tampering, and a
+    # silent re-download would hide it.
     if [ -x "$BIN" ] && [ -f "$DIGEST_FILE" ]; then
-        read -r cached_version expected _ < "$DIGEST_FILE"
-        [ "$cached_version" = "$version" ] \
-            || fatal "cached binary version mismatch; reinstall the plugin"
-        actual=$(sha256_file "$BIN")
-        [ -n "$expected" ] && [ "$actual" = "$expected" ] \
-            || fatal "cached binary digest mismatch; reinstall the plugin"
-        log "cached binary SHA-256 verified at $BIN"
-        exit 0
+        cached_version=""
+        expected=""
+        read -r cached_version expected _ < "$DIGEST_FILE" || true
+        if [ -n "$cached_version" ] && [ -n "$expected" ] && [ "$cached_version" = "$version" ]; then
+            actual=$(sha256_file "$BIN")
+            [ "$actual" = "$expected" ] \
+                || fatal "cached binary digest mismatch; reinstall the plugin"
+            log "cached binary SHA-256 verified at $BIN"
+            exit 0
+        fi
+        err "cached binary record is stale or unreadable; reinstalling"
+        rm -f "$BIN" "$DIGEST_FILE"
     fi
 
     command -v curl >/dev/null 2>&1 || fatal "curl is required for marketplace installation"
+    # source: --source-ref landed in cli/cli#10308 and shipped in GitHub CLI
+    # 2.68.0 (2025-03-05). Probing the flag we actually pass is the only sound
+    # gate: 2.49 exposes `attestation verify` but rejects --source-ref, which
+    # would surface as an unexplained provenance failure.
     command -v gh >/dev/null 2>&1 \
-        || fatal "GitHub CLI 2.49+ is required to verify release provenance: https://cli.github.com/"
-    gh attestation verify --help >/dev/null 2>&1 \
-        || fatal "GitHub CLI lacks 'gh attestation verify'; upgrade to version 2.49 or newer"
+        || fatal "GitHub CLI 2.68+ is required to verify release provenance: https://cli.github.com/"
+    gh attestation verify --help 2>/dev/null | grep -q -- "--source-ref" \
+        || fatal "GitHub CLI lacks 'gh attestation verify --source-ref'; upgrade to version 2.68 or newer"
 
     case "$(uname -s)-$(uname -m)" in
         Darwin-arm64) release_target="macos-aarch64" ;;
@@ -160,7 +183,8 @@ if [ "$marketplace_install" = "yes" ]; then
     download "$base/$asset.sigstore.json" "$download_dir/$asset.sigstore.json" \
         || fatal "release provenance bundle unavailable"
     verify_provenance "$download_dir/$asset" "$download_dir/$asset.sigstore.json" \
-        || fatal "release provenance verification failed or exceeded 20 seconds"
+        "refs/tags/v$version" \
+        || fatal "release provenance verification failed or exceeded 15 seconds"
 
     # Streaming the one expected member into a new regular file prevents tar
     # symlinks, hardlinks, devices, ownership and permission metadata from
