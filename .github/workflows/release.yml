@@ -62,6 +62,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+          draft: true
 
   build:
     name: build (${{ matrix.target_tag }})
@@ -258,6 +259,7 @@ jobs:
           # upload here. tag_name pins the upload to that release so
           # softprops never tries to create a sibling draft.
           tag_name: ${{ github.ref_name }}
+          draft: true
           files: |
             ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz
             ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz.sha256
@@ -319,6 +321,7 @@ jobs:
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
+          draft: true
           files: |
             ai-architect-mcp-codebase.cdx.json
             ai-architect-mcp-codebase.cdx.json.sha256
@@ -342,12 +345,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download platform binaries from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          TAG="${{ github.ref_name }}"
-          BASE="https://github.com/cdeust/ai-architect-mcp-codebase/releases/download/${TAG}"
+          set -euo pipefail
           for TARGET in macos-aarch64 linux-x86_64 linux-aarch64; do
-            curl -fsSL "${BASE}/ai-architect-mcp-codebase-${TARGET}.tar.gz" \
-              -o "ai-architect-mcp-codebase-${TARGET}.tar.gz"
+            ASSET="ai-architect-mcp-codebase-${TARGET}.tar.gz"
+            gh release download "$TAG" --repo "$REPOSITORY" \
+              --pattern "$ASSET" --pattern "$ASSET.sha256"
+            sha256sum --check "$ASSET.sha256"
+            gh attestation verify "$ASSET" --repo "$REPOSITORY"
           done
 
       - name: Assemble staging directory
@@ -360,6 +369,7 @@ jobs:
           cp README.md     "$STAGING/"
           cp LICENSE       "$STAGING/"
           cp PRIVACY.md    "$STAGING/"
+          cp mcp-contract.json "$STAGING/"
           cp launch.sh     "$STAGING/"
           chmod +x "$STAGING/launch.sh"
 
@@ -408,6 +418,7 @@ jobs:
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
+          draft: true
           files: |
             ai-architect-mcp-codebase.mcpb
             ai-architect-mcp-codebase.mcpb.sha256
@@ -417,28 +428,71 @@ jobs:
   # The plugin bootstrap resolves these public URLs during Claude's MCP
   # handshake. Manifest consistency alone cannot prove that a fresh install is
   # usable, so the release is incomplete until every URL and checksum resolves.
-  verify_published_assets:
-    name: verify published install contract
+  verify_staged_assets:
+    name: verify staged release contract
     needs: [build, sbom, package_mcpb]
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      attestations: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
       - name: Download and verify every launcher asset
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          TAG="${{ github.ref_name }}"
-          mkdir release-assets
+          MANIFEST_VERSION=$(python3 -c 'import json; print(json.load(open(".claude-plugin/plugin.json"))["version"])')
+          test "$TAG" = "v$MANIFEST_VERSION"
+          mkdir -p release-assets
           cd release-assets
           for TARGET in macos-aarch64 linux-x86_64 linux-aarch64 windows-x86_64; do
             ASSET="ai-architect-mcp-codebase-${TARGET}.tar.gz"
-            gh release download "$TAG" --repo cdeust/ai-architect-mcp-codebase \
-              --pattern "$ASSET" --pattern "$ASSET.sha256"
+            gh release download "$TAG" --repo "$REPOSITORY" \
+              --pattern "$ASSET" --pattern "$ASSET.sha256" --pattern "$ASSET.sigstore.json"
             sha256sum --check "$ASSET.sha256"
+            gh attestation verify "$ASSET" --repo "$REPOSITORY" \
+              --bundle "$ASSET.sigstore.json"
           done
-          gh release download "$TAG" --repo cdeust/ai-architect-mcp-codebase \
+          gh release download "$TAG" --repo "$REPOSITORY" \
             --pattern 'ai-architect-mcp-codebase.mcpb' \
-            --pattern 'ai-architect-mcp-codebase.mcpb.sha256'
+            --pattern 'ai-architect-mcp-codebase.mcpb.sha256' \
+            --pattern 'ai-architect-mcp-codebase.mcpb.sigstore.json' \
+            --pattern 'ai-architect-mcp-codebase.cdx.json' \
+            --pattern 'ai-architect-mcp-codebase.cdx.json.sha256' \
+            --pattern 'ai-architect-mcp-codebase.cdx.json.sigstore.json'
           sha256sum --check ai-architect-mcp-codebase.mcpb.sha256
+          sha256sum --check ai-architect-mcp-codebase.cdx.json.sha256
+          gh attestation verify ai-architect-mcp-codebase.mcpb --repo "$REPOSITORY" \
+            --bundle ai-architect-mcp-codebase.mcpb.sigstore.json
+          gh attestation verify ai-architect-mcp-codebase.cdx.json --repo "$REPOSITORY" \
+            --bundle ai-architect-mcp-codebase.cdx.json.sigstore.json
+
+  publish_verified_release:
+    name: publish verified release
+    needs: verify_staged_assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish, then verify the anonymous plugin URL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "$REPOSITORY" --draft=false
+          TARGET=linux-x86_64
+          ASSET="ai-architect-mcp-codebase-${TARGET}.tar.gz"
+          BASE="https://github.com/${REPOSITORY}/releases/download/${TAG}"
+          curl --fail --location --silent --show-error \
+            --connect-timeout 5 --max-time 60 --retry 3 --retry-connrefused \
+            "$BASE/$ASSET" -o "$ASSET"
+          curl --fail --location --silent --show-error \
+            --connect-timeout 5 --max-time 30 --retry 3 --retry-connrefused \
+            "$BASE/$ASSET.sha256" -o "$ASSET.sha256"
+          sha256sum --check "$ASSET.sha256"

@@ -37,6 +37,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   unreleased source checkouts retain the build fallback. A machine-readable
   `mcp-contract.json` publishes the Claude plugin, server key, and tool prefix,
   and the identity gate derives the prefix from the actual manifests.
+  Release publication now stays draft until every archive, checksum, Sigstore
+  attestation, SBOM, and MCPB has been verified; only then is it published and
+  fetched once through the same anonymous URL used by the plugin bootstrap.
 
 ### Fixed
 

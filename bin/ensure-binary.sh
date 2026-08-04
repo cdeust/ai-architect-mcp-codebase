@@ -58,6 +58,12 @@ fi
 needs_build="no"
 if [ ! -x "$BIN" ]; then
     needs_build="missing"
+elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    # Marketplace versions install into immutable versioned cache directories.
+    # Source mtimes reflect checkout/extraction time and are not a freshness
+    # signal for a release binary; an executable already in this cache is the
+    # exact binary previously verified for this plugin version.
+    needs_build="no"
 else
     # Compare mtimes: rebuild if any source file is newer than the binary.
     # `find -newer` returns the first match; head -1 to short-circuit.
@@ -81,6 +87,9 @@ fi
 # standalone installer. A marketplace install must not silently enter the cold
 # source build that the host cannot wait for.
 VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/.claude-plugin/plugin.json" | head -1)
+REPOSITORY_URL=$(sed -n 's/^[[:space:]]*"repository"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/.claude-plugin/plugin.json" | head -1)
+REPOSITORY_SLUG=${REPOSITORY_URL#https://github.com/}
+REPOSITORY_SLUG=${REPOSITORY_SLUG%.git}
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) release_target="macos-aarch64" ;;
     Linux-x86_64) release_target="linux-x86_64" ;;
@@ -88,14 +97,21 @@ case "$(uname -s)-$(uname -m)" in
     *) release_target="" ;;
 esac
 
+if [ "$needs_build" = "missing" ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "$release_target" ]; then
+    err "FATAL: Claude marketplace bootstrap does not support $(uname -s)/$(uname -m)."
+    err "       Supported plugin platforms: macOS arm64, Linux x86_64, Linux aarch64."
+    exit 1
+fi
+
 if [ "$needs_build" = "missing" ] && [ -n "$VERSION" ] && [ -n "$release_target" ] && command -v curl >/dev/null 2>&1; then
     asset="ai-architect-mcp-codebase-${release_target}.tar.gz"
-    base="https://github.com/cdeust/ai-architect-mcp-codebase/releases/download/v${VERSION}"
+    base="${REPOSITORY_URL}/releases/download/v${VERSION}"
     download_dir=$(mktemp -d)
     trap 'rm -rf "$download_dir"' EXIT
     err "Installing ai-architect-mcp-codebase v${VERSION} for ${release_target}…"
-    if curl --fail --location --silent --show-error "$base/$asset" -o "$download_dir/$asset" \
-        && curl --fail --location --silent --show-error "$base/$asset.sha256" -o "$download_dir/$asset.sha256"; then
+    curl_args="--fail --location --silent --show-error --connect-timeout 5 --max-time 30 --retry 2 --retry-connrefused"
+    if curl $curl_args "$base/$asset" -o "$download_dir/$asset" \
+        && curl $curl_args "$base/$asset.sha256" -o "$download_dir/$asset.sha256"; then
         expected=$(awk '{print $1}' "$download_dir/$asset.sha256")
         if command -v sha256sum >/dev/null 2>&1; then
             actual=$(sha256sum "$download_dir/$asset" | awk '{print $1}')
@@ -103,9 +119,25 @@ if [ "$needs_build" = "missing" ] && [ -n "$VERSION" ] && [ -n "$release_target"
             actual=$(shasum -a 256 "$download_dir/$asset" | awk '{print $1}')
         fi
         if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+            if command -v gh >/dev/null 2>&1; then
+                if ! curl $curl_args "$base/$asset.sigstore.json" -o "$download_dir/$asset.sigstore.json"; then
+                    err "release provenance bundle unavailable"
+                    exit 1
+                fi
+                if ! gh attestation verify "$download_dir/$asset" \
+                    --repo "$REPOSITORY_SLUG" \
+                    --bundle "$download_dir/$asset.sigstore.json" >&2; then
+                    err "release provenance verification failed"
+                    exit 1
+                fi
+            else
+                err "WARNING: gh CLI unavailable; provenance not verified (SHA-256 verified)."
+            fi
             mkdir -p "$(dirname "$BIN")"
-            tar -xzf "$download_dir/$asset" -C "$(dirname "$BIN")"
+            tar -xzf "$download_dir/$asset" --no-same-owner --no-same-permissions \
+                -C "$(dirname "$BIN")" ai-architect-mcp-codebase
             chmod +x "$BIN"
+            touch "$BIN"
             err "ai-architect-mcp-codebase: verified release binary installed"
             exit 0
         fi
@@ -117,9 +149,9 @@ if [ "$needs_build" = "missing" ] && [ -n "$VERSION" ] && [ -n "$release_target"
     trap - EXIT
 fi
 
-if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+if [ "$needs_build" = "missing" ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
     err "FATAL: no verified release binary is available for plugin version ${VERSION:-unknown}."
-    err "       Check https://github.com/cdeust/ai-architect-mcp-codebase/releases"
+    err "       Check ${REPOSITORY_URL}/releases"
     err "       The plugin will not start a cold build inside Claude's MCP timeout."
     exit 1
 fi

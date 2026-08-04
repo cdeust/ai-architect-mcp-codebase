@@ -227,14 +227,23 @@ claude plugin uninstall automatised-pipeline@automatised-pipeline-marketplace
 claude plugin marketplace remove automatised-pipeline-marketplace
 ```
 
-Claude MCP allowlists and permissions must also replace
-`mcp__plugin_automatised-pipeline_automatised-pipeline__<tool>` with
+Claude MCP allowlists and permissions must also replace every prefix listed in
+`revoked_claude_tool_prefixes` in the contract with
 `mcp__plugin_ai-architect-mcp-codebase_ai-architect__<tool>`. The final
 `ai-architect` segment is intentionally stable: it is the MCP server key, not
 the plugin's distribution name. The machine-readable source of truth is
 [`mcp-contract.json`](mcp-contract.json); consumer repositories validate their
 allowlists against its derived `claude_tool_prefix` instead of maintaining an
 independent spelling.
+
+Contract schema 1 requires `distribution`, `claude_plugin`,
+`claude_marketplace`, `mcp_server`, `claude_tool_prefix`, and
+`revoked_claude_tool_prefixes`. Consumers must pin the raw contract URL to a
+release tag or commit SHA, validate that the prefix equals
+`mcp__plugin_<claude_plugin>_<mcp_server>__`, and remove revoked prefixes from
+allowlists rather than retaining them as aliases. After v0.9.0, the immutable
+contract URL is
+`https://raw.githubusercontent.com/cdeust/ai-architect-mcp-codebase/v0.9.0/mcp-contract.json`.
 
 **OpenAI Codex CLI** (also picked up by the ChatGPT desktop app and Codex IDE extension — they share `~/.codex/config.toml`)
 

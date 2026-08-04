@@ -107,35 +107,35 @@ fn claude_project_manifest_keeps_the_existing_full_profile_default() {
 
 #[test]
 fn canonical_distribution_identity_is_consistent() {
+    let contract = read_json("mcp-contract.json");
     let server = read_json("server.json");
     let mcpb = read_json("manifest.json");
     let claude_plugin = read_json(".claude-plugin/plugin.json");
     let claude_marketplace = read_json(".claude-plugin/marketplace.json");
 
-    assert_eq!(env!("CARGO_PKG_NAME"), "ai-architect-mcp-codebase");
-    assert_eq!(server["name"], "io.github.cdeust/ai-architect-mcp-codebase");
-    assert_eq!(mcpb["name"], "ai-architect-mcp-codebase");
-    assert_eq!(claude_plugin["name"], "ai-architect-mcp-codebase");
-    assert_eq!(
-        claude_marketplace["name"],
-        "ai-architect-mcp-codebase-marketplace"
-    );
-    assert_eq!(
-        claude_marketplace["plugins"][0]["name"],
-        "ai-architect-mcp-codebase"
-    );
+    let distribution = contract["distribution"].as_str().unwrap();
+    let plugin_name = contract["claude_plugin"].as_str().unwrap();
+    let marketplace_name = contract["claude_marketplace"].as_str().unwrap();
+    let mcp_server = contract["mcp_server"].as_str().unwrap();
+    let derived_prefix = format!("mcp__plugin_{plugin_name}_{mcp_server}__");
+
+    assert_eq!(env!("CARGO_PKG_NAME"), distribution);
+    assert_eq!(server["name"], format!("io.github.cdeust/{distribution}"));
+    assert_eq!(mcpb["name"], distribution);
+    assert_eq!(claude_plugin["name"], plugin_name);
+    assert_eq!(claude_marketplace["name"], marketplace_name);
+    assert_eq!(claude_marketplace["plugins"][0]["name"], plugin_name);
     assert_eq!(
         read_json(".agents/plugins/marketplace.json")["plugins"][0]["name"],
-        "ai-architect-mcp-codebase"
+        distribution
     );
     assert_eq!(
         read_json("plugins/ai-architect-mcp-codebase/.codex-plugin/plugin.json")["name"],
-        "ai-architect-mcp-codebase"
+        distribution
     );
-    assert_eq!(
-        read_json("gemini-extension.json")["name"],
-        "ai-architect-mcp-codebase"
-    );
+    assert_eq!(read_json("gemini-extension.json")["name"], distribution);
+    assert_eq!(contract["claude_tool_prefix"], derived_prefix);
+    assert_eq!(contract["schema_version"], 1);
 
     for version in [
         &server["version"],

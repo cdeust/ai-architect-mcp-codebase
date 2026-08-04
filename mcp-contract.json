@@ -5,7 +5,9 @@
   "claude_marketplace": "ai-architect-mcp-codebase-marketplace",
   "mcp_server": "ai-architect",
   "claude_tool_prefix": "mcp__plugin_ai-architect-mcp-codebase_ai-architect__",
-  "legacy_claude_tool_prefixes": [
-    "mcp__plugin_automatised-pipeline_automatised-pipeline__"
+  "revoked_claude_tool_prefixes": [
+    "mcp__plugin_automatised-pipeline_ai-architect__",
+    "mcp__plugin_automatised-pipeline_automatised-pipeline__",
+    "mcp__plugin_ai-architect-codebase_ai-architect__"
   ]
 }
