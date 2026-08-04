@@ -70,12 +70,11 @@ def fixture(
     (fake_bin / "cargo").write_text("#!/bin/sh\necho COLD_BUILD_STARTED >&2\nexit 99\n", encoding="utf-8")
     (fake_bin / "gh").write_text(
         f'''#!/bin/sh
-if [ "$*" = "attestation verify --help" ]; then exit 0; fi
+if [ "$*" = "attestation verify --help" ]; then echo "  --source-ref string"; exit 0; fi
 printf '%s\\n' "$*" >> {str(gh_calls)!r}
 case "${{TEST_GH_MODE:-success}}" in
   success) exit 0 ;;
   fail) exit 1 ;;
-  hang) exec python3 -c 'import signal,time; signal.signal(signal.SIGALRM, signal.SIG_IGN); time.sleep(60)' ;;
 esac
 exit 1
 ''',
@@ -157,6 +156,42 @@ shutil.copyfile(source, out)
     (fake_bin / "curl").chmod(0o755)
 
 
+def install_hanging_gh(fake_bin: Path) -> None:
+    """Build a gh-shaped process that only SIGKILL can terminate."""
+    compiler = shutil.which("cc")
+    require(compiler is not None, "a C compiler is required for the watchdog test")
+    source = fake_bin / "hanging-gh.c"
+    source.write_text(
+        r'''#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0) {
+            puts("  --source-ref string");
+            return 0;
+        }
+    }
+    signal(SIGALRM, SIG_IGN);
+    signal(SIGTERM, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    signal(SIGHUP, SIG_IGN);
+    for (;;) pause();
+}
+''',
+        encoding="utf-8",
+    )
+    compiled = subprocess.run(
+        [compiler, str(source), "-o", str(fake_bin / "gh")],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    require(compiled.returncode == 0, f"failed to compile hanging gh fixture: {compiled.stderr}")
+
+
 def absent_release() -> ReleaseFixture:
     return ReleaseFixture(None, None, None)
 
@@ -187,13 +222,18 @@ def main() -> None:
         require(result.returncode == 0, result.stderr)
         binary = plugin / "target/release/ai-architect-mcp-codebase"
         require(binary.is_file() and not binary.is_symlink(), "installed binary is not a regular file")
+        require(binary.stat().st_mode & 0o022 == 0, "installed binary is group- or world-writable")
         require((binary.parent / f"{binary.name}.sha256").is_file(), "verified digest was not persisted")
         requested = curl_calls.read_text(encoding="utf-8").splitlines()
         require(requested == [f"{EXPECTED_BASE}/{ASSET}", f"{EXPECTED_BASE}/{ASSET}.sha256", f"{EXPECTED_BASE}/{ASSET}.sigstore.json"], f"wrong URLs: {requested}")
         gh_args = gh_calls.read_text(encoding="utf-8")
         require(f"--repo {EXPECTED_REPO}" in gh_args, "gh verification lacks fixed repository")
         require(f"--signer-workflow {EXPECTED_SIGNER}" in gh_args, "gh verification lacks fixed signer workflow")
-        require("--bundle " in gh_args, "gh verification lacks offline bundle")
+        require(
+            f"--source-ref refs/tags/v{PLUGIN['version']}" in gh_args,
+            "gh verification lacks the pinned release tag",
+        )
+        require("--bundle " in gh_args, "gh verification lacks the attached bundle")
 
         # Cached control: digest is rechecked; no network. Tampering fails closed.
         curl_calls.unlink()
@@ -205,13 +245,22 @@ def main() -> None:
         result = run(plugin, fake_bin)
         require(result.returncode != 0 and "digest mismatch" in result.stderr, "tampered cache was accepted")
 
-        # Version is part of the cache record; a reused directory cannot mask a bump.
+        # Version and sidecar format drift trigger a fully verified refresh.
         shutil.copy2(release.archive, binary)
         binary.chmod(0o755)
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         (binary.parent / f"{binary.name}.sha256").write_text(f"0.8.4  {digest}  {binary}\n", encoding="utf-8")
         result = run(plugin, fake_bin)
-        require(result.returncode != 0 and "version mismatch" in result.stderr, "stale cache version was accepted")
+        require(result.returncode == 0 and "refreshing verified release" in result.stderr, result.stderr)
+        require(curl_calls.exists(), "stale cache version did not refresh from the release")
+
+        curl_calls.unlink()
+        gh_calls.unlink()
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        (binary.parent / f"{binary.name}.sha256").write_text(f"{digest}  {binary}\n", encoding="utf-8")
+        result = run(plugin, fake_bin)
+        require(result.returncode == 0 and "metadata is invalid or obsolete" in result.stderr, result.stderr)
+        require(curl_calls.exists(), "legacy two-field cache did not refresh from the release")
 
         # Negative controls protect each independent integrity boundary.
         for label, release, gh_mode in (
@@ -224,6 +273,27 @@ def main() -> None:
             install_curl(fake_bin_case, curl_case, release)
             result = run(plugin_case, fake_bin_case, gh_mode=gh_mode)
             require_not_installed(plugin_case, result, label)
+
+        # The deadline is shared across every retry and every downloaded file.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "download-budget")
+        date_calls = tmp / "download-budget/date-calls"
+        (fake_bin / "date").write_text(
+            f'''#!/bin/sh
+if [ -f {str(date_calls)!r} ]; then
+  echo 1181
+else
+  : > {str(date_calls)!r}
+  echo 1000
+fi
+''',
+            encoding="utf-8",
+        )
+        (fake_bin / "date").chmod(0o755)
+        install_curl(fake_bin, curl_calls, make_release(tmp / "download-budget-release"))
+        result = run(plugin, fake_bin)
+        require_not_installed(plugin, result, "download budget")
+        require("180-second global budget" in result.stderr, "download budget did not fail at the deadline")
+        require(not curl_calls.exists(), "expired download budget invoked curl")
 
         # Symlink case uses an existing non-executable victim and checks the
         # external side effect, not only the absence of a plugin-root binary.
@@ -246,7 +316,16 @@ def main() -> None:
         require_not_installed(plugin, result, "hostile repository")
         require(not curl_calls.exists(), "hostile repository reached download path")
 
-        for label, malicious_version in (("downgrade", "0.8.4"), ("traversal", "../../attacker/repo")):
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "cargo-mismatch", version="0.9.1")
+        install_curl(fake_bin, curl_calls, make_release(tmp / "cargo-mismatch-release"))
+        result = run(plugin, fake_bin)
+        require_not_installed(plugin, result, "plugin/Cargo version mismatch")
+        require(not curl_calls.exists(), "plugin/Cargo mismatch reached download path")
+
+        for label, malicious_version in (
+            ("downgrade", "0.8.4"),
+            ("traversal", "9.9.9/../../../../attacker/evil"),
+        ):
             plugin, fake_bin, curl_calls, _ = fixture(
                 tmp / label, version=malicious_version, cargo_version=malicious_version
             )
@@ -257,37 +336,56 @@ def main() -> None:
 
         # gh is mandatory and must expose the attestation verifier.
         plugin, fake_bin, curl_calls, _ = fixture(tmp / "oldgh")
-        (fake_bin / "gh").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (fake_bin / "gh").write_text(
+            '#!/bin/sh\n[ "$*" = "attestation verify --help" ] && echo "usage: gh attestation verify" && exit 0\nexit 1\n',
+            encoding="utf-8",
+        )
         (fake_bin / "gh").chmod(0o755)
         install_curl(fake_bin, curl_calls, make_release(tmp / "oldgh-release"))
         result = run(plugin, fake_bin)
         require_not_installed(plugin, result, "old gh")
+        require("2.68" in result.stderr and "--source-ref" in result.stderr, "old gh diagnostic is not actionable")
         require(not curl_calls.exists(), "old gh reached download path")
 
         plugin, fake_bin, curl_calls, _ = fixture(tmp / "nogh")
         (fake_bin / "gh").unlink()
-        node = shutil.which("node")
-        require(node is not None, "node is required by the bootstrap test")
-        (fake_bin / "node").symlink_to(node)
+        for tool in ("bash", "awk"):
+            executable = shutil.which(tool)
+            require(executable is not None, f"{tool} is required by the bootstrap test")
+            (fake_bin / tool).symlink_to(executable)
+        digest_tool = shutil.which("sha256sum") or shutil.which("shasum")
+        require(digest_tool is not None, "a SHA-256 tool is required by the bootstrap test")
+        (fake_bin / Path(digest_tool).name).symlink_to(digest_tool)
         install_curl(fake_bin, curl_calls, make_release(tmp / "nogh-release"))
-        result = run(plugin, fake_bin, path=f"{fake_bin}:/usr/bin:/bin")
+        result = run(plugin, fake_bin, path=str(fake_bin))
         require_not_installed(plugin, result, "missing gh")
+        require("GitHub CLI 2.68+ is required" in result.stderr, "missing gh test failed before the gh gate")
         require(not curl_calls.exists(), "missing gh reached download path")
 
         # The watchdog must terminate a process that explicitly ignores SIGALRM.
         plugin, fake_bin, curl_calls, _ = fixture(tmp / "hanging-gh")
+        install_hanging_gh(fake_bin)
         install_curl(fake_bin, curl_calls, make_release(tmp / "hanging-gh-release"))
         started = time.monotonic()
-        result = run(plugin, fake_bin, gh_mode="hang")
+        result = run(plugin, fake_bin)
         elapsed = time.monotonic() - started
         require_not_installed(plugin, result, "hanging gh")
-        require(elapsed < 25, f"provenance watchdog took {elapsed:.1f}s")
+        require(elapsed < 38, f"provenance watchdog took {elapsed:.1f}s")
 
-        # A source checkout never downloads upstream bytes and retains Cargo fallback.
+        # The source escape hatch requires a real checkout and is always visible.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "source-optout-without-git")
+        install_curl(fake_bin, curl_calls, absent_release())
+        result = run(plugin, fake_bin, source_checkout=True)
+        require_not_installed(plugin, result, "source opt-out without .git")
+        require("verification skipped" not in result.stderr, "unverified source opt-out was honored")
+
+        # A confirmed source checkout never downloads upstream bytes and retains Cargo fallback.
         plugin, fake_bin, curl_calls, _ = fixture(tmp / "source")
+        (plugin / ".git").mkdir()
         install_curl(fake_bin, curl_calls, absent_release())
         result = run(plugin, fake_bin, source_checkout=True)
         require(result.returncode == 1 and "COLD_BUILD_STARTED" in result.stderr, "source checkout did not invoke Cargo")
+        require("bootstrap verification skipped (source-checkout mode)" in result.stderr, "source opt-out was silent")
         require(not curl_calls.exists(), "source checkout downloaded a release")
 
     print("PLUGIN BOOTSTRAP OK: trust anchor, SHA, provenance, archive type, cache, and source paths")

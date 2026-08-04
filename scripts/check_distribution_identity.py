@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -34,9 +35,20 @@ def main() -> None:
     claude_marketplace = load(".claude-plugin/marketplace.json")
     plugin_name = claude_plugin["name"]
     marketplace_name = claude_marketplace["name"]
-    server_keys = list(load(".mcp.json")["mcpServers"])
+    mcp_servers = load(".mcp.json")["mcpServers"]
+    server_keys = list(mcp_servers)
     require(len(server_keys) == 1, f"expected one Claude MCP server key, got {server_keys}")
     server_key = server_keys[0]
+    server_config = mcp_servers[server_key]
+    require(
+        set(server_config) == {"command", "args"},
+        f"unexpected Claude MCP server configuration keys: {sorted(server_config)}",
+    )
+    require(
+        server_config["command"] == "${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh"
+        and server_config["args"] == [],
+        "Claude MCP launcher contract drifted",
+    )
     derived_prefix = f"mcp__plugin_{plugin_name}_{server_key}__"
 
     assertions = {
@@ -66,9 +78,27 @@ def main() -> None:
     plugin_version = claude_plugin["version"]
     require(re.fullmatch(r"\d+\.\d+\.\d+", plugin_version) is not None, "plugin version is not stable SemVer")
     require(plugin_version == cargo_version.group(1), "Claude plugin and Cargo versions differ")
+    version_assertions = {
+        "manifest.json": load("manifest.json")["version"],
+        ".claude-plugin/marketplace.json metadata": claude_marketplace["metadata"]["version"],
+        ".claude-plugin/marketplace.json plugin": claude_marketplace["plugins"][0]["version"],
+        "Codex plugin.json": load("plugins/ai-architect-mcp-codebase/.codex-plugin/plugin.json")["version"],
+        "gemini-extension.json": load("gemini-extension.json")["version"],
+        "server.json": load("server.json")["version"],
+        "server.json package": load("server.json")["packages"][0]["version"],
+    }
+    wrong_versions = {where: value for where, value in version_assertions.items() if value != plugin_version}
+    require(not wrong_versions, f"public version declarations drifted: {wrong_versions}")
     bootstrap = (ROOT / "bin/ensure-binary.sh").read_text(encoding="utf-8")
-    minimum = re.search(r'^MINIMUM_VERSION="([^"]+)"$', bootstrap, re.MULTILINE)
-    require(minimum is not None and minimum.group(1) == plugin_version, "bootstrap minimum version drifted")
+    expected = re.search(r'^EXPECTED_VERSION="([^"]+)"$', bootstrap, re.MULTILINE)
+    require(expected is not None and expected.group(1) == plugin_version, "bootstrap release pin drifted")
+    for label, path, variable in (
+        ("plugin", ".claude-plugin/plugin.json", "EXPECTED_PLUGIN_MANIFEST_SHA256"),
+        ("Cargo", "Cargo.toml", "EXPECTED_CARGO_MANIFEST_SHA256"),
+    ):
+        pinned = re.search(rf'^{variable}="([0-9a-f]{{64}})"$', bootstrap, re.MULTILINE)
+        actual = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        require(pinned is not None and pinned.group(1) == actual, f"bootstrap {label} manifest digest drifted")
     print(
         f"DISTRIBUTION IDENTITY OK: {CANONICAL} across "
         f"{len(assertions) + 2} declarations; Claude prefix {derived_prefix}"

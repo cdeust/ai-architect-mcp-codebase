@@ -69,7 +69,7 @@ network calls during indexing; all processing is local.
 
 | Property | How you check it |
 |---|---|
-| The artifact was built by our workflow, from this source | `gh attestation verify <file> --repo cdeust/ai-architect-mcp-codebase` |
+| The artifact was built by our release workflow and stable tag | `gh attestation verify <file> --repo cdeust/ai-architect-mcp-codebase --signer-workflow cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml --source-ref refs/tags/v0.9.0 --bundle <file>.sigstore.json` |
 | The bytes were not altered in transit | `sha256sum -c <file>.sha256` |
 | The release tag was cut by the maintainer, not by whoever can push | **not claimed** — tags are unsigned; artifact provenance answers this instead (see below) |
 | What is inside the binary | the CycloneDX SBOM asset, `ai-architect-mcp-codebase.cdx.json` |
@@ -80,15 +80,18 @@ Verify a downloaded release before running it:
 
 ```bash
 gh attestation verify ai-architect-mcp-codebase-macos-aarch64.tar.gz \
-  --repo cdeust/ai-architect-mcp-codebase
+  --repo cdeust/ai-architect-mcp-codebase \
+  --signer-workflow cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.9.0 \
+  --bundle ai-architect-mcp-codebase-macos-aarch64.tar.gz.sigstore.json
 sha256sum -c ai-architect-mcp-codebase-macos-aarch64.tar.gz.sha256
 ```
 
 Every attested asset also ships its Sigstore bundle as a sibling
-`<asset>.sigstore.json` on the release page. `gh attestation verify` queries
-GitHub's attestation API, so it needs the network and it needs GitHub to be
-answering; the bundle is the same signed statement as a file you can keep, so
-an air-gapped or archival consumer can verify the artifact without either.
+`<asset>.sigstore.json` on the release page. The bundle keeps the signed
+statement with the artifact and avoids a Rekor transparency-log lookup.
+`gh attestation verify` can still fetch Sigstore's TUF trust root, so a cold
+cache requires network access even when `--bundle` is supplied.
 
 ### Verifying the release tag
 

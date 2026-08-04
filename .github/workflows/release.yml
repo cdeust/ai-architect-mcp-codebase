@@ -66,10 +66,17 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(python3 -c 'import json; print(json.load(open(".claude-plugin/plugin.json"))["version"])')
-          case "$TAG" in
-            "v$VERSION"|"v$VERSION-rc"[0-9]*) ;;
-            *) echo "tag $TAG does not match plugin version $VERSION" >&2; exit 1 ;;
-          esac
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "plugin version $VERSION is not stable SemVer" >&2; exit 1; }
+          if [ "$TAG" = "v$VERSION" ]; then
+            :
+          elif [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-rc[0-9]+$ ]] \
+            && [ "${BASH_REMATCH[1]}" = "$VERSION" ]; then
+            :
+          else
+            echo "tag $TAG does not match plugin version $VERSION" >&2
+            exit 1
+          fi
 
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
@@ -463,6 +470,7 @@ jobs:
     needs: [build, sbom, package_mcpb]
     outputs:
       checksums: ${{ steps.verify.outputs.checksums }}
+      inventory_sha: ${{ steps.verify.outputs.inventory_sha }}
     runs-on: ubuntu-latest
     permissions:
       # Draft releases are visible only to callers with push access. This job
@@ -482,10 +490,17 @@ jobs:
         run: |
           set -euo pipefail
           MANIFEST_VERSION=$(python3 -c 'import json; print(json.load(open(".claude-plugin/plugin.json"))["version"])')
-          case "$TAG" in
-            "v$MANIFEST_VERSION"|"v$MANIFEST_VERSION-rc"[0-9]*) ;;
-            *) echo "tag $TAG does not match plugin version $MANIFEST_VERSION" >&2; exit 1 ;;
-          esac
+          [[ "$MANIFEST_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "plugin version $MANIFEST_VERSION is not stable SemVer" >&2; exit 1; }
+          if [ "$TAG" = "v$MANIFEST_VERSION" ]; then
+            :
+          elif [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-rc[0-9]+$ ]] \
+            && [ "${BASH_REMATCH[1]}" = "$MANIFEST_VERSION" ]; then
+            :
+          else
+            echo "tag $TAG does not match plugin version $MANIFEST_VERSION" >&2
+            exit 1
+          fi
           mkdir -p release-assets
           cd release-assets
           for TARGET in macos-aarch64 linux-x86_64 linux-aarch64 windows-x86_64; do
@@ -549,8 +564,10 @@ jobs:
           ACTUAL=$(gh release view "$TAG" --repo "$REPOSITORY" --json assets \
             --jq '.assets[].name' | sort)
           test "$ACTUAL" = "$EXPECTED"
-          CHECKSUMS=$(python3 -c 'import glob,json; print(json.dumps({line.split()[1]: line.split()[0] for path in glob.glob("*.tar.gz.sha256") for line in open(path)}))')
+          CHECKSUMS=$(python3 -c 'import glob,json; print(json.dumps({line.split()[1]: line.split()[0] for path in glob.glob("*.sha256") for line in open(path)}))')
           echo "checksums=$CHECKSUMS" >> "$GITHUB_OUTPUT"
+          INVENTORY_SHA=$(printf '%s\n' "$EXPECTED" | sha256sum | awk '{print $1}')
+          echo "inventory_sha=$INVENTORY_SHA" >> "$GITHUB_OUTPUT"
 
   publish_verified_release:
     name: publish verified release
@@ -565,6 +582,7 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
           VERIFIED_CHECKSUMS: ${{ needs.verify_staged_assets.outputs.checksums }}
+          VERIFIED_INVENTORY_SHA: ${{ needs.verify_staged_assets.outputs.inventory_sha }}
         run: |
           set -Eeuo pipefail
           gh release edit "$TAG" --repo "$REPOSITORY" --draft=false
@@ -576,8 +594,8 @@ jobs:
           }
           trap rollback ERR INT TERM
           BASE="https://github.com/${REPOSITORY}/releases/download/${TAG}"
-          for TARGET in macos-aarch64 linux-x86_64 linux-aarch64; do
-            ASSET="ai-architect-mcp-codebase-${TARGET}.tar.gz"
+          verify_public_asset() {
+            local ASSET=$1
             curl --fail --location --silent --show-error \
               --connect-timeout 5 --max-time 120 --retry 5 --retry-all-errors \
               "$BASE/$ASSET" -o "$ASSET"
@@ -590,6 +608,20 @@ jobs:
             gh attestation verify "$ASSET" --repo "$REPOSITORY" \
               --signer-workflow "$REPOSITORY/.github/workflows/release.yml" \
               --source-ref "refs/tags/$TAG" --bundle "$ASSET.sigstore.json"
+          }
+          for ASSET in \
+            ai-architect-mcp-codebase-macos-aarch64.tar.gz \
+            ai-architect-mcp-codebase-linux-x86_64.tar.gz \
+            ai-architect-mcp-codebase-linux-aarch64.tar.gz \
+            ai-architect-mcp-codebase-windows-x86_64.tar.gz \
+            ai-architect-mcp-codebase.mcpb \
+            ai-architect-mcp-codebase.cdx.json \
+            mcp-contract.json; do
+            verify_public_asset "$ASSET"
           done
+          ACTUAL_INVENTORY=$(gh release view "$TAG" --repo "$REPOSITORY" --json assets \
+            --jq '.assets[].name' | sort)
+          ACTUAL_INVENTORY_SHA=$(printf '%s\n' "$ACTUAL_INVENTORY" | sha256sum | awk '{print $1}')
+          test "$ACTUAL_INVENTORY_SHA" = "$VERIFIED_INVENTORY_SHA"
           rollback_required=no
           trap - ERR INT TERM
