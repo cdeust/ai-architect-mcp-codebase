@@ -163,7 +163,7 @@ if [ "$marketplace_install" = "yes" ]; then
         else
             err "cached binary metadata is invalid or obsolete; refreshing verified release"
         fi
-        rm -f "$BIN" "$DIGEST_FILE"
+        rm -f "$DIGEST_FILE"
     fi
 
     command -v curl >/dev/null 2>&1 || fatal "curl is required for marketplace installation"

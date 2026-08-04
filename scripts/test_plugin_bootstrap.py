@@ -269,6 +269,26 @@ def main() -> None:
         require(result.returncode == 0 and "metadata is invalid or obsolete" in result.stderr, result.stderr)
         require(curl_calls.exists(), "empty cache metadata did not refresh from the release")
 
+        # A failed refresh must not destroy the last locally valid binary. The
+        # missing sidecar keeps it ineligible for execution until a later
+        # verified download atomically replaces it.
+        plugin_case, fake_bin_case, curl_case, _ = fixture(tmp / "offline-refresh")
+        binary_case = plugin_case / "target/release/ai-architect-mcp-codebase"
+        binary_case.parent.mkdir(parents=True)
+        original = b"#!/bin/sh\nexit 0\n"
+        binary_case.write_bytes(original)
+        binary_case.chmod(0o755)
+        digest = hashlib.sha256(original).hexdigest()
+        sidecar = binary_case.parent / f"{binary_case.name}.sha256"
+        sidecar.write_text(f"{digest}  {binary_case}\n", encoding="utf-8")
+        install_curl(fake_bin_case, curl_case, absent_release())
+        result = run(plugin_case, fake_bin_case)
+        require(result.returncode != 0 and "metadata is invalid or obsolete" in result.stderr, result.stderr)
+        require(binary_case.read_bytes() == original, "failed refresh destroyed the valid cached binary")
+        require(binary_case.stat().st_mode & 0o111 != 0, "failed refresh removed cached binary executability")
+        require(not sidecar.exists(), "failed refresh retained obsolete cache metadata")
+        require("COLD_BUILD_STARTED" not in result.stderr, "failed marketplace refresh invoked Cargo")
+
         # Negative controls protect each independent integrity boundary.
         for label, release, gh_mode in (
             ("404", absent_release(), "success"),
