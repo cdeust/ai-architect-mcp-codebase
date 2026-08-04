@@ -564,7 +564,7 @@ jobs:
           ACTUAL=$(gh release view "$TAG" --repo "$REPOSITORY" --json assets \
             --jq '.assets[].name' | sort)
           test "$ACTUAL" = "$EXPECTED"
-          CHECKSUMS=$(python3 -c 'import glob,json; print(json.dumps({line.split()[1]: line.split()[0] for path in glob.glob("*.sha256") for line in open(path)}))')
+          CHECKSUMS=$(python3 -c 'import glob,json; print(json.dumps({line.split()[1].lstrip("*"): line.split()[0] for path in glob.glob("*.sha256") for line in open(path)}))')
           echo "checksums=$CHECKSUMS" >> "$GITHUB_OUTPUT"
           INVENTORY_SHA=$(printf '%s\n' "$EXPECTED" | sha256sum | awk '{print $1}')
           echo "inventory_sha=$INVENTORY_SHA" >> "$GITHUB_OUTPUT"
