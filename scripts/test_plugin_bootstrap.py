@@ -262,6 +262,13 @@ def main() -> None:
         require(result.returncode == 0 and "metadata is invalid or obsolete" in result.stderr, result.stderr)
         require(curl_calls.exists(), "legacy two-field cache did not refresh from the release")
 
+        curl_calls.unlink()
+        gh_calls.unlink()
+        (binary.parent / f"{binary.name}.sha256").write_text("", encoding="utf-8")
+        result = run(plugin, fake_bin)
+        require(result.returncode == 0 and "metadata is invalid or obsolete" in result.stderr, result.stderr)
+        require(curl_calls.exists(), "empty cache metadata did not refresh from the release")
+
         # Negative controls protect each independent integrity boundary.
         for label, release, gh_mode in (
             ("404", absent_release(), "success"),
@@ -374,9 +381,15 @@ fi
 
         # The source escape hatch requires a real checkout and is always visible.
         plugin, fake_bin, curl_calls, _ = fixture(tmp / "source-optout-without-git")
-        install_curl(fake_bin, curl_calls, absent_release())
+        unverified = plugin / "target/release/ai-architect-mcp-codebase"
+        unverified.parent.mkdir(parents=True)
+        unverified.write_text("#!/bin/sh\necho UNVERIFIED\n", encoding="utf-8")
+        unverified.chmod(0o755)
+        install_curl(fake_bin, curl_calls, make_release(tmp / "source-optout-without-git-release"))
         result = run(plugin, fake_bin, source_checkout=True)
-        require_not_installed(plugin, result, "source opt-out without .git")
+        require(result.returncode == 0, result.stderr)
+        require(curl_calls.exists(), "source opt-out without .git skipped the verified download")
+        require("UNVERIFIED" not in unverified.read_text(encoding="utf-8"), "unverified cached binary survived")
         require("verification skipped" not in result.stderr, "unverified source opt-out was honored")
 
         # A confirmed source checkout never downloads upstream bytes and retains Cargo fallback.

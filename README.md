@@ -230,7 +230,7 @@ only metadata fail closed; it cannot make arbitrary code from a hostile fork
 trustworthy, because such a fork can also replace the bootstrap itself. Verify
 that the marketplace slug is exactly `cdeust/ai-architect-mcp-codebase`.
 
-Repository smoke tests that set `CLAUDE_PLUGIN_ROOT` may also set
+Contributors working on a clone that sets `CLAUDE_PLUGIN_ROOT` may also set
 `AI_ARCHITECT_SOURCE_CHECKOUT=1` to retain the local Cargo build path. The
 bootstrap honors that override only when the plugin root contains `.git`, and
 always reports the verification bypass on stderr. Marketplace manifests may

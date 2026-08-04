@@ -122,6 +122,9 @@ verify_provenance() {
 
 marketplace_install="no"
 if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    # This is a developer escape hatch, never a decision packaged metadata may
+    # make: a marketplace cache has no .git, and every accepted bypass is
+    # announced even when the launcher requested quiet mode.
     if [ "${AI_ARCHITECT_SOURCE_CHECKOUT:-0}" = "1" ] && [ -e "$ROOT/.git" ]; then
         err "bootstrap verification skipped (source-checkout mode)"
     else
@@ -136,6 +139,9 @@ if [ "$marketplace_install" = "yes" ]; then
         || fatal "Cargo manifest does not match the reviewed release identity"
     version="$EXPECTED_VERSION"
 
+    # An obsolete or unreadable cache record falls through to the stricter
+    # download path, which verifies SHA-256 and provenance again. A digest
+    # mismatch at the current version remains fatal because that is tampering.
     if [ -x "$BIN" ] && [ -f "$DIGEST_FILE" ]; then
         cached_version=""
         expected=""
