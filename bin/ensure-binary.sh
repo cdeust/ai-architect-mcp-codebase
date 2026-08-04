@@ -13,7 +13,8 @@
 # 1. If `target/release/ai-architect-mcp-codebase` exists AND is newer than every
 #    file under `src/` and `Cargo.{toml,lock}`, exit 0 immediately.
 # 2. Otherwise, download the matching checksum-verified GitHub release asset.
-# 3. Before a release exists, fall back to `cargo build --release --quiet`.
+# 3. A marketplace install fails fast when its release is unavailable. A
+#    source checkout can still fall back to `cargo build --release --quiet`.
 #
 # Determinism: zero side effects beyond `cargo build`. Idempotent. No
 # global state. Safe to invoke from any hook or launcher.
@@ -77,8 +78,8 @@ fi
 # A marketplace install contains source, not target/. Compiling the complete
 # graph stack during Claude's MCP handshake exceeds the host startup timeout on
 # a cold machine, so released versions use the same prebuilt asset as the
-# standalone installer. Failure is non-fatal here: an unreleased checkout can
-# still use the source-build fallback below.
+# standalone installer. A marketplace install must not silently enter the cold
+# source build that the host cannot wait for.
 VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/.claude-plugin/plugin.json" | head -1)
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) release_target="macos-aarch64" ;;
@@ -108,12 +109,19 @@ if [ "$needs_build" = "missing" ] && [ -n "$VERSION" ] && [ -n "$release_target"
             err "ai-architect-mcp-codebase: verified release binary installed"
             exit 0
         fi
-        err "release checksum verification failed; falling back to a source build"
+        err "release checksum verification failed"
     else
-        err "release asset unavailable; falling back to a source build"
+        err "release asset unavailable"
     fi
     rm -rf "$download_dir"
     trap - EXIT
+fi
+
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    err "FATAL: no verified release binary is available for plugin version ${VERSION:-unknown}."
+    err "       Check https://github.com/cdeust/ai-architect-mcp-codebase/releases"
+    err "       The plugin will not start a cold build inside Claude's MCP timeout."
+    exit 1
 fi
 
 # Build path. Cargo writes its own progress to stderr; we add a

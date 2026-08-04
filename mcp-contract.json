@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "distribution": "ai-architect-mcp-codebase",
+  "claude_plugin": "ai-architect-mcp-codebase",
+  "claude_marketplace": "ai-architect-mcp-codebase-marketplace",
+  "mcp_server": "ai-architect",
+  "claude_tool_prefix": "mcp__plugin_ai-architect-mcp-codebase_ai-architect__",
+  "legacy_claude_tool_prefixes": [
+    "mcp__plugin_automatised-pipeline_automatised-pipeline__"
+  ]
+}

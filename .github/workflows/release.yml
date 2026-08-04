@@ -413,3 +413,32 @@ jobs:
             ai-architect-mcp-codebase.mcpb.sha256
             ai-architect-mcp-codebase.mcpb.sigstore.json
           fail_on_unmatched_files: true
+
+  # The plugin bootstrap resolves these public URLs during Claude's MCP
+  # handshake. Manifest consistency alone cannot prove that a fresh install is
+  # usable, so the release is incomplete until every URL and checksum resolves.
+  verify_published_assets:
+    name: verify published install contract
+    needs: [build, sbom, package_mcpb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download and verify every launcher asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          mkdir release-assets
+          cd release-assets
+          for TARGET in macos-aarch64 linux-x86_64 linux-aarch64 windows-x86_64; do
+            ASSET="ai-architect-mcp-codebase-${TARGET}.tar.gz"
+            gh release download "$TAG" --repo cdeust/ai-architect-mcp-codebase \
+              --pattern "$ASSET" --pattern "$ASSET.sha256"
+            sha256sum --check "$ASSET.sha256"
+          done
+          gh release download "$TAG" --repo cdeust/ai-architect-mcp-codebase \
+            --pattern 'ai-architect-mcp-codebase.mcpb' \
+            --pattern 'ai-architect-mcp-codebase.mcpb.sha256'
+          sha256sum --check ai-architect-mcp-codebase.mcpb.sha256

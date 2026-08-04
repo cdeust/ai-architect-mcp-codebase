@@ -33,7 +33,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   README documents the exact Claude tool-prefix and host migration commands.
   Fresh Claude marketplace installs fetch and checksum-verify the matching
   release binary before MCP startup, avoiding a cold Rust build inside the
-  handshake timeout; unreleased source checkouts retain the build fallback.
+  handshake timeout. They now fail fast when that release is unavailable;
+  unreleased source checkouts retain the build fallback. A machine-readable
+  `mcp-contract.json` publishes the Claude plugin, server key, and tool prefix,
+  and the identity gate derives the prefix from the actual manifests.
 
 ### Fixed
 
