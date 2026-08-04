@@ -10,8 +10,9 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// Path to the built binary (Cargo provides this env var for bin integration tests).
-const BIN: &str = env!("CARGO_BIN_EXE_automatised-pipeline");
+/// Paths to both shipped binaries (Cargo provides these for integration tests).
+const BIN: &str = env!("CARGO_BIN_EXE_ai-architect-mcp-codebase");
+const LEGACY_BIN: &str = env!("CARGO_BIN_EXE_automatised-pipeline");
 
 fn run(home: &Path, args: &[&str]) -> (String, i32) {
     let out = Command::new(BIN)
@@ -81,6 +82,29 @@ fn install_never_clobbers_other_servers_and_is_idempotent() {
         read(home, ".cursor/mcp.json"),
         before,
         "file unchanged on re-run"
+    );
+}
+
+#[test]
+fn legacy_executable_forwards_to_the_canonical_server() {
+    let mut child = Command::new(LEGACY_BIN)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run compatibility executable");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["result"]["serverInfo"]["name"], "ai-architect");
+    assert_eq!(
+        response["result"]["serverInfo"]["version"],
+        env!("CARGO_PKG_VERSION")
     );
 }
 
