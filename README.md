@@ -219,6 +219,11 @@ claude plugin marketplace add cdeust/ai-architect-mcp-codebase
 claude plugin install ai-architect-mcp-codebase@ai-architect-mcp-codebase-marketplace
 ```
 
+Fresh marketplace installs require GitHub CLI 2.49 or newer. The bootstrap
+verifies the release's offline Sigstore bundle against the fixed
+`cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml` signer before
+installing any executable; it never accepts a manifest-provided trust anchor.
+
 If the former Automatised Pipeline plugin is installed, remove it before
 installing the canonical package:
 
@@ -238,12 +243,12 @@ independent spelling.
 
 Contract schema 1 requires `distribution`, `claude_plugin`,
 `claude_marketplace`, `mcp_server`, `claude_tool_prefix`, and
-`revoked_claude_tool_prefixes`. Consumers must pin the raw contract URL to a
-release tag or commit SHA, validate that the prefix equals
+`revoked_claude_tool_prefixes`. Consumers must pin the raw contract URL to the
+full commit SHA (tags can be moved), validate that the prefix equals
 `mcp__plugin_<claude_plugin>_<mcp_server>__`, and remove revoked prefixes from
-allowlists rather than retaining them as aliases. After v0.9.0, the immutable
-contract URL is
-`https://raw.githubusercontent.com/cdeust/ai-architect-mcp-codebase/v0.9.0/mcp-contract.json`.
+allowlists rather than retaining them as aliases. Consumer PRs record the full
+producer commit in their contract URL; the v0.9.0 release must not be assumed
+available until its verified-release workflow completes.
 
 **OpenAI Codex CLI** (also picked up by the ChatGPT desktop app and Codex IDE extension — they share `~/.codex/config.toml`)
 

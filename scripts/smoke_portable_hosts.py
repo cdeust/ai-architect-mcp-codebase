@@ -21,6 +21,11 @@ CORE_TOOLS = {
 }
 
 
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(message)
+
+
 def _json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -79,26 +84,26 @@ def _exercise(host: str, server: dict, cwd: Path) -> None:
         capture_output=True,
         check=False,
     )
-    assert run.returncode == 0, (
+    require(run.returncode == 0, (
         f"{host}: shipped command {command!r} exited {run.returncode}\n"
         f"stderr:\n{run.stderr}\nstdout:\n{run.stdout}"
-    )
+    ))
 
     initialize = _response(run.stdout, 1)
-    assert initialize.get("error") is None
-    assert initialize["result"]["serverInfo"]["name"] == "ai-architect"
-    assert "core" in initialize["result"]["instructions"].lower()
+    require(initialize.get("error") is None, f"{host}: initialize failed")
+    require(initialize["result"]["serverInfo"]["name"] == "ai-architect", f"{host}: wrong server name")
+    require("core" in initialize["result"]["instructions"].lower(), f"{host}: wrong profile")
 
     listed = _response(run.stdout, 2)
     names = {tool["name"] for tool in listed["result"]["tools"]}
-    assert names == CORE_TOOLS, f"{host}: wrong core tool surface: {sorted(names)}"
+    require(names == CORE_TOOLS, f"{host}: wrong core tool surface: {sorted(names)}")
 
     called = _response(run.stdout, 3)
-    assert called.get("error") is None
-    assert called["result"].get("isError") is not True
+    require(called.get("error") is None, f"{host}: health_check RPC failed")
+    require(called["result"].get("isError") is not True, f"{host}: health_check returned isError")
     health = json.loads(called["result"]["content"][0]["text"])
-    assert health["status"] == "ok"
-    assert health["tools_count"] == len(CORE_TOOLS)
+    require(health["status"] == "ok", f"{host}: unhealthy server")
+    require(health["tools_count"] == len(CORE_TOOLS), f"{host}: wrong health tool count")
     print(
         f"PORTABLE HOST SMOKE OK: {host}, "
         f"{initialize['result']['serverInfo']['version']}, "

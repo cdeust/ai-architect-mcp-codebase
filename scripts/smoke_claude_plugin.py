@@ -11,6 +11,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(message)
+
+
 def response(output: str, request_id: int) -> dict:
     for line in output.splitlines():
         try:
@@ -32,10 +37,10 @@ def main() -> None:
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "health_check", "arguments": {}}},
     ]
     run = subprocess.run([command, *server.get("args", [])], env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(ROOT)}, input="\n".join(map(json.dumps, requests)) + "\n", text=True, capture_output=True, check=False)
-    assert run.returncode == 0, run.stderr
-    assert response(run.stdout, 1).get("error") is None
-    assert len(response(run.stdout, 2)["result"]["tools"]) == 26
-    assert response(run.stdout, 3)["result"].get("isError") is not True
+    require(run.returncode == 0, run.stderr)
+    require(response(run.stdout, 1).get("error") is None, "Claude initialize failed")
+    require(len(response(run.stdout, 2)["result"]["tools"]) == 26, "Claude tool surface is not 26")
+    require(response(run.stdout, 3)["result"].get("isError") is not True, "Claude health_check failed")
     print("CLAUDE PLUGIN SMOKE OK: shipped launcher initialized, listed 26 tools, and called health_check")
 
 

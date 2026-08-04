@@ -117,6 +117,14 @@ fn canonical_distribution_identity_is_consistent() {
     let plugin_name = contract["claude_plugin"].as_str().unwrap();
     let marketplace_name = contract["claude_marketplace"].as_str().unwrap();
     let mcp_server = contract["mcp_server"].as_str().unwrap();
+    let actual_mcp = read_json(".mcp.json");
+    let actual_server_keys: Vec<_> = actual_mcp["mcpServers"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(actual_server_keys, vec![mcp_server]);
     let derived_prefix = format!("mcp__plugin_{plugin_name}_{mcp_server}__");
 
     assert_eq!(env!("CARGO_PKG_NAME"), distribution);

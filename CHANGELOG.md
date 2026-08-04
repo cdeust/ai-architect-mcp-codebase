@@ -40,6 +40,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   Release publication now stays draft until every archive, checksum, Sigstore
   attestation, SBOM, and MCPB has been verified; only then is it published and
   fetched once through the same anonymous URL used by the plugin bootstrap.
+  The bootstrap fixes the trusted repository and signer workflow independently
+  of plugin metadata, requires an offline-capable GitHub CLI verifier, rejects
+  archive link types by streaming one member into a regular file, and persists
+  and rechecks the installed binary digest on every marketplace launch.
 
 ### Fixed
 

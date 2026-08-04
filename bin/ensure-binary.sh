@@ -1,38 +1,31 @@
 #!/usr/bin/env bash
-# ensure-binary.sh — guarantee target/release/ai-architect-mcp-codebase exists.
+# Ensure the Claude plugin has the canonical ai-architect-mcp-codebase binary.
 #
-# Used by:
-#   - session-start.sh hook (runs synchronously, BEFORE MCP servers
-#     attempt to connect). Builds once on first install.
-#   - .mcp.json launcher (re-invokes if binary disappeared between
-#     sessions; fails fast with a clear stderr message rather than
-#     silently calling `cargo run` which exceeds MCP startup timeout).
+# Marketplace cache (CLAUDE_PLUGIN_ROOT set, no .git): download the release
+# archive, verify its SHA-256 and offline Sigstore bundle against the fixed
+# producer/workflow identity, then install it atomically. Persist the verified
+# digest and re-check it on every launch.
 #
-# Behaviour
-# ---------
-# 1. If `target/release/ai-architect-mcp-codebase` exists AND is newer than every
-#    file under `src/` and `Cargo.{toml,lock}`, exit 0 immediately.
-# 2. Otherwise, download the matching checksum-verified GitHub release asset.
-# 3. A marketplace install fails fast when its release is unavailable. A
-#    source checkout can still fall back to `cargo build --release --quiet`.
-#
-# Determinism: zero side effects beyond `cargo build`. Idempotent. No
-# global state. Safe to invoke from any hook or launcher.
+# Source checkout (.git present, or no CLAUDE_PLUGIN_ROOT): never substitute a
+# release binary for local source. Rebuild when sources are newer than target/.
 
 set -euo pipefail
 
+EXPECTED_REPO="cdeust/ai-architect-mcp-codebase"
+EXPECTED_REPOSITORY_URL="https://github.com/${EXPECTED_REPO}"
+EXPECTED_SIGNER_WORKFLOW="${EXPECTED_REPO}/.github/workflows/release.yml"
+
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BIN="$ROOT/target/release/ai-architect-mcp-codebase"
+DIGEST_FILE="$BIN.sha256"
 MANIFEST="$ROOT/Cargo.toml"
+PLUGIN_MANIFEST="$ROOT/.claude-plugin/plugin.json"
 SRC_DIR="$ROOT/src"
-
-# Quiet mode: caller is the MCP launcher; suppress progress noise.
-# Verbose mode: caller is a session-start hook or human; show progress.
 MODE="${1:-quiet}"
 
 log() {
     if [ "$MODE" = "verbose" ]; then
-        echo "$@" >&2
+        echo "ai-architect-mcp-codebase: $*" >&2
     fi
 }
 
@@ -40,142 +33,150 @@ err() {
     echo "ai-architect-mcp-codebase: $*" >&2
 }
 
-# Need cargo available in PATH.
-if ! command -v cargo >/dev/null 2>&1; then
-    err "FATAL: cargo not found in PATH. Install Rust (https://rustup.rs)"
-    err "       and re-run this command. Plugin cannot start without"
-    err "       a built binary."
-    exit 127
-fi
-
-# Manifest sanity.
-if [ ! -f "$MANIFEST" ]; then
-    err "FATAL: Cargo.toml missing at $MANIFEST"
+fatal() {
+    err "FATAL: $*"
     exit 1
+}
+
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        fatal "neither sha256sum nor shasum is available"
+    fi
+}
+
+download() {
+    # 5 s connect bound; abort a stalled transfer below 1 KiB/s for 30 s.
+    # The 120 s total permits the current ~10 MiB asset on slower links while
+    # remaining bounded inside an actionable first-start failure.
+    curl --fail --location --silent --show-error \
+        --connect-timeout 5 --max-time 120 --speed-limit 1024 --speed-time 30 \
+        --retry 2 --retry-connrefused "$1" -o "$2"
+}
+
+verify_provenance() {
+    artifact=$1
+    bundle=$2
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 20 gh attestation verify "$artifact" \
+            --repo "$EXPECTED_REPO" --signer-workflow "$EXPECTED_SIGNER_WORKFLOW" \
+            --bundle "$bundle" >&2
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout 20 gh attestation verify "$artifact" \
+            --repo "$EXPECTED_REPO" --signer-workflow "$EXPECTED_SIGNER_WORKFLOW" \
+            --bundle "$bundle" >&2
+    elif command -v perl >/dev/null 2>&1; then
+        # alarm survives exec, providing a portable macOS bound without GNU coreutils.
+        perl -e '$seconds=shift @ARGV; alarm $seconds; exec @ARGV' 20 \
+            gh attestation verify "$artifact" \
+            --repo "$EXPECTED_REPO" --signer-workflow "$EXPECTED_SIGNER_WORKFLOW" \
+            --bundle "$bundle" >&2
+    else
+        fatal "timeout, gtimeout, or perl is required to bound provenance verification"
+    fi
+}
+
+[ -f "$MANIFEST" ] || fatal "Cargo.toml missing at $MANIFEST"
+[ -f "$PLUGIN_MANIFEST" ] || fatal "plugin.json missing at $PLUGIN_MANIFEST"
+
+marketplace_install="no"
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ ! -d "$ROOT/.git" ]; then
+    marketplace_install="yes"
 fi
 
-# Fast path: binary exists and is fresh relative to all sources.
+if [ "$marketplace_install" = "yes" ]; then
+    manifest_repository=$(sed -n 's/^[[:space:]]*"repository"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_MANIFEST" | head -1)
+    [ "$manifest_repository" = "$EXPECTED_REPOSITORY_URL" ] \
+        || fatal "plugin repository is not the trusted producer $EXPECTED_REPOSITORY_URL"
+
+    if [ -x "$BIN" ] && [ -f "$DIGEST_FILE" ]; then
+        expected=$(awk '{print $1}' "$DIGEST_FILE")
+        actual=$(sha256_file "$BIN")
+        [ -n "$expected" ] && [ "$actual" = "$expected" ] \
+            || fatal "cached binary digest mismatch; reinstall the plugin"
+        log "cached binary SHA-256 verified at $BIN"
+        exit 0
+    fi
+
+    command -v curl >/dev/null 2>&1 || fatal "curl is required for marketplace installation"
+    command -v gh >/dev/null 2>&1 \
+        || fatal "GitHub CLI 2.49+ is required to verify release provenance: https://cli.github.com/"
+    gh attestation verify --help >/dev/null 2>&1 \
+        || fatal "GitHub CLI lacks 'gh attestation verify'; upgrade to version 2.49 or newer"
+
+    version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_MANIFEST" | head -1)
+    [ -n "$version" ] || fatal "plugin version missing"
+    case "$(uname -s)-$(uname -m)" in
+        Darwin-arm64) release_target="macos-aarch64" ;;
+        Linux-x86_64) release_target="linux-x86_64" ;;
+        Linux-aarch64) release_target="linux-aarch64" ;;
+        *)
+            fatal "unsupported plugin platform $(uname -s)/$(uname -m); supported: macOS arm64, Linux x86_64, Linux aarch64"
+            ;;
+    esac
+
+    asset="ai-architect-mcp-codebase-${release_target}.tar.gz"
+    base="${EXPECTED_REPOSITORY_URL}/releases/download/v${version}"
+    download_dir=$(mktemp -d)
+    trap 'rm -rf "$download_dir"' EXIT
+    err "installing v${version} for ${release_target}"
+
+    download "$base/$asset" "$download_dir/$asset" \
+        || fatal "release asset unavailable: $base/$asset"
+    download "$base/$asset.sha256" "$download_dir/$asset.sha256" \
+        || fatal "release checksum unavailable"
+    expected=$(awk '{print $1}' "$download_dir/$asset.sha256")
+    actual=$(sha256_file "$download_dir/$asset")
+    [ -n "$expected" ] && [ "$actual" = "$expected" ] \
+        || fatal "release checksum verification failed"
+
+    download "$base/$asset.sigstore.json" "$download_dir/$asset.sigstore.json" \
+        || fatal "release provenance bundle unavailable"
+    verify_provenance "$download_dir/$asset" "$download_dir/$asset.sigstore.json" \
+        || fatal "release provenance verification failed or exceeded 20 seconds"
+
+    # Streaming the one expected member into a new regular file prevents tar
+    # symlinks, hardlinks, devices, ownership and permission metadata from
+    # reaching the plugin cache. mv publishes the verified binary atomically.
+    staged_bin="$download_dir/ai-architect-mcp-codebase.verified"
+    tar -xzOf "$download_dir/$asset" ai-architect-mcp-codebase > "$staged_bin" \
+        || fatal "release archive does not contain the expected binary"
+    [ -s "$staged_bin" ] || fatal "release binary is empty"
+    chmod 0755 "$staged_bin"
+    installed_digest=$(sha256_file "$staged_bin")
+    mkdir -p "$(dirname "$BIN")"
+    mv -f "$staged_bin" "$BIN"
+    printf '%s  %s\n' "$installed_digest" "$BIN" > "$DIGEST_FILE"
+    err "release binary installed; SHA-256 and Sigstore provenance verified"
+    exit 0
+fi
+
+# Source checkout: preserve the developer's source/binary freshness contract.
 needs_build="no"
 if [ ! -x "$BIN" ]; then
     needs_build="missing"
-elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
-    # Marketplace versions install into immutable versioned cache directories.
-    # Source mtimes reflect checkout/extraction time and are not a freshness
-    # signal for a release binary; an executable already in this cache is the
-    # exact binary previously verified for this plugin version.
-    needs_build="no"
-else
-    # Compare mtimes: rebuild if any source file is newer than the binary.
-    # `find -newer` returns the first match; head -1 to short-circuit.
-    if [ -d "$SRC_DIR" ]; then
-        newer=$(find "$SRC_DIR" "$MANIFEST" "$ROOT/Cargo.lock" \
-                    -newer "$BIN" -print -quit 2>/dev/null || true)
-        if [ -n "$newer" ]; then
-            needs_build="stale"
-        fi
+elif [ -d "$SRC_DIR" ]; then
+    newer=$(find "$SRC_DIR" "$MANIFEST" "$ROOT/Cargo.lock" \
+                -newer "$BIN" -print -quit 2>/dev/null || true)
+    if [ -n "$newer" ]; then
+        needs_build="stale"
     fi
 fi
 
 if [ "$needs_build" = "no" ]; then
-    log "ai-architect-mcp-codebase: binary up-to-date at $BIN"
+    log "source-checkout binary up-to-date at $BIN"
     exit 0
 fi
 
-# A marketplace install contains source, not target/. Compiling the complete
-# graph stack during Claude's MCP handshake exceeds the host startup timeout on
-# a cold machine, so released versions use the same prebuilt asset as the
-# standalone installer. A marketplace install must not silently enter the cold
-# source build that the host cannot wait for.
-VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/.claude-plugin/plugin.json" | head -1)
-REPOSITORY_URL=$(sed -n 's/^[[:space:]]*"repository"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/.claude-plugin/plugin.json" | head -1)
-REPOSITORY_SLUG=${REPOSITORY_URL#https://github.com/}
-REPOSITORY_SLUG=${REPOSITORY_SLUG%.git}
-case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64) release_target="macos-aarch64" ;;
-    Linux-x86_64) release_target="linux-x86_64" ;;
-    Linux-aarch64) release_target="linux-aarch64" ;;
-    *) release_target="" ;;
-esac
-
-if [ "$needs_build" = "missing" ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "$release_target" ]; then
-    err "FATAL: Claude marketplace bootstrap does not support $(uname -s)/$(uname -m)."
-    err "       Supported plugin platforms: macOS arm64, Linux x86_64, Linux aarch64."
-    exit 1
-fi
-
-if [ "$needs_build" = "missing" ] && [ -n "$VERSION" ] && [ -n "$release_target" ] && command -v curl >/dev/null 2>&1; then
-    asset="ai-architect-mcp-codebase-${release_target}.tar.gz"
-    base="${REPOSITORY_URL}/releases/download/v${VERSION}"
-    download_dir=$(mktemp -d)
-    trap 'rm -rf "$download_dir"' EXIT
-    err "Installing ai-architect-mcp-codebase v${VERSION} for ${release_target}…"
-    curl_args="--fail --location --silent --show-error --connect-timeout 5 --max-time 30 --retry 2 --retry-connrefused"
-    if curl $curl_args "$base/$asset" -o "$download_dir/$asset" \
-        && curl $curl_args "$base/$asset.sha256" -o "$download_dir/$asset.sha256"; then
-        expected=$(awk '{print $1}' "$download_dir/$asset.sha256")
-        if command -v sha256sum >/dev/null 2>&1; then
-            actual=$(sha256sum "$download_dir/$asset" | awk '{print $1}')
-        else
-            actual=$(shasum -a 256 "$download_dir/$asset" | awk '{print $1}')
-        fi
-        if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
-            if command -v gh >/dev/null 2>&1; then
-                if ! curl $curl_args "$base/$asset.sigstore.json" -o "$download_dir/$asset.sigstore.json"; then
-                    err "release provenance bundle unavailable"
-                    exit 1
-                fi
-                if ! gh attestation verify "$download_dir/$asset" \
-                    --repo "$REPOSITORY_SLUG" \
-                    --bundle "$download_dir/$asset.sigstore.json" >&2; then
-                    err "release provenance verification failed"
-                    exit 1
-                fi
-            else
-                err "WARNING: gh CLI unavailable; provenance not verified (SHA-256 verified)."
-            fi
-            mkdir -p "$(dirname "$BIN")"
-            tar -xzf "$download_dir/$asset" --no-same-owner --no-same-permissions \
-                -C "$(dirname "$BIN")" ai-architect-mcp-codebase
-            chmod +x "$BIN"
-            touch "$BIN"
-            err "ai-architect-mcp-codebase: verified release binary installed"
-            exit 0
-        fi
-        err "release checksum verification failed"
-    else
-        err "release asset unavailable"
-    fi
-    rm -rf "$download_dir"
-    trap - EXIT
-fi
-
-if [ "$needs_build" = "missing" ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
-    err "FATAL: no verified release binary is available for plugin version ${VERSION:-unknown}."
-    err "       Check ${REPOSITORY_URL}/releases"
-    err "       The plugin will not start a cold build inside Claude's MCP timeout."
-    exit 1
-fi
-
-# Build path. Cargo writes its own progress to stderr; we add a
-# bracketing message so the user knows what's happening.
-err "Building ai-architect-mcp-codebase (reason: $needs_build)…"
-err "  manifest: $MANIFEST"
-err "  output:   $BIN"
-err "  this can take 2–3 minutes on first install."
-
-start_ts=$(date +%s)
+command -v cargo >/dev/null 2>&1 \
+    || fatal "cargo not found; install Rust from https://rustup.rs"
+err "building from source (reason: $needs_build; first build can take several minutes)"
 if cargo build --release --quiet --manifest-path "$MANIFEST" >&2; then
-    end_ts=$(date +%s)
-    elapsed=$((end_ts - start_ts))
-    err "ai-architect-mcp-codebase: build OK in ${elapsed}s"
-    if [ ! -x "$BIN" ]; then
-        err "FATAL: cargo build succeeded but $BIN is not executable."
-        err "       Check Cargo.toml [[bin]] target name == 'ai-architect-mcp-codebase'."
-        exit 1
-    fi
-    exit 0
+    [ -x "$BIN" ] || fatal "cargo succeeded but $BIN is not executable"
+    err "source build complete"
 else
-    err "FATAL: cargo build failed. Run manually for full output:"
-    err "       cargo build --release --manifest-path '$MANIFEST'"
-    exit 1
+    fatal "cargo build failed; rerun without --quiet for full output"
 fi

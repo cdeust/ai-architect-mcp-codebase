@@ -58,6 +58,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify tag matches the plugin version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c 'import json; print(json.load(open(".claude-plugin/plugin.json"))["version"])')
+          test "$TAG" = "v$VERSION"
+
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
@@ -289,7 +299,7 @@ jobs:
           toolchain: "1.95.0"
 
       - name: Install cargo-cyclonedx
-        run: cargo install cargo-cyclonedx --locked --version ^0.5
+        run: cargo install cargo-cyclonedx --locked --version 0.5.9
 
       - name: Generate SBOM
         run: |
@@ -356,7 +366,8 @@ jobs:
             gh release download "$TAG" --repo "$REPOSITORY" \
               --pattern "$ASSET" --pattern "$ASSET.sha256"
             sha256sum --check "$ASSET.sha256"
-            gh attestation verify "$ASSET" --repo "$REPOSITORY"
+            gh attestation verify "$ASSET" --repo "$REPOSITORY" \
+              --signer-workflow "$REPOSITORY/.github/workflows/release.yml"
           done
 
       - name: Assemble staging directory
@@ -388,14 +399,12 @@ jobs:
 
       - name: Pack .mcpb bundle
         run: |
-          # .mcpb is a ZIP archive with manifest.json at root.
-          # Try the official packer first; fall back to zip.
-          if npx -y @anthropic-ai/mcpb@latest pack "$STAGING" ai-architect-mcp-codebase.mcpb 2>/dev/null; then
-            echo "Packed via @anthropic-ai/mcpb"
-          else
-            cd "$STAGING" && zip -r "$OLDPWD/ai-architect-mcp-codebase.mcpb" . && cd "$OLDPWD"
-            echo "Packed via zip (mcpb CLI unavailable)"
-          fi
+          # .mcpb is a ZIP archive with manifest.json at root. Use the runner's
+          # fixed zip tool rather than executing an unpinned package inside the
+          # release job immediately before attestation.
+          cd "$STAGING"
+          zip -r "$OLDPWD/ai-architect-mcp-codebase.mcpb" .
+          cd "$OLDPWD"
           shasum -a 256 ai-architect-mcp-codebase.mcpb | tee ai-architect-mcp-codebase.mcpb.sha256
           ls -la ai-architect-mcp-codebase.mcpb ai-architect-mcp-codebase.mcpb.sha256
 
@@ -433,7 +442,10 @@ jobs:
     needs: [build, sbom, package_mcpb]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # Draft releases are visible only to callers with push access. This job
+      # does not mutate them, but contents:write is required by GitHub's draft
+      # release visibility rule.
+      contents: write
       attestations: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -455,6 +467,7 @@ jobs:
               --pattern "$ASSET" --pattern "$ASSET.sha256" --pattern "$ASSET.sigstore.json"
             sha256sum --check "$ASSET.sha256"
             gh attestation verify "$ASSET" --repo "$REPOSITORY" \
+              --signer-workflow "$REPOSITORY/.github/workflows/release.yml" \
               --bundle "$ASSET.sigstore.json"
           done
           gh release download "$TAG" --repo "$REPOSITORY" \
@@ -467,9 +480,34 @@ jobs:
           sha256sum --check ai-architect-mcp-codebase.mcpb.sha256
           sha256sum --check ai-architect-mcp-codebase.cdx.json.sha256
           gh attestation verify ai-architect-mcp-codebase.mcpb --repo "$REPOSITORY" \
+            --signer-workflow "$REPOSITORY/.github/workflows/release.yml" \
             --bundle ai-architect-mcp-codebase.mcpb.sigstore.json
           gh attestation verify ai-architect-mcp-codebase.cdx.json --repo "$REPOSITORY" \
+            --signer-workflow "$REPOSITORY/.github/workflows/release.yml" \
             --bundle ai-architect-mcp-codebase.cdx.json.sigstore.json
+
+          EXPECTED=$(printf '%s\n' \
+            ai-architect-mcp-codebase-macos-aarch64.tar.gz \
+            ai-architect-mcp-codebase-macos-aarch64.tar.gz.sha256 \
+            ai-architect-mcp-codebase-macos-aarch64.tar.gz.sigstore.json \
+            ai-architect-mcp-codebase-linux-x86_64.tar.gz \
+            ai-architect-mcp-codebase-linux-x86_64.tar.gz.sha256 \
+            ai-architect-mcp-codebase-linux-x86_64.tar.gz.sigstore.json \
+            ai-architect-mcp-codebase-linux-aarch64.tar.gz \
+            ai-architect-mcp-codebase-linux-aarch64.tar.gz.sha256 \
+            ai-architect-mcp-codebase-linux-aarch64.tar.gz.sigstore.json \
+            ai-architect-mcp-codebase-windows-x86_64.tar.gz \
+            ai-architect-mcp-codebase-windows-x86_64.tar.gz.sha256 \
+            ai-architect-mcp-codebase-windows-x86_64.tar.gz.sigstore.json \
+            ai-architect-mcp-codebase.cdx.json \
+            ai-architect-mcp-codebase.cdx.json.sha256 \
+            ai-architect-mcp-codebase.cdx.json.sigstore.json \
+            ai-architect-mcp-codebase.mcpb \
+            ai-architect-mcp-codebase.mcpb.sha256 \
+            ai-architect-mcp-codebase.mcpb.sigstore.json | sort)
+          ACTUAL=$(gh release view "$TAG" --repo "$REPOSITORY" --json assets \
+            --jq '.assets[].name' | sort)
+          test "$ACTUAL" = "$EXPECTED"
 
   publish_verified_release:
     name: publish verified release
@@ -486,13 +524,23 @@ jobs:
         run: |
           set -euo pipefail
           gh release edit "$TAG" --repo "$REPOSITORY" --draft=false
-          TARGET=linux-x86_64
-          ASSET="ai-architect-mcp-codebase-${TARGET}.tar.gz"
+          published=yes
+          rollback() {
+            if [ "$published" = yes ]; then
+              gh release edit "$TAG" --repo "$REPOSITORY" --draft=true
+            fi
+          }
+          trap rollback ERR
           BASE="https://github.com/${REPOSITORY}/releases/download/${TAG}"
-          curl --fail --location --silent --show-error \
-            --connect-timeout 5 --max-time 60 --retry 3 --retry-connrefused \
-            "$BASE/$ASSET" -o "$ASSET"
-          curl --fail --location --silent --show-error \
-            --connect-timeout 5 --max-time 30 --retry 3 --retry-connrefused \
-            "$BASE/$ASSET.sha256" -o "$ASSET.sha256"
-          sha256sum --check "$ASSET.sha256"
+          for TARGET in macos-aarch64 linux-x86_64 linux-aarch64; do
+            ASSET="ai-architect-mcp-codebase-${TARGET}.tar.gz"
+            curl --fail --location --silent --show-error \
+              --connect-timeout 5 --max-time 120 --retry 5 --retry-all-errors \
+              "$BASE/$ASSET" -o "$ASSET"
+            curl --fail --location --silent --show-error \
+              --connect-timeout 5 --max-time 60 --retry 5 --retry-all-errors \
+              "$BASE/$ASSET.sha256" -o "$ASSET.sha256"
+            sha256sum --check "$ASSET.sha256"
+          done
+          published=no
+          trap - ERR

@@ -8,6 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CANONICAL = "ai-architect-mcp-codebase"
+EXPECTED_REPOSITORY = "https://github.com/cdeust/ai-architect-mcp-codebase"
+# Deliberately duplicated from the contract: this is a revocation freeze, not
+# another derived source. Any history addition requires an explicit gate edit.
 REVOKED_PREFIXES = [
     "mcp__plugin_automatised-pipeline_ai-architect__",
     "mcp__plugin_automatised-pipeline_automatised-pipeline__",
@@ -47,6 +50,7 @@ def main() -> None:
     require(not wrong, f"non-canonical public identities: {wrong}")
     require(marketplace_name == f"{CANONICAL}-marketplace", "wrong Claude marketplace name")
     require(contract["schema_version"] == 1, "unsupported MCP contract schema")
+    require(claude_plugin["repository"] == EXPECTED_REPOSITORY, "Claude plugin repository trust anchor drifted")
     require(contract["distribution"] == CANONICAL, "contract distribution drifted")
     require(contract["claude_plugin"] == plugin_name, "contract plugin drifted")
     require(contract["claude_marketplace"] == marketplace_name, "contract marketplace drifted")
