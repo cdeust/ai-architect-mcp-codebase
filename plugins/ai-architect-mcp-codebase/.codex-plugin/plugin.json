@@ -1,5 +1,5 @@
 {
-  "name": "ai-architect",
+  "name": "ai-architect-mcp-codebase",
   "version": "0.9.0",
   "description": "Graph-grounded codebase understanding and change-impact analysis for Codex.",
   "author": {

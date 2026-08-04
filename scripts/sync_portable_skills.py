@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "skills"
-GENERATED = ROOT / "plugins" / "ai-architect" / "skills"
+GENERATED = ROOT / "plugins" / "ai-architect-mcp-codebase" / "skills"
 SKILLS = ("understand-codebase", "impact-analysis", "validate-change-plan")
 
 

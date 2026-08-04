@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "ai-architect",
+      "name": "ai-architect-mcp-codebase",
       "source": {
         "source": "local",
-        "path": "./plugins/ai-architect"
+        "path": "./plugins/ai-architect-mcp-codebase"
       },
       "policy": {
         "installation": "AVAILABLE",

@@ -26,7 +26,7 @@ def _json(path: Path) -> dict:
 
 
 def _codex_server() -> tuple[dict, Path]:
-    plugin_root = ROOT / "plugins" / "ai-architect"
+    plugin_root = ROOT / "plugins" / "ai-architect-mcp-codebase"
     plugin = _json(plugin_root / ".codex-plugin" / "plugin.json")
     mcp_path = plugin_root / plugin["mcpServers"]
     return _json(mcp_path)["mcpServers"]["ai-architect"], plugin_root

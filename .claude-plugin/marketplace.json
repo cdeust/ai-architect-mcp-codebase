@@ -1,5 +1,5 @@
 {
-  "name": "ai-architect-marketplace",
+  "name": "ai-architect-mcp-codebase-marketplace",
   "owner": {
     "name": "Clement Deust",
     "email": "admin@ai-architect.tools"
@@ -10,7 +10,7 @@
   },
   "plugins": [
     {
-      "name": "ai-architect-codebase",
+      "name": "ai-architect-mcp-codebase",
       "source": "./",
       "description": "26 MCP tools · all-file indexing (every file is a File node; .js→Imports, Markdown→References) · LadybugDB property graph · Leiden communities · BM25+TF-IDF+RRF search",
       "version": "0.9.0",

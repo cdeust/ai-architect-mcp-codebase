@@ -12,9 +12,8 @@
 # ---------
 # 1. If `target/release/ai-architect-mcp-codebase` exists AND is newer than every
 #    file under `src/` and `Cargo.{toml,lock}`, exit 0 immediately.
-# 2. Otherwise, run `cargo build --release --quiet`. Prints progress to
-#    stderr only — stdout stays clean for the MCP launcher pipeline.
-# 3. On build failure, exit 1 with an actionable message.
+# 2. Otherwise, download the matching checksum-verified GitHub release asset.
+# 3. Before a release exists, fall back to `cargo build --release --quiet`.
 #
 # Determinism: zero side effects beyond `cargo build`. Idempotent. No
 # global state. Safe to invoke from any hook or launcher.
@@ -73,6 +72,48 @@ fi
 if [ "$needs_build" = "no" ]; then
     log "ai-architect-mcp-codebase: binary up-to-date at $BIN"
     exit 0
+fi
+
+# A marketplace install contains source, not target/. Compiling the complete
+# graph stack during Claude's MCP handshake exceeds the host startup timeout on
+# a cold machine, so released versions use the same prebuilt asset as the
+# standalone installer. Failure is non-fatal here: an unreleased checkout can
+# still use the source-build fallback below.
+VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/.claude-plugin/plugin.json" | head -1)
+case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64) release_target="macos-aarch64" ;;
+    Linux-x86_64) release_target="linux-x86_64" ;;
+    Linux-aarch64) release_target="linux-aarch64" ;;
+    *) release_target="" ;;
+esac
+
+if [ "$needs_build" = "missing" ] && [ -n "$VERSION" ] && [ -n "$release_target" ] && command -v curl >/dev/null 2>&1; then
+    asset="ai-architect-mcp-codebase-${release_target}.tar.gz"
+    base="https://github.com/cdeust/ai-architect-mcp-codebase/releases/download/v${VERSION}"
+    download_dir=$(mktemp -d)
+    trap 'rm -rf "$download_dir"' EXIT
+    err "Installing ai-architect-mcp-codebase v${VERSION} for ${release_target}…"
+    if curl --fail --location --silent --show-error "$base/$asset" -o "$download_dir/$asset" \
+        && curl --fail --location --silent --show-error "$base/$asset.sha256" -o "$download_dir/$asset.sha256"; then
+        expected=$(awk '{print $1}' "$download_dir/$asset.sha256")
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$download_dir/$asset" | awk '{print $1}')
+        else
+            actual=$(shasum -a 256 "$download_dir/$asset" | awk '{print $1}')
+        fi
+        if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+            mkdir -p "$(dirname "$BIN")"
+            tar -xzf "$download_dir/$asset" -C "$(dirname "$BIN")"
+            chmod +x "$BIN"
+            err "ai-architect-mcp-codebase: verified release binary installed"
+            exit 0
+        fi
+        err "release checksum verification failed; falling back to a source build"
+    else
+        err "release asset unavailable; falling back to a source build"
+    fi
+    rm -rf "$download_dir"
+    trap - EXIT
 fi
 
 # Build path. Cargo writes its own progress to stderr; we add a

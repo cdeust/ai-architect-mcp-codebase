@@ -19,11 +19,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 - **Native Codex plugin and Gemini workflows over the unchanged eight-tool
   `core` profile.** A repo marketplace now exposes an isolated
-  `plugins/ai-architect` package with its own MCP manifest, while the Gemini
+  `plugins/ai-architect-mcp-codebase` package with its own MCP manifest, while the Gemini
   extension version tracks the crate and discovers the same three portable
   skills: codebase understanding, impact analysis, and structural change-plan
   validation. Distribution tests lock versions, profile arguments, marketplace
   paths, skill parity, and the existing Claude/full project manifest.
+
+- **Functional host migration checks.** Claude Code, Codex, Gemini, crates.io,
+  and MCPB metadata now expose the same `ai-architect-mcp-codebase` identity.
+  CI validates the real Claude plugin manifest, launches the shipped Claude,
+  Codex, Gemini, and staged MCPB commands through initialize, tools/list, and
+  health_check, and rejects a return of the retired public plugin names. The
+  README documents the exact Claude tool-prefix and host migration commands.
+  Fresh Claude marketplace installs fetch and checksum-verify the matching
+  release binary before MCP startup, avoiding a cold Rust build inside the
+  handshake timeout; unreleased source checkouts retain the build fallback.
 
 ### Fixed
 

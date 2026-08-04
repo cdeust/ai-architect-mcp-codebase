@@ -28,8 +28,8 @@ fn read_json(relative: &str) -> Value {
 
 #[test]
 fn codex_and_gemini_launch_the_core_profile_at_the_crate_version() {
-    let plugin = read_json("plugins/ai-architect/.codex-plugin/plugin.json");
-    let codex_mcp = read_json("plugins/ai-architect/.mcp.json");
+    let plugin = read_json("plugins/ai-architect-mcp-codebase/.codex-plugin/plugin.json");
+    let codex_mcp = read_json("plugins/ai-architect-mcp-codebase/.mcp.json");
     let gemini = read_json("gemini-extension.json");
 
     assert_eq!(plugin["version"], env!("CARGO_PKG_VERSION"));
@@ -51,12 +51,12 @@ fn codex_marketplace_points_at_the_isolated_plugin() {
         .as_array()
         .expect("plugins array")
         .iter()
-        .find(|entry| entry["name"] == "ai-architect")
-        .expect("ai-architect marketplace entry");
+        .find(|entry| entry["name"] == "ai-architect-mcp-codebase")
+        .expect("ai-architect-mcp-codebase marketplace entry");
 
     assert_eq!(marketplace["name"], "ai-architect-mcp-codebase");
     assert_eq!(entry["source"]["source"], "local");
-    assert_eq!(entry["source"]["path"], "./plugins/ai-architect");
+    assert_eq!(entry["source"]["path"], "./plugins/ai-architect-mcp-codebase");
     assert_eq!(entry["policy"]["installation"], "AVAILABLE");
     assert_eq!(entry["policy"]["authentication"], "ON_INSTALL");
 }
@@ -65,7 +65,7 @@ fn codex_marketplace_points_at_the_isolated_plugin() {
 fn generated_codex_skills_match_the_canonical_gemini_sources() {
     for skill in PORTABLE_SKILLS {
         let gemini_root = root().join("skills").join(skill);
-        let codex_root = root().join("plugins/ai-architect/skills").join(skill);
+        let codex_root = root().join("plugins/ai-architect-mcp-codebase/skills").join(skill);
         let gemini_skill = read(gemini_root.join("SKILL.md"));
         let codex_skill = read(codex_root.join("SKILL.md"));
         let gemini_interface = read(gemini_root.join("agents/openai.yaml"));
@@ -89,18 +89,15 @@ fn claude_project_manifest_keeps_the_existing_full_profile_default() {
     let claude_project_mcp = read_json(".mcp.json");
     let server = &claude_project_mcp["mcpServers"]["ai-architect"];
 
-    assert_eq!(server["command"], "python3");
+    assert_eq!(
+        server["command"],
+        "${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh"
+    );
     assert!(
         !server.to_string().contains("--profile"),
         "the Claude project manifest must retain the server's full default"
     );
-    assert!(server.to_string().contains("ai-architect-mcp-codebase"));
-    assert!(
-        server
-            .to_string()
-            .contains("automatised-pipeline@automatised-pipeline-marketplace"),
-        "the renamed Claude plugin must still locate existing installations"
-    );
+    assert_eq!(server["args"], json!([]));
 }
 
 #[test]
@@ -113,8 +110,27 @@ fn canonical_distribution_identity_is_consistent() {
     assert_eq!(env!("CARGO_PKG_NAME"), "ai-architect-mcp-codebase");
     assert_eq!(server["name"], "io.github.cdeust/ai-architect-mcp-codebase");
     assert_eq!(mcpb["name"], "ai-architect-mcp-codebase");
-    assert_eq!(claude_plugin["name"], "ai-architect-codebase");
-    assert_eq!(claude_marketplace["name"], "ai-architect-marketplace");
+    assert_eq!(claude_plugin["name"], "ai-architect-mcp-codebase");
+    assert_eq!(
+        claude_marketplace["name"],
+        "ai-architect-mcp-codebase-marketplace"
+    );
+    assert_eq!(
+        claude_marketplace["plugins"][0]["name"],
+        "ai-architect-mcp-codebase"
+    );
+    assert_eq!(
+        read_json(".agents/plugins/marketplace.json")["plugins"][0]["name"],
+        "ai-architect-mcp-codebase"
+    );
+    assert_eq!(
+        read_json("plugins/ai-architect-mcp-codebase/.codex-plugin/plugin.json")["name"],
+        "ai-architect-mcp-codebase"
+    );
+    assert_eq!(
+        read_json("gemini-extension.json")["name"],
+        "ai-architect-mcp-codebase"
+    );
 
     for version in [
         &server["version"],

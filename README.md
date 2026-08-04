@@ -212,6 +212,27 @@ The extension also exposes three host-native workflows from `skills/`:
 They use only the eight tools in the `core` profile and explicitly surface
 index coverage gaps before accepting negative graph results.
 
+**Claude Code plugin** (primary interface)
+
+```bash
+claude plugin marketplace add cdeust/ai-architect-mcp-codebase
+claude plugin install ai-architect-mcp-codebase@ai-architect-mcp-codebase-marketplace
+```
+
+If the former Automatised Pipeline plugin is installed, remove it before
+installing the canonical package:
+
+```bash
+claude plugin uninstall automatised-pipeline@automatised-pipeline-marketplace
+claude plugin marketplace remove automatised-pipeline-marketplace
+```
+
+Claude MCP allowlists and permissions must also replace
+`mcp__plugin_automatised-pipeline_automatised-pipeline__<tool>` with
+`mcp__plugin_ai-architect-mcp-codebase_ai-architect__<tool>`. The final
+`ai-architect` segment is intentionally stable: it is the MCP server key, not
+the plugin's distribution name.
+
 **OpenAI Codex CLI** (also picked up by the ChatGPT desktop app and Codex IDE extension — they share `~/.codex/config.toml`)
 
 ```bash
@@ -232,13 +253,21 @@ repository's marketplace:
 ```bash
 cargo install ai-architect-mcp-codebase
 codex plugin marketplace add cdeust/ai-architect-mcp-codebase
-codex plugin add ai-architect@ai-architect-mcp-codebase
+codex plugin add ai-architect-mcp-codebase@ai-architect-mcp-codebase
 ```
 
-The Codex package lives under `plugins/ai-architect/`, with its own
+The Codex package lives under `plugins/ai-architect-mcp-codebase/`, with its own
 `.mcp.json` fixed to `--profile core`. This isolation is intentional: the
 root `.mcp.json` remains the existing Claude project configuration and keeps
 the server's backward-compatible `full` default.
+
+For Gemini CLI, uninstall the former extension identity before reinstalling
+from the renamed repository:
+
+```bash
+gemini extensions uninstall ai-architect
+gemini extensions install https://github.com/cdeust/ai-architect-mcp-codebase
+```
 
 **Cursor** — `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
 
