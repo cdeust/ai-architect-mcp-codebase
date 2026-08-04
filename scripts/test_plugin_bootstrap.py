@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,7 +35,13 @@ def require(condition: bool, message: str) -> None:
         raise SystemExit(message)
 
 
-def fixture(tmp: Path, *, repository: str = EXPECTED_REPOSITORY_URL, source_checkout: bool = False) -> tuple[Path, Path, Path, Path]:
+def fixture(
+    tmp: Path,
+    *,
+    repository: str | None = None,
+    version: str | None = None,
+    cargo_version: str | None = None,
+) -> tuple[Path, Path, Path, Path]:
     plugin = tmp / "plugin"
     fake_bin = tmp / "fake-bin"
     curl_calls = tmp / "curl-calls"
@@ -42,14 +49,21 @@ def fixture(tmp: Path, *, repository: str = EXPECTED_REPOSITORY_URL, source_chec
     (plugin / "bin").mkdir(parents=True)
     (plugin / ".claude-plugin").mkdir()
     (plugin / "src").mkdir()
-    if source_checkout:
-        (plugin / ".git").mkdir()
     fake_bin.mkdir()
     shutil.copy2(ROOT / "bin/ensure-binary.sh", plugin / "bin/ensure-binary.sh")
-    manifest = dict(PLUGIN)
-    manifest["repository"] = repository
-    (plugin / ".claude-plugin/plugin.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    shutil.copy2(ROOT / "Cargo.toml", plugin / "Cargo.toml")
+    if repository is None and version is None:
+        shutil.copy2(ROOT / ".claude-plugin/plugin.json", plugin / ".claude-plugin/plugin.json")
+    else:
+        manifest = dict(PLUGIN)
+        if repository is not None:
+            manifest["repository"] = repository
+        if version is not None:
+            manifest["version"] = version
+        (plugin / ".claude-plugin/plugin.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    if cargo_version is not None:
+        cargo = cargo.replace(f'version = "{PLUGIN["version"]}"', f'version = "{cargo_version}"', 1)
+    (plugin / "Cargo.toml").write_text(cargo, encoding="utf-8")
     shutil.copy2(ROOT / "Cargo.lock", plugin / "Cargo.lock")
 
     (fake_bin / "uname").write_text('#!/bin/sh\n[ "$1" = "-s" ] && echo Darwin || echo arm64\n', encoding="utf-8")
@@ -58,7 +72,12 @@ def fixture(tmp: Path, *, repository: str = EXPECTED_REPOSITORY_URL, source_chec
         f'''#!/bin/sh
 if [ "$*" = "attestation verify --help" ]; then exit 0; fi
 printf '%s\\n' "$*" >> {str(gh_calls)!r}
-[ "${{TEST_GH_MODE:-success}}" = "success" ]
+case "${{TEST_GH_MODE:-success}}" in
+  success) exit 0 ;;
+  fail) exit 1 ;;
+  hang) exec python3 -c 'import signal,time; signal.signal(signal.SIGALRM, signal.SIG_IGN); time.sleep(60)' ;;
+esac
+exit 1
 ''',
         encoding="utf-8",
     )
@@ -67,33 +86,46 @@ printf '%s\\n' "$*" >> {str(gh_calls)!r}
     return plugin, fake_bin, curl_calls, gh_calls
 
 
-def run(plugin: Path, fake_bin: Path, *, gh_mode: str = "success") -> subprocess.CompletedProcess[str]:
+def run(
+    plugin: Path,
+    fake_bin: Path,
+    *,
+    gh_mode: str = "success",
+    source_checkout: bool = False,
+    path: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(plugin / "bin/ensure-binary.sh")],
         env={
             **os.environ,
             "CLAUDE_PLUGIN_ROOT": str(plugin),
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PATH": path or f"{fake_bin}:{os.environ['PATH']}",
             "TEST_GH_MODE": gh_mode,
+            "AI_ARCHITECT_SOURCE_CHECKOUT": "1" if source_checkout else "0",
         },
         text=True,
         capture_output=True,
-        timeout=25,
+        timeout=40,
         check=False,
     )
 
 
-def make_release(tmp: Path, *, bad_sha: bool = False, symlink: bool = False) -> ReleaseFixture:
+def make_release(
+    tmp: Path,
+    *,
+    bad_sha: bool = False,
+    symlink_target: Path | None = None,
+) -> ReleaseFixture:
     tmp.mkdir(parents=True, exist_ok=True)
     payload = tmp / "ai-architect-mcp-codebase"
     payload.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     payload.chmod(0o755)
     archive = tmp / ASSET
     with tarfile.open(archive, "w:gz") as bundle:
-        if symlink:
+        if symlink_target is not None:
             member = tarfile.TarInfo(payload.name)
             member.type = tarfile.SYMTYPE
-            member.linkname = "/tmp/ai-architect-bootstrap-victim"
+            member.linkname = str(symlink_target)
             bundle.addfile(member)
         else:
             bundle.add(payload, arcname=payload.name)
@@ -135,7 +167,10 @@ def without_bundle(release: ReleaseFixture) -> ReleaseFixture:
 
 def require_not_installed(plugin: Path, result: subprocess.CompletedProcess[str], label: str) -> None:
     require(result.returncode != 0, f"{label}: unexpectedly succeeded")
-    require(not (plugin / "target/release/ai-architect-mcp-codebase").exists(), f"{label}: installed a binary")
+    require(
+        not os.path.lexists(plugin / "target/release/ai-architect-mcp-codebase"),
+        f"{label}: installed a binary or link",
+    )
     require("COLD_BUILD_STARTED" not in result.stderr, f"{label}: invoked Cargo in marketplace mode")
 
 
@@ -170,18 +205,37 @@ def main() -> None:
         result = run(plugin, fake_bin)
         require(result.returncode != 0 and "digest mismatch" in result.stderr, "tampered cache was accepted")
 
+        # Version is part of the cache record; a reused directory cannot mask a bump.
+        shutil.copy2(release.archive, binary)
+        binary.chmod(0o755)
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        (binary.parent / f"{binary.name}.sha256").write_text(f"0.8.4  {digest}  {binary}\n", encoding="utf-8")
+        result = run(plugin, fake_bin)
+        require(result.returncode != 0 and "version mismatch" in result.stderr, "stale cache version was accepted")
+
         # Negative controls protect each independent integrity boundary.
         for label, release, gh_mode in (
             ("404", absent_release(), "success"),
             ("badsha", make_release(tmp / "badsha", bad_sha=True), "success"),
             ("nobundle", without_bundle(make_release(tmp / "nobundle")), "success"),
             ("ghfail", make_release(tmp / "ghfail"), "fail"),
-            ("symlink", make_release(tmp / "symlink", symlink=True), "success"),
         ):
             plugin_case, fake_bin_case, curl_case, _ = fixture(tmp / label)
             install_curl(fake_bin_case, curl_case, release)
             result = run(plugin_case, fake_bin_case, gh_mode=gh_mode)
             require_not_installed(plugin_case, result, label)
+
+        # Symlink case uses an existing non-executable victim and checks the
+        # external side effect, not only the absence of a plugin-root binary.
+        victim = tmp / "symlink/victim"
+        victim.parent.mkdir(parents=True, exist_ok=True)
+        victim.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        victim.chmod(0o644)
+        plugin_case, fake_bin_case, curl_case, _ = fixture(tmp / "symlink/plugin-case")
+        install_curl(fake_bin_case, curl_case, make_release(tmp / "symlink/release", symlink_target=victim))
+        result = run(plugin_case, fake_bin_case)
+        require_not_installed(plugin_case, result, "symlink")
+        require(victim.stat().st_mode & 0o111 == 0, "archive symlink changed victim permissions")
 
         # A hostile fork cannot redirect either downloads or signer identity.
         plugin, fake_bin, curl_calls, _ = fixture(
@@ -192,10 +246,47 @@ def main() -> None:
         require_not_installed(plugin, result, "hostile repository")
         require(not curl_calls.exists(), "hostile repository reached download path")
 
-        # A source checkout never downloads upstream bytes and retains Cargo fallback.
-        plugin, fake_bin, curl_calls, _ = fixture(tmp / "source", source_checkout=True)
-        install_curl(fake_bin, curl_calls, absent_release())
+        for label, malicious_version in (("downgrade", "0.8.4"), ("traversal", "../../attacker/repo")):
+            plugin, fake_bin, curl_calls, _ = fixture(
+                tmp / label, version=malicious_version, cargo_version=malicious_version
+            )
+            install_curl(fake_bin, curl_calls, make_release(tmp / f"{label}-release"))
+            result = run(plugin, fake_bin)
+            require_not_installed(plugin, result, label)
+            require(not curl_calls.exists(), f"{label}: invalid version reached download path")
+
+        # gh is mandatory and must expose the attestation verifier.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "oldgh")
+        (fake_bin / "gh").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (fake_bin / "gh").chmod(0o755)
+        install_curl(fake_bin, curl_calls, make_release(tmp / "oldgh-release"))
         result = run(plugin, fake_bin)
+        require_not_installed(plugin, result, "old gh")
+        require(not curl_calls.exists(), "old gh reached download path")
+
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "nogh")
+        (fake_bin / "gh").unlink()
+        node = shutil.which("node")
+        require(node is not None, "node is required by the bootstrap test")
+        (fake_bin / "node").symlink_to(node)
+        install_curl(fake_bin, curl_calls, make_release(tmp / "nogh-release"))
+        result = run(plugin, fake_bin, path=f"{fake_bin}:/usr/bin:/bin")
+        require_not_installed(plugin, result, "missing gh")
+        require(not curl_calls.exists(), "missing gh reached download path")
+
+        # The watchdog must terminate a process that explicitly ignores SIGALRM.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "hanging-gh")
+        install_curl(fake_bin, curl_calls, make_release(tmp / "hanging-gh-release"))
+        started = time.monotonic()
+        result = run(plugin, fake_bin, gh_mode="hang")
+        elapsed = time.monotonic() - started
+        require_not_installed(plugin, result, "hanging gh")
+        require(elapsed < 25, f"provenance watchdog took {elapsed:.1f}s")
+
+        # A source checkout never downloads upstream bytes and retains Cargo fallback.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "source")
+        install_curl(fake_bin, curl_calls, absent_release())
+        result = run(plugin, fake_bin, source_checkout=True)
         require(result.returncode == 1 and "COLD_BUILD_STARTED" in result.stderr, "source checkout did not invoke Cargo")
         require(not curl_calls.exists(), "source checkout downloaded a release")
 

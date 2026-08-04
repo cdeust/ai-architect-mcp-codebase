@@ -121,6 +121,9 @@ jobs:
           python3 scripts/check_distribution_identity.py
           python3 scripts/test_plugin_bootstrap.py
 
+      - name: Check distribution launchers with ShellCheck
+        run: shellcheck -S warning bin/ensure-binary.sh bin/launch-plugin.sh launch.sh
+
       - name: Build and start the shipped Codex and Gemini commands
         # cargo install builds this release target for end users. The smoke
         # script reads command + args from both manifests, performs the MCP

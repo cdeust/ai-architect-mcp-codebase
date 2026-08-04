@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +61,14 @@ def main() -> None:
     require(derived_prefix not in REVOKED_PREFIXES, "canonical prefix is marked revoked")
     cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     require(f'name = "{CANONICAL}"' in cargo, "Cargo package identity drifted")
+    cargo_version = re.search(r'^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"', cargo, re.MULTILINE)
+    require(cargo_version is not None, "Cargo package version missing")
+    plugin_version = claude_plugin["version"]
+    require(re.fullmatch(r"\d+\.\d+\.\d+", plugin_version) is not None, "plugin version is not stable SemVer")
+    require(plugin_version == cargo_version.group(1), "Claude plugin and Cargo versions differ")
+    bootstrap = (ROOT / "bin/ensure-binary.sh").read_text(encoding="utf-8")
+    minimum = re.search(r'^MINIMUM_VERSION="([^"]+)"$', bootstrap, re.MULTILINE)
+    require(minimum is not None and minimum.group(1) == plugin_version, "bootstrap minimum version drifted")
     print(
         f"DISTRIBUTION IDENTITY OK: {CANONICAL} across "
         f"{len(assertions) + 2} declarations; Claude prefix {derived_prefix}"

@@ -32,7 +32,7 @@ categories = ["development-tools", "command-line-utilities"]
 # test fixtures, and CI config that would bloat the .crate file. Only
 # what `cargo build` needs (plus README/LICENSE) ships. Patterns are
 # gitignore-style — the leading `/` anchors them to the package root.
-include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE"]
+include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE", "/mcp-contract.json"]
 
 [lib]
 # Keep the Rust import path stable for workspace consumers and downstream users.

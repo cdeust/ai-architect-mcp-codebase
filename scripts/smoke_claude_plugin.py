@@ -36,7 +36,18 @@ def main() -> None:
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "health_check", "arguments": {}}},
     ]
-    run = subprocess.run([command, *server.get("args", [])], env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(ROOT)}, input="\n".join(map(json.dumps, requests)) + "\n", text=True, capture_output=True, check=False)
+    run = subprocess.run(
+        [command, *server.get("args", [])],
+        env={
+            **os.environ,
+            "CLAUDE_PLUGIN_ROOT": str(ROOT),
+            "AI_ARCHITECT_SOURCE_CHECKOUT": "1",
+        },
+        input="\n".join(map(json.dumps, requests)) + "\n",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     require(run.returncode == 0, run.stderr)
     require(response(run.stdout, 1).get("error") is None, "Claude initialize failed")
     require(len(response(run.stdout, 2)["result"]["tools"]) == 26, "Claude tool surface is not 26")

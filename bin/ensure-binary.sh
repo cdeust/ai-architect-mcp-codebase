@@ -14,6 +14,7 @@ set -euo pipefail
 EXPECTED_REPO="cdeust/ai-architect-mcp-codebase"
 EXPECTED_REPOSITORY_URL="https://github.com/${EXPECTED_REPO}"
 EXPECTED_SIGNER_WORKFLOW="${EXPECTED_REPO}/.github/workflows/release.yml"
+MINIMUM_VERSION="0.9.0"
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BIN="$ROOT/target/release/ai-architect-mcp-codebase"
@@ -49,51 +50,75 @@ sha256_file() {
 }
 
 download() {
+    remaining=$((DOWNLOAD_DEADLINE - $(date +%s)))
+    [ "$remaining" -gt 0 ] || fatal "release download exceeded the 180-second global budget"
     # 5 s connect bound; abort a stalled transfer below 1 KiB/s for 30 s.
-    # The 120 s total permits the current ~10 MiB asset on slower links while
-    # remaining bounded inside an actionable first-start failure.
+    # --retry-max-time shares the remaining global budget across retries.
     curl --fail --location --silent --show-error \
-        --connect-timeout 5 --max-time 120 --speed-limit 1024 --speed-time 30 \
-        --retry 2 --retry-connrefused "$1" -o "$2"
+        --connect-timeout 5 --max-time "$remaining" --retry-max-time "$remaining" \
+        --speed-limit 1024 --speed-time 30 --retry 2 --retry-connrefused \
+        "$1" -o "$2"
 }
 
 verify_provenance() {
-    artifact=$1
-    bundle=$2
-    if command -v timeout >/dev/null 2>&1; then
-        timeout 20 gh attestation verify "$artifact" \
-            --repo "$EXPECTED_REPO" --signer-workflow "$EXPECTED_SIGNER_WORKFLOW" \
-            --bundle "$bundle" >&2
-    elif command -v gtimeout >/dev/null 2>&1; then
-        gtimeout 20 gh attestation verify "$artifact" \
-            --repo "$EXPECTED_REPO" --signer-workflow "$EXPECTED_SIGNER_WORKFLOW" \
-            --bundle "$bundle" >&2
-    elif command -v perl >/dev/null 2>&1; then
-        # alarm survives exec, providing a portable macOS bound without GNU coreutils.
-        perl -e '$seconds=shift @ARGV; alarm $seconds; exec @ARGV' 20 \
-            gh attestation verify "$artifact" \
-            --repo "$EXPECTED_REPO" --signer-workflow "$EXPECTED_SIGNER_WORKFLOW" \
-            --bundle "$bundle" >&2
-    else
-        fatal "timeout, gtimeout, or perl is required to bound provenance verification"
-    fi
+    local artifact=$1
+    local bundle=$2
+    # gh is a Go binary and ignores SIGALRM on macOS. Node is already required
+    # by Claude Code; this watchdog sends SIGTERM after 15 s (over 3x the
+    # measured 4.5 s cold TUF-root lookup), then SIGKILL two seconds later.
+    # The trust-anchor argv exists in one place and is exercised on every host.
+    node -e '
+      const { spawn } = require("child_process");
+      const child = spawn(process.argv[1], process.argv.slice(2), { stdio: "inherit" });
+      const hard = setTimeout(() => child.kill("SIGKILL"), 17000);
+      const soft = setTimeout(() => child.kill("SIGTERM"), 15000);
+      child.on("error", error => { clearTimeout(soft); clearTimeout(hard); console.error(error); process.exit(1); });
+      child.on("exit", (code, signal) => {
+        clearTimeout(soft); clearTimeout(hard);
+        process.exit(code === 0 ? 0 : (signal ? 124 : code));
+      });
+    ' gh attestation verify "$artifact" \
+        --repo "$EXPECTED_REPO" \
+        --signer-workflow "$EXPECTED_SIGNER_WORKFLOW" \
+        --source-ref "refs/tags/v$version" \
+        --bundle "$bundle" >&2
 }
 
 [ -f "$MANIFEST" ] || fatal "Cargo.toml missing at $MANIFEST"
 [ -f "$PLUGIN_MANIFEST" ] || fatal "plugin.json missing at $PLUGIN_MANIFEST"
 
 marketplace_install="no"
-if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ ! -d "$ROOT/.git" ]; then
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ "${AI_ARCHITECT_SOURCE_CHECKOUT:-0}" != "1" ]; then
     marketplace_install="yes"
 fi
 
 if [ "$marketplace_install" = "yes" ]; then
-    manifest_repository=$(sed -n 's/^[[:space:]]*"repository"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_MANIFEST" | head -1)
+    command -v node >/dev/null 2>&1 || fatal "Node.js is required to parse plugin metadata"
+    identity=$(node -e '
+      const fs = require("fs");
+      const plugin = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const cargo = fs.readFileSync(process.argv[2], "utf8");
+      const match = cargo.match(/^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
+      if (!match) throw new Error("Cargo package version missing");
+      if (!/^\d+\.\d+\.\d+$/.test(plugin.version)) throw new Error("plugin version is not stable SemVer");
+      if (plugin.version !== match[1]) throw new Error("plugin and Cargo versions differ");
+      const current = plugin.version.split(".").map(Number);
+      const minimum = process.argv[3].split(".").map(Number);
+      for (let i = 0; i < 3; i++) {
+        if (current[i] > minimum[i]) break;
+        if (current[i] < minimum[i]) throw new Error("plugin version is below the supported floor");
+      }
+      process.stdout.write(plugin.version + "\t" + plugin.repository);
+    ' "$PLUGIN_MANIFEST" "$MANIFEST" "$MINIMUM_VERSION") \
+        || fatal "invalid plugin identity metadata"
+    IFS=$'\t' read -r version manifest_repository <<< "$identity"
     [ "$manifest_repository" = "$EXPECTED_REPOSITORY_URL" ] \
         || fatal "plugin repository is not the trusted producer $EXPECTED_REPOSITORY_URL"
 
     if [ -x "$BIN" ] && [ -f "$DIGEST_FILE" ]; then
-        expected=$(awk '{print $1}' "$DIGEST_FILE")
+        read -r cached_version expected _ < "$DIGEST_FILE"
+        [ "$cached_version" = "$version" ] \
+            || fatal "cached binary version mismatch; reinstall the plugin"
         actual=$(sha256_file "$BIN")
         [ -n "$expected" ] && [ "$actual" = "$expected" ] \
             || fatal "cached binary digest mismatch; reinstall the plugin"
@@ -107,8 +132,6 @@ if [ "$marketplace_install" = "yes" ]; then
     gh attestation verify --help >/dev/null 2>&1 \
         || fatal "GitHub CLI lacks 'gh attestation verify'; upgrade to version 2.49 or newer"
 
-    version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_MANIFEST" | head -1)
-    [ -n "$version" ] || fatal "plugin version missing"
     case "$(uname -s)-$(uname -m)" in
         Darwin-arm64) release_target="macos-aarch64" ;;
         Linux-x86_64) release_target="linux-x86_64" ;;
@@ -122,6 +145,7 @@ if [ "$marketplace_install" = "yes" ]; then
     base="${EXPECTED_REPOSITORY_URL}/releases/download/v${version}"
     download_dir=$(mktemp -d)
     trap 'rm -rf "$download_dir"' EXIT
+    DOWNLOAD_DEADLINE=$(($(date +%s) + 180))
     err "installing v${version} for ${release_target}"
 
     download "$base/$asset" "$download_dir/$asset" \
@@ -149,7 +173,7 @@ if [ "$marketplace_install" = "yes" ]; then
     installed_digest=$(sha256_file "$staged_bin")
     mkdir -p "$(dirname "$BIN")"
     mv -f "$staged_bin" "$BIN"
-    printf '%s  %s\n' "$installed_digest" "$BIN" > "$DIGEST_FILE"
+    printf '%s  %s  %s\n' "$version" "$installed_digest" "$BIN" > "$DIGEST_FILE"
     err "release binary installed; SHA-256 and Sigstore provenance verified"
     exit 0
 fi

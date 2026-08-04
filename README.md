@@ -223,6 +223,10 @@ Fresh marketplace installs require GitHub CLI 2.49 or newer. The bootstrap
 verifies the release's offline Sigstore bundle against the fixed
 `cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml` signer before
 installing any executable; it never accepts a manifest-provided trust anchor.
+This protects the official package and makes a minimal-diff fork that changes
+only metadata fail closed; it cannot make arbitrary code from a hostile fork
+trustworthy, because such a fork can also replace the bootstrap itself. Verify
+that the marketplace slug is exactly `cdeust/ai-architect-mcp-codebase`.
 
 If the former Automatised Pipeline plugin is installed, remove it before
 installing the canonical package:
@@ -249,6 +253,7 @@ full commit SHA (tags can be moved), validate that the prefix equals
 allowlists rather than retaining them as aliases. Consumer PRs record the full
 producer commit in their contract URL; the v0.9.0 release must not be assumed
 available until its verified-release workflow completes.
+The same contract is included in the crate, MCPB, and signed release assets.
 
 **OpenAI Codex CLI** (also picked up by the ChatGPT desktop app and Codex IDE extension — they share `~/.codex/config.toml`)
 

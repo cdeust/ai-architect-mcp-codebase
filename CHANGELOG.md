@@ -43,7 +43,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   The bootstrap fixes the trusted repository and signer workflow independently
   of plugin metadata, requires an offline-capable GitHub CLI verifier, rejects
   archive link types by streaming one member into a regular file, and persists
-  and rechecks the installed binary digest on every marketplace launch.
+  and rechecks the installed version and binary digest on every marketplace
+  launch to detect cache corruption or partial replacement. The adjacent
+  digest is not a trust boundary against an actor able to rewrite both files.
 
 ### Fixed
 
