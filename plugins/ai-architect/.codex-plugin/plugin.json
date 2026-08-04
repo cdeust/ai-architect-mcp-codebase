@@ -1,13 +1,13 @@
 {
   "name": "ai-architect",
-  "version": "0.8.4",
+  "version": "0.9.0",
   "description": "Graph-grounded codebase understanding and change-impact analysis for Codex.",
   "author": {
     "name": "cdeust",
     "url": "https://github.com/cdeust"
   },
-  "homepage": "https://github.com/cdeust/automatised-pipeline",
-  "repository": "https://github.com/cdeust/automatised-pipeline",
+  "homepage": "https://github.com/cdeust/ai-architect-mcp-codebase",
+  "repository": "https://github.com/cdeust/ai-architect-mcp-codebase",
   "license": "MIT",
   "keywords": ["code-intelligence", "code-graph", "impact-analysis", "mcp"],
   "skills": "./skills/",
@@ -18,7 +18,7 @@
     "developerName": "cdeust",
     "category": "Developer Tools",
     "capabilities": ["Read"],
-    "websiteURL": "https://github.com/cdeust/automatised-pipeline",
+    "websiteURL": "https://github.com/cdeust/ai-architect-mcp-codebase",
     "defaultPrompt": [
       "Map this repository before proposing a change.",
       "Trace the blast radius of this diff."

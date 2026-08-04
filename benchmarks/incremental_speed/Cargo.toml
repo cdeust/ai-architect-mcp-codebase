@@ -16,6 +16,6 @@ path = "src/main.rs"
 [dependencies]
 # The library under test — drives the real indexer/artifact/fill machinery, so
 # the measured operations are the ones the tools run.
-ai-architect-mcp = { path = "../.." }
+ai-architect-mcp = { package = "ai-architect-mcp-codebase", path = "../.." }
 serde_json = "1"
 tempfile = "3"

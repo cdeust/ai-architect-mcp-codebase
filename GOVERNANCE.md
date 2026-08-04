@@ -3,10 +3,10 @@
 This document states who decides what, how a decision is made, and what happens
 to this project if the current maintainer stops. It exists because a project
 that cannot answer those questions is a project you should not depend on — and
-because `automatised-pipeline` asks for read access to your entire source tree,
+because `ai-architect-mcp-codebase` asks for read access to your entire source tree,
 which raises the bar on "who is behind this".
 
-It is deliberately honest about scale: **automatised-pipeline has one
+It is deliberately honest about scale: **ai-architect-mcp-codebase has one
 maintainer.** Several practices below would read as bureaucratic theatre at
 that size, so they are described as what they actually are rather than dressed
 up as a process.
@@ -82,8 +82,8 @@ If the maintainer becomes unavailable:
   archived on GitHub; the reasoning behind each decision lives in the PR that
   made it, not in one person's memory.
 - **What is genuinely single-owner** is the GitHub repository itself, the
-  crates.io ownership of `ai-architect-mcp`, the MCP registry entry
-  `io.github.cdeust/automatised-pipeline`, and the release-publishing identity.
+  crates.io ownership of `ai-architect-mcp-codebase`, the MCP registry entry
+  `io.github.cdeust/ai-architect-mcp-codebase`, and the release-publishing identity.
   If the maintainer disappeared without transferring them, the practical
   continuation path is a fork under new ownership publishing under its own
   identity.

@@ -1,11 +1,11 @@
 #!/bin/sh
 # scripts/publish-mcp-registry.sh
 #
-# PUBLISH RUNBOOK — automatised-pipeline MCP Registry submission
+# PUBLISH RUNBOOK — ai-architect-mcp-codebase MCP Registry submission
 # =============================================================
 #
 # PURPOSE
-#   After CI builds and uploads automatised-pipeline.mcpb to a GitHub
+#   After CI builds and uploads ai-architect-mcp-codebase.mcpb to a GitHub
 #   Release, this script:
 #     1. Downloads the released .mcpb bundle.
 #     2. Computes its sha256.
@@ -72,13 +72,13 @@ fi
 
 # Normalise: strip leading 'v' for version comparisons, keep full tag for URLs.
 VERSION="${TAG#v}"
-MCPB_URL="https://github.com/cdeust/automatised-pipeline/releases/download/${TAG}/automatised-pipeline.mcpb"
+MCPB_URL="https://github.com/cdeust/ai-architect-mcp-codebase/releases/download/${TAG}/ai-architect-mcp-codebase.mcpb"
 
-echo "==> Downloading automatised-pipeline.mcpb from:"
+echo "==> Downloading ai-architect-mcp-codebase.mcpb from:"
 echo "    ${MCPB_URL}"
 
 TMP_DIR="$(mktemp -d)"
-MCPB_PATH="$TMP_DIR/automatised-pipeline.mcpb"
+MCPB_PATH="$TMP_DIR/ai-architect-mcp-codebase.mcpb"
 
 curl -fsSL --progress-bar "$MCPB_URL" -o "$MCPB_PATH"
 
@@ -109,7 +109,7 @@ echo "    mcp-publisher login github"
 echo "    mcp-publisher publish"
 echo ""
 echo "==> After publishing:"
-echo "    - MCP Registry: https://registry.modelcontextprotocol.io/servers/io.github.cdeust/automatised-pipeline"
+echo "    - MCP Registry: https://registry.modelcontextprotocol.io/servers/io.github.cdeust/ai-architect-mcp-codebase"
 echo "    - Glama: auto-indexed within ~24h (no action required)"
 echo "    - Anthropic Directory: submit server.json at the MCP Directory portal"
 echo ""

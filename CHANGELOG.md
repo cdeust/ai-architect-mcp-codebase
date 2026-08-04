@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Canonical AI Architect Codebase distribution identity.** The repository,
+  crates.io package, MCP Registry entry, release assets, MCPB manifest, Claude
+  marketplace, Codex marketplace, and Gemini extension now converge on
+  `ai-architect-mcp-codebase` / `io.github.cdeust/ai-architect-mcp-codebase`.
+  The MCP invocation remains `ai-architect`, the previous
+  `automatised-pipeline` executable remains available as a compatibility alias,
+  and existing `.automatised-pipeline` graph artifacts remain readable without
+  migration.
+
 - **Native Codex plugin and Gemini workflows over the unchanged eight-tool
   `core` profile.** A repo marketplace now exposes an isolated
   `plugins/ai-architect` package with its own MCP manifest, while the Gemini
@@ -854,7 +863,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   private advisory form — and that feature was switched off, so a reporter
   without write access who followed the instructions arrived at a page they
   could not use. Private advisories are now enabled
-  (`gh api repos/cdeust/automatised-pipeline/private-vulnerability-reporting`
+  (`gh api repos/cdeust/ai-architect-mcp-codebase/private-vulnerability-reporting`
   → `{"enabled":true}`), and SECURITY.md names a **fallback that does not
   depend on a GitHub feature flag**: `hello@ai-architect.tools`, under the
   same per-severity SLA. The disclosure timeline accepts either channel.
@@ -884,7 +893,7 @@ adheres to [Semantic Versioning](https://semver.org/).
     raised as soon as an advisory is published. Alerts had to be enabled
     first: security updates depend on them and the endpoint returned 404.
 
-  Verification (`gh api repos/cdeust/automatised-pipeline --jq
+  Verification (`gh api repos/cdeust/ai-architect-mcp-codebase --jq
   '.security_and_analysis'`): `secret_scanning`,
   `secret_scanning_push_protection` and `dependabot_security_updates` all
   report `enabled`. `.bestpractices.json` drops the two
@@ -1006,7 +1015,7 @@ documents installation on every major MCP host.
   (including extension install via the new `gemini-extension.json`),
   OpenAI Codex CLI, Cursor, Windsurf, and VS Code, all on the `core`
   profile. The registry-ownership line (`mcp-name:
-  io.github.cdeust/automatised-pipeline`) is now visible README text in
+  io.github.cdeust/ai-architect-mcp-codebase`) is now visible README text in
   a Registry section, not an HTML comment only.
 
 ### Fixed

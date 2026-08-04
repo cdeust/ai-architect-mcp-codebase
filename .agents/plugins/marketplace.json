@@ -1,7 +1,7 @@
 {
-  "name": "automatised-pipeline",
+  "name": "ai-architect-mcp-codebase",
   "interface": {
-    "displayName": "Automatised Pipeline"
+    "displayName": "AI Architect Codebase"
   },
   "plugins": [
     {

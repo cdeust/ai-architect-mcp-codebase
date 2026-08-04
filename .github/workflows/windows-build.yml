@@ -81,7 +81,7 @@ jobs:
           exit 1
 
       - name: Build
-        run: cargo build --release --bin automatised-pipeline --target x86_64-pc-windows-msvc
+        run: cargo build --release --bin ai-architect-mcp-codebase --target x86_64-pc-windows-msvc
 
       - name: Confirm the binary exists
-        run: ls -la target/x86_64-pc-windows-msvc/release/automatised-pipeline.exe
+        run: ls -la target/x86_64-pc-windows-msvc/release/ai-architect-mcp-codebase.exe

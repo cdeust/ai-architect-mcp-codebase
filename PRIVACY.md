@@ -1,8 +1,8 @@
-# Privacy Policy — automatised-pipeline
+# Privacy Policy — ai-architect-mcp-codebase
 
 **Last updated: 2026-06-19**
 
-automatised-pipeline is a local, offline Rust binary that runs entirely on your machine. This policy describes what data it processes, where that data lives, and what — if anything — leaves your machine.
+ai-architect-mcp-codebase is a local, offline Rust binary that runs entirely on your machine. This policy describes what data it processes, where that data lives, and what — if anything — leaves your machine.
 
 ---
 
@@ -29,7 +29,7 @@ The graph database is a directory of LadybugDB files. Deleting that directory pe
 
 ## What leaves your machine
 
-**Nothing.** automatised-pipeline makes no network connections. It has no telemetry, no analytics, no crash reporting, and no license validation. It does not phone home.
+**Nothing.** ai-architect-mcp-codebase makes no network connections. It has no telemetry, no analytics, no crash reporting, and no license validation. It does not phone home.
 
 The binary communicates exclusively over stdio (JSON-RPC 2.0) with the MCP host that spawned it — typically Claude Desktop or Claude Code. That communication is local inter-process communication on your machine.
 
@@ -39,7 +39,7 @@ The binary communicates exclusively over stdio (JSON-RPC 2.0) with the MCP host 
 
 - **Stop indexing at any time** — kill the process. No partial writes persist as corrupt state; the server uses atomic file writes throughout.
 - **Delete all data** — remove the `output_dir` you passed to `index_codebase`. Nothing else to clean up.
-- **Audit the code** — the full source is at [https://github.com/cdeust/automatised-pipeline](https://github.com/cdeust/automatised-pipeline). Every dependency is declared in `Cargo.toml` with a documented justification comment.
+- **Audit the code** — the full source is at [https://github.com/cdeust/ai-architect-mcp-codebase](https://github.com/cdeust/ai-architect-mcp-codebase). Every dependency is declared in `Cargo.toml` with a documented justification comment.
 
 ---
 

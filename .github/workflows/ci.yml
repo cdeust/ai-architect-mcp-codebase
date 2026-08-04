@@ -117,7 +117,7 @@ jobs:
         # script reads command + args from both manifests, performs the MCP
         # handshake and calls health_check through the core profile.
         run: |
-          cargo build --release --bin automatised-pipeline
+          cargo build --release --bin ai-architect-mcp-codebase
           PATH="$PWD/target/release:$PATH" python3 scripts/smoke_portable_hosts.py
 
       - name: Run pinned OpenAI Codex validators
@@ -144,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     # source: issue #42 — ci.yml ran no clippy job at all, which is why 35+
     # `-D warnings` errors accumulated undetected in the root crate
-    # (ai-architect-mcp). This job closes that gap: every push/PR must be
+    # (ai-architect-mcp-codebase). This job closes that gap: every push/PR must be
     # clean under `-D warnings` across every workspace member (root crate +
     # crates/zera + benches/harness), matching the exact command from the
     # issue body so a local `cargo clippy --all-targets -- -D warnings`

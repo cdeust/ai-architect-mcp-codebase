@@ -1,8 +1,8 @@
 {
   "manifest_version": "0.4",
-  "name": "automatised-pipeline",
-  "display_name": "automatised-pipeline — Codebase Intelligence",
-  "version": "0.8.4",
+  "name": "ai-architect-mcp-codebase",
+  "display_name": "AI Architect Codebase",
+  "version": "0.9.0",
   "license": "MIT",
   "author": {
     "name": "Clement Deust",
@@ -10,13 +10,13 @@
     "url": "https://ai-architect.tools"
   },
   "description": "Cross-platform codebase intelligence MCP for Codex, Gemini, Claude, and other hosts — index any repo into a property graph; 26 tools for agents.",
-  "long_description": "automatised-pipeline is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust / Python / TypeScript / Java / Kotlin / Swift / Objective-C / C / C++ / Go codebase into a LadybugDB property graph, resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 26 MCP tools. It is the codebase intelligence layer that sits between a finding and a PRD — read-only intelligence that tells the system what is true about the code so the next stage can reason without guessing.",
-  "homepage": "https://github.com/cdeust/automatised-pipeline",
-  "documentation": "https://github.com/cdeust/automatised-pipeline#readme",
-  "support": "https://github.com/cdeust/automatised-pipeline/issues",
+  "long_description": "AI Architect Codebase is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust / Python / TypeScript / Java / Kotlin / Swift / Objective-C / C / C++ / Go codebase into a LadybugDB property graph, resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 26 MCP tools. It is the codebase intelligence layer that sits between a finding and a PRD — read-only intelligence that tells the system what is true about the code so the next stage can reason without guessing.",
+  "homepage": "https://github.com/cdeust/ai-architect-mcp-codebase",
+  "documentation": "https://github.com/cdeust/ai-architect-mcp-codebase#readme",
+  "support": "https://github.com/cdeust/ai-architect-mcp-codebase/issues",
   "icon": "icon.png",
   "privacy_policies": [
-    "https://github.com/cdeust/automatised-pipeline/blob/main/PRIVACY.md"
+    "https://github.com/cdeust/ai-architect-mcp-codebase/blob/main/PRIVACY.md"
   ],
   "compatibility": {
     "platforms": ["darwin", "linux"]

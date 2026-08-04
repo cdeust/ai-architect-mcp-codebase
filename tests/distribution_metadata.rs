@@ -54,7 +54,7 @@ fn codex_marketplace_points_at_the_isolated_plugin() {
         .find(|entry| entry["name"] == "ai-architect")
         .expect("ai-architect marketplace entry");
 
-    assert_eq!(marketplace["name"], "automatised-pipeline");
+    assert_eq!(marketplace["name"], "ai-architect-mcp-codebase");
     assert_eq!(entry["source"]["source"], "local");
     assert_eq!(entry["source"]["path"], "./plugins/ai-architect");
     assert_eq!(entry["policy"]["installation"], "AVAILABLE");
@@ -87,11 +87,51 @@ fn generated_codex_skills_match_the_canonical_gemini_sources() {
 #[test]
 fn claude_project_manifest_keeps_the_existing_full_profile_default() {
     let claude_project_mcp = read_json(".mcp.json");
-    let server = &claude_project_mcp["mcpServers"]["automatised-pipeline"];
+    let server = &claude_project_mcp["mcpServers"]["ai-architect"];
 
     assert_eq!(server["command"], "python3");
     assert!(
         !server.to_string().contains("--profile"),
         "the Claude project manifest must retain the server's full default"
     );
+    assert!(server.to_string().contains("ai-architect-mcp-codebase"));
+    assert!(
+        server
+            .to_string()
+            .contains("automatised-pipeline@automatised-pipeline-marketplace"),
+        "the renamed Claude plugin must still locate existing installations"
+    );
+}
+
+#[test]
+fn canonical_distribution_identity_is_consistent() {
+    let server = read_json("server.json");
+    let mcpb = read_json("manifest.json");
+    let claude_plugin = read_json(".claude-plugin/plugin.json");
+    let claude_marketplace = read_json(".claude-plugin/marketplace.json");
+
+    assert_eq!(env!("CARGO_PKG_NAME"), "ai-architect-mcp-codebase");
+    assert_eq!(server["name"], "io.github.cdeust/ai-architect-mcp-codebase");
+    assert_eq!(mcpb["name"], "ai-architect-mcp-codebase");
+    assert_eq!(claude_plugin["name"], "ai-architect-codebase");
+    assert_eq!(claude_marketplace["name"], "ai-architect-marketplace");
+
+    for version in [
+        &server["version"],
+        &server["packages"][0]["version"],
+        &mcpb["version"],
+        &claude_plugin["version"],
+        &claude_marketplace["metadata"]["version"],
+        &claude_marketplace["plugins"][0]["version"],
+    ] {
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    }
+
+    for document in [server, mcpb, claude_plugin, claude_marketplace] {
+        let serialized = document.to_string();
+        assert!(
+            !serialized.contains("github.com/cdeust/automatised-pipeline"),
+            "public distribution metadata contains the retired repository URL"
+        );
+    }
 }

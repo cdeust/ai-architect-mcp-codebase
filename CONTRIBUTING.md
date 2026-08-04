@@ -1,4 +1,4 @@
-# Contributing to automatised-pipeline
+# Contributing to ai-architect-mcp-codebase
 
 Thanks for considering a contribution. This is a Rust MCP server with
 **23 tools, 220 tests, zero warnings, every constant sourced**. Every
@@ -25,8 +25,8 @@ architecture.
 builds its C++ core from source — ~5 minutes first build, cached after).
 
 ```bash
-git clone https://github.com/cdeust/automatised-pipeline.git
-cd automatised-pipeline
+git clone https://github.com/cdeust/ai-architect-mcp-codebase.git
+cd ai-architect-mcp-codebase
 cargo build --release
 # First build: ~5 minutes (compiles LadybugDB C++ core)
 # Subsequent builds: <1 second incremental

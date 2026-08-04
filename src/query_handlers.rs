@@ -174,7 +174,7 @@ pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
     let meta = json!({
         "schema_version": 1,
         "root": root.to_string_lossy(),
-        "tool": "automatised-pipeline",
+        "tool": "ai-architect-mcp-codebase",
     });
     let meta_path = output_dir.join("meta.json");
     if let Err(e) = fs::write(&meta_path, meta.to_string()) {

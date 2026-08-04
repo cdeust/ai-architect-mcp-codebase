@@ -14,18 +14,16 @@ members = [".", "benches/harness", "benchmarks/token_surface", "benchmarks/incre
 exclude = ["fuzz"]
 
 [package]
-# Published as `ai-architect-mcp` (both this and `automatised-pipeline`
-# were unregistered on crates.io as of 2026-07-22; keeping the existing
-# package name avoids a rename, matches the MCP server identity
-# `ai-architect`, and carries the discoverable `-mcp` suffix). The binary
-# stays `automatised-pipeline` — cargo install installs it by [[bin]] name.
-name = "ai-architect-mcp"
-version = "0.8.4"
+# `ai-architect-mcp-codebase` is the canonical distribution identity across
+# crates.io, GitHub, release assets, and the MCP Registry. The old executable
+# remains as a compatibility alias for existing scripts and host configs.
+name = "ai-architect-mcp-codebase"
+version = "0.9.0"
 edition = "2021"
 description = "Cross-platform codebase-intelligence MCP server: tree-sitter parsing into a LadybugDB graph, cross-file resolution, hybrid search, and impact analysis for AI agents."
 license = "MIT"
-repository = "https://github.com/cdeust/automatised-pipeline"
-homepage = "https://github.com/cdeust/automatised-pipeline"
+repository = "https://github.com/cdeust/ai-architect-mcp-codebase"
+homepage = "https://ai-architect.tools"
 readme = "README.md"
 # crates.io caps keywords at 5; category slugs from https://crates.io/categories
 keywords = ["mcp", "code-intelligence", "tree-sitter", "code-graph", "static-analysis"]
@@ -36,9 +34,22 @@ categories = ["development-tools", "command-line-utilities"]
 # gitignore-style — the leading `/` anchors them to the package root.
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE"]
 
+[lib]
+# Keep the Rust import path stable for workspace consumers and downstream users.
+name = "ai_architect_mcp"
+path = "src/lib.rs"
+
 [[bin]]
-name = "automatised-pipeline"
+name = "ai-architect-mcp-codebase"
 path = "src/main.rs"
+
+[[bin]]
+# Compatibility alias only. Do not duplicate the binary's 500+ unit tests in
+# `--all-targets`; the canonical target above is the test-bearing executable.
+name = "automatised-pipeline"
+path = "src/bin/automatised-pipeline.rs"
+test = false
+bench = false
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -8,7 +8,7 @@ grading rubric, scope and stopping rule up front. The result set
 against the committed corpus; nothing in this plan is edited in response to the
 numbers.
 
-- **Author:** experiment-runner (Claude), for cdeust/automatised-pipeline.
+- **Author:** experiment-runner (Claude), for cdeust/ai-architect-mcp-codebase.
 - **Registration date:** 2026-07-26.
 - **Parity tracker:** cdeust/enterprise-backlog#26. Reference design:
   `DeusData/codebase-memory-mcp` `docs/EVALUATION_PLAN.md` (peer-review-before-

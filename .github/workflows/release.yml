@@ -1,7 +1,7 @@
 name: Release binaries
 
 # Triggered when the maintainer pushes a tag matching v*. Builds the
-# automatised-pipeline binary for the three platforms Cortex's installer
+# ai-architect-mcp-codebase binary for the three platforms Cortex's installer
 # fast-path knows how to consume (macos-aarch64, linux-x86_64,
 # linux-aarch64) plus a windows-x86_64 leg, tarballs each,
 # computes a SHA256 companion, and attaches everything to the GitHub
@@ -13,15 +13,15 @@ name: Release binaries
 # isn't end-of-lifed, or cross-compile from macos-latest.
 #
 # Asset naming convention (Cortex installer contract):
-#   automatised-pipeline-{os}-{arch}.tar.gz
-#   automatised-pipeline-{os}-{arch}.tar.gz.sha256
-#   automatised-pipeline-{os}-{arch}.tar.gz.sigstore.json   (provenance)
+#   ai-architect-mcp-codebase-{os}-{arch}.tar.gz
+#   ai-architect-mcp-codebase-{os}-{arch}.tar.gz.sha256
+#   ai-architect-mcp-codebase-{os}-{arch}.tar.gz.sigstore.json   (provenance)
 # where {os} ∈ {macos, linux, windows}, {arch} ∈ {x86_64, aarch64}.
 # Every attested asset gets a sibling `.sigstore.json` Sigstore bundle. The
 # installer contract ignores it; it exists so the signature is on the release
 # page rather than only in GitHub's attestation API (see the staging steps).
-# The tar archive root must contain ``automatised-pipeline`` (no nested
-# dir); the windows archive contains ``automatised-pipeline.exe``.
+# The tar archive root must contain ``ai-architect-mcp-codebase`` (no nested
+# dir); the windows archive contains ``ai-architect-mcp-codebase.exe``.
 # Cortex's installer contract only consumes the macos/linux assets —
 # windows is a direct-download convenience, not part of that contract.
 
@@ -186,17 +186,17 @@ jobs:
         if: startsWith(matrix.runner, 'ubuntu')
         env:
           ZSTD_SYS_USE_PKG_CONFIG: "1"
-        run: cargo build --release --bin automatised-pipeline --target ${{ matrix.rust_target }}
+        run: cargo build --release --bin ai-architect-mcp-codebase --target ${{ matrix.rust_target }}
 
       - name: Build (macos/windows — vendored static zstd)
         if: ${{ !startsWith(matrix.runner, 'ubuntu') }}
-        run: cargo build --release --bin automatised-pipeline --target ${{ matrix.rust_target }}
+        run: cargo build --release --bin ai-architect-mcp-codebase --target ${{ matrix.rust_target }}
 
       - name: Strip binary (best-effort)
         run: |
           # matrix.bin_suffix is `.exe` on windows, empty (undefined)
           # elsewhere — GitHub renders undefined matrix keys as "".
-          BIN=target/${{ matrix.rust_target }}/release/automatised-pipeline${{ matrix.bin_suffix }}
+          BIN=target/${{ matrix.rust_target }}/release/ai-architect-mcp-codebase${{ matrix.bin_suffix }}
           # GNU strip on Linux, llvm-strip on macOS — both ignore unknown.
           # No strip for MSVC binaries; the `|| true` covers windows too.
           strip "$BIN" 2>/dev/null || true
@@ -204,11 +204,11 @@ jobs:
 
       - name: Package tarball + sha256
         run: |
-          ASSET="automatised-pipeline-${{ matrix.target_tag }}.tar.gz"
-          BIN=target/${{ matrix.rust_target }}/release/automatised-pipeline${{ matrix.bin_suffix }}
+          ASSET="ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz"
+          BIN=target/${{ matrix.rust_target }}/release/ai-architect-mcp-codebase${{ matrix.bin_suffix }}
           STAGING=$(mktemp -d)
-          cp "$BIN" "$STAGING/automatised-pipeline${{ matrix.bin_suffix }}"
-          tar -C "$STAGING" -czf "$ASSET" automatised-pipeline${{ matrix.bin_suffix }}
+          cp "$BIN" "$STAGING/ai-architect-mcp-codebase${{ matrix.bin_suffix }}"
+          tar -C "$STAGING" -czf "$ASSET" ai-architect-mcp-codebase${{ matrix.bin_suffix }}
           # sha256sum (coreutils) covers Linux and Git Bash on windows;
           # shasum covers macOS. windows-latest has NO shasum — the
           # v0.8.1 windows leg exited 127 on it after a successful build.
@@ -221,12 +221,12 @@ jobs:
 
       # Provenance BEFORE upload: the attestation binds this exact artifact
       # digest to this workflow, commit and runner. Verify with
-      #   gh attestation verify <file> --repo cdeust/automatised-pipeline
+      #   gh attestation verify <file> --repo cdeust/ai-architect-mcp-codebase
       - name: Attest build provenance (tarball)
         id: attest_tarball
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: automatised-pipeline-${{ matrix.target_tag }}.tar.gz
+          subject-path: ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz
 
       - name: Stage attestation bundle as a release asset
         env:
@@ -248,8 +248,8 @@ jobs:
           if command -v cygpath >/dev/null 2>&1; then
             BUNDLE="$(cygpath -u "$BUNDLE")"
           fi
-          cp "$BUNDLE" "automatised-pipeline-${{ matrix.target_tag }}.tar.gz.sigstore.json"
-          ls -la "automatised-pipeline-${{ matrix.target_tag }}.tar.gz.sigstore.json"
+          cp "$BUNDLE" "ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz.sigstore.json"
+          ls -la "ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz.sigstore.json"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -259,9 +259,9 @@ jobs:
           # softprops never tries to create a sibling draft.
           tag_name: ${{ github.ref_name }}
           files: |
-            automatised-pipeline-${{ matrix.target_tag }}.tar.gz
-            automatised-pipeline-${{ matrix.target_tag }}.tar.gz.sha256
-            automatised-pipeline-${{ matrix.target_tag }}.tar.gz.sigstore.json
+            ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz
+            ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz.sha256
+            ai-architect-mcp-codebase-${{ matrix.target_tag }}.tar.gz.sigstore.json
           fail_on_unmatched_files: true
 
   # SBOM for the whole dependency graph (issue #66). Generated from
@@ -296,15 +296,15 @@ jobs:
           # root one under a predictable release-asset name.
           # -exec rather than `| xargs`: shellcheck SC2038, and a path with a
           # space would silently produce the wrong file.
-          find . -maxdepth 3 -name 'sbom.json' -exec cp {} automatised-pipeline.cdx.json \; -quit
-          ls -la automatised-pipeline.cdx.json
-          sha256sum automatised-pipeline.cdx.json | tee automatised-pipeline.cdx.json.sha256
+          find . -maxdepth 3 -name 'sbom.json' -exec cp {} ai-architect-mcp-codebase.cdx.json \; -quit
+          ls -la ai-architect-mcp-codebase.cdx.json
+          sha256sum ai-architect-mcp-codebase.cdx.json | tee ai-architect-mcp-codebase.cdx.json.sha256
 
       - name: Attest build provenance (SBOM)
         id: attest_sbom
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: automatised-pipeline.cdx.json
+          subject-path: ai-architect-mcp-codebase.cdx.json
 
       # Same reason as the tarball leg: the bundle has to be ON the release
       # for an offline consumer (and Scorecard) to see a signature at all.
@@ -312,17 +312,17 @@ jobs:
         env:
           ATTESTATION_BUNDLE: ${{ steps.attest_sbom.outputs.bundle-path }}
         run: |
-          cp "$ATTESTATION_BUNDLE" automatised-pipeline.cdx.json.sigstore.json
-          ls -la automatised-pipeline.cdx.json.sigstore.json
+          cp "$ATTESTATION_BUNDLE" ai-architect-mcp-codebase.cdx.json.sigstore.json
+          ls -la ai-architect-mcp-codebase.cdx.json.sigstore.json
 
       - name: Upload SBOM to release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            automatised-pipeline.cdx.json
-            automatised-pipeline.cdx.json.sha256
-            automatised-pipeline.cdx.json.sigstore.json
+            ai-architect-mcp-codebase.cdx.json
+            ai-architect-mcp-codebase.cdx.json.sha256
+            ai-architect-mcp-codebase.cdx.json.sigstore.json
           fail_on_unmatched_files: true
 
   # Pack and publish the .mcpb bundle after all three platform binaries
@@ -344,10 +344,10 @@ jobs:
       - name: Download platform binaries from release
         run: |
           TAG="${{ github.ref_name }}"
-          BASE="https://github.com/cdeust/automatised-pipeline/releases/download/${TAG}"
+          BASE="https://github.com/cdeust/ai-architect-mcp-codebase/releases/download/${TAG}"
           for TARGET in macos-aarch64 linux-x86_64 linux-aarch64; do
-            curl -fsSL "${BASE}/automatised-pipeline-${TARGET}.tar.gz" \
-              -o "automatised-pipeline-${TARGET}.tar.gz"
+            curl -fsSL "${BASE}/ai-architect-mcp-codebase-${TARGET}.tar.gz" \
+              -o "ai-architect-mcp-codebase-${TARGET}.tar.gz"
           done
 
       - name: Assemble staging directory
@@ -369,9 +369,9 @@ jobs:
           # Extract platform binaries into bin/<platform>/
           for TARGET in macos-aarch64 linux-x86_64 linux-aarch64; do
             mkdir -p "$STAGING/bin/${TARGET}"
-            tar -xzf "automatised-pipeline-${TARGET}.tar.gz" \
+            tar -xzf "ai-architect-mcp-codebase-${TARGET}.tar.gz" \
               -C "$STAGING/bin/${TARGET}/"
-            chmod +x "$STAGING/bin/${TARGET}/automatised-pipeline"
+            chmod +x "$STAGING/bin/${TARGET}/ai-architect-mcp-codebase"
           done
 
           echo "STAGING=$STAGING" >> "$GITHUB_ENV"
@@ -380,20 +380,20 @@ jobs:
         run: |
           # .mcpb is a ZIP archive with manifest.json at root.
           # Try the official packer first; fall back to zip.
-          if npx -y @anthropic-ai/mcpb@latest pack "$STAGING" automatised-pipeline.mcpb 2>/dev/null; then
+          if npx -y @anthropic-ai/mcpb@latest pack "$STAGING" ai-architect-mcp-codebase.mcpb 2>/dev/null; then
             echo "Packed via @anthropic-ai/mcpb"
           else
-            cd "$STAGING" && zip -r "$OLDPWD/automatised-pipeline.mcpb" . && cd "$OLDPWD"
+            cd "$STAGING" && zip -r "$OLDPWD/ai-architect-mcp-codebase.mcpb" . && cd "$OLDPWD"
             echo "Packed via zip (mcpb CLI unavailable)"
           fi
-          shasum -a 256 automatised-pipeline.mcpb | tee automatised-pipeline.mcpb.sha256
-          ls -la automatised-pipeline.mcpb automatised-pipeline.mcpb.sha256
+          shasum -a 256 ai-architect-mcp-codebase.mcpb | tee ai-architect-mcp-codebase.mcpb.sha256
+          ls -la ai-architect-mcp-codebase.mcpb ai-architect-mcp-codebase.mcpb.sha256
 
       - name: Attest build provenance (.mcpb)
         id: attest_mcpb
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: automatised-pipeline.mcpb
+          subject-path: ai-architect-mcp-codebase.mcpb
 
       # Same reason as the tarball leg: the bundle has to be ON the release
       # for an offline consumer (and Scorecard) to see a signature at all.
@@ -401,15 +401,15 @@ jobs:
         env:
           ATTESTATION_BUNDLE: ${{ steps.attest_mcpb.outputs.bundle-path }}
         run: |
-          cp "$ATTESTATION_BUNDLE" automatised-pipeline.mcpb.sigstore.json
-          ls -la automatised-pipeline.mcpb.sigstore.json
+          cp "$ATTESTATION_BUNDLE" ai-architect-mcp-codebase.mcpb.sigstore.json
+          ls -la ai-architect-mcp-codebase.mcpb.sigstore.json
 
       - name: Upload .mcpb to release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            automatised-pipeline.mcpb
-            automatised-pipeline.mcpb.sha256
-            automatised-pipeline.mcpb.sigstore.json
+            ai-architect-mcp-codebase.mcpb
+            ai-architect-mcp-codebase.mcpb.sha256
+            ai-architect-mcp-codebase.mcpb.sigstore.json
           fail_on_unmatched_files: true

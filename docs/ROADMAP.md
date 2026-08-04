@@ -30,7 +30,7 @@ fidelity work outranks new languages and new tools.
 
 `src/main.rs` (~6500 lines) and `src/graph_store.rs` are far over this
 project's own 500-line file cap. The split is tracked as an epic
-([#151](https://github.com/cdeust/automatised-pipeline/issues/151)) and is a
+([#151](https://github.com/cdeust/ai-architect-mcp-codebase/issues/151)) and is a
 prerequisite for most other work in this list, because a 6500-line composition
 root is where changes go to become risky. Behaviour-preserving, proven by the
 existing suite passing unchanged.

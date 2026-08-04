@@ -1,7 +1,7 @@
-<!-- mcp-name: io.github.cdeust/automatised-pipeline -->
+<!-- mcp-name: io.github.cdeust/ai-architect-mcp-codebase -->
 
 <p align="center">
-  <img src="assets/banner.svg" alt="automatised-pipeline — codebase intelligence as an MCP server" width="100%"/>
+  <img src="assets/banner.svg" alt="ai-architect-mcp-codebase — codebase intelligence as an MCP server" width="100%"/>
 </p>
 
 <p align="center">
@@ -26,16 +26,16 @@
 
 <p align="center">
   <strong>Companion projects:</strong><br>
-  <a href="https://github.com/cdeust/Cortex">Cortex</a> — persistent memory that consolidates and reconsolidates across sessions<br>
+  <a href="https://github.com/cdeust/Cortex">Hypermnesia MCP</a> — persistent memory that consolidates and reconsolidates across sessions<br>
   <a href="https://github.com/cdeust/zetetic-team-subagents">zetetic-team-subagents</a> — 97 genius reasoning agents + 18 team specialists<br>
-  <a href="https://github.com/cdeust/prd-spec-generator">prd-spec-generator</a> — TypeScript PRD generator that consumes our graph intelligence
+  <a href="https://github.com/cdeust/ai-architect-mcp-spec">AI Architect Spec</a> — TypeScript PRD generator that consumes our graph intelligence
 </p>
 
 ---
 
 Every AI coding assistant hits the same wall: you ask it to change `handle_tool_call`, and it either hallucinates a function that was renamed last week, edits something in the wrong community of the codebase, or silently breaks a call chain three modules away. Agents operate on strings; codebases have structure. The gap is where bugs live.
 
-**automatised-pipeline** is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, or Go codebase into a LadybugDB property graph (Ruby is dispatched on the shallow path — node-kind rows, no deep extraction — for 11 languages in total), resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 26 MCP tools.
+**ai-architect-mcp-codebase** is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, or Go codebase into a LadybugDB property graph (Ruby is dispatched on the shallow path — node-kind rows, no deep extraction — for 11 languages in total), resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 26 MCP tools.
 
 It is the **codebase intelligence layer** that sits between a finding ("this bug exists") and a PRD ("here is the fix, here is what it affects, here is what it must never break"). It is **read-only intelligence** — it never writes code, opens PRs, or runs CI. It tells the system what is true about the code so the next stage can reason without guessing.
 
@@ -93,8 +93,8 @@ verify_semantic_diff(before_graph_path, after_graph_path)
 ### Clone + build
 
 ```bash
-git clone https://github.com/cdeust/automatised-pipeline.git
-cd automatised-pipeline
+git clone https://github.com/cdeust/ai-architect-mcp-codebase.git
+cd ai-architect-mcp-codebase
 cargo build --release
 # First build: ~5 minutes (compiles LadybugDB C++ core)
 # Subsequent builds: <1 second incremental
@@ -118,7 +118,7 @@ The repo ships a `.mcp.json` that Claude Code picks up automatically when you op
 Or register globally (recommended agent setup — the `core` profile):
 
 ```bash
-claude mcp add ai-architect -- /absolute/path/to/target/release/automatised-pipeline --profile core
+claude mcp add ai-architect -- /absolute/path/to/target/release/ai-architect-mcp-codebase --profile core
 ```
 
 ### Tool profiles
@@ -133,9 +133,9 @@ The server registers one of two tool sets, chosen once at startup:
 Select with the `--profile` flag or the `AP_PROFILE` environment variable (the flag wins):
 
 ```bash
-automatised-pipeline --profile core   # agent-facing 8
-AP_PROFILE=core automatised-pipeline  # same, via env
-automatised-pipeline                  # default: full (all 26)
+ai-architect-mcp-codebase --profile core   # agent-facing 8
+AP_PROFILE=core ai-architect-mcp-codebase  # same, via env
+ai-architect-mcp-codebase                  # default: full (all 26)
 ```
 
 The default stays `full` until the next major version — shrinking the default tool surface is a breaking change. New agent installations should opt into `core`: `analyze_codebase` already runs index + resolve + cluster in one call, so the 18 hidden tools are pipeline plumbing an agent never needs, and hiding them keeps the tool prompt small.
@@ -144,14 +144,14 @@ The default stays `full` until the next major version — shrinking the default 
 
 ```bash
 # Run the binary directly to verify the handshake
-./target/release/automatised-pipeline
+./target/release/ai-architect-mcp-codebase
 
 # Or exercise it via stdio JSON-RPC:
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"health_check","arguments":{}}}' \
-  | ./target/release/automatised-pipeline
+  | ./target/release/ai-architect-mcp-codebase
 ```
 
 ### Use with other MCP hosts
@@ -159,7 +159,7 @@ printf '%s\n' \
 The server is a self-contained stdio binary — any MCP host can launch it. Install once:
 
 ```bash
-cargo install ai-architect-mcp   # installs the `automatised-pipeline` binary into ~/.cargo/bin
+cargo install ai-architect-mcp-codebase   # installs the `ai-architect-mcp-codebase` binary into ~/.cargo/bin
 ```
 
 ### Install into your agent host (auto-config)
@@ -167,7 +167,7 @@ cargo install ai-architect-mcp   # installs the `automatised-pipeline` binary in
 One command detects your installed hosts and writes the right MCP config for each — **never clobbering** the rest of the file:
 
 ```bash
-automatised-pipeline install
+ai-architect-mcp-codebase install
 ```
 
 It configures the top six hosts it detects: **Claude Code** (`~/.claude.json`), **Codex CLI** (`~/.codex/config.toml`), **Gemini CLI** (`~/.gemini/settings.json`), **Cursor** (`~/.cursor/mcp.json`), **VS Code** (`Code/User/mcp.json`), and **Zed** (`~/.config/zed/settings.json`).
@@ -176,35 +176,35 @@ It configures the top six hosts it detects: **Claude Code** (`~/.claude.json`), 
 - **Zed JSONC.** Zed's `settings.json` allows comments, which strict JSON editing would destroy, so `install` **refuses to edit it in place** and prints the snippet + instructions instead (your comments stay byte-for-byte).
 - **Codex TOML** is edited comment- and format-preserving (via `toml_edit`).
 - **Flags:** `--dry-run` (print planned changes, write nothing), `--only <host>` / `--skip <host>` (filter; `--only` forces a host even if undetected), `--with-hooks` (also register the Grep/Glob PreToolUse hook, see below). Re-running is **idempotent** (a second run reports "no change").
-- **Uninstall:** `automatised-pipeline uninstall` removes exactly our entries (and the hook), leaving everything else intact.
+- **Uninstall:** `ai-architect-mcp-codebase uninstall` removes exactly our entries (and the hook), leaving everything else intact.
 
 ```bash
-automatised-pipeline install --dry-run                 # preview
-automatised-pipeline install --only cursor --only zed  # just these
-automatised-pipeline install --with-hooks              # + the grep→graph hook
-automatised-pipeline uninstall                         # remove our entries
+ai-architect-mcp-codebase install --dry-run                 # preview
+ai-architect-mcp-codebase install --only cursor --only zed  # just these
+ai-architect-mcp-codebase install --with-hooks              # + the grep→graph hook
+ai-architect-mcp-codebase uninstall                         # remove our entries
 ```
 
 **Binary → first query.** Measured on this machine (2026-07): `install` completes in **~1.3 s** (dominated by process/DB startup; the config write itself is sub-second); `analyze_codebase` on this repo's own `src/` (114 files → 16.5k nodes, 16.3k edges — index + resolve + cluster) takes **~12 s wall**; the first `search_codebase` returns instantly. So once the binary exists, **install → analyze → first graph query is ~15 s — well under the 2-minute target.** The one-time `cargo build --release` (~5 min, compiling the LadybugDB C++ core) is a separate, before-the-clock step.
 
 #### Fail-open grep→graph hook
 
-`automatised-pipeline install --with-hooks` registers a Claude Code `PreToolUse` hook (matcher `Grep|Glob`) that runs `automatised-pipeline hook-augment`. Before a Grep/Glob in a project that has an ai-architect graph, it injects a one-line suggestion to consider `search_codebase`/`query_graph` first. **Cardinal rule: it never blocks the tool call** — no graph, an unparseable payload, or any error → it prints nothing and exits 0. Hook registration is **opt-in** (the `--with-hooks` flag), never default.
+`ai-architect-mcp-codebase install --with-hooks` registers a Claude Code `PreToolUse` hook (matcher `Grep|Glob`) that runs `ai-architect-mcp-codebase hook-augment`. Before a Grep/Glob in a project that has an ai-architect graph, it injects a one-line suggestion to consider `search_codebase`/`query_graph` first. **Cardinal rule: it never blocks the tool call** — no graph, an unparseable payload, or any error → it prints nothing and exits 0. Hook registration is **opt-in** (the `--with-hooks` flag), never default.
 
 ### Or configure a host by hand
 
-The CLI commands below assume `~/.cargo/bin` is on your `PATH`. GUI hosts (Cursor, Windsurf, VS Code) may not inherit your shell `PATH` — in the JSON configs, replace `automatised-pipeline` with the output of `which automatised-pipeline`. Use the `core` profile (8 read-only tools) for agent hosts.
+The CLI commands below assume `~/.cargo/bin` is on your `PATH`. GUI hosts (Cursor, Windsurf, VS Code) may not inherit your shell `PATH` — in the JSON configs, replace `ai-architect-mcp-codebase` with the output of `which ai-architect-mcp-codebase`. Use the `core` profile (8 read-only tools) for agent hosts.
 
 **Gemini CLI**
 
 ```bash
-gemini mcp add -e AP_PROFILE=core ai-architect automatised-pipeline
+gemini mcp add -e AP_PROFILE=core ai-architect ai-architect-mcp-codebase
 ```
 
 Or install as an extension (this repo ships a `gemini-extension.json`):
 
 ```bash
-gemini extensions install https://github.com/cdeust/automatised-pipeline
+gemini extensions install https://github.com/cdeust/ai-architect-mcp-codebase
 ```
 
 The extension also exposes three host-native workflows from `skills/`:
@@ -215,14 +215,14 @@ index coverage gaps before accepting negative graph results.
 **OpenAI Codex CLI** (also picked up by the ChatGPT desktop app and Codex IDE extension — they share `~/.codex/config.toml`)
 
 ```bash
-codex mcp add ai-architect -- automatised-pipeline --profile core
+codex mcp add ai-architect -- ai-architect-mcp-codebase --profile core
 ```
 
 Or in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.ai-architect]
-command = "automatised-pipeline"
+command = "ai-architect-mcp-codebase"
 args = ["--profile", "core"]
 ```
 
@@ -230,9 +230,9 @@ Or install the packaged Codex plugin and its three matching skills from this
 repository's marketplace:
 
 ```bash
-cargo install ai-architect-mcp
-codex plugin marketplace add cdeust/automatised-pipeline
-codex plugin add ai-architect@automatised-pipeline
+cargo install ai-architect-mcp-codebase
+codex plugin marketplace add cdeust/ai-architect-mcp-codebase
+codex plugin add ai-architect@ai-architect-mcp-codebase
 ```
 
 The Codex package lives under `plugins/ai-architect/`, with its own
@@ -246,7 +246,7 @@ the server's backward-compatible `full` default.
 {
   "mcpServers": {
     "ai-architect": {
-      "command": "automatised-pipeline",
+      "command": "ai-architect-mcp-codebase",
       "args": ["--profile", "core"]
     }
   }
@@ -262,7 +262,7 @@ the server's backward-compatible `full` default.
   "servers": {
     "ai-architect": {
       "type": "stdio",
-      "command": "automatised-pipeline",
+      "command": "ai-architect-mcp-codebase",
       "args": ["--profile", "core"]
     }
   }
@@ -276,7 +276,7 @@ from agents.mcp import MCPServerStdio
 
 async with MCPServerStdio(
     name="ai-architect",
-    params={"command": "automatised-pipeline", "args": ["--profile", "core"]},
+    params={"command": "ai-architect-mcp-codebase", "args": ["--profile", "core"]},
 ) as server:
     agent = Agent(name="Assistant", mcp_servers=[server])
 ```
@@ -361,7 +361,7 @@ profiles are unchanged. The artifact is entirely optional: without it,
 
 > Post-import *incremental fill* (re-index only the `artifact_commit..HEAD` diff
 > instead of a full re-index) is tracked in
-> [#62](https://github.com/cdeust/automatised-pipeline/issues/62) — it needs a
+> [#62](https://github.com/cdeust/ai-architect-mcp-codebase/issues/62) — it needs a
 > changed-files-only indexer, which AP does not yet have.
 
 ---
@@ -463,7 +463,7 @@ Inherited from [zetetic-team-subagents](https://github.com/cdeust/zetetic-team-s
 
 ## Security
 
-Four CRITICAL, four HIGH, three MEDIUM findings were surfaced by a `security-auditor` agent pass and fixed in commit [`512d683`](https://github.com/cdeust/automatised-pipeline/commit/512d683):
+Four CRITICAL, four HIGH, three MEDIUM findings were surfaced by a `security-auditor` agent pass and fixed in commit [`512d683`](https://github.com/cdeust/ai-architect-mcp-codebase/commit/512d683):
 
 - Cypher injection via `insert_edge` → centralized `cypher_str()` escaping (`\` first, then `'`)
 - Git argument injection → `validate_git_ref` rejects `--`, newlines, NUL; `--` separator before refs
@@ -552,7 +552,7 @@ precision/recall/token/tool-call numbers above stand on their own.
                               │ MCP (stdio JSON-RPC)
                               ↓
       ┌──────────────────────────────────────────────────┐
-      │             automatised-pipeline                 │  ← this repo
+      │             ai-architect-mcp-codebase                 │  ← this repo
       │  stage 0 · 1 · 2 · 3a-e · 4 · 6 · 8 · 9          │
       │  Rust · LadybugDB · tree-sitter · Tantivy        │
       └──────┬──────────────────┬────────────────────────┘
@@ -602,7 +602,7 @@ Every stage has an integration test with fixture data. The `lbug_bulk_investigat
 ## Repository layout
 
 ```
-automatised-pipeline/
+ai-architect-mcp-codebase/
 ├── src/
 │   ├── main.rs                    ← MCP server entry point
 │   ├── cli.rs                     ← argument parsing + startup wiring
@@ -701,9 +701,9 @@ Public repo, MIT licensed. Security audit fixes are in, correctness fixes are in
 
 ## Registry
 
-Published on crates.io as [`ai-architect-mcp`](https://crates.io/crates/ai-architect-mcp) and listed in the [MCP Registry](https://registry.modelcontextprotocol.io) under the name below (this line doubles as the registry's package-ownership proof):
+Published on crates.io as [`ai-architect-mcp-codebase`](https://crates.io/crates/ai-architect-mcp-codebase) and listed in the [MCP Registry](https://registry.modelcontextprotocol.io) under the name below (this line doubles as the registry's package-ownership proof):
 
-mcp-name: io.github.cdeust/automatised-pipeline
+mcp-name: io.github.cdeust/ai-architect-mcp-codebase
 
 ---
 
@@ -716,7 +716,7 @@ outside any employment relationship and is not affiliated with, endorsed by,
 or owned by any past or present employer. It is part of the ai-architect
 ecosystem ([Cortex](https://github.com/cdeust/Cortex),
 [zetetic-team-subagents](https://github.com/cdeust/zetetic-team-subagents),
-[prd-spec-generator](https://github.com/cdeust/prd-spec-generator)).
+[AI Architect Spec](https://github.com/cdeust/ai-architect-mcp-spec)).
 
 The graph-theoretic and information-retrieval algorithms used here (Louvain
 community detection with C2 repair, BM25, RRF rank fusion, tree-sitter AST

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Marketplace pin-staleness gate. CANONICAL COPY: cdeust/Cortex.
 
-A byte-identical copy lives in cdeust/automatised-pipeline (its CI diffs
+A byte-identical copy lives in cdeust/ai-architect-mcp-codebase (its CI diffs
 against this file weekly and fails on drift), so the gate is ONE artifact
 guarding both repos — never two copies that diverge into a no-op.
 

@@ -311,7 +311,7 @@ fn is_our_hook_command(command: &str) -> bool {
 /// Registers our PreToolUse `hook-augment` hook into Claude Code's settings.json
 /// (never-clobber: preserves every other hook and setting). `existing` is the
 /// current settings.json content (None = absent). `command` is the full command
-/// to run (e.g. `/path/to/automatised-pipeline hook-augment`). Idempotent:
+/// to run (e.g. `/path/to/ai-architect-mcp-codebase hook-augment`). Idempotent:
 /// `NoChange` when a hook of ours with the same matcher+command already exists.
 pub fn merge_hook_install(existing: Option<&str>, command: &str) -> MergeOutcome {
     let mut root: Value = match existing {
@@ -419,7 +419,7 @@ mod tests {
     fn spec() -> ServerSpec {
         ServerSpec {
             name: "ai-architect".into(),
-            command: "/usr/local/bin/automatised-pipeline".into(),
+            command: "/usr/local/bin/ai-architect-mcp-codebase".into(),
             args: vec![],
         }
     }

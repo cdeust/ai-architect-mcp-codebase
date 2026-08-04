@@ -27,6 +27,7 @@ arbitrary = { version = "1.4.2", features = ["derive"] }
 
 [dependencies.ai-architect-mcp]
 path = ".."
+package = "ai-architect-mcp-codebase"
 
 # Fuzz targets need debug assertions and overflow checks ON — a panic is the
 # signal we are hunting, so optimising them away would defeat the harness.

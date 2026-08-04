@@ -6,7 +6,7 @@ If you discover a security issue in this project, **do not** open a public
 issue. Instead, send a private report to the maintainer.
 
 **Preferred channel:** open a [private security advisory on
-GitHub](https://github.com/cdeust/automatised-pipeline/security/advisories/new).
+GitHub](https://github.com/cdeust/ai-architect-mcp-codebase/security/advisories/new).
 It keeps the report, the discussion and the eventual CVE in one place, and it
 is private to you and the maintainer.
 
@@ -55,7 +55,7 @@ Only the latest minor release on `main` receives security patches.
 
 ## What this tool accesses, and what assurance is offered
 
-Being plain about this is the point: `automatised-pipeline` **reads your entire
+Being plain about this is the point: `ai-architect-mcp-codebase` **reads your entire
 source tree** to build its graph. That is what it is for. It is also exactly
 the access an attacker would want, so the honest question is not whether it
 reads your code but whether the binary you ran is the one we built.
@@ -69,19 +69,19 @@ network calls during indexing; all processing is local.
 
 | Property | How you check it |
 |---|---|
-| The artifact was built by our workflow, from this source | `gh attestation verify <file> --repo cdeust/automatised-pipeline` |
+| The artifact was built by our workflow, from this source | `gh attestation verify <file> --repo cdeust/ai-architect-mcp-codebase` |
 | The bytes were not altered in transit | `sha256sum -c <file>.sha256` |
 | The release tag was cut by the maintainer, not by whoever can push | **not claimed** — tags are unsigned; artifact provenance answers this instead (see below) |
-| What is inside the binary | the CycloneDX SBOM asset, `automatised-pipeline.cdx.json` |
+| What is inside the binary | the CycloneDX SBOM asset, `ai-architect-mcp-codebase.cdx.json` |
 | Dependencies carry no known advisory | `cargo audit` / `cargo deny`, run daily in CI |
 | Repo-level supply-chain posture | OpenSSF Scorecard, published weekly |
 
 Verify a downloaded release before running it:
 
 ```bash
-gh attestation verify automatised-pipeline-macos-aarch64.tar.gz \
-  --repo cdeust/automatised-pipeline
-sha256sum -c automatised-pipeline-macos-aarch64.tar.gz.sha256
+gh attestation verify ai-architect-mcp-codebase-macos-aarch64.tar.gz \
+  --repo cdeust/ai-architect-mcp-codebase
+sha256sum -c ai-architect-mcp-codebase-macos-aarch64.tar.gz.sha256
 ```
 
 Every attested asset also ships its Sigstore bundle as a sibling

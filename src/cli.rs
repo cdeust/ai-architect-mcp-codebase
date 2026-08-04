@@ -173,7 +173,7 @@ fn binary_command() -> String {
         .ok()
         .and_then(|p| p.canonicalize().ok().or(Some(p)))
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "automatised-pipeline".to_string())
+        .unwrap_or_else(|| "ai-architect-mcp-codebase".to_string())
 }
 
 /// Applies a merge outcome to `path` (writing unless `dry_run`) and returns a

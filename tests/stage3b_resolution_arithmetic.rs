@@ -12,7 +12,7 @@
 //   3. `resolve_extends` must only count successes, and must dedup like
 //      every other edge kind.
 //
-// source: github.com/cdeust/automatised-pipeline issue #28.
+// source: github.com/cdeust/ai-architect-mcp-codebase issue #28.
 
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;

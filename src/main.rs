@@ -1,4 +1,4 @@
-// automatised-pipeline — stage-by-stage MCP rewrite of the ai-architect pipeline.
+// AI Architect Codebase — graph-grounded code intelligence over MCP.
 //
 // Transport: stdio JSON-RPC 2.0, hand-rolled (no MCP SDK — we own the protocol
 // wire layer so the agents know exactly what's happening).
@@ -337,7 +337,7 @@ fn main() {
     let profile = match ToolProfile::resolve(&args, env_profile.as_deref()) {
         Ok(profile) => profile,
         Err(message) => {
-            eprintln!("[automatised-pipeline] {}", message);
+            eprintln!("[ai-architect-mcp-codebase] {}", message);
             // source: POSIX utility convention (e.g. grep(1)) — exit status 2
             // signals a usage error, distinct from runtime failure (1).
             process::exit(2);
@@ -345,7 +345,7 @@ fn main() {
     };
 
     eprintln!(
-        "[automatised-pipeline] stage 0-3d up (Rust {}, profile '{}')",
+        "[ai-architect-mcp-codebase] stage 0-3d up (Rust {}, profile '{}')",
         SERVER_VERSION,
         profile.name()
     );
@@ -356,7 +356,7 @@ fn main() {
         let line = match line {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[automatised-pipeline] stdin error: {}", e);
+                eprintln!("[ai-architect-mcp-codebase] stdin error: {}", e);
                 break;
             }
         };
@@ -366,7 +366,7 @@ fn main() {
         }
         match serde_json::from_str::<Request>(trimmed) {
             Ok(req) => handle_request(req, profile),
-            Err(e) => eprintln!("[automatised-pipeline] parse error: {}", e),
+            Err(e) => eprintln!("[ai-architect-mcp-codebase] parse error: {}", e),
         }
     }
 }

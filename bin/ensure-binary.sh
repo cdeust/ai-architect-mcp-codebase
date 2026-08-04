@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ensure-binary.sh — guarantee target/release/automatised-pipeline exists.
+# ensure-binary.sh — guarantee target/release/ai-architect-mcp-codebase exists.
 #
 # Used by:
 #   - session-start.sh hook (runs synchronously, BEFORE MCP servers
@@ -10,7 +10,7 @@
 #
 # Behaviour
 # ---------
-# 1. If `target/release/automatised-pipeline` exists AND is newer than every
+# 1. If `target/release/ai-architect-mcp-codebase` exists AND is newer than every
 #    file under `src/` and `Cargo.{toml,lock}`, exit 0 immediately.
 # 2. Otherwise, run `cargo build --release --quiet`. Prints progress to
 #    stderr only — stdout stays clean for the MCP launcher pipeline.
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-BIN="$ROOT/target/release/automatised-pipeline"
+BIN="$ROOT/target/release/ai-architect-mcp-codebase"
 MANIFEST="$ROOT/Cargo.toml"
 SRC_DIR="$ROOT/src"
 
@@ -37,7 +37,7 @@ log() {
 }
 
 err() {
-    echo "automatised-pipeline: $*" >&2
+    echo "ai-architect-mcp-codebase: $*" >&2
 }
 
 # Need cargo available in PATH.
@@ -71,13 +71,13 @@ else
 fi
 
 if [ "$needs_build" = "no" ]; then
-    log "automatised-pipeline: binary up-to-date at $BIN"
+    log "ai-architect-mcp-codebase: binary up-to-date at $BIN"
     exit 0
 fi
 
 # Build path. Cargo writes its own progress to stderr; we add a
 # bracketing message so the user knows what's happening.
-err "Building ai-architect-mcp (reason: $needs_build)…"
+err "Building ai-architect-mcp-codebase (reason: $needs_build)…"
 err "  manifest: $MANIFEST"
 err "  output:   $BIN"
 err "  this can take 2–3 minutes on first install."
@@ -86,10 +86,10 @@ start_ts=$(date +%s)
 if cargo build --release --quiet --manifest-path "$MANIFEST" >&2; then
     end_ts=$(date +%s)
     elapsed=$((end_ts - start_ts))
-    err "automatised-pipeline: build OK in ${elapsed}s"
+    err "ai-architect-mcp-codebase: build OK in ${elapsed}s"
     if [ ! -x "$BIN" ]; then
         err "FATAL: cargo build succeeded but $BIN is not executable."
-        err "       Check Cargo.toml [[bin]] target name == 'automatised-pipeline'."
+        err "       Check Cargo.toml [[bin]] target name == 'ai-architect-mcp-codebase'."
         exit 1
     fi
     exit 0

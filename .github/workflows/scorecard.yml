@@ -23,7 +23,7 @@ name: OpenSSF Scorecard
 #
 #   jobs:
 #     scorecard:
-#       uses: cdeust/automatised-pipeline/.github/workflows/scorecard.yml@main
+#       uses: cdeust/ai-architect-mcp-codebase/.github/workflows/scorecard.yml@main
 #       permissions:
 #         security-events: write
 #         id-token: write
