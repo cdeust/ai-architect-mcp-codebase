@@ -56,7 +56,10 @@ fn codex_marketplace_points_at_the_isolated_plugin() {
 
     assert_eq!(marketplace["name"], "ai-architect-mcp-codebase");
     assert_eq!(entry["source"]["source"], "local");
-    assert_eq!(entry["source"]["path"], "./plugins/ai-architect-mcp-codebase");
+    assert_eq!(
+        entry["source"]["path"],
+        "./plugins/ai-architect-mcp-codebase"
+    );
     assert_eq!(entry["policy"]["installation"], "AVAILABLE");
     assert_eq!(entry["policy"]["authentication"], "ON_INSTALL");
 }
@@ -65,7 +68,9 @@ fn codex_marketplace_points_at_the_isolated_plugin() {
 fn generated_codex_skills_match_the_canonical_gemini_sources() {
     for skill in PORTABLE_SKILLS {
         let gemini_root = root().join("skills").join(skill);
-        let codex_root = root().join("plugins/ai-architect-mcp-codebase/skills").join(skill);
+        let codex_root = root()
+            .join("plugins/ai-architect-mcp-codebase/skills")
+            .join(skill);
         let gemini_skill = read(gemini_root.join("SKILL.md"));
         let codex_skill = read(codex_root.join("SKILL.md"));
         let gemini_interface = read(gemini_root.join("agents/openai.yaml"));
