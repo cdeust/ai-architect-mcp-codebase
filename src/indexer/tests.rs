@@ -232,7 +232,8 @@ fn test_symlink_skipped() {
 fn test_dependency_scope_walk() {
     // Proves DependencyScope toggles descent into build/dependency dirs
     // while always excluding `.git`.
-    // Fixture: root/app.rs, root/node_modules/dep.rs, root/.git/hook.rs.
+    // Fixture: root/app.rs, root/node_modules/dep.rs, root/deps/dep2.rs,
+    // root/.git/hook.rs.
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
     let root = tempfile::Builder::new()
@@ -242,9 +243,11 @@ fn test_dependency_scope_walk() {
         .keep();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("node_modules")).unwrap();
+    std::fs::create_dir_all(root.join("deps")).unwrap();
     std::fs::create_dir_all(root.join(".git")).unwrap();
     std::fs::write(root.join("app.rs"), "fn main() {}\n").unwrap();
     std::fs::write(root.join("node_modules/dep.rs"), "fn dep() {}\n").unwrap();
+    std::fs::write(root.join("deps/dep2.rs"), "fn dep2() {}\n").unwrap();
     std::fs::write(root.join(".git/hook.rs"), "fn hook() {}\n").unwrap();
 
     let names = |opts: WalkOptions| -> Vec<String> {
@@ -257,15 +260,18 @@ fn test_dependency_scope_walk() {
         v
     };
 
-    // Default (DependencyScope::None): node_modules and .git are both pruned.
+    // Default (DependencyScope::None): node_modules, deps, and .git are all
+    // pruned. `deps` regression: issue observed 2026-08-06 — Cortex repo's
+    // gitignored deps/ (1.1 GB vendored Python site-packages) was walked
+    // into before this entry existed.
     assert_eq!(names(WalkOptions::default()), vec!["app.rs"]);
 
-    // Full: node_modules is descended, .git stays out.
+    // Full: node_modules and deps are descended, .git stays out.
     let full = WalkOptions {
         language_filter: None,
         dependency_scope: DependencyScope::Full,
     };
-    assert_eq!(names(full), vec!["app.rs", "dep.rs"]);
+    assert_eq!(names(full), vec!["app.rs", "dep.rs", "dep2.rs"]);
 
     // PublicApi also descends at the walk level — the visibility filter
     // is applied at persistence time (see persist::tests), not here.
@@ -273,7 +279,7 @@ fn test_dependency_scope_walk() {
         language_filter: None,
         dependency_scope: DependencyScope::PublicApi,
     };
-    assert_eq!(names(public_api), vec!["app.rs", "dep.rs"]);
+    assert_eq!(names(public_api), vec!["app.rs", "dep.rs", "dep2.rs"]);
 
     let _ = std::fs::remove_dir_all(&root);
 }

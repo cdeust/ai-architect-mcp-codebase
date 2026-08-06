@@ -220,6 +220,14 @@ fn should_skip(name: &str, dependency_scope: DependencyScope) -> bool {
         || name == ".swiftpm"
         // Go
         || name == "vendor"
+        // Elixir / Mix and Erlang / rebar3 — `deps` is the standard fetched-
+        // dependency directory for both build tools, and is also used in the
+        // wild as an ad hoc vendored-packages dir. source: measured
+        // 2026-08-06 — indexing the Cortex repo without this entry walked
+        // into its gitignored deps/ (1.1 GB vendored Python site-packages,
+        // including numpy C headers), flooding the log with duplicate-id
+        // warnings and timing out the Cortex->AP MCP client.
+        || name == "deps"
         // General build output
         || name == "dist"
         || name == "bin"
