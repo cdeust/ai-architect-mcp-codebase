@@ -121,7 +121,9 @@ pub(crate) fn run_get_impact(arguments: &Value) -> Value {
 }
 
 /// Scalar columns of a reverse-dependency handle, in tabular-projection order
-/// (issue #56). Shared by all four impact sections (they are homogeneous).
+/// (issue #56). Shared by all five impact sections (they are homogeneous):
+/// callers/importers/users/implementors/references (references added by
+/// issue #205).
 pub(crate) const IMPACT_COLUMNS: &[&str] = &["qualified_name", "label", "confidence", "id"];
 
 /// Columns of a co-change partner row (issue #58) in get_impact.
@@ -197,6 +199,7 @@ pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
     sort_nodes(&mut impact.importers);
     sort_nodes(&mut impact.users);
     sort_nodes(&mut impact.implementors);
+    sort_nodes(&mut impact.references);
 
     // Serialize reverse-dependency endpoints as re-queryable handles so the
     // caller can keep traversing through MCP (get_symbol/get_context on `id`)
@@ -218,10 +221,15 @@ pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
     };
     // dependents_total is computed from the FULL, pre-truncation counts so the
     // caller always sees the true blast-radius size even when a section is cut.
+    // Deliberately CODE-ONLY (callers/importers/users/implementors) — the
+    // `counts` object below is where code vs. reference fan-in is split out
+    // explicitly (issue #205), so this field's meaning is unchanged for
+    // existing callers.
     let dependents_total = impact.callers.len()
         + impact.importers.len()
         + impact.users.len()
         + impact.implementors.len();
+    let references_total_full = impact.references.len();
 
     // `callers` is the PRIMARY list and the only one the `offset` cursor pages:
     // a caller can page callers to exhaustion via `next_offset`. The remaining
@@ -247,9 +255,19 @@ pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
         to_handles(&impact.implementors),
         response_budget::per_section_chars(),
     );
+    // Doc/script cross-references (issue #205) — same bounded-summary
+    // treatment as importers/users/implementors, kept in its own section
+    // since it is not a code dependency.
+    let references = response_budget::bound_values(
+        to_handles(&impact.references),
+        response_budget::per_section_chars(),
+    );
 
-    let any_truncated =
-        callers.truncated || importers.truncated || users.truncated || implementors.truncated;
+    let any_truncated = callers.truncated
+        || importers.truncated
+        || users.truncated
+        || implementors.truncated
+        || references.truncated;
 
     // Token-surface shaping (issue #56): render each reverse-dependency section
     // under the shared detail/format. ids → bare qualified names; tabular →
@@ -264,6 +282,7 @@ pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
     let importers_view = render(&importers.items);
     let users_view = render(&users.items);
     let implementors_view = render(&implementors.items);
+    let references_view = render(&references.items);
 
     let mut out = json!({
         "stage": 3,
@@ -287,7 +306,19 @@ pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
         "users_total": users.total_count,
         "implementors": implementors_view.value,
         "implementors_total": implementors.total_count,
+        "references": references_view.value,
+        "references_total": references.total_count,
         "dependents_total": dependents_total,
+        // Code vs. reference fan-in split (issue #205): `code` is the same
+        // count as `dependents_total` (callers+importers+users+implementors);
+        // `references` is the doc/script cross-reference count. Reported
+        // together so a caller doing "what's the real fan-in of this file?"
+        // does not have to sum sections itself or mistake one dimension for
+        // the whole.
+        "counts": {
+            "code": dependents_total,
+            "references": references_total_full,
+        },
         "truncated": any_truncated,
         // Epistemic honesty: is this blast radius exhaustive, or a lower bound?
         // `lower-bound` means real impact may exceed what is shown — because the
