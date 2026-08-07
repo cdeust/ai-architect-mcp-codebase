@@ -200,11 +200,15 @@ pub fn index_codebase_with_language(
     let files_indexed = collector.files_indexed();
 
     // All-file indexing post-pass: now that every File node exists, recover
-    // the import graph of files the AST parsers don't cover (.js family) as
-    // Imports_File_File edges. Forward-reference safe (all File nodes present);
-    // best-effort (unresolved specifiers skipped). source: all-file indexing.
+    // the import/reference graph of files the AST parsers don't cover — .js
+    // family (Imports_File_File) and markdown/shell doc/script cross-
+    // references (References_File_File, issue #205). Forward-reference safe
+    // (all File nodes present); best-effort (unresolved specifiers skipped).
+    // source: all-file indexing.
     match light_link::link_loose_file_imports(&store, codebase_path, &source_files) {
-        Ok(n) if n > 0 => eprintln!("indexer: light-linked {n} loose file imports (.js family)"),
+        Ok(n) if n > 0 => {
+            eprintln!("indexer: light-linked {n} loose file imports/references (.js/.md/.sh)")
+        }
         Ok(_) => {}
         Err(e) => eprintln!("indexer: light-link pass skipped: {e}"),
     }
