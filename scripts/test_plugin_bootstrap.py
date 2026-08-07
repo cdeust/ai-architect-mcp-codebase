@@ -421,6 +421,66 @@ fi
         require("bootstrap verification skipped (source-checkout mode)" in result.stderr, "source opt-out was silent")
         require(not curl_calls.exists(), "source checkout downloaded a release")
 
+        # Live-mount montage (issue #206): a marketplace cache whose installed
+        # binary is a symlink into a source tree checked out elsewhere. The
+        # plain hatch above can never fire for it (a marketplace cache root
+        # has no .git of its own); this extension accepts the montage shape
+        # under the same explicit opt-in, and only it.
+        dev_tree = tmp / "montage/dev-checkout"
+        (dev_tree / ".git").mkdir(parents=True)
+        dev_bin = dev_tree / "target/release/ai-architect-mcp-codebase"
+        dev_bin.parent.mkdir(parents=True)
+        dev_bin.write_text("#!/bin/sh\necho DEV_BUILD\n", encoding="utf-8")
+        dev_bin.chmod(0o755)
+        # Decouple from fixture-copy ordering: the montage binary must read as
+        # not-stale against the (empty) packaged src/ and freshly copied
+        # manifests regardless of wall-clock timing between test cases.
+        future = time.time() + 3600
+        os.utime(dev_bin, (future, future))
+
+        # (a) montage + AI_ARCHITECT_SOURCE_CHECKOUT=1 -> accepted, loudly
+        # announced with the resolved dev path, no network reached.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "montage-accept")
+        target_bin = plugin / "target/release/ai-architect-mcp-codebase"
+        target_bin.parent.mkdir(parents=True)
+        target_bin.symlink_to(dev_bin)
+        install_curl(fake_bin, curl_calls, absent_release())
+        result = run(plugin, fake_bin, source_checkout=True)
+        require(result.returncode == 0, result.stderr)
+        require("bootstrap verification skipped (source-checkout mode)" in result.stderr, "montage accept was silent")
+        require(str(dev_bin.resolve()) in result.stderr, "montage acceptance did not announce the resolved dev path")
+        require(not curl_calls.exists(), "montage acceptance reached the download path")
+
+        # (b) montage + no opt-in -> still FATAL: the digest pin protects the
+        # default path exactly as it does for any other tampered cache.
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "montage-no-env")
+        target_bin = plugin / "target/release/ai-architect-mcp-codebase"
+        target_bin.parent.mkdir(parents=True)
+        target_bin.symlink_to(dev_bin)
+        sidecar = plugin / "target/release/ai-architect-mcp-codebase.sha256"
+        sidecar.write_text(f"{PLUGIN['version']}  {'0' * 64}  {target_bin}\n", encoding="utf-8")
+        install_curl(fake_bin, curl_calls, absent_release())
+        result = run(plugin, fake_bin)
+        require(result.returncode != 0 and "digest mismatch" in result.stderr, "montage without opt-in was not FATAL")
+
+        # (c) symlink to a location with no .git ancestor + opt-in -> still
+        # FATAL; the hatch requires a genuine source checkout, not merely a
+        # symlink pointing "elsewhere".
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / "montage-no-git")
+        orphan = tmp / "montage/orphan-binary"
+        orphan.parent.mkdir(parents=True, exist_ok=True)
+        orphan.write_text("#!/bin/sh\necho ORPHAN\n", encoding="utf-8")
+        orphan.chmod(0o755)
+        target_bin = plugin / "target/release/ai-architect-mcp-codebase"
+        target_bin.parent.mkdir(parents=True)
+        target_bin.symlink_to(orphan)
+        sidecar = plugin / "target/release/ai-architect-mcp-codebase.sha256"
+        sidecar.write_text(f"{PLUGIN['version']}  {'0' * 64}  {target_bin}\n", encoding="utf-8")
+        install_curl(fake_bin, curl_calls, absent_release())
+        result = run(plugin, fake_bin, source_checkout=True)
+        require(result.returncode != 0 and "digest mismatch" in result.stderr, "non-git symlink target was wrongly accepted")
+        require("verification skipped" not in result.stderr, "non-git symlink target triggered the source-checkout hatch")
+
     print("PLUGIN BOOTSTRAP OK: trust anchor, SHA, provenance, archive type, cache, and source paths")
 
 
