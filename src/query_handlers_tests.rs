@@ -102,6 +102,197 @@ fn test_query_graph_rejects_delete() {
 }
 
 #[test]
+fn readonly_gate_ignores_keywords_inside_literals_and_properties() {
+    // issue #200 — a client that looks a symbol up BY NAME sends the symbol as
+    // a string literal. `load`, `set`, `create`, `delete` and `call` are all
+    // ordinary function names, so the literal must not trip the gate. Observed
+    // 6x on automatised-pipeline / 4x on cortex-viz in the 2026-08-06 bench.
+    for name in [
+        "load", "set", "create", "delete", "merge", "drop", "call", "remove", "alter",
+    ] {
+        let q = format!("MATCH (s:Symbol) WHERE s.name = '{name}' RETURN s");
+        assert_eq!(
+            forbidden_cypher_keyword(&q),
+            None,
+            "literal '{name}' must pass"
+        );
+    }
+    // Double-quoted literals and IN-lists take the same path.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (s) WHERE s.name = \"load\" RETURN s"),
+        None
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (s) WHERE s.name IN ['load','parse'] RETURN s"),
+        None
+    );
+    // Property access: `n.set` is a property, never a SET clause.
+    assert_eq!(forbidden_cypher_keyword("MATCH (n) RETURN n.load"), None);
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) RETURN n.set, n.create"),
+        None
+    );
+    // Backtick-quoted identifiers are data, not clauses.
+    assert_eq!(forbidden_cypher_keyword("MATCH (n) RETURN n.`set`"), None);
+    // Comments are not executable.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) RETURN n // DELETE n"),
+        None
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) /* CREATE (x) */ RETURN n"),
+        None
+    );
+}
+
+#[test]
+fn readonly_gate_still_rejects_real_mutations_around_literals() {
+    // The masking must not become a bypass: a real clause OUTSIDE a literal is
+    // still caught, including when a literal or comment precedes it.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (s) WHERE s.name = 'load' DELETE s"),
+        Some("DELETE")
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) /* harmless */ CREATE (m:Foo)"),
+        Some("CREATE")
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("// comment\nMATCH (n) SET n.x = 1"),
+        Some("SET")
+    );
+    // An escaped quote must not end the literal early and expose the rest.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (s) WHERE s.name = 'it\\'s load' RETURN s"),
+        None
+    );
+    // Genuine LOAD is still a mutation-class clause.
+    assert_eq!(
+        forbidden_cypher_keyword("LOAD CSV FROM 'x' AS r RETURN r"),
+        Some("LOAD")
+    );
+}
+
+#[test]
+fn readonly_gate_treats_a_lone_slash_as_arithmetic_not_a_comment() {
+    // Only `//` and `/*` open a comment. A single `/` is division (or part of
+    // a path) and must stay executable text: mutation testing showed that
+    // relaxing the block-comment guard made every lone `/` open an
+    // unterminated comment, which fails the query closed for no reason.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) RETURN n.size / 2"),
+        None
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) WHERE n.a / n.b > 1 RETURN n"),
+        None
+    );
+    // A division does not hide a following mutation from the scan either.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) WITH n.a / 2 AS x DELETE n"),
+        Some("DELETE")
+    );
+}
+
+#[test]
+fn readonly_gate_block_comment_boundaries() {
+    // Discriminating inputs found by an exhaustive differential run over the
+    // block-comment scanner (every string of length 0..=7 in the alphabet that
+    // drives it). Without these, three arithmetic mutants on the `/*` arm and
+    // its `i += 2` survive — and one of them MIS-MASKS text, which is the
+    // direction that could hide a mutation from the scan.
+    // # source: measured 2026-08-07, /tmp/exh200b.rs differential harness.
+
+    // Empty block comment is a real, closed comment: masked, query allowed.
+    assert_eq!(forbidden_cypher_keyword("MATCH (n) /**/ RETURN n"), None);
+    // ...and it must not swallow what follows it.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) /**/ DELETE n"),
+        Some("DELETE")
+    );
+    // `/*` with nothing after it is unterminated -> fail closed.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) RETURN n /*"),
+        Some("UNTERMINATED_LITERAL")
+    );
+    // `/*/` LOOKS closed but is not: the `/` is part of the opener, so the
+    // comment never terminates. Masking it as if closed would hide the rest.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) /*/ RETURN n"),
+        Some("UNTERMINATED_LITERAL")
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) /*/ DELETE n"),
+        Some("UNTERMINATED_LITERAL")
+    );
+    // A closed comment immediately followed by another one still masks both.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) /*a*//*b*/ RETURN n"),
+        None
+    );
+}
+
+#[test]
+fn readonly_gate_handles_non_executable_regions_at_index_zero() {
+    // The arm guards are `i + 1 < b.len()`; several arithmetic mutants on them
+    // differ ONLY when the region starts at index 0, because that is the single
+    // position where `i - 1` underflows and `i * 1` coincides with `i`. Every
+    // other test here has the literal or comment mid-query, so those mutants
+    // survived until this case existed.
+    // # source: exhaustive differential run, 2026-08-07 (/tmp/exh200b.rs).
+
+    // Leading closed block comment is masked -> the keyword inside is data.
+    assert_eq!(
+        forbidden_cypher_keyword("/* CREATE (x) */ MATCH (n) RETURN n"),
+        None
+    );
+    // Leading line comment likewise.
+    assert_eq!(
+        forbidden_cypher_keyword("// DELETE n\nMATCH (n) RETURN n"),
+        None
+    );
+    // Leading string literal likewise.
+    assert_eq!(forbidden_cypher_keyword("'load' MATCH (n) RETURN n"), None);
+    // A leading comment must not hide a real clause after it.
+    assert_eq!(
+        forbidden_cypher_keyword("/* x */ MATCH (n) DELETE n"),
+        Some("DELETE")
+    );
+    // Unterminated at index 0 still fails closed.
+    assert_eq!(
+        forbidden_cypher_keyword("/* never closed"),
+        Some("UNTERMINATED_LITERAL")
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("'unclosed load"),
+        Some("UNTERMINATED_LITERAL")
+    );
+    // The whole query being nothing but a closed comment is still a clean read.
+    assert_eq!(forbidden_cypher_keyword("/**/"), None);
+}
+
+#[test]
+fn readonly_gate_fails_closed_on_unterminated_literal() {
+    // An unterminated literal would let everything after it escape the scan,
+    // so it is refused outright rather than masked to end-of-input.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (s) WHERE s.name = 'oops DELETE s"),
+        Some("UNTERMINATED_LITERAL")
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) /* never closed CREATE (m)"),
+        Some("UNTERMINATED_LITERAL")
+    );
+    // ...and the end-to-end path reports it as a policy rejection.
+    let args = json!({
+        "graph_path": "/nonexistent/graph",
+        "query": "MATCH (s) WHERE s.name = 'oops DELETE s"
+    });
+    let err = do_query_graph(&args).expect_err("must reject unterminated literal");
+    assert!(err.contains("read_only_query_required"), "got: {err}");
+}
+
+#[test]
 fn order_by_detection_whole_word_and_case_insensitive() {
     assert!(has_order_by_clause("MATCH (n) RETURN n ORDER BY n.id"));
     assert!(has_order_by_clause("match (n) return n order by n.name"));

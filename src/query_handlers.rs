@@ -55,21 +55,124 @@ pub(crate) const FORBIDDEN_CYPHER_KEYWORDS: &[&str] = &[
 ];
 
 /// Returns the first forbidden keyword found in `query`, or None if the query
-/// is safe. Matching is whole-word, ASCII case-insensitive. Strings/comments
-/// are not specifically excluded — callers who need `CREATE` as a literal in
-/// a read query must restructure it (reading doesn't require mutation words).
+/// is safe. Matching is whole-word, ASCII case-insensitive, and considers only
+/// *executable* text: string literals, backtick-quoted identifiers and comments
+/// are masked out first, and a keyword reached through `.` is a property name,
+/// not a clause.
+///
+/// Why (issue #200): whole-word matching alone was not enough. A client that
+/// looks a symbol up BY NAME — which is exactly what Cortex's process-symbols
+/// path does during ingestion — sends `... WHERE s.name = 'load'`, and the
+/// literal tripped the gate. `set`, `create`, `delete` and `call` are ordinary
+/// function names in any codebase, so this rejected legitimate read queries
+/// against any corpus containing them (observed 6x on automatised-pipeline and
+/// 4x on cortex-viz in the 2026-08-06 A/B ingestion bench).
+///
+/// Masking is safe because nothing masked can execute: text inside a literal or
+/// a comment is data, and `n.set` addresses a property. An UNTERMINATED literal
+/// is the one case that could hide a real mutation from the scan, so it is
+/// rejected outright (fail closed) rather than masked to end-of-input.
 pub(crate) fn forbidden_cypher_keyword(query: &str) -> Option<&'static str> {
-    let upper = query.to_ascii_uppercase();
+    let Some(executable) = mask_non_executable(query) else {
+        // Unterminated literal/comment — refuse rather than scan a truncated
+        // view of the query. Reported as its own sentinel so the caller still
+        // gets an actionable read_only_query_required error.
+        return Some("UNTERMINATED_LITERAL");
+    };
+    let upper = executable.to_ascii_uppercase();
     FORBIDDEN_CYPHER_KEYWORDS
         .iter()
-        .find(|&&kw| contains_whole_word(&upper, kw))
+        .find(|&&kw| contains_keyword_token(&upper, kw))
         .copied()
 }
 
-/// Whole-word contains: `needle` must be bordered by non-alphanumeric chars
-/// (or start/end of haystack). Prevents false positives on identifiers that
-/// embed the keyword (e.g. `created_at` should not trigger `CREATE`).
-pub(crate) fn contains_whole_word(haystack: &str, needle: &str) -> bool {
+/// Replaces every non-executable region of `query` with spaces, preserving byte
+/// length. Returns None when a literal or block comment is left unterminated.
+///
+/// Documented equivalent mutants (coding-standards.md §12.4). The scoped
+/// cargo-mutants run over this function accounts for all 76 mutants: 56 caught,
+/// 10 timed out, 10 survive. Every survivor is an off-by-one on one of the
+/// bounds guards below (`<`→`<=`, `+`→`-`, `+`→`*`) or `&&`→`||` in the
+/// comment-close check. They are unobservable: each only changes behaviour at a
+/// position where the literal or comment is already unterminated, and every
+/// such path converges on the same result (return None).
+///
+/// Established DIFFERENTIALLY, not by argument — reasoning got this wrong once
+/// already. The original and each variant were run over EVERY string of length
+/// 0..=7 drawn from the alphabet that drives these branches
+/// (`'` `"` `` ` `` `\` `/` `*` `a` `\n`), 2,396,745 inputs each, comparing
+/// outputs. The survivors listed above show 0 differing inputs. Three OTHER
+/// mutants on the block-comment arm showed 10,751 / 7,326 / 2,394 differing
+/// inputs — genuinely non-equivalent, and now killed by
+/// `readonly_gate_block_comment_boundaries` and
+/// `readonly_gate_handles_non_executable_regions_at_index_zero`. The
+/// discriminating cases were `/**/`, `/*`, `/*/` and any region starting at
+/// index 0, where `i - 1` underflows and `i * 1` coincides with `i`.
+/// # source: measured 2026-08-07, differential harness /tmp/exh200b.rs.
+///
+/// The 10 timeouts stop the index advancing so the loop never terminates; a
+/// hang is detection, not an escape.
+pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
+    let b = query.as_bytes();
+    let mut out = vec![b' '; b.len()];
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            q @ (b'\'' | b'"' | b'`') => {
+                i += 1; // opening quote already blanked
+                let mut closed = false;
+                while i < b.len() {
+                    // Backslash escapes the next byte inside quotes.
+                    if b[i] == b'\\' && q != b'`' && i + 1 < b.len() {
+                        i += 2;
+                        continue;
+                    }
+                    if b[i] == q {
+                        i += 1;
+                        closed = true;
+                        break;
+                    }
+                    i += 1;
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                i += 2;
+                let mut closed = false;
+                while i + 1 < b.len() {
+                    if b[i] == b'*' && b[i + 1] == b'/' {
+                        i += 2;
+                        closed = true;
+                        break;
+                    }
+                    i += 1;
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            c => {
+                out[i] = c;
+                i += 1;
+            }
+        }
+    }
+    // Masked bytes are ASCII spaces and kept bytes came from a valid UTF-8
+    // string at boundaries the ASCII-only matches never split.
+    String::from_utf8(out).ok()
+}
+
+/// Whole-word match that additionally rejects property access: `n.set` is a
+/// property named `set`, never a SET clause, so a `.` immediately before the
+/// keyword disqualifies it.
+pub(crate) fn contains_keyword_token(haystack: &str, needle: &str) -> bool {
     let bytes = haystack.as_bytes();
     let nbytes = needle.as_bytes();
     if nbytes.is_empty() || bytes.len() < nbytes.len() {
@@ -78,10 +181,10 @@ pub(crate) fn contains_whole_word(haystack: &str, needle: &str) -> bool {
     let mut i = 0;
     while i + nbytes.len() <= bytes.len() {
         if &bytes[i..i + nbytes.len()] == nbytes {
-            let left_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_';
+            // `.` disqualifies: `n.set` is a property, never a SET clause.
+            let left_ok = i == 0 || (!is_ident_char(bytes[i - 1]) && bytes[i - 1] != b'.');
             let right = i + nbytes.len();
-            let right_ok = right == bytes.len()
-                || (!bytes[right].is_ascii_alphanumeric() && bytes[right] != b'_');
+            let right_ok = right == bytes.len() || !is_ident_char(bytes[right]);
             if left_ok && right_ok {
                 return true;
             }
