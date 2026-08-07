@@ -10,6 +10,15 @@
 # Source checkout (no CLAUDE_PLUGIN_ROOT, or explicit opt-in plus .git): never
 # substitute a release binary for local source. Rebuild when sources are newer
 # than target/.
+#
+# Live-mount montage (marketplace cache whose installed binary is a symlink
+# into a separately checked-out source tree, e.g. a dev-symlink montage):
+# a marketplace cache has no .git of its own, so the plain opt-in above can
+# never fire for it and the digest pin goes FATAL against a binary the
+# developer intentionally rebuilt. Same explicit opt-in
+# (AI_ARCHITECT_SOURCE_CHECKOUT=1) additionally accepts this shape when the
+# installed binary resolves (following symlinks) to a path outside $ROOT that
+# sits inside its own .git-bearing tree. See issue #206.
 
 set -euo pipefail
 
@@ -53,6 +62,35 @@ sha256_file() {
     else
         fatal "neither sha256sum nor shasum is available"
     fi
+}
+
+resolve_path() {
+    # Portable symlink resolution (macOS ships BSD readlink without -f).
+    # Follows relative and absolute link targets, bounded against loops,
+    # then canonicalizes the final directory with `cd -P`.
+    local target="$1" iterations=0 link dir base
+    while [ -L "$target" ]; do
+        iterations=$((iterations + 1))
+        [ "$iterations" -le 40 ] || fatal "symlink resolution exceeded 40 hops at $target"
+        link=$(readlink "$target")
+        case "$link" in
+            /*) target="$link" ;;
+            *) target="$(dirname -- "$target")/$link" ;;
+        esac
+    done
+    dir=$(cd -- "$(dirname -- "$target")" 2>/dev/null && pwd -P) || fatal "cannot resolve directory for $target"
+    base=$(basename -- "$target")
+    printf '%s/%s\n' "$dir" "$base"
+}
+
+find_git_root() {
+    # Walk up from a resolved directory looking for a .git boundary.
+    local dir="$1"
+    while :; do
+        [ -e "$dir/.git" ] && { printf '%s\n' "$dir"; return 0; }
+        [ "$dir" = "/" ] && return 1
+        dir=$(dirname -- "$dir")
+    done
 }
 
 download() {
@@ -125,8 +163,32 @@ if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
     # This is a developer escape hatch, never a decision packaged metadata may
     # make: a marketplace cache has no .git, and every accepted bypass is
     # announced even when the launcher requested quiet mode.
-    if [ "${AI_ARCHITECT_SOURCE_CHECKOUT:-0}" = "1" ] && [ -e "$ROOT/.git" ]; then
+    source_checkout_hatch="no"
+    montage_note=""
+    if [ "${AI_ARCHITECT_SOURCE_CHECKOUT:-0}" = "1" ]; then
+        if [ -e "$ROOT/.git" ]; then
+            source_checkout_hatch="yes"
+        elif [ -L "$BIN" ]; then
+            # Live-mount montage: the installed binary is a symlink into a
+            # source tree checked out elsewhere. Accept only if the resolved
+            # target lies OUTSIDE $ROOT (a real montage, not self-reference)
+            # and inside its own .git-bearing tree (a real source checkout,
+            # not an arbitrary file).
+            resolved_bin="$(resolve_path "$BIN")"
+            case "$resolved_bin" in
+                "$ROOT"/*|"$ROOT") ;;
+                *)
+                    if git_root=$(find_git_root "$(dirname -- "$resolved_bin")"); then
+                        source_checkout_hatch="yes"
+                        montage_note="live-mounted dev symlink: $BIN -> $resolved_bin (source checkout at $git_root)"
+                    fi
+                    ;;
+            esac
+        fi
+    fi
+    if [ "$source_checkout_hatch" = "yes" ]; then
         err "bootstrap verification skipped (source-checkout mode)"
+        [ -n "$montage_note" ] && err "$montage_note"
     else
         marketplace_install="yes"
     fi
