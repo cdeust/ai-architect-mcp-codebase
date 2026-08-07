@@ -13,7 +13,9 @@
 
 use super::*;
 use crate::epistemic::Boundary;
-use crate::graph_store::{cypher_str, GraphStore, NODE_COMMUNITY, NODE_FUNCTION, NODE_PROCESS};
+use crate::graph_store::{
+    cypher_str, GraphStore, NODE_COMMUNITY, NODE_FILE, NODE_FUNCTION, NODE_PROCESS,
+};
 
 /// Builds a fresh, schema-initialized store in a unique temp dir. The caller
 /// owns the returned `TempDir`; dropping it removes the database.
@@ -26,6 +28,25 @@ fn empty_store() -> (tempfile::TempDir, GraphStore) {
     let store = GraphStore::open_or_create(&db_path).expect("open_or_create");
     store.create_schema().expect("create_schema");
     (dir, store)
+}
+
+fn insert_file(store: &GraphStore, id: &str) {
+    store
+        .insert_node(
+            NODE_FILE,
+            &[
+                ("id", &cypher_str(id)),
+                ("path", &cypher_str(id)),
+                ("name", &cypher_str(id)),
+                (
+                    "extension",
+                    &cypher_str(id.rsplit('.').next().unwrap_or("")),
+                ),
+                ("size_bytes", "1"),
+                ("parse_errors", "0"),
+            ],
+        )
+        .expect("insert file node");
 }
 
 fn insert_function(store: &GraphStore, qn: &str) {
@@ -193,4 +214,125 @@ fn get_impact_flags_heuristic_edge_as_lower_bound() {
         "a heuristic edge must emit the heuristic epistemic reason, got {:?}",
         result.epistemic_reasons
     );
+}
+
+// ---------------------------------------------------------------------------
+// File-level reference fan-in (issue #205)
+// ---------------------------------------------------------------------------
+
+/// A File target with `References_File_File` edges pointing at it (the shape
+/// `light_link`'s markdown/shell extraction produces) surfaces those
+/// referrers under `references`, split out from `importers`, and the impact
+/// boundary stays `Exact` — the graph has reference-edge indexing (there IS a
+/// References_File_File edge), so there is nothing to be blind to.
+#[test]
+fn get_impact_reports_file_reference_fan_in_as_exact() {
+    let (_dir, store) = empty_store();
+    let hub = "rules/coding-standards.md";
+    let referrer_a = "CONTRIBUTING.md";
+    let referrer_b = "tools/foo.sh";
+
+    insert_file(&store, hub);
+    insert_file(&store, referrer_a);
+    insert_file(&store, referrer_b);
+    store
+        .insert_edge(
+            "References_File_File",
+            referrer_a,
+            hub,
+            &[("confidence", "1.0"), ("resolution_method", "'md-link'")],
+        )
+        .expect("insert md reference edge");
+    store
+        .insert_edge(
+            "References_File_File",
+            referrer_b,
+            hub,
+            &[("confidence", "1.0"), ("resolution_method", "'sh-source'")],
+        )
+        .expect("insert sh reference edge");
+
+    let result = get_impact(&store, hub).expect("get_impact");
+
+    assert_eq!(
+        result.references.len(),
+        2,
+        "both referrers must surface under references, got {:?}",
+        result.references.iter().map(|n| &n.id).collect::<Vec<_>>()
+    );
+    assert!(
+        result.importers.is_empty(),
+        "reference edges must not leak into the code-dependency `importers` section"
+    );
+    assert_eq!(
+        result.epistemic,
+        Boundary::Exact,
+        "reference edges exist in the graph ⇒ code-only fan-in is not flagged as unindexed"
+    );
+}
+
+/// A File target with ZERO inbound references, in a graph that contains
+/// markdown/shell files but NO `References_File_File` edges anywhere, must be
+/// flagged `LowerBound` with the "predates reference-edge indexing" reason —
+/// this graph cannot tell "genuinely unreferenced" apart from "built before
+/// issue #205 shipped", so it must say so rather than claim completeness.
+#[test]
+fn get_impact_flags_unindexed_reference_graph_as_lower_bound() {
+    let (_dir, store) = empty_store();
+    let target = "rules/coding-standards.md";
+    let unrelated_md = "README.md"; // present, but never linked via References_
+
+    insert_file(&store, target);
+    insert_file(&store, unrelated_md);
+
+    let result = get_impact(&store, target).expect("get_impact");
+
+    assert!(result.references.is_empty());
+    assert_eq!(
+        result.epistemic,
+        Boundary::LowerBound,
+        "md/sh files exist but zero References_File_File edges anywhere ⇒ lower bound"
+    );
+    assert!(
+        result
+            .epistemic_reasons
+            .iter()
+            .any(|r| r.contains("References_File_File") && r.contains("lower bound")),
+        "must name the unindexed-reference carrier, got {:?}",
+        result.epistemic_reasons
+    );
+}
+
+/// A File target with zero inbound references in a graph where OTHER files
+/// DO carry References_File_File edges (reference-edge indexing has clearly
+/// run) must NOT be flagged lower-bound on that basis — this is a genuinely
+/// unreferenced file, not a coverage gap.
+#[test]
+fn get_impact_does_not_flag_orphan_file_when_graph_has_reference_indexing() {
+    let (_dir, store) = empty_store();
+    let target = "docs/orphan.md";
+    let other_hub = "rules/coding-standards.md";
+    let other_referrer = "CONTRIBUTING.md";
+
+    insert_file(&store, target);
+    insert_file(&store, other_hub);
+    insert_file(&store, other_referrer);
+    store
+        .insert_edge(
+            "References_File_File",
+            other_referrer,
+            other_hub,
+            &[("confidence", "1.0"), ("resolution_method", "'md-link'")],
+        )
+        .expect("insert reference edge elsewhere in the graph");
+
+    let result = get_impact(&store, target).expect("get_impact");
+
+    assert!(result.references.is_empty());
+    assert_eq!(
+        result.epistemic,
+        Boundary::Exact,
+        "reference-edge indexing ran elsewhere in this graph ⇒ an orphan file is not a coverage gap"
+    );
+    assert!(result.epistemic_reasons.is_empty());
 }
