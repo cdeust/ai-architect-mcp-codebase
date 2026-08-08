@@ -108,6 +108,95 @@
       "query_id": "q10",
       "input": { "qualified_name": "app.ts::App" },
       "expected": { "qualified_name": "app.ts::App" }
+    },
+
+    {
+      "query_id": "q8",
+      "_note": "issue #212 root cause 1: top-level Functions in app.ts, mirroring rust-self's per-file Defines_File_Function methodology. store.ts and logger.ts define no top-level Functions (only class Methods), so app.ts::main is the corpus's only non-trivial q8 case — verified by reading the 3 source files and against a freshly indexed+resolved graph (query_graph, 2026-08-08).",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'app.ts' RETURN n.qualified_name"
+      },
+      "expected": { "symbols": ["app.ts::main"] }
+    },
+
+    {
+      "query_id": "q9",
+      "_note": "issue #212 root cause 1: imports in app.ts (named import `{ ConsoleLogger, Logger }` from './logger' counts as two, per the task rule multi-import braces count as multiple, plus one from './store'). Verified against a freshly indexed+resolved graph (query_graph) and independently against app.ts's source text.",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'app.ts' RETURN n.path"
+      },
+      "expected": {
+        "imports": [
+          ".::logger::ConsoleLogger",
+          ".::logger::Logger",
+          ".::store::MemoryStore"
+        ]
+      }
+    },
+    {
+      "query_id": "q9",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'store.ts' RETURN n.path"
+      },
+      "expected": {
+        "imports": [".::logger::Logger"]
+      }
+    },
+
+    {
+      "query_id": "q11",
+      "_note": "issue #212 root cause 1: private/public fields on the corpus's three concrete classes. Verified against a freshly indexed+resolved graph (query_graph) and independently against each file's source text.",
+      "input": {
+        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'logger.ts::ConsoleLogger' RETURN f.name"
+      },
+      "expected": { "fields": ["prefix"] }
+    },
+    {
+      "query_id": "q11",
+      "input": {
+        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'store.ts::MemoryStore' RETURN f.name"
+      },
+      "expected": { "fields": ["data", "logger"] }
+    },
+    {
+      "query_id": "q11",
+      "input": {
+        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'app.ts::App' RETURN f.name"
+      },
+      "expected": { "fields": ["logger", "store"] }
+    },
+
+    {
+      "query_id": "q12",
+      "_note": "issue #212 root cause 1: partition by module/file, mirroring rust-self's directory-based methodology — logger.ts is the logging concern, store.ts the storage concern, app.ts the entry/wiring concern. This is a principled independent module boundary (three distinct concerns, one per file), NOT copied from cluster_graph's own output on this corpus — the whole point of the label is to test whether the pipeline's community detection recovers this human module boundary on a small tightly-coupled corpus. Covers every top-level symbol the corpus defines.",
+      "input": {},
+      "expected": {
+        "partition": [
+          { "qn": "logger.ts::Logger", "cluster": 1 },
+          { "qn": "logger.ts::ConsoleLogger", "cluster": 1 },
+          { "qn": "logger.ts::NullLogger", "cluster": 1 },
+          { "qn": "store.ts::Store", "cluster": 2 },
+          { "qn": "store.ts::MemoryStore", "cluster": 2 },
+          { "qn": "app.ts::App", "cluster": 3 },
+          { "qn": "app.ts::main", "cluster": 3 }
+        ]
+      }
+    },
+
+    {
+      "query_id": "q14",
+      "_note": "issue #212 root cause 3 (cleared, not a bug): investigated whether the resolver correctly distinguishes local (should resolve) TS relative imports from external (expected unresolved) ones before labeling this query — verified via a freshly indexed+resolved graph that every Import node under app.ts and store.ts has is_resolved=true (all three of the corpus's imports are local relative imports across its own files, and all resolve via Imports_File_Struct/Imports_File_Trait edges: app.ts -> store.ts::MemoryStore, logger.ts::ConsoleLogger, logger.ts::Logger; store.ts -> logger.ts::Logger). The corpus has zero genuinely-external (npm/stdlib) imports, so the honest ground truth is an empty unresolved set for both files — this deliberately differs from rust-self's q14 query (which reuses the q9 pattern and hand-filters `expected` to the external subset); that pattern degenerates to a forced 0.0 score here (scoring.rs::score_f1 returns 0.0 whenever expected is empty and actual is non-empty), so this label instead queries Import.is_resolved directly (set by resolver::imports::resolve_imports via GraphStore::mark_nodes_resolved) to keep both the query and the expectation honest for a corpus with no external imports.",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'app.ts' AND n.is_resolved = false RETURN n.path"
+      },
+      "expected": { "unresolved": [] }
+    },
+    {
+      "query_id": "q14",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'store.ts' AND n.is_resolved = false RETURN n.path"
+      },
+      "expected": { "unresolved": [] }
     }
   ]
 }
