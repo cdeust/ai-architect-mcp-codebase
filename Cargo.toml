@@ -111,6 +111,27 @@ tempfile = "3"
 # Source: ZERA S1 — the zera-hello integration test needs the crate to
 # call hello() against a real indexed graph from this workspace.
 zera = { path = "crates/zera" }
+# source: issue #224 follow-up — widened-sample recall measurement for the
+# generic structural-introspection engine (parser::spec::structural). These
+# 12 grammars are NOT wired into any production dispatch path (test-only,
+# hence dev-dependencies, hence zero effect on the shipped binary or the
+# end-result bench) — they exist solely so `structural_wide_sample_tests`
+# can measure recall on languages nobody has hand-tuned an extractor for,
+# per the task's "projection to 180 must rest on a measured rate over a
+# wider sample" requirement. Each is an official tree-sitter grammar crate
+# published on crates.io, MIT or Apache-2.0 licensed.
+tree-sitter-c-sharp = "0.23"
+tree-sitter-php = "0.24"
+tree-sitter-scala = "0.26"
+tree-sitter-haskell = "0.23"
+tree-sitter-elixir = "0.3"
+tree-sitter-lua = "0.5"
+tree-sitter-bash = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-zig = "1.1"
+tree-sitter-julia = "0.23"
+tree-sitter-dart = "0.2"
+tree-sitter-ocaml = "0.25"
 
 [profile.release]
 opt-level = 3
