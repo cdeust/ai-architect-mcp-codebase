@@ -130,17 +130,23 @@ pub fn run_corpus(corpus: &CorpusConfig, binary: &Path) -> CorpusRun {
             }
         };
         let start = Instant::now();
-        let score =
-            match dispatch_label(&mut client, &graph_path, spec.tool, spec.score_type, label) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!(
-                        "[bench] {}/{}: dispatch error: {}",
-                        corpus.name, label.query_id, e
-                    );
-                    0.0
-                }
-            };
+        let score = match dispatch_label(
+            &mut client,
+            &graph_path,
+            &corpus.corpus_dir,
+            spec.tool,
+            spec.score_type,
+            label,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "[bench] {}/{}: dispatch error: {}",
+                    corpus.name, label.query_id, e
+                );
+                0.0
+            }
+        };
         let dt = start.elapsed().as_millis();
         *sums.entry(label.query_id.clone()).or_insert(0.0) += score;
         *counts.entry(label.query_id.clone()).or_insert(0) += 1;
@@ -185,23 +191,43 @@ fn index_corpus(client: &mut McpClient, source: &Path, output_dir: &Path) -> Res
 fn dispatch_label(
     client: &mut McpClient,
     graph_path: &Path,
+    corpus_dir: &Path,
     tool: &str,
     score_type: ScoreType,
     label: &GroundTruthLabel,
 ) -> Result<f64, String> {
     let graph = graph_path.to_string_lossy().to_string();
-    let args = build_tool_args(tool, &graph, &label.input)?;
+    let args = build_tool_args(tool, &graph, corpus_dir, &label.input)?;
     let resp = client.call_tool(tool, &args)?;
     let payload = parse_tool_payload(&resp)?;
     score_response(tool, score_type, &payload, &label.expected)
 }
 
+/// Label `input` keys that name a fixture file on disk. A relative value is
+/// anchored to the corpus directory before being forwarded to the tool, so
+/// ground truth never has to embed an absolute, developer-machine-specific
+/// path (issue #210) — the corpus is the only stable anchor across checkouts
+/// and CI runners.
+const FIXTURE_PATH_KEYS: &[&str] = &["prd_path", "affected_symbols_path"];
+
 /// Assemble MCP tool args from the label's `input` plus graph_path.
-fn build_tool_args(tool: &str, graph_path: &str, input: &Value) -> Result<Value, String> {
+fn build_tool_args(
+    tool: &str,
+    graph_path: &str,
+    corpus_dir: &Path,
+    input: &Value,
+) -> Result<Value, String> {
     let mut obj = serde_json::Map::new();
     obj.insert("graph_path".to_string(), json!(graph_path));
     if let Some(input_obj) = input.as_object() {
         for (k, v) in input_obj {
+            if FIXTURE_PATH_KEYS.contains(&k.as_str()) {
+                if let Some(rel) = v.as_str() {
+                    let resolved = resolve_fixture_path(corpus_dir, rel)?;
+                    obj.insert(k.clone(), json!(resolved));
+                    continue;
+                }
+            }
             obj.insert(k.clone(), v.clone());
         }
     }
@@ -210,6 +236,24 @@ fn build_tool_args(tool: &str, graph_path: &str, input: &Value) -> Result<Value,
     // is query_graph; we just pass through.
     let _ = tool;
     Ok(Value::Object(obj))
+}
+
+/// Resolve a fixture-file reference against the corpus directory. Absolute
+/// paths pass through unchanged (so a caller who genuinely needs one can
+/// still supply it); relative paths are joined to `corpus_dir` and must
+/// exist on disk — a dangling reference is a stale-label bug and must fail
+/// loudly here, not as a downstream tool error with no context.
+fn resolve_fixture_path(corpus_dir: &Path, rel: &str) -> Result<String, String> {
+    let candidate = Path::new(rel);
+    let resolved = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        corpus_dir.join(candidate)
+    };
+    let canonical = resolved
+        .canonicalize()
+        .map_err(|e| format!("fixture path {:?} (resolved from {:?}): {e}", resolved, rel))?;
+    Ok(canonical.to_string_lossy().to_string())
 }
 
 /// Parse the MCP envelope `{content:[{text: "..."}]}` and return the inner

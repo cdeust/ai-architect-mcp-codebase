@@ -55,6 +55,13 @@ pub struct CorpusConfig {
     pub language: String,
     /// Absolute path to the source tree to index.
     pub source_path: PathBuf,
+    /// Absolute path to `benches/corpora/<name>/` itself — the anchor for
+    /// any label field that names a fixture file relative to the corpus
+    /// (e.g. q13's `prd_path`/`affected_symbols_path`), so ground truth
+    /// never has to embed a developer-machine-specific absolute path
+    /// (issue #210: that class of hardcoded path is stale on every other
+    /// checkout, CI included, the same day it's written).
+    pub corpus_dir: PathBuf,
     pub labels: Vec<GroundTruthLabel>,
     /// True iff labels is empty (a stub corpus).
     pub is_stub: bool,
@@ -85,11 +92,15 @@ pub fn load_one(corpora_root: &Path, name: &str) -> Result<CorpusConfig, String>
     }
 
     let source_path = resolve_source_path(&dir, &manifest.path)?;
+    let corpus_dir = dir
+        .canonicalize()
+        .map_err(|e| format!("canonicalize {:?}: {e}", dir))?;
     let is_stub = truth.labels.is_empty();
     Ok(CorpusConfig {
         name: manifest.name,
         language: manifest.language,
         source_path,
+        corpus_dir,
         labels: truth.labels,
         is_stub,
     })
