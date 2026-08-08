@@ -1,7 +1,7 @@
 {
   "affected_symbols": [
     {
-      "qualified_name": "parser/rust.rs::parse_rust_file",
+      "qualified_name": "parser/mod.rs::parse_file",
       "change_kind": "modify",
       "rationale": "Parser refactor — touches parser community."
     },
@@ -11,7 +11,7 @@
       "rationale": "But also touches search community — scope violation."
     },
     {
-      "qualified_name": "clustering.rs::cluster_graph",
+      "qualified_name": "clustering/community.rs::cluster_graph",
       "change_kind": "modify",
       "rationale": "And clustering community — third affected community."
     }

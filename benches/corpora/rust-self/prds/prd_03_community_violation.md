@@ -13,7 +13,7 @@ clustering. The validator should flag a community_consistency violation.
 
 ## Affected symbols
 
-- `parse_rust_file` (change_kind: modify) — lives in parser community.
+- `parse_file` (change_kind: modify) — lives in parser community.
 - `search_graph` (change_kind: modify) — lives in search community.
 - `cluster_graph` (change_kind: modify) — lives in clustering community.
 

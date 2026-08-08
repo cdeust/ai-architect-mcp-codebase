@@ -11,7 +11,7 @@
         "label_filter": "Struct"
       },
       "expected": {
-        "qualified_name": "graph_store.rs::GraphStore"
+        "qualified_name": "graph_store/mod.rs::GraphStore"
       }
     },
     {
@@ -21,7 +21,7 @@
         "label_filter": "Struct"
       },
       "expected": {
-        "qualified_name": "resolver.rs::ResolutionResult"
+        "qualified_name": "resolver/mod.rs::ResolutionResult"
       }
     },
     {
@@ -161,7 +161,7 @@
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "resolver.rs::resolve_graph"
+        "qualified_name": "resolver/mod.rs::resolve_graph"
       }
     },
     {
@@ -221,7 +221,7 @@
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "main.rs::validate_graph_path_safe"
+        "qualified_name": "query_handlers.rs::validate_graph_path_safe"
       }
     },
     {
@@ -231,149 +231,150 @@
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "main.rs::forbidden_cypher_keyword"
+        "qualified_name": "query_handlers.rs::forbidden_cypher_keyword"
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "main.rs::do_index_codebase"
+        "qualified_name": "indexing_handlers.rs::do_index_codebase"
       },
       "expected": {
         "callers": [
-          "main.rs::run_index_codebase"
+          "indexing_handlers.rs::run_index_codebase"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "main.rs::do_query_graph"
+        "qualified_name": "query_handlers.rs::do_query_graph"
       },
       "expected": {
         "callers": [
-          "main.rs::run_query_graph"
+          "query_handlers.rs::run_query_graph"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "main.rs::do_get_context"
+        "qualified_name": "search_context_handlers.rs::do_get_context"
       },
       "expected": {
         "callers": [
-          "main.rs::run_get_context"
+          "search_context_handlers.rs::run_get_context"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "main.rs::do_search_codebase"
+        "qualified_name": "search_context_handlers.rs::do_search_codebase"
       },
       "expected": {
         "callers": [
-          "main.rs::run_search_codebase"
+          "search_context_handlers.rs::run_search_codebase"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "main.rs::forbidden_cypher_keyword"
+        "qualified_name": "query_handlers.rs::forbidden_cypher_keyword"
       },
       "expected": {
         "callers": [
-          "main.rs::do_query_graph"
+          "query_handlers.rs::do_query_graph"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "main.rs::validate_graph_path_safe"
+        "qualified_name": "query_handlers.rs::validate_graph_path_safe"
       },
       "expected": {
         "callers": [
-          "main.rs::do_index_codebase"
+          "analyze_handlers.rs::do_analyze_codebase",
+          "indexing_handlers.rs::do_index_codebase"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "main.rs::contains_whole_word"
+        "qualified_name": "query_handlers.rs::contains_keyword_token"
       },
       "expected": {
         "callers": [
-          "main.rs::forbidden_cypher_keyword"
+          "query_handlers.rs::forbidden_cypher_keyword"
         ]
       }
     },
     {
       "query_id": "q5",
       "input": {
-        "qualified_name": "main.rs::run_index_codebase"
+        "qualified_name": "indexing_handlers.rs::run_index_codebase"
       },
       "expected": {
         "callees": [
-          "main.rs::do_index_codebase"
+          "indexing_handlers.rs::do_index_codebase"
         ]
       }
     },
     {
       "query_id": "q5",
       "input": {
-        "qualified_name": "main.rs::run_query_graph"
+        "qualified_name": "query_handlers.rs::run_query_graph"
       },
       "expected": {
         "callees": [
-          "main.rs::do_query_graph"
+          "query_handlers.rs::do_query_graph"
         ]
       }
     },
     {
       "query_id": "q5",
       "input": {
-        "qualified_name": "main.rs::run_get_context"
+        "qualified_name": "search_context_handlers.rs::run_get_context"
       },
       "expected": {
         "callees": [
-          "main.rs::do_get_context"
+          "search_context_handlers.rs::do_get_context"
         ]
       }
     },
     {
       "query_id": "q5",
       "input": {
-        "qualified_name": "main.rs::run_search_codebase"
+        "qualified_name": "search_context_handlers.rs::run_search_codebase"
       },
       "expected": {
         "callees": [
-          "main.rs::do_search_codebase"
+          "search_context_handlers.rs::do_search_codebase"
         ]
       }
     },
     {
       "query_id": "q5",
       "input": {
-        "qualified_name": "main.rs::run_get_impact"
+        "qualified_name": "process_impact_handlers.rs::run_get_impact"
       },
       "expected": {
         "callees": [
-          "main.rs::do_get_impact"
+          "process_impact_handlers.rs::do_get_impact"
         ]
       }
     },
     {
       "query_id": "q5",
       "input": {
-        "qualified_name": "main.rs::run_get_symbol"
+        "qualified_name": "symbol_handlers.rs::run_get_symbol"
       },
       "expected": {
         "callees": [
-          "main.rs::do_get_symbol"
+          "symbol_handlers.rs::do_get_symbol"
         ]
       }
     },
@@ -389,7 +390,7 @@
     {
       "query_id": "q6",
       "input": {
-        "qualified_name": "graph_store.rs::GraphStore"
+        "qualified_name": "graph_store/mod.rs::GraphStore"
       },
       "expected": {
         "implementors": []
@@ -398,7 +399,7 @@
     {
       "query_id": "q7",
       "input": {
-        "qualified_name": "main.rs::run_index_codebase"
+        "qualified_name": "indexing_handlers.rs::run_index_codebase"
       },
       "expected": {
         "affected": []
@@ -407,7 +408,7 @@
     {
       "query_id": "q7",
       "input": {
-        "qualified_name": "main.rs::forbidden_cypher_keyword"
+        "qualified_name": "query_handlers.rs::forbidden_cypher_keyword"
       },
       "expected": {
         "affected": []
@@ -415,41 +416,98 @@
     },
     {
       "query_id": "q8",
-      "_note": "top-level Functions defined in resolver.rs (29 top-level fns)",
+      "_note": "top-level fns in resolver/mod.rs (issue #210: resolver.rs split into resolver/{mod,calls,extends,implements,imports,uses}.rs; verified via query_graph + source grep 2026-08-08)",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'resolver.rs' RETURN n.qualified_name"
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'resolver/mod.rs' RETURN n.qualified_name"
       },
       "expected": {
         "symbols": [
-          "resolver.rs::build_symbol_index",
-          "resolver.rs::resolve_graph",
-          "resolver.rs::load_existing_edges",
-          "resolver.rs::is_resolution_edge",
-          "resolver.rs::resolve_imports",
-          "resolver.rs::resolve_one_import",
-          "resolver.rs::resolve_single_import",
-          "resolver.rs::resolve_glob_import",
-          "resolver.rs::resolve_calls",
-          "resolver.rs::resolve_single_call",
-          "resolver.rs::resolve_implements",
-          "resolver.rs::resolve_implements_from_schema",
-          "resolver.rs::build_trait_method_map",
-          "resolver.rs::match_struct_to_traits",
-          "resolver.rs::resolve_extends",
-          "resolver.rs::resolve_uses",
-          "resolver.rs::resolve_field_type_uses",
-          "resolver.rs::extract_type_identifiers",
-          "resolver.rs::find_type_target",
-          "resolver.rs::build_file_import_map",
-          "resolver.rs::is_external_crate",
-          "resolver.rs::normalize_import_path",
-          "resolver.rs::extract_file_from_import_id",
-          "resolver.rs::extract_file_from_qn",
-          "resolver.rs::extract_caller_from_callsite_id",
-          "resolver.rs::determine_caller_label",
-          "resolver.rs::is_child_of_module",
-          "resolver.rs::pick_best_candidate",
-          "resolver.rs::compute_import_confidence"
+          "resolver/mod.rs::build_file_import_map",
+          "resolver/mod.rs::build_symbol_index",
+          "resolver/mod.rs::check_known_rel_table",
+          "resolver/mod.rs::determine_caller_label",
+          "resolver/mod.rs::extract_caller_from_callsite_id",
+          "resolver/mod.rs::extract_file_from_import_id",
+          "resolver/mod.rs::extract_file_from_qn",
+          "resolver/mod.rs::is_resolution_edge",
+          "resolver/mod.rs::load_existing_edges",
+          "resolver/mod.rs::resolve_graph"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in resolver/calls.rs (post-split, issue #210)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'resolver/calls.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "resolver/calls.rs::record_call_unresolved",
+          "resolver/calls.rs::resolve_calls",
+          "resolver/calls.rs::resolve_one_call_site",
+          "resolver/calls.rs::resolve_single_call",
+          "resolver/calls.rs::stage_call_edge"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in resolver/imports.rs (post-split, issue #210)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'resolver/imports.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "resolver/imports.rs::resolve_glob_import",
+          "resolver/imports.rs::resolve_imports",
+          "resolver/imports.rs::resolve_one_import",
+          "resolver/imports.rs::resolve_single_import"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in resolver/implements.rs (post-split, issue #210)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'resolver/implements.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "resolver/implements.rs::resolve_impl_trait_blocks",
+          "resolver/implements.rs::resolve_implements",
+          "resolver/implements.rs::resolve_one_implements"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in resolver/extends.rs (post-split, issue #210)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'resolver/extends.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "resolver/extends.rs::resolve_extends",
+          "resolver/extends.rs::resolve_one_extends_base"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in resolver/uses.rs (post-split, issue #210)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'resolver/uses.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "resolver/uses.rs::extract_type_identifiers",
+          "resolver/uses.rs::find_type_target",
+          "resolver/uses.rs::resolve_callable_type_uses",
+          "resolver/uses.rs::resolve_field_type_uses",
+          "resolver/uses.rs::resolve_one_callable_type_use",
+          "resolver/uses.rs::resolve_one_field_type_use",
+          "resolver/uses.rs::resolve_uses"
         ]
       }
     },
@@ -484,37 +542,60 @@
     },
     {
       "query_id": "q8",
-      "_note": "top-level fns in indexer/persist.rs (25 fns, refreshed 2026-07-05 after indexer.rs split; derived from source grep)",
+      "_note": "top-level fns in indexer/persist/mod.rs (issue #210: indexer/persist.rs split into indexer/persist/{mod,nodes,edges}.rs; verified via query_graph + source grep 2026-08-08)",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'indexer/persist.rs' RETURN n.qualified_name"
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'indexer/persist/mod.rs' RETURN n.qualified_name"
       },
       "expected": {
         "symbols": [
-          "indexer/persist.rs::insert_ancestor_dirs",
-          "indexer/persist.rs::insert_directory_node",
-          "indexer/persist.rs::insert_file_node",
-          "indexer/persist.rs::insert_dir_file_edge",
-          "indexer/persist.rs::index_single_file",
-          "indexer/persist.rs::set_file_parse_errors",
-          "indexer/persist.rs::accumulate_parsed_nodes",
-          "indexer/persist.rs::keep_under_public_api",
-          "indexer/persist.rs::is_visibility_declaring_label",
-          "indexer/persist.rs::is_public_symbol",
-          "indexer/persist.rs::build_node_properties",
-          "indexer/persist.rs::has_language_col",
-          "indexer/persist.rs::append_label_properties",
-          "indexer/persist.rs::accumulate_parsed_edges",
-          "indexer/persist.rs::structural_provenance_props",
-          "indexer/persist.rs::resolve_edge_table",
-          "indexer/persist.rs::resolve_defines_table",
-          "indexer/persist.rs::resolve_has_method_table",
-          "indexer/persist.rs::resolve_has_field_table",
-          "indexer/persist.rs::lookup_label_among",
-          "indexer/persist.rs::is_valid_rel_table",
-          "indexer/persist.rs::has_name_col",
-          "indexer/persist.rs::has_qualified_name_col",
-          "indexer/persist.rs::has_line_cols",
-          "indexer/persist.rs::has_visibility_col"
+          "indexer/persist/mod.rs::index_single_file",
+          "indexer/persist/mod.rs::insert_ancestor_dirs",
+          "indexer/persist/mod.rs::insert_dir_file_edge",
+          "indexer/persist/mod.rs::insert_directory_node",
+          "indexer/persist/mod.rs::insert_file_node",
+          "indexer/persist/mod.rs::isolate",
+          "indexer/persist/mod.rs::set_file_parse_errors"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in indexer/persist/nodes.rs (post-split, issue #210)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'indexer/persist/nodes.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "indexer/persist/nodes.rs::accumulate_parsed_nodes",
+          "indexer/persist/nodes.rs::append_label_properties",
+          "indexer/persist/nodes.rs::build_node_properties",
+          "indexer/persist/nodes.rs::has_language_col",
+          "indexer/persist/nodes.rs::has_line_cols",
+          "indexer/persist/nodes.rs::has_name_col",
+          "indexer/persist/nodes.rs::has_qualified_name_col",
+          "indexer/persist/nodes.rs::has_visibility_col",
+          "indexer/persist/nodes.rs::is_public_symbol",
+          "indexer/persist/nodes.rs::is_visibility_declaring_label",
+          "indexer/persist/nodes.rs::keep_under_public_api"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in indexer/persist/edges.rs (post-split, issue #210)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'indexer/persist/edges.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "indexer/persist/edges.rs::accumulate_parsed_edges",
+          "indexer/persist/edges.rs::is_valid_rel_table",
+          "indexer/persist/edges.rs::lookup_label_among",
+          "indexer/persist/edges.rs::resolve_defines_table",
+          "indexer/persist/edges.rs::resolve_edge_table",
+          "indexer/persist/edges.rs::resolve_has_field_table",
+          "indexer/persist/edges.rs::resolve_has_method_table",
+          "indexer/persist/edges.rs::structural_provenance_props"
         ]
       }
     },
@@ -571,16 +652,26 @@
     },
     {
       "query_id": "q9",
-      "_note": "imports in resolver.rs — task rule: multi-import braces count as multiple",
+      "_note": "imports in resolver/mod.rs (issue #210: resolver.rs split; re-derived empirically from real Defines_File_Import edges + source grep 2026-08-08) — task rule: multi-import braces count as multiple",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'resolver.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'resolver/mod.rs' RETURN n.path"
       },
       "expected": {
         "imports": [
+          "crate::ambiguity_policy",
+          "crate::ambiguity_policy::Context",
+          "crate::ambiguity_policy::Resolution",
           "crate::graph_store::GraphStore",
+          "crate::graph_store::PropEdgeList",
+          "crate::graph_store::is_known_rel_table",
+          "extends::resolve_one_extends_base",
+          "imports::resolve_glob_import",
           "std::collections::HashMap",
           "std::collections::HashSet",
-          "std::time::Instant"
+          "std::sync::atomic::AtomicU64",
+          "std::sync::atomic::Ordering",
+          "std::time::Instant",
+          "uses::extract_type_identifiers"
         ]
       }
     },
@@ -640,16 +731,20 @@
     {
       "query_id": "q9",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'graph_store.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'graph_store/mod.rs' RETURN n.path"
       },
       "expected": {
         "imports": [
+          "config",
+          "ddl",
           "lbug::Connection",
           "lbug::Database",
           "lbug::LogicalType",
           "lbug::PreparedStatement",
           "lbug::SystemConfig",
           "lbug::Value",
+          "schema",
+          "serialize",
           "std::cell::RefCell",
           "std::collections::HashMap",
           "std::path::Path"
@@ -843,7 +938,7 @@
     {
       "query_id": "q11",
       "input": {
-        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'resolver.rs::ResolutionResult' RETURN f.name"
+        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'resolver/mod.rs::ResolutionResult' RETURN f.name"
       },
       "expected": {
         "fields": [
@@ -862,7 +957,7 @@
     {
       "query_id": "q11",
       "input": {
-        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'resolver.rs::UnresolvedRef' RETURN f.name"
+        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'resolver/mod.rs::UnresolvedRef' RETURN f.name"
       },
       "expected": {
         "fields": [
@@ -1103,15 +1198,15 @@
             "cluster": 2
           },
           {
-            "qn": "graph_store.rs::GraphStore",
+            "qn": "graph_store/mod.rs::GraphStore",
             "cluster": 3
           },
           {
-            "qn": "graph_store.rs::QueryResult",
+            "qn": "graph_store/mod.rs::QueryResult",
             "cluster": 3
           },
           {
-            "qn": "graph_store.rs::cypher_str",
+            "qn": "graph_store/mod.rs::cypher_str",
             "cluster": 3
           },
           {
@@ -1127,19 +1222,19 @@
             "cluster": 3
           },
           {
-            "qn": "resolver.rs::resolve_graph",
+            "qn": "resolver/mod.rs::resolve_graph",
             "cluster": 3
           },
           {
-            "qn": "resolver.rs::ResolutionResult",
+            "qn": "resolver/mod.rs::ResolutionResult",
             "cluster": 3
           },
           {
-            "qn": "resolver.rs::resolve_imports",
+            "qn": "resolver/imports.rs::resolve_imports",
             "cluster": 3
           },
           {
-            "qn": "resolver.rs::resolve_calls",
+            "qn": "resolver/calls.rs::resolve_calls",
             "cluster": 3
           },
           {
@@ -1203,11 +1298,11 @@
             "cluster": 8
           },
           {
-            "qn": "main.rs::forbidden_cypher_keyword",
+            "qn": "query_handlers.rs::forbidden_cypher_keyword",
             "cluster": 8
           },
           {
-            "qn": "main.rs::validate_graph_path_safe",
+            "qn": "query_handlers.rs::validate_graph_path_safe",
             "cluster": 8
           }
         ]
@@ -1217,8 +1312,8 @@
       "query_id": "q13",
       "_note": "PRD fixture 1: valid, in-scope change to an existing symbol. Expected: no findings, validation_status=ok.",
       "input": {
-        "prd_path": "/Users/cdeust/Developments/anthropic/ai-automatised-pipeline/benches/corpora/rust-self/prds/prd_01_valid.md",
-        "affected_symbols_path": "/Users/cdeust/Developments/anthropic/ai-automatised-pipeline/benches/corpora/rust-self/prds/prd_01_valid.affected_symbols.json"
+        "prd_path": "prds/prd_01_valid.md",
+        "affected_symbols_path": "prds/prd_01_valid.affected_symbols.json"
       },
       "expected": {
         "truly_present": []
@@ -1228,8 +1323,8 @@
       "query_id": "q13",
       "_note": "PRD fixture 2: references a non-existent symbol. Expected axis: symbol_hallucination.",
       "input": {
-        "prd_path": "/Users/cdeust/Developments/anthropic/ai-automatised-pipeline/benches/corpora/rust-self/prds/prd_02_hallucinated.md",
-        "affected_symbols_path": "/Users/cdeust/Developments/anthropic/ai-automatised-pipeline/benches/corpora/rust-self/prds/prd_02_hallucinated.affected_symbols.json"
+        "prd_path": "prds/prd_02_hallucinated.md",
+        "affected_symbols_path": "prds/prd_02_hallucinated.affected_symbols.json"
       },
       "expected": {
         "truly_present": [
@@ -1241,8 +1336,8 @@
       "query_id": "q13",
       "_note": "PRD fixture 3: claims parser-only scope but touches parser, search, and clustering communities. Expected axis: community_consistency.",
       "input": {
-        "prd_path": "/Users/cdeust/Developments/anthropic/ai-automatised-pipeline/benches/corpora/rust-self/prds/prd_03_community_violation.md",
-        "affected_symbols_path": "/Users/cdeust/Developments/anthropic/ai-automatised-pipeline/benches/corpora/rust-self/prds/prd_03_community_violation.affected_symbols.json"
+        "prd_path": "prds/prd_03_community_violation.md",
+        "affected_symbols_path": "prds/prd_03_community_violation.affected_symbols.json"
       },
       "expected": {
         "truly_present": [
@@ -1252,14 +1347,16 @@
     },
     {
       "query_id": "q14",
-      "_note": "external (non-crate) imports in resolver.rs — should be flagged unresolved by the cross-crate resolver",
+      "_note": "external (non-crate) imports in resolver/mod.rs (issue #210: resolver.rs split; re-derived 2026-08-08) — should be flagged unresolved by the cross-crate resolver",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'resolver.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'resolver/mod.rs' RETURN n.path"
       },
       "expected": {
         "unresolved": [
           "std::collections::HashMap",
           "std::collections::HashSet",
+          "std::sync::atomic::AtomicU64",
+          "std::sync::atomic::Ordering",
           "std::time::Instant"
         ]
       }
@@ -1308,7 +1405,7 @@
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'graph_store.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'graph_store/mod.rs' RETURN n.path"
       },
       "expected": {
         "unresolved": [
