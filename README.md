@@ -230,11 +230,70 @@ only metadata fail closed; it cannot make arbitrary code from a hostile fork
 trustworthy, because such a fork can also replace the bootstrap itself. Verify
 that the marketplace slug is exactly `cdeust/ai-architect-mcp-codebase`.
 
-Contributors working on a clone that sets `CLAUDE_PLUGIN_ROOT` may also set
-`AI_ARCHITECT_SOURCE_CHECKOUT=1` to retain the local Cargo build path. The
-bootstrap honors that override only when the plugin root contains `.git`, and
-always reports the verification bypass on stderr. Marketplace manifests may
-not supply environment overrides for this server entry.
+#### Developer escape hatch: running a local dev build in place of the release
+
+`bin/ensure-binary.sh` pins the installed binary to a verified release digest
+(see [Security](#security)) — that pin rejects any binary it did not download
+and verify itself, including one you legitimately rebuilt from source. Set
+`AI_ARCHITECT_SOURCE_CHECKOUT=1` to opt out of the pin for a local dev build.
+The bootstrap accepts two shapes under this flag, both requiring the explicit
+opt-in — it is never inferred from metadata:
+
+- **Plain source checkout** — `$CLAUDE_PLUGIN_ROOT` itself contains `.git`
+  (you registered a clone directly as the plugin root).
+- **Live-mount montage** — the installed binary at
+  `target/release/ai-architect-mcp-codebase` is a symlink whose fully
+  resolved target lies outside `$CLAUDE_PLUGIN_ROOT` and sits inside its own
+  `.git`-bearing checkout (e.g. a marketplace cache whose binary was replaced
+  with a symlink into a separate dev clone, so you can iterate without
+  reinstalling the plugin after every rebuild). Added in
+  [#208](https://github.com/cdeust/ai-architect-mcp-codebase/pull/208) —
+  a plain `.git`-at-root check cannot see this shape, because a marketplace
+  cache has no `.git` of its own.
+
+**What the flag skips, precisely:** only the release-binary digest
+verification (`sha256sum` against the cached/pinned digest) and, for a fresh
+install, the download + Sigstore provenance check — for that one launch. It
+does **not** skip the `Cargo.toml` / `plugin.json` presence checks (still
+`fatal` if either file is missing), and for a plain source checkout it still
+runs the freshness rebuild (`cargo build --release` when `src/` is newer than
+the binary). For the montage shape specifically, nothing rebuilds the
+binary — the bootstrap trusts the already-built binary the symlink resolves
+to, as-is.
+
+**Threat model.** This is an explicit, user-set opt-in, never something
+packaged metadata can trigger. An attacker who can already write to your
+plugin cache — replacing the installed binary with a symlink to force this
+path — can just as easily replace `bin/ensure-binary.sh` or
+`bin/launch-plugin.sh` themselves, so the digest pin was never a defense
+against that attacker; it defends the *default* path (flag unset) where the
+bootstrap is the thing standing between a marketplace download and your
+shell. The default path is unchanged by this hatch and remains a hard
+`fatal` on any digest mismatch. Every accepted bypass is announced on
+`stderr` even in quiet mode:
+
+```
+ai-architect-mcp-codebase: bootstrap verification skipped (source-checkout mode)
+ai-architect-mcp-codebase: live-mounted dev symlink: <plugin-cache>/target/release/ai-architect-mcp-codebase -> <resolved dev path> (source checkout at <resolved .git root>)
+```
+
+**Diagnosing the failure mode without the flag.** If a marketplace-cache
+binary is replaced by a montage symlink and `AI_ARCHITECT_SOURCE_CHECKOUT` is
+not set, the plugin dies silently from Claude Code's point of view — you only
+see `MCP error -32000: Connection closed`. The real cause is on stderr, which
+Claude Code does not surface for a failed MCP launch; run the launcher by
+hand with `CLAUDE_PLUGIN_ROOT` set to the plugin cache directory to see it:
+
+```bash
+CLAUDE_PLUGIN_ROOT=/path/to/plugin/cache bin/launch-plugin.sh
+# ai-architect-mcp-codebase: FATAL: cached binary digest mismatch; reinstall the plugin
+```
+
+**Operational gotcha:** `export AI_ARCHITECT_SOURCE_CHECKOUT=1` in
+`~/.zshrc` alone is not enough. `~/.zshrc` is read only by *interactive*
+shells; the Claude Code plugin launcher and its hooks run in non-interactive
+ones and never see it. Put the export in `~/.zshenv` (or your shell's
+equivalent non-interactive startup file) instead.
 
 If the former Automatised Pipeline plugin is installed, remove it before
 installing the canonical package:
