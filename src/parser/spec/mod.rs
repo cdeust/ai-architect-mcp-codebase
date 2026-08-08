@@ -15,6 +15,8 @@ mod c;
 mod c_family;
 mod conventions;
 mod cpp;
+mod declarative;
+mod declarative_rules;
 mod families;
 mod go;
 mod java;
@@ -46,7 +48,11 @@ mod cpp_member_classification_tests;
 #[cfg(test)]
 mod cpp_parity_tests;
 #[cfg(test)]
+mod declarative_tests;
+#[cfg(test)]
 mod embedded_tests;
+#[cfg(test)]
+mod go_parity_tests;
 #[cfg(test)]
 mod guard;
 #[cfg(test)]

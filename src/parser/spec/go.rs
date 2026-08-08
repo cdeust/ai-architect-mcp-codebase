@@ -1,29 +1,99 @@
-// parser::spec::go — the Go LangSpec row + GoConventions (ADR-0055 first
-// migration, phase 1). This is the whole of Go's extraction now: a data row
-// plus a handful of grammar-specific predicates. Everything else is the
-// generic walkers.
+// parser::spec::go — the Go LangSpec row (ADR-0055 first migration, phase 1;
+// issue #220 phase 1: migrated to the declarative deep path).
+//
+// Production now runs Go through `DeclarativeConventions(&GO_RULES)`
+// (`declarative.rs`) — a `ConventionSpec` data row plus the shared generic
+// interpreter, proving the machinery issue #220 phase 1 introduces. The
+// hand-written `GoConventions` below is KEPT, unused by `GO_SPEC`, as the
+// rollback path and the parity oracle: `go_parity_tests.rs` asserts the
+// declarative path and `GoConventions` produce byte-identical output on the
+// same corpus before any deletion is considered (ADR rollback discipline —
+// the hand-written struct is never deleted in the same PR that introduces
+// its declarative row).
 //
 // Every node-kind string below is a real kind in tree-sitter-go's
 // node-types.json (the executable spec-validation guard asserts it).
 // source: tree-sitter-go 0.23.4 src/node-types.json
 // (github.com/tree-sitter/tree-sitter-go, pinned in Cargo.lock).
 
+use super::declarative::DeclarativeConventions;
+use super::declarative_rules::{
+    CallEntryRule, CallSiteQnScheme, CalleeDispatchRow, CalleeTransform, ConventionSpec,
+    ImportRule, PropertySet, QnScheme, ReceiverPattern, RefToRule, VisibilityRule,
+};
+use super::lang_spec::LangSpec;
+use crate::parser::Language;
+
+// Used only by the test-only `GoConventions` (parity oracle) below.
+#[cfg(test)]
+use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
+#[cfg(test)]
+use crate::parser::node_field_text;
+#[cfg(test)]
 use tree_sitter::Node;
 
-use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
-use super::lang_spec::LangSpec;
-use crate::parser::{node_field_text, Language};
+/// Go's six-method behavior as a `ConventionSpec` data row (issue #220 phase
+/// 1). Every value below is read directly off `GoConventions` (this file,
+/// preserved below) — this row reproduces it exactly, proven by
+/// `go_parity_tests.rs`.
+pub(super) static GO_RULES: ConventionSpec = ConventionSpec {
+    // GoConventions::visibility_of: uppercase first letter ⇒ "public", else
+    // "package".
+    visibility: VisibilityRule::NameCase {
+        public_label: "public",
+        else_label: "package",
+    },
+    // GoConventions::receiver_type: `(c *T)` → `T` — strip parens, take the
+    // last whitespace token (drops the receiver's variable name), strip a
+    // leading `*` (pointer receiver).
+    receiver_pattern: Some(ReceiverPattern {
+        strip_parens: true,
+        take_last_whitespace_token: true,
+        strip_leading_sigils: &['*'],
+    }),
+    // GoConventions::def_qn: `{scope}::{name}#{seq}`.
+    qn_scheme: QnScheme::SeqSuffixed,
+    // GoConventions::call_callee: read the `function` field, take the tail
+    // segment after the last `.`, require an identifier-leading result.
+    callee_dispatch: &[CalleeDispatchRow {
+        node_kind: None,
+        field: GO_CALL_FUNCTION_FIELD,
+        fallback_field: None,
+        transform: CalleeTransform::TailSegment(&['.']),
+        require_leading_ident: true,
+        suffix: None,
+    }],
+    // GoConventions::call_entry: `{caller}::call@{line}:{col}#{seq}`,
+    // `Calls`, ref_to = the callee verbatim, `public`, `[callee_name]`.
+    call_entry: CallEntryRule {
+        qn_scheme: CallSiteQnScheme::LineColSeq,
+        ref_kind: "Calls",
+        ref_to: RefToRule::Verbatim,
+        visibility: "public",
+        properties: PropertySet::CalleeOnly,
+    },
+    // GoConventions::imports_of / go_import_entry: DFS the import statement
+    // for nodes matching `GO_SPEC.import_spec_kinds` (`import_spec`), each
+    // yielding one entry from its `GO_SPEC.import_path_field` (`"path"`).
+    import_rule: ImportRule::ContainerTable,
+};
 
-/// Go behavioral conventions. Only the genuinely Go-specific predicates —
-/// export-by-capitalization visibility, `(recv *T)` receiver parsing, `#seq`
-/// QN shaping, and last-segment callee extraction — diverge from the generic
-/// defaults.
+static GO_DECLARATIVE_CONVENTIONS: DeclarativeConventions = DeclarativeConventions(&GO_RULES);
+
+/// Go's hand-written behavioral conventions (ADR-0055 phase 1). Superseded in
+/// production by `GO_DECLARATIVE_CONVENTIONS` above (issue #220 phase 1).
+/// Gated `#[cfg(test)]`: its only caller is the test-only `GO_SPEC_LEGACY`
+/// row below, which `go_parity_tests.rs` uses as the parity oracle — see the
+/// module doc comment. Kept, not deleted, per the ADR rollback discipline.
+#[cfg(test)]
 pub(super) struct GoConventions;
 
-// Field names in tree-sitter-go used by the conventions (not by the generic
-// walkers). source: tree-sitter-go 0.23.4 node-types.json.
+// Field name in tree-sitter-go used by both the production callee-dispatch
+// row (`GO_RULES` above) and the test-only legacy `GoConventions` below.
+// source: tree-sitter-go 0.23.4 node-types.json.
 const GO_CALL_FUNCTION_FIELD: &str = "function";
 
+#[cfg(test)]
 impl GoConventions {
     /// Shapes one Go `import_spec` node into an `ImportEntry`, or `None` when
     /// the path is empty. Called by `imports_of` for every import spec found
@@ -54,6 +124,7 @@ impl GoConventions {
     }
 }
 
+#[cfg(test)]
 impl LanguageConventions for GoConventions {
     fn visibility_of(&self, name: &str) -> String {
         // Exported iff the first letter is uppercase; idiomatic Go convention.
@@ -151,6 +222,7 @@ impl LanguageConventions for GoConventions {
     }
 }
 
+#[cfg(test)]
 static GO_CONVENTIONS: GoConventions = GoConventions;
 
 /// The Go language spec row. All node-kind strings: tree-sitter-go 0.23.4
@@ -200,11 +272,25 @@ pub(crate) static GO_SPEC: LangSpec = LangSpec {
     construction_type_field: Some("type"),
     ts_language: || tree_sitter_go::LANGUAGE.into(),
     embedded: &[],
-    conventions: &GO_CONVENTIONS,
+    // issue #220 phase 1: production runs the declarative row, not
+    // `GoConventions` — see the module doc comment for the rollback story.
+    conventions: &GO_DECLARATIVE_CONVENTIONS,
     c_family: None,
     cpp_family: None,
     objc_family: None,
     ts_family: None,
     ts_language_by_ext: None,
     rust_family: None,
+};
+
+/// Test-only twin of `GO_SPEC` wired to the hand-written `GoConventions`
+/// instead of the declarative row — the parity oracle `go_parity_tests.rs`
+/// parses the same corpus through both and asserts identical output.
+/// Every field but `conventions` is copied verbatim from `GO_SPEC` (all
+/// `LangSpec` fields are `Copy` types, so `..GO_SPEC` is a plain field copy,
+/// not a move out of a `static`).
+#[cfg(test)]
+pub(crate) static GO_SPEC_LEGACY: LangSpec = LangSpec {
+    conventions: &GO_CONVENTIONS,
+    ..GO_SPEC
 };
