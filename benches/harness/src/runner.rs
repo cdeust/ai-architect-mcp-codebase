@@ -344,30 +344,64 @@ fn get_symbol_resolved_qn(payload: &Value, expected: &str) -> String {
 /// the expected set.  The extraction key depends on the tool.
 fn score_f1_from_payload(tool: &str, payload: &Value, expected: &Value) -> Result<f64, String> {
     let expected_set = expected_string_array(expected)?;
-    let actual_set = extract_actual_set(tool, payload);
+    let actual_set = extract_actual_set(tool, payload, expected);
     Ok(score_f1(&expected_set, &actual_set))
 }
 
-fn extract_actual_set(tool: &str, payload: &Value) -> Vec<String> {
+/// Maps an `expected` object's recognized key (see `expected_string_array`)
+/// to the specific `get_context` relationship arrays that answer it. A label
+/// asking "callers" must be scored against the relations that actually carry
+/// call-like references — unioning every relationship kind (as a prior
+/// version of this function did) counts unrelated `imports`/`implements`
+/// edges as false positives and tanked precision on every q4/q5/q6 label
+/// (root-cause verified live against `indexing_handlers.rs::do_index_codebase`:
+/// 1 true caller vs a 21-item union — see issue #214 loss-ledger comment).
+///
+/// `called_by`/`calls` alone under-counts: a class instantiation
+/// (`new ConsoleLogger(...)`) is graphed as a `Uses`/`UsedBy` edge, not
+/// `Calls` (verified live on `logger.ts::ConsoleLogger`: `calls`/`called_by`
+/// both empty, `used_by` holds the true caller). "Who calls/instantiates X"
+/// is answered by the union of the call-edge and use-edge families.
+fn get_context_relation_keys(expected: &Value) -> &'static [&'static str] {
+    let obj = match expected.as_object() {
+        Some(o) => o,
+        None => return &[],
+    };
+    if obj.contains_key("callers") {
+        &["called_by", "used_by"]
+    } else if obj.contains_key("callees") {
+        &["calls", "uses"]
+    } else if obj.contains_key("implementors") {
+        &["implemented_by"]
+    } else if obj.contains_key("interfaces") {
+        &["implements"]
+    } else if obj.contains_key("imports") {
+        &["imports"]
+    } else {
+        // Unrecognized expected shape: fall back to the full union so an
+        // unanticipated label still gets *some* signal instead of an empty
+        // actual set.
+        &[
+            "calls",
+            "called_by",
+            "implements",
+            "implemented_by",
+            "imports",
+            "imported_by",
+            "uses",
+            "used_by",
+        ]
+    }
+}
+
+fn extract_actual_set(tool: &str, payload: &Value, expected: &Value) -> Vec<String> {
     match tool {
         "get_context" => {
-            // Label declares which relationship it wants via `expected.field`
-            // — we fall back to flattening all qualified_names from both
-            // `calls` and `called_by` so that q4/q5 labels can just list qns.
             let mut out: Vec<String> = Vec::new();
-            for rel in [
-                "calls",
-                "called_by",
-                "implements",
-                "implemented_by",
-                "imports",
-                "imported_by",
-                "uses",
-                "used_by",
-            ] {
+            for rel in get_context_relation_keys(expected) {
                 if let Some(arr) = payload
                     .get("relationships")
-                    .and_then(|r| r.get(rel))
+                    .and_then(|r| r.get(*rel))
                     .and_then(|v| v.as_array())
                 {
                     for item in arr {
@@ -380,16 +414,23 @@ fn extract_actual_set(tool: &str, payload: &Value) -> Vec<String> {
             out
         }
         "get_impact" => {
-            // impact.processes + impact.communities are symbolic; for
-            // blast-radius labels, we also look under a potential
-            // `affected` array if the tool ever grows one.
+            // The real get_impact response has no `affected` field (it
+            // never did — verified against src/clustering/impact.rs and the
+            // tool's own MCP schema); the previous version of this function
+            // read `payload.get("affected")` and always got None, so q7
+            // (weight 0.15, the single highest-weighted query) always scored
+            // against an empty actual set. Every existing q7 label happens
+            // to expect `[]` too, so the miss was silently vacuous instead
+            // of loud — see issue #214. Blast radius is the union of the
+            // four real reverse-dependency lists the tool documents:
+            // callers, importers, users, implementors.
             let mut out = Vec::new();
-            if let Some(arr) = payload.get("affected").and_then(|v| v.as_array()) {
-                for item in arr {
-                    if let Some(qn) = item.as_str() {
-                        out.push(qn.to_string());
-                    } else if let Some(qn) = item.get("qualified_name").and_then(|v| v.as_str()) {
-                        out.push(qn.to_string());
+            for key in ["callers", "importers", "users", "implementors"] {
+                if let Some(arr) = payload.get(key).and_then(|v| v.as_array()) {
+                    for item in arr {
+                        if let Some(qn) = item.get("qualified_name").and_then(|v| v.as_str()) {
+                            out.push(qn.to_string());
+                        }
                     }
                 }
             }
@@ -659,6 +700,83 @@ impl Drop for McpClient {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Regression for issue #214: a q4 ("callers") label must be scored
+    /// against `called_by` (+ `used_by` for instantiation sites), never the
+    /// union of every relationship kind — the union counted `calls` as
+    /// false positives and collapsed precision on every real q4/q5/q6
+    /// label (root-cause verified live on
+    /// `indexing_handlers.rs::do_index_codebase`: 1 true caller vs a
+    /// 21-item union before this fix).
+    #[test]
+    fn test_get_context_callers_ignores_unrelated_calls_edges() {
+        let payload = json!({
+            "relationships": {
+                "called_by": [{"qualified_name": "mod.rs::run_wrapper"}],
+                "calls": [
+                    {"qualified_name": "handler_util.rs::require_absolute"},
+                    {"qualified_name": "handler_util.rs::parse_bool_arg"}
+                ],
+                "implements": [], "implemented_by": [],
+                "imports": [], "imported_by": [],
+                "uses": [], "used_by": []
+            }
+        });
+        let expected = json!({"callers": ["mod.rs::run_wrapper"]});
+        let actual = extract_actual_set("get_context", &payload, &expected);
+        assert_eq!(actual, vec!["mod.rs::run_wrapper".to_string()]);
+        assert_eq!(score_f1(&["mod.rs::run_wrapper".to_string()], &actual), 1.0);
+    }
+
+    /// Regression for issue #214: a class instantiation (`new Foo(...)`) is
+    /// graphed as `used_by`, not `called_by` — a q4 ("callers") label on a
+    /// class/struct must still find its instantiation site. Verified live
+    /// on `logger.ts::ConsoleLogger` (`calls`/`called_by` both empty,
+    /// `used_by` holds `app.ts::App::constructor`).
+    #[test]
+    fn test_get_context_callers_includes_instantiation_via_used_by() {
+        let payload = json!({
+            "relationships": {
+                "called_by": [], "calls": [],
+                "implements": [], "implemented_by": [],
+                "imports": [], "imported_by": [],
+                "uses": [],
+                "used_by": [{"qualified_name": "app.ts::App::constructor"}]
+            }
+        });
+        let expected = json!({"callers": ["app.ts::App::constructor"]});
+        let actual = extract_actual_set("get_context", &payload, &expected);
+        assert_eq!(actual, vec!["app.ts::App::constructor".to_string()]);
+    }
+
+    /// Regression for issue #214: `get_impact`'s real schema has no
+    /// `affected` field (the pre-fix scorer always read None from it,
+    /// silently scoring q7 as a vacuous empty-vs-empty match). The fixed
+    /// extractor must read the real `callers`/`importers`/`users`/
+    /// `implementors` lists.
+    #[test]
+    fn test_get_impact_extracts_real_dependents_not_affected() {
+        let payload = json!({
+            "callers": [{"qualified_name": "main.rs::handle_tool_call"}],
+            "importers": [{"qualified_name": "app.ts"}],
+            "users": [{"qualified_name": "app.ts::App::logger"}],
+            "implementors": [{"qualified_name": "logger.ts::ConsoleLogger"}],
+            "affected": ["should-be-ignored"]
+        });
+        let expected = json!({"affected": []});
+        let mut actual = extract_actual_set("get_impact", &payload, &expected);
+        actual.sort();
+        assert_eq!(
+            actual,
+            vec![
+                "app.ts".to_string(),
+                "app.ts::App::logger".to_string(),
+                "logger.ts::ConsoleLogger".to_string(),
+                "main.rs::handle_tool_call".to_string(),
+            ]
+        );
+        assert!(!actual.contains(&"should-be-ignored".to_string()));
+    }
 
     /// Regression for B3: the Q13 scorer extracts axis names from
     /// `report.findings[].axis` (the real validate_prd_against_graph
