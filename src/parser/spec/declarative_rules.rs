@@ -43,10 +43,57 @@
 // tree-sitter-python's `node-types.json` and validated by the spec guard
 // (coding-standards §8: no invented constants/shapes without a grounded
 // source for THIS session).
+//
+// issue #220 phase 2 (Java) shared-layer fix: `VisibilityRule::ModifierKeyword`
+// originally located the modifier text via `modifier_field: Option<&'static
+// str>` — a named-field lookup, with a whole-node-text fallback when `None`.
+// Reading tree-sitter-java 0.23.5's real `node-types.json` (not assumed)
+// showed BOTH were wrong for Java: `modifiers` is never a named field on any
+// Java declaration (always an unnamed-but-typed `children` entry), and a
+// whole-node-text scan false-positives on a nested declaration's own
+// modifiers (`class Outer { public class Inner {} }` would wrongly read
+// `Outer` as public). `ModifierSource` replaces `modifier_field` with two
+// explicit, correct location strategies (`Field`/`ChildKind`) — see
+// `ModifierSource`'s own doc comment. This is the "fix it in the shared
+// layer" step the phase 1 design comment called for before Java could depend
+// on `ModifierKeyword`.
 
 // ---------------------------------------------------------------------------
 // Rule data types
 // ---------------------------------------------------------------------------
+
+/// How the modifier-bearing text is located for `VisibilityRule::ModifierKeyword`.
+/// Two shapes, grounded against real grammars read for issue #220 phase 2
+/// (Java): a `node-types.json` declaration can expose its modifiers either as
+/// a genuine named field, or only as an unnamed-but-typed child — the two are
+/// NOT interchangeable, and conflating them is exactly the shared-layer defect
+/// phase 2 found and fixes here (see the module doc comment's "phase 2" note).
+pub(crate) enum ModifierSource {
+    /// A named field (`Node::child_by_field_name`) carries the modifier text
+    /// directly. Fits a grammar that exposes modifiers as a real field.
+    #[allow(dead_code)]
+    Field(&'static str),
+    /// Scan the node's own IMMEDIATE children (not the whole subtree, and not
+    /// the whole node's text) for the first child whose `kind()` equals this
+    /// string, and read that child's own text. Required for
+    /// tree-sitter-java: `modifiers` is a real node type but is listed under
+    /// every declaration's `children`, never under `fields`, in
+    /// tree-sitter-java 0.23.5's `node-types.json` (`class_declaration`,
+    /// `method_declaration`, `field_declaration`, `interface_declaration`,
+    /// `enum_declaration`, `record_declaration`, `constructor_declaration`,
+    /// `annotation_type_declaration` all show the identical shape) — so
+    /// `ModifierSource::Field("modifiers")` would silently return "" via
+    /// `child_by_field_name` for every one of them. Scanning only IMMEDIATE
+    /// children (not the whole node text, which phase 1's original `None`
+    /// fallback used) is itself load-bearing: `node.children()` on an
+    /// enclosing declaration includes every NESTED declaration's subtree too,
+    /// so a whole-text scan of `class Outer { public class Inner {} }` would
+    /// find "public" from `Inner`'s own modifiers and wrongly report `Outer`
+    /// (which has none) as public. Proven by
+    /// `modifier_keyword_node_visibility_does_not_leak_a_nested_declarations_modifier`
+    /// in `declarative_tests.rs`.
+    ChildKind(&'static str),
+}
 
 /// How a declared name's visibility is derived. Drives BOTH `visibility_of`
 /// (name-only) and `node_visibility` (node + name) from one value — the
@@ -82,19 +129,20 @@ pub(crate) enum VisibilityRule {
         public_label: &'static str,
         dunder_exempt: bool,
     },
-    /// A modifier keyword, scanned off a named child field (`modifier_field`)
-    /// or the node's own leading text (`modifier_field: None`), decides
-    /// visibility; the first matching `(keyword, label)` pair wins, else
-    /// `default_label`. Drives `node_visibility` (needs the AST node);
-    /// `visibility_of` (name-only, no node available) returns
-    /// `default_label`. Included for the shared schema per issue #220's
-    /// design (java.rs:44-61, swift.rs:95-104, kotlin_conventions.rs:220-227);
-    /// no current `LangSpec` row selects it — the intended first consumer is
-    /// Java. Exercised directly by
-    /// `modifier_keyword_node_visibility_scans_the_named_field` below.
-    #[allow(dead_code)]
+    /// A modifier keyword, located via `modifier_source`, decides visibility;
+    /// the first matching `(keyword, label)` pair wins, else `default_label`.
+    /// Drives `node_visibility` (needs the AST node); `visibility_of`
+    /// (name-only, no node available) returns `default_label`. Included for
+    /// the shared schema per issue #220's design (java.rs:44-61,
+    /// swift.rs:95-104, kotlin_conventions.rs:220-227). Selected by Java
+    /// (issue #220 phase 2, `java.rs`'s `JAVA_RULES`) via
+    /// `ModifierSource::ChildKind` — see that variant's doc comment for why
+    /// `ModifierSource::Field` cannot express Java's shape. Exercised
+    /// directly by `modifier_keyword_node_visibility_scans_the_named_field`
+    /// (Field) and `modifier_keyword_node_visibility_scans_a_child_kind`
+    /// (ChildKind) in `declarative_tests.rs`.
     ModifierKeyword {
-        modifier_field: Option<&'static str>,
+        modifier_source: ModifierSource,
         candidates: &'static [(&'static str, &'static str)],
         default_label: &'static str,
     },

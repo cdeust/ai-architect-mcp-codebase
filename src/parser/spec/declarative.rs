@@ -19,8 +19,8 @@ use tree_sitter::Node;
 
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
 use super::declarative_rules::{
-    CallSiteQnScheme, CalleeTransform, ConventionSpec, ImportRule, PropertySet, QnScheme,
-    RefToRule, VisibilityRule,
+    CallSiteQnScheme, CalleeTransform, ConventionSpec, ImportRule, ModifierSource, PropertySet,
+    QnScheme, RefToRule, VisibilityRule,
 };
 use super::lang_spec::LangSpec;
 use crate::parser::{node_field_text, node_text, qual};
@@ -100,13 +100,22 @@ impl LanguageConventions for DeclarativeConventions {
     fn node_visibility(&self, source: &str, node: Node, name: &str) -> String {
         match &self.0.visibility {
             VisibilityRule::ModifierKeyword {
-                modifier_field,
+                modifier_source,
                 candidates,
                 default_label,
             } => {
-                let text = match modifier_field {
-                    Some(f) => node_field_text(source, node, f),
-                    None => node_text(source, node),
+                let text = match modifier_source {
+                    ModifierSource::Field(f) => node_field_text(source, node, f),
+                    // Scan only IMMEDIATE children for the first one whose
+                    // kind matches — never the whole subtree/whole node text
+                    // (that would leak a NESTED declaration's own modifiers
+                    // into this node's result; see `ModifierSource::ChildKind`'s
+                    // doc comment in `declarative_rules.rs`).
+                    ModifierSource::ChildKind(kind) => {
+                        let mut cursor = node.walk();
+                        let found = node.children(&mut cursor).find(|c| c.kind() == *kind);
+                        found.map(|c| node_text(source, c)).unwrap_or_default()
+                    }
                 };
                 for (keyword, label) in *candidates {
                     if text.split_whitespace().any(|tok| tok == *keyword) {
