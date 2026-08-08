@@ -19,7 +19,7 @@ use super::conventions::LanguageConventions;
 use super::declarative::{shape_statement_strip, DeclarativeConventions};
 use super::declarative_rules::{
     CallEntryRule, CallSiteQnScheme, CalleeDispatchRow, CalleeTransform, ConventionSpec,
-    ImportRule, PropertySet, QnScheme, ReceiverPattern, RefToRule, VisibilityRule,
+    ImportRule, ModifierSource, PropertySet, QnScheme, ReceiverPattern, RefToRule, VisibilityRule,
 };
 
 // --- VisibilityRule::NameCase (Go's shape, exercised in production via
@@ -82,13 +82,16 @@ fn sigil_prefix_visibility_matches_the_python_shape() {
     assert_eq!(conv.visibility_of("__dunder__"), "");
 }
 
-// --- VisibilityRule::ModifierKeyword (Java's shape; not yet selected by any
-// LangSpec row) — exercised against Go's own grammar purely to prove the
-// field-scan ALGORITHM, not any language's real behavior. ---
+// --- VisibilityRule::ModifierKeyword (Java's shape; selected in production
+// by `java.rs`'s `JAVA_RULES` as of issue #220 phase 2) ---
 
-static MODIFIER_KEYWORD_SPEC: ConventionSpec = ConventionSpec {
+// `ModifierSource::Field` — exercised against Go's own grammar purely to
+// prove the field-scan ALGORITHM, not any language's real behavior (no
+// migrated language currently selects `Field`; Java needs `ChildKind`, below
+// — see `ModifierSource`'s doc comment in `declarative_rules.rs` for why).
+static MODIFIER_KEYWORD_FIELD_SPEC: ConventionSpec = ConventionSpec {
     visibility: VisibilityRule::ModifierKeyword {
-        modifier_field: Some("name"),
+        modifier_source: ModifierSource::Field("name"),
         candidates: &[("public", "public"), ("private", "private")],
         default_label: "package",
     },
@@ -107,7 +110,7 @@ static MODIFIER_KEYWORD_SPEC: ConventionSpec = ConventionSpec {
 
 #[test]
 fn modifier_keyword_node_visibility_scans_the_named_field() {
-    let conv = DeclarativeConventions(&MODIFIER_KEYWORD_SPEC);
+    let conv = DeclarativeConventions(&MODIFIER_KEYWORD_FIELD_SPEC);
 
     // Parse a trivial Go source purely to obtain a real `Node` whose `name`
     // field's text we control — this validates the interpreter's
@@ -126,6 +129,10 @@ fn modifier_keyword_node_visibility_scans_the_named_field() {
 
     assert_eq!(conv.node_visibility(source, func, "private"), "private");
 }
+
+// `ModifierSource::ChildKind` (Java's real shape) is exercised in its own
+// file, `declarative_java_tests.rs` — split out to keep this file under the
+// coding-standards §4.1 500-line cap (a pure move, no behavior here).
 
 // --- ReceiverPattern (Go's shape) ---
 
@@ -250,8 +257,14 @@ static VERBATIM_CALLEE_SPEC: ConventionSpec = ConventionSpec {
 /// branch tests below — any grammar can supply the `Node`s these tests need,
 /// since the branches under test (`RefToRule::TailSegment`,
 /// `ImportRule::StatementStrip`) read node text/fields generically and are
-/// not Go-specific themselves.
-fn first_node_of_kind<'t>(tree: &'t tree_sitter::Tree, source: &str, kind: &str) -> Node<'t> {
+/// not Go-specific themselves. `pub(super)`: also used by
+/// `declarative_java_tests.rs` (real tree-sitter-java `Node`s), avoiding a
+/// duplicate copy of the same DFS.
+pub(super) fn first_node_of_kind<'t>(
+    tree: &'t tree_sitter::Tree,
+    source: &str,
+    kind: &str,
+) -> Node<'t> {
     let _ = source;
     let mut stack = vec![tree.root_node()];
     while let Some(n) = stack.pop() {
