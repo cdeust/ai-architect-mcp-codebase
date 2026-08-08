@@ -1,4 +1,4 @@
 name = "kotlin-coroutines"
 language = "kotlin"
 path = "./src"
-description = "STUB — to be populated with a kotlinx.coroutines slice. Ground truth is TODO. Requires a Kotlin adapter in the analyzer (not yet shipped — see stage-3b-v2.md §4.2)."
+description = "STUB — to be populated with a kotlinx.coroutines slice. Ground truth is TODO. The Kotlin adapter IS shipped (ADR-0055 phase 4, KOTLIN_SPEC); this corpus was never populated to exercise it (issue #216) because fully labeling all 14 canonical queries, each independently verified against a freshly built graph plus source grep per the no-circularity discipline typescript-small's #212 labeling used, is scoped work on the same order as that dedicated PR — out of #216's scope. Left as an honest empty stub rather than a half-labeled corpus (which would score 0 at full weight and tank the aggregate)."

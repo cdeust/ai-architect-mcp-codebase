@@ -1,4 +1,4 @@
 name = "go-kubectl"
 language = "go"
 path = "./src"
-description = "STUB — to be populated with a kubernetes/kubectl slice. Requires a Go adapter in the analyzer (not yet shipped — see stage-3b-v2.md §4.2)."
+description = "STUB — to be populated with a kubernetes/kubectl slice. Ground truth is TODO. The Go adapter IS shipped (src/parser/spec/go.rs); this corpus was never populated to exercise it. Note (issue #216): Go is expected to have no explicit heritage clause when populated — interface satisfaction is structural in Go, so it is not part of the #212/#216 walker/resolver-property defect class."
