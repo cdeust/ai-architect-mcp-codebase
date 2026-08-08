@@ -92,9 +92,18 @@ use std::collections::{HashMap, HashSet};
 
 use tree_sitter::{Language as TsLanguage, Node};
 
+use super::structural_fallback::{
+    first_named_child, has_parameter_like_child, heritage_targets_via_child_hop,
+    kind_hints_definition_role, kind_hints_positional_call, resolve_name_via_bounded_scan,
+    resolve_name_via_declarator_chain, visibility_via_modifier_child, KindRole,
+};
+use super::structural_scope::{
+    any_field, enclosing_def_index, end_line_of, has_field, last_segment, line_of, resolve_scopes,
+    rightmost_named_leaf_text, CallEntry, DefEntry, DefRole,
+};
 use crate::parser::{
     collect_error_ranges, count_parse_errors, node_text, parse_tree_too_deep, parse_with_timeout,
-    qual, ExtractedNode, ExtractedRef, Language, ParseResult, LABEL_CALL_SITE, LABEL_FUNCTION,
+    ExtractedNode, ExtractedRef, Language, ParseResult, LABEL_CALL_SITE, LABEL_FUNCTION,
     LABEL_METHOD, LABEL_STRUCT, MAX_TREE_DEPTH,
 };
 
@@ -129,84 +138,6 @@ pub(crate) struct StructuralStats {
     pub unclassified_named_nodes_with_a_name_field: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DefRole {
-    FunctionLike,
-    TypeLike,
-}
-
-struct DefEntry<'t> {
-    node: Node<'t>,
-    role: DefRole,
-    name: String,
-    is_method: bool,
-    qn: String,
-}
-
-struct CallEntry<'t> {
-    node: Node<'t>,
-    callee: String,
-}
-
-/// Reduces a possibly-qualified callee/heritage name to its trailing segment
-/// (`Utils.parse` -> `parse`, `a::b::c` -> `c`). Duplicated from
-/// `shallow::last_segment` rather than shared: two current call sites in this
-/// module plus shallow's own, none of which the `coding-standards.md` §3.3
-/// three-use threshold for extraction counts across module boundaries the
-/// same way — kept local so this module stays readable standalone.
-fn last_segment(text: &str) -> String {
-    const SEPARATORS: [&str; 3] = [".", QN_SEP, "->"];
-    let mut tail = text.trim();
-    for sep in SEPARATORS {
-        if let Some(idx) = tail.rfind(sep) {
-            let candidate = &tail[idx + sep.len()..];
-            if !candidate.trim().is_empty() {
-                tail = candidate.trim();
-            }
-        }
-    }
-    tail.to_string()
-}
-
-/// The text of the rightmost named leaf under `node` (or `node` itself if it
-/// has no named children). Tree-sitter marks a grammar's keywords as
-/// UNNAMED children (`extends`, `implements`) and its content (identifiers,
-/// type references) as NAMED ones — the same convention `shallow.rs`'s
-/// `named_children` already relies on. A heritage field's target node is
-/// often a wrapper spanning the introducing keyword plus the actual type
-/// reference (verified: Java's `superclass` field node's text is literally
-/// `"extends Base"`), so reading the WHOLE node's text would leak the
-/// keyword into the edge target; descending to the rightmost named leaf
-/// strips it structurally, with no per-language keyword list.
-fn rightmost_named_leaf_text(source: &str, node: Node) -> String {
-    let mut current = node;
-    loop {
-        let mut cursor = current.walk();
-        let named: Vec<Node> = current.named_children(&mut cursor).collect();
-        match named.last() {
-            Some(&last) => current = last,
-            None => break,
-        }
-    }
-    node_text(source, current)
-}
-
-fn line_of(node: Node) -> u64 {
-    node.start_position().row as u64 + 1
-}
-
-fn end_line_of(node: Node) -> u64 {
-    node.end_position().row as u64 + 1
-}
-
-fn has_field(node: Node, field: &str) -> bool {
-    node.child_by_field_name(field).is_some()
-}
-
-fn any_field(node: Node, fields: &[&str]) -> bool {
-    fields.iter().any(|f| has_field(node, f))
-}
-
 /// One classified call site: the callee-bearing field name to read, chosen by
 /// which structural signature the node matched. `None` when nothing matched.
 fn call_callee_field(node: Node) -> Option<&'static str> {
@@ -225,85 +156,82 @@ fn call_callee_field(node: Node) -> Option<&'static str> {
     None
 }
 
-/// Classifies one node's OWN field shape — independent of nesting — into a
-/// definition role, a call, or neither. Definitions are checked before calls
-/// because a function-like definition can coincidentally satisfy no call
-/// rule (it never carries `arguments`), so there is no ordering hazard, but
-/// checking definitions first keeps the precedence explicit and documented.
+/// Resolves function-vs-type once a definition candidate's name is already
+/// known, preferring field shape (TIER 1: `parameters`/`params` field) and
+/// falling back, in order, to a positional parameter-shaped child (TIER 2a)
+/// and finally the node's own kind vocabulary (TIER 2b:
+/// `kind_hints_definition_role`). Shared by BOTH the TIER 1 and TIER 2
+/// branches of `classify` below: a node can satisfy TIER 1's `name`+`body`
+/// field check (Swift's `function_declaration` does — see the module doc)
+/// while still needing this refinement, since `parameters`/`params` is the
+/// ONE field TIER 1's own name+body gate does not itself require. Splitting
+/// "found a definition" from "which kind of definition" this way is what
+/// lets Swift be fixed without bypassing TIER 1's field check for it.
+fn resolve_def_role(node: Node) -> DefRole {
+    if any_field(node, &PARAMETER_FIELD_CANDIDATES) || has_parameter_like_child(node) {
+        return DefRole::FunctionLike;
+    }
+    match kind_hints_definition_role(node.kind()) {
+        Some(KindRole::FunctionLike) => DefRole::FunctionLike,
+        Some(KindRole::TypeLike) | None => DefRole::TypeLike,
+    }
+}
+
+/// Classifies one node into a definition role, a call, or neither, in two
+/// tiers. TIER 1 reads the node's OWN field shape first — `name`+`body` for
+/// a definition candidate (role resolved via `resolve_def_role` above),
+/// `function`/`method`/`name`+`arguments` for calls — so every
+/// already-full-recall language (Python/Java/TypeScript/Ruby/Go) keeps its
+/// exact prior qualified names.
+///
+/// TIER 2 (`structural_fallback`, issue #224 follow-up) runs only when TIER 1
+/// found no definition-or-call SHAPE at all (no `name`+`body`, no callee
+/// field), and only on nodes whose OWN kind already looks definition-shaped
+/// (`kind_hints_definition_role`) or call-shaped
+/// (`kind_hints_positional_call`) — see the module doc there for why that
+/// gate is necessary before descending into declarator chains or bounded
+/// identifier scans, and why it cannot false-positive on wrapper nodes like
+/// `class_body`/`function_value_parameters`/`call_suffix`.
 fn classify(node: Node) -> Role {
     let name = has_field(node, "name");
     let body = has_field(node, "body");
     if name && body {
-        if any_field(node, &PARAMETER_FIELD_CANDIDATES) {
-            return Role::Def(DefRole::FunctionLike);
-        }
-        return Role::Def(DefRole::TypeLike);
+        let role = resolve_def_role(node);
+        let name_node = node
+            .child_by_field_name("name")
+            .expect("name field checked above");
+        return Role::Def { role, name_node };
     }
     if let Some(field) = call_callee_field(node) {
-        return Role::Call(field);
+        let callee_node = node
+            .child_by_field_name(field)
+            .expect("field checked above");
+        return Role::Call { callee_node };
     }
+
+    if kind_hints_definition_role(node.kind()).is_some() {
+        let name_node =
+            resolve_name_via_declarator_chain(node).or_else(|| resolve_name_via_bounded_scan(node));
+        if let Some(name_node) = name_node {
+            return Role::Def {
+                role: resolve_def_role(node),
+                name_node,
+            };
+        }
+    }
+    if kind_hints_positional_call(node.kind()) {
+        if let Some(callee_node) = first_named_child(node) {
+            return Role::Call { callee_node };
+        }
+    }
+
     Role::None { has_name: name }
 }
 
-enum Role {
-    Def(DefRole),
-    Call(&'static str),
+enum Role<'t> {
+    Def { role: DefRole, name_node: Node<'t> },
+    Call { callee_node: Node<'t> },
     None { has_name: bool },
-}
-
-/// Finds the nearest ancestor of `node` already present in `node_id_to_def`,
-/// returning its index. `None` means file scope.
-fn enclosing_def_index(node: Node, node_id_to_def: &HashMap<usize, usize>) -> Option<usize> {
-    let mut current = node.parent();
-    while let Some(n) = current {
-        if let Some(&idx) = node_id_to_def.get(&n.id()) {
-            return Some(idx);
-        }
-        current = n.parent();
-    }
-    None
-}
-
-/// Computes each definition's qualified name and method/function split,
-/// mirroring `shallow.rs`'s dedup discipline (a name collision at the same
-/// scope gets a `@{start_line}` suffix).
-///
-/// Preconditions: `defs` is fully populated and sorted by AST pre-order
-/// (`node.start_byte()`) so an ancestor's qn is always resolved before a
-/// descendant needs it. Postconditions: every `DefEntry.qn` is set and
-/// `is_method` reflects either an own `receiver` field or a type-like
-/// enclosing definition.
-fn resolve_scopes(defs: &mut [DefEntry], file_path: &str) {
-    let node_id_to_def: HashMap<usize, usize> = defs
-        .iter()
-        .enumerate()
-        .map(|(i, d)| (d.node.id(), i))
-        .collect();
-
-    let mut emitted_qns: HashSet<String> = HashSet::new();
-    for i in 0..defs.len() {
-        let node = defs[i].node;
-        let name = defs[i].name.clone();
-        let start_line = line_of(node);
-        let parent_idx = enclosing_def_index(node, &node_id_to_def);
-        let scope = match parent_idx {
-            Some(idx) => defs[idx].qn.clone(),
-            None => file_path.to_string(),
-        };
-        let parent_is_type_like = parent_idx.is_some_and(|idx| defs[idx].role == DefRole::TypeLike);
-        if defs[i].role == DefRole::FunctionLike {
-            defs[i].is_method = has_field(node, "receiver") || parent_is_type_like;
-        }
-        let candidate = qual(&scope, &name);
-        let qn = if emitted_qns.insert(candidate.clone()) {
-            candidate
-        } else {
-            let unique = format!("{candidate}@{start_line}");
-            emitted_qns.insert(unique.clone());
-            unique
-        };
-        defs[i].qn = qn;
-    }
 }
 
 /// Parses `source` with `spec`'s grammar and runs the structural
@@ -337,44 +265,63 @@ pub(crate) fn parse_structural(
     let mut stats = StructuralStats::default();
     let mut defs: Vec<DefEntry> = Vec::new();
     let mut calls: Vec<CallEntry> = Vec::new();
-    let mut heritage: Vec<(usize, String)> = Vec::new(); // (def index, target name)
+    // Keyed by the DEFINING NODE'S `id()`, never by a `defs` vector index:
+    // `defs` is discovered in stack-pop (reverse-child) order and only
+    // acquires its FINAL, index-stable order after `defs.sort_by_key`
+    // below. A raw `defs.len()`-at-discovery-time index silently goes stale
+    // across that sort (root-cause fixed here, not pinned into the coverage
+    // tests as a "known gap" — this bug pre-dates TIER 2 and was invisible
+    // before because every prior fixture had at most one heritage-bearing
+    // definition, so any reordering coincidentally still hit index 0).
+    let mut heritage: Vec<(usize, String)> = Vec::new(); // (defining node id, target name)
 
     let mut stack = vec![tree.root_node()];
     while let Some(node) = stack.pop() {
         if node.is_named() {
             match classify(node) {
-                Role::Def(role) => {
-                    if let Some(name_node) = node.child_by_field_name("name") {
-                        let name = node_text(source, name_node);
-                        if !name.is_empty() {
-                            let def_index = defs.len();
-                            if role == DefRole::TypeLike {
-                                for field in HERITAGE_FIELD_CANDIDATES {
-                                    if let Some(target_node) = node.child_by_field_name(field) {
-                                        let text = rightmost_named_leaf_text(source, target_node);
-                                        let target = last_segment(&text);
-                                        if !target.is_empty() {
-                                            heritage.push((def_index, target));
-                                        }
+                Role::Def { role, name_node } => {
+                    let name = node_text(source, name_node);
+                    if !name.is_empty() {
+                        if role == DefRole::TypeLike {
+                            let mut seen_targets: HashSet<String> = HashSet::new();
+                            for field in HERITAGE_FIELD_CANDIDATES {
+                                if let Some(target_node) = node.child_by_field_name(field) {
+                                    let text = rightmost_named_leaf_text(source, target_node);
+                                    let target = last_segment(&text);
+                                    if !target.is_empty() && seen_targets.insert(target.clone()) {
+                                        heritage.push((node.id(), target));
                                     }
                                 }
                             }
-                            defs.push(DefEntry {
-                                node,
-                                role,
-                                name,
-                                is_method: false, // filled by resolve_scopes
-                                qn: String::new(),
-                            });
+                            // TIER 2 heritage-on-child-node hop (fixes
+                            // TypeScript, C++): a SEPARATE detection path
+                            // from the field-based one above (mutually
+                            // exclusive per grammar in practice, but both
+                            // checked unconditionally; deduped against the
+                            // same `seen_targets` set so a grammar that
+                            // somehow satisfied both never double-emits).
+                            for target_node in heritage_targets_via_child_hop(node) {
+                                let target = last_segment(&node_text(source, target_node));
+                                if !target.is_empty() && seen_targets.insert(target.clone()) {
+                                    heritage.push((node.id(), target));
+                                }
+                            }
                         }
+                        let visibility = visibility_via_modifier_child(source, node);
+                        defs.push(DefEntry {
+                            node,
+                            role,
+                            name,
+                            is_method: false, // filled by resolve_scopes
+                            qn: String::new(),
+                            visibility,
+                        });
                     }
                 }
-                Role::Call(field) => {
-                    if let Some(callee_node) = node.child_by_field_name(field) {
-                        let callee = last_segment(&node_text(source, callee_node));
-                        if !callee.is_empty() {
-                            calls.push(CallEntry { node, callee });
-                        }
+                Role::Call { callee_node } => {
+                    let callee = last_segment(&node_text(source, callee_node));
+                    if !callee.is_empty() {
+                        calls.push(CallEntry { node, callee });
                     }
                 }
                 Role::None { has_name } => {
@@ -418,8 +365,9 @@ pub(crate) fn parse_structural(
             qualified_name: def.qn.clone(),
             start_line: line_of(def.node),
             end_line: end_line_of(def.node),
-            // No field-based visibility signal — see the module doc.
-            visibility: String::new(),
+            // TIER 2 item 4: node-KIND heuristic (`visibility_via_modifier_child`),
+            // not field-based — see the module doc and `structural_fallback`'s.
+            visibility: def.visibility.clone(),
             properties: Vec::new(),
         });
         let edge_kind = if def.role == DefRole::FunctionLike && def.is_method {
@@ -434,12 +382,17 @@ pub(crate) fn parse_structural(
         });
     }
 
-    for (def_index, target) in &heritage {
-        refs.push(ExtractedRef {
-            kind: "Inherits".to_string(),
-            from_qualified_name: defs[*def_index].qn.clone(),
-            to_qualified_name: target.clone(),
-        });
+    for (node_id, target) in &heritage {
+        // Resolved via the POST-sort `node_id_to_def` map, not a raw index
+        // into `defs` — see the collection site's comment for why a plain
+        // index would go stale across `defs.sort_by_key` above.
+        if let Some(&idx) = node_id_to_def.get(node_id) {
+            refs.push(ExtractedRef {
+                kind: "Inherits".to_string(),
+                from_qualified_name: defs[idx].qn.clone(),
+                to_qualified_name: target.clone(),
+            });
+        }
     }
 
     for call in &calls {
