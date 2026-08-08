@@ -398,20 +398,22 @@
     },
     {
       "query_id": "q7",
+      "_note": "issue #214: extract_actual_set previously read a non-existent payload.affected field, so this label's empty expectation was never really exercised. Corrected via independent source read (grep for call sites, excluding test files) plus a live get_impact probe: run_index_codebase has exactly one caller, main.rs::main's dispatch in handle_tool_call (main.rs:236).",
       "input": {
         "qualified_name": "indexing_handlers.rs::run_index_codebase"
       },
       "expected": {
-        "affected": []
+        "affected": ["main.rs::handle_tool_call"]
       }
     },
     {
       "query_id": "q7",
+      "_note": "issue #214: see the run_index_codebase q7 note above for the extract_actual_set bug this corrects. Verified via grep for call sites (excluding query_handlers_tests.rs): forbidden_cypher_keyword has exactly one production caller, query_handlers.rs::do_query_graph at line 321.",
       "input": {
         "qualified_name": "query_handlers.rs::forbidden_cypher_keyword"
       },
       "expected": {
-        "affected": []
+        "affected": ["query_handlers.rs::do_query_graph"]
       }
     },
     {

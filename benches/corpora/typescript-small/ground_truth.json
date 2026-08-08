@@ -88,9 +88,17 @@
 
     {
       "query_id": "q7",
+      "_note": "issue #214: extract_actual_set previously read a non-existent payload.affected field, so this empty expectation was never really exercised. Corrected via independent source read (grep for `Logger` across src/): Logger is implemented by ConsoleLogger and NullLogger (logger.ts), and used as a field type by App (app.ts) and MemoryStore (store.ts) via imports in both files. Live get_impact confirms dependents_total=6 across implementors/importers/users.",
       "input": { "qualified_name": "logger.ts::Logger" },
       "expected": {
-        "affected": []
+        "affected": [
+          "logger.ts::ConsoleLogger",
+          "logger.ts::NullLogger",
+          "app.ts",
+          "store.ts",
+          "app.ts::App::logger",
+          "store.ts::MemoryStore::logger"
+        ]
       }
     },
 
