@@ -19,8 +19,9 @@
 //     `computed_property` body scanned for calls).
 //   - a `public class` (`Animal`) with `init`/`deinit`/`open func` (open
 //     visibility), and an `extension Animal: Equatable` → a second `Struct` node
-//     with the same QN marked `is_extension=true` whose method scopes under
-//     `::Animal`, plus an `Extends Animal -> Equatable` conformance edge (#97).
+//     with the same QN marked `is_extension=true` + `bases="Equatable"` (issue
+//     #216 fix) whose method scopes under `::Animal`, plus an
+//     `Extends Animal -> Equatable` conformance edge (#97).
 //   - an `actor` (`Counter`) → `Struct`.
 //   - an `enum` (`Color`) → `Enum`, with `case red` / `case green, blue`
 //     (one `enum_entry`, two variants) / `case custom(Int)` → `Variant`s edged
@@ -83,7 +84,7 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Method|speak|Sources/App/Demo.swift::Animal::speak#15|51|53|open|[(\"receiver_type\", \"Sources/App/Demo.swift::Animal\")]",
         "Method|subscript|Sources/App/Demo.swift::Point::subscript#10|35|37|internal|[(\"member_kind\", \"subscript\"), (\"receiver_type\", \"Sources/App/Demo.swift::Point\")]",
         "Struct|Animal|Sources/App/Demo.swift::Animal|40|54|public|[]",
-        "Struct|Animal|Sources/App/Demo.swift::Animal|78|82|internal|[(\"is_extension\", \"true\")]",
+        "Struct|Animal|Sources/App/Demo.swift::Animal|78|82|internal|[(\"bases\", \"Equatable\"), (\"is_extension\", \"true\")]",
         "Struct|Counter|Sources/App/Demo.swift::Counter|56|62|internal|[]",
         "Struct|Point|Sources/App/Demo.swift::Point|16|38|internal|[]",
         "Trait|Serializable|Sources/App/Demo.swift::Serializable|74|76|internal|[]",

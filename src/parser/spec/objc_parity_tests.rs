@@ -42,8 +42,9 @@
 //   - `@protocol Drawable` → a `Trait` with NO member extraction (the `- (void)
 //     draw;` inside it emits NOTHING — negative assertion).
 //   - `@interface Shape : NSObject <Drawable>` → a `Struct` keyed `…::Shape`,
-//     one `Extends` to `NSObject` (the `<Drawable>` conformance is NOT emitted);
-//     `@implementation Shape` and the category `@interface Shape (Extras)` are
+//     one `Extends` to `NSObject` + `bases="NSObject"` (issue #216 fix; the
+//     `<Drawable>` conformance is NOT emitted); `@implementation Shape` and
+//     the category `@interface Shape (Extras)` are
 //     TWO more `Struct` nodes on the SAME QN (three `Defines(→…::Shape)`). The
 //     category carries `is_category=true` + `category=Extras`.
 //   - Methods: instance `- (void)start;` and class `+ (instancetype)shapeNamed:`
@@ -178,7 +179,7 @@ fn expected_node_records() -> Vec<&'static str> {
         "Method|start|app/Shape.m::Shape::start#4|25|30|public|[(\"receiver_type\", \"app/Shape.m::Shape\")]",
         "Struct|Node|app/Shape.m::Node|10|10|public|[]",
         "Struct|Point|app/Shape.m::Point|6|6|public|[]",
-        "Struct|Shape|app/Shape.m::Shape|18|22|public|[]",
+        "Struct|Shape|app/Shape.m::Shape|18|22|public|[(\"bases\", \"NSObject\")]",
         "Struct|Shape|app/Shape.m::Shape|24|34|public|[]",
         "Struct|Shape|app/Shape.m::Shape|36|38|public|[(\"is_category\", \"true\"), (\"category\", \"Extras\")]",
         "Struct|Value|app/Shape.m::Value|7|7|public|[]",

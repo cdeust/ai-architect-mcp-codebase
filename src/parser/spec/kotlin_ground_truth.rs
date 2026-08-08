@@ -13,7 +13,8 @@
 //   - an `enum class` (`Color`) → `Enum`, its entries (`RED`/`GREEN`/`BLUE`) →
 //     `Constant` with `enum_entry=true`, reached via the `enum_class_body`.
 //   - a `sealed class` (`Shape`) → `Struct` with a nested `class Circle : Shape()`
-//     → `Struct` + `Extends`, and its method's call.
+//     → `Struct` + `Extends` + `bases="Shape"` (issue #216 fix), and its
+//     method's call.
 //   - a `data class` (`Point`) → `Struct`; its ctor params (`val x`, `val y`)
 //     are `class_parameter` nodes inside `primary_constructor`, NOT
 //     `property_declaration`, so they remain dropped (issue #93 is scoped to
@@ -22,7 +23,8 @@
 //     instances` property → `Constant` + `Defines` (#93, name descended through
 //     `variable_declaration`).
 //   - classes (`Animal`, `Dog`); `Dog : Animal(), Greeter` → two `Extends`
-//     refs; `public` modifier visibility; a member extension `fun String.wag()`
+//     refs + `bases="Animal,Greeter"` (issue #216 fix); `public` modifier
+//     visibility; a member extension `fun String.wag()`
 //     and an override method; member properties `Animal::species` (public) and
 //     `Dog::breed` (`private` modifier) → `Constant` + `Defines` (#93).
 //   - top-level functions (`topLevel`, extension `fun String.shout()`,
@@ -133,8 +135,8 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Method|register|com/example/app/Demo.kt::Registry::register#4|31|33|public|[(\"receiver_type\", \"com/example/app/Demo.kt::Registry\")]",
         "Method|wag|com/example/app/Demo.kt::Dog::wag#10|48|50|public|[(\"receiver_type\", \"com/example/app/Demo.kt::Dog\")]",
         "Struct|Animal|com/example/app/Demo.kt::Animal|36|41|public|[]",
-        "Struct|Circle|com/example/app/Demo.kt::Shape::Circle|20|24|public|[]",
-        "Struct|Dog|com/example/app/Demo.kt::Dog|43|51|public|[]",
+        "Struct|Circle|com/example/app/Demo.kt::Shape::Circle|20|24|public|[(\"bases\", \"Shape\")]",
+        "Struct|Dog|com/example/app/Demo.kt::Dog|43|51|public|[(\"bases\", \"Animal,Greeter\")]",
         "Struct|Marker|com/example/app/Demo.kt::Marker|11|11|public|[]",
         "Struct|Point|com/example/app/Demo.kt::Point|27|27|public|[]",
         "Struct|Registry|com/example/app/Demo.kt::Registry|29|34|public|[]",

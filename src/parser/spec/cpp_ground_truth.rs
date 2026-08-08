@@ -35,8 +35,10 @@
 //     members (`x`, `y`, `i`, `f`) are `Field` + `HasField` with a
 //     `type_annotation`, the same model the flat C walker uses (#124.4).
 //   - `class Shape` / `Circle` / `Multi` / `Container` - `Struct`
-//     (`is_class=true`); `Circle : public Shape` -> one `Extends`; `Multi :
-//     public Shape, protected Point` -> TWO `Extends`.
+//     (`is_class=true`); `Circle : public Shape` -> one `Extends` + a `bases`
+//     CSV property; `Multi : public Shape, protected Point` -> TWO `Extends`
+//     + `bases="Shape,Point"` (issue #216 fix — the property, not the ref, is
+//     what `resolver::extends::resolve_extends` reads).
 //   - Member prototypes (`virtual double area() const;`, `void draw();`) ->
 //     `Method` (`is_prototype=true`, receiver = enclosing class). An inline
 //     definition (`int getId() { ... }`) -> `Method` WITHOUT `is_prototype`, and
@@ -216,9 +218,9 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Method|operator+|app/main.cpp::geometry::Shape::operator+#7|26|26|public|[(\"is_prototype\", \"true\"), (\"receiver_type\", \"app/main.cpp::geometry::Shape\")]",
         "Method|~Point|app/main.cpp::geometry::Point::~Point#3|18|18|public|[(\"is_prototype\", \"true\"), (\"receiver_type\", \"app/main.cpp::geometry::Point\")]",
         "Method|~Shape|app/main.cpp::geometry::Shape::~Shape#5|24|24|public|[(\"is_prototype\", \"true\"), (\"receiver_type\", \"app/main.cpp::geometry::Shape\")]",
-        "Struct|Circle|app/main.cpp::geometry::Circle|32|38|public|[(\"is_class\", \"true\")]",
+        "Struct|Circle|app/main.cpp::geometry::Circle|32|38|public|[(\"is_class\", \"true\"), (\"bases\", \"Shape\")]",
         "Struct|Container|app/main.cpp::geometry::Container|54|58|public|[(\"is_class\", \"true\")]",
-        "Struct|Multi|app/main.cpp::geometry::Multi|40|42|public|[(\"is_class\", \"true\")]",
+        "Struct|Multi|app/main.cpp::geometry::Multi|40|42|public|[(\"is_class\", \"true\"), (\"bases\", \"Shape,Point\")]",
         "Struct|Point|app/main.cpp::geometry::Point|13|19|public|[]",
         "Struct|Shape|app/main.cpp::geometry::Shape|21|30|public|[(\"is_class\", \"true\")]",
         "Struct|Value|app/main.cpp::geometry::Value|44|47|public|[]",
