@@ -1,105 +1,64 @@
 // parser::spec::structural_coverage_tests — the PR's primary deliverable
 // (issue #224, owner pivot 2026-08-08): a language-by-language coverage table
-// for the grammar-introspection engine (`structural.rs`), each row pinned by
-// an assertion so it cannot silently drift, plus two direct comparisons
-// against the CURRENT production hand-written path (`crate::parser::parse_file`)
-// on the same source, and one true zero-code-onboarding proof (Ruby).
+// for the grammar-introspection engine (`structural.rs` + its TIER 2
+// extensions in `structural_fallback.rs`), each row pinned by an assertion
+// so it cannot silently drift, plus direct comparisons against the CURRENT
+// production hand-written path (`crate::parser::parse_file`) on the same
+// source, and one true zero-code-onboarding proof (Ruby).
 //
 // ## Method
 //
 // Every snippet below is a minimal, real, idiomatic definition + a call +
 // (where the language has one) a heritage clause. Every row in the table was
 // produced by actually running `parse_structural` and reading its output —
-// none of this is predicted from reading grammar docs. Where the result
-// looks worse than expected (Swift, Kotlin, C, ObjC), a second run against a
-// slightly different snippet shape is noted inline to rule out "wrong test
-// input" before it is recorded as a genuine engine limitation.
+// none of this is predicted from reading grammar docs. This file is the
+// SECOND generation of this table: the original (TIER 1 only) row for each
+// of C, C++, ObjC, Swift, and kotlin-ng is preserved in this module's git
+// history and in the PR description's before/after comparison; what follows
+// is the AFTER state, produced by the TIER 2 mechanisms in
+// `structural_fallback.rs` (declarator-chain descent, bounded identifier
+// scan, heritage-on-child-node hop, kind-substring fallback classifier).
 //
-// ## Coverage table (10 hand-written languages + Ruby)
+// ## Coverage table (10 hand-written languages + Ruby) — AFTER TIER 2
 //
 // | Language | Function/Method split | Struct/class shell | Calls | Inherits | Verdict |
 // |---|---|---|---|---|---|
-// | Python     | Yes (name+body+parameters) | Yes (name+body) | Yes (function+arguments) | not tested this fixture (no heritage clause used) | **Full recall on this shape** |
-// | Java       | Yes | Yes | Yes (name+arguments, no `function` field — Java's own shape) | **Yes** (`superclass`+`interfaces` fields, keyword-stripped via rightmost-named-leaf) | **Full recall + heritage** |
-// | TypeScript | Yes | Yes | Yes (function+arguments) | not tested (heritage lives on a `class_heritage` child NODE, not a field of `class_declaration` — verified absent from its field list; a real, separate gap from Java's) | Defs+calls full; heritage needs one more hop |
-// | Ruby       | Yes | Yes | Yes (method+arguments) | not tested this fixture | **Full recall — and ZERO new code, just the crate already in `Cargo.toml`** |
-// | Rust       | Partial: top-level `fn` yes; `impl` block methods **NO** — `impl_item` has fields `body`/`trait`/`type`/`type_parameters`, no `name` field (Rust names an impl by WHAT it implements, not a symbol name), so it never satisfies the name+body rule and cannot become an enclosing scope. A unit struct (`struct Greeter;`, no braces) also has no `body` field. | Partial (only braced structs) | Yes for calls reached from a detected scope | not tested | **Rust's method/impl idiom is invisible to field introspection** — its central OO idiom, not an edge case |
-// | C          | **No** — `function_definition` has fields `body`/`declarator`/`type`; the identifier is nested TWO levels inside `declarator` (a `function_declarator` with its own `declarator`+`parameters` fields), never surfacing as a `name` field on the top node | N/A (C has no class construct) | Yes (function+arguments — calls ARE visible even though the enclosing function is not) | N/A | **Definitions invisible; calls visible** |
-// | C++        | **No**, same declarator nesting as C, for methods | Yes for the class SHELL (`class_specifier` has `name`+`body` directly) | Yes, attributed to the class (since the method inside is undetected, the call is attributed to the nearest detected ancestor, which is the class) | not tested | **Class shell only; every method inside is invisible** |
-// | ObjC       | **No** — `class_interface`/`class_implementation` have fields `category`/`superclass`, no `name` field at all (the class name is an unnamed/positional child) | **No**, same reason | Yes (`method`+`receiver`, ObjC's message-send shape, which structurally has NO `arguments` field) | N/A (no `name` to hang it on) | **Nothing but calls** |
-// | Swift      | **Misclassified**, not missing: `function_declaration` has fields `body`/`default_value`/`name`/`return_type` — genuinely NO `parameters` and NO `params` field (parameters are nested, unnamed, inside a `function_signature`-shaped child) — so every function AND every class satisfy the SAME "name+body, no parameters" rule and all come out labeled `Struct`. | Same bucket as above | **No** — `call_expression` has ZERO fields; fully positional call syntax | not tested | **Defs found but un-split; calls invisible** |
-// | Kotlin (kotlin-ng) | **No** | **No** | **No** | N/A | **Total blackout** — `function_declaration`/`class_declaration` expose only a `name` field; `call_expression` exposes none; kotlin-ng's grammar is close to fully positional |
+// | Python     | Yes | Yes | Yes | not tested this fixture | **Full recall** (unchanged, TIER 1 only) |
+// | Java       | Yes | Yes | Yes | **Yes** (field-based) | **Full recall + heritage** (unchanged) |
+// | TypeScript | Yes | Yes | Yes | **Yes** — NEW: heritage-on-child-node hop reads `class_heritage`'s nested `extends_clause` | **Full recall + heritage** (heritage gap CLOSED) |
+// | Ruby       | Yes | Yes | Yes | not tested this fixture | **Full recall, zero new code** (unchanged) |
+// | Rust       | Partial: top-level `fn` yes; `impl` block methods still **NO** — `impl_item`'s kind does not match the TIER 2 vocabulary (see "what remains unreachable" below) | Partial (only braced structs) | Yes | not tested | **Unchanged — Rust's `impl` idiom is the one target NOT in this PR's priority list and remains structurally unreached** |
+// | C          | **YES — NEW**: declarator-chain descent finds both free functions | N/A (C has no class construct) | Yes | N/A | **Full recall** (definitions gap CLOSED) |
+// | C++        | **YES — NEW**: declarator-chain descent finds the free function AND the class method, correctly scoped as a `HasMethod` edge | Yes | Yes, correctly attributed to the method (not the class) | **Yes — NEW**: heritage-on-child-node hop reads `base_class_clause` | **Full recall + heritage** (both gaps CLOSED) |
+// | ObjC       | **YES — NEW**: bounded identifier-leaf descent finds the class name (a positional child preceding the `superclass` field); both interface-only method declarations AND implementation method definitions are indexed (two separate real declaration sites in the source, not a duplicate bug) | **YES — NEW** | Yes | **Yes** — the `superclass` field was ALREADY TIER-1-reachable once the class node itself gets a name (was previously unreachable transitively, since no def existed to hang the edge on) | **Full recall + heritage** (definitions gap CLOSED, which transitively closed heritage too) |
+// | Swift      | **YES — NEW, split correctly**: `resolve_def_role` now consults `has_parameter_like_child`/`kind_hints_definition_role` even when TIER 1's `name`+`body` check already matched (Swift's grammar quirk — see the `resolve_def_role` doc) | Yes | **YES — NEW**: positional call fallback (with the `call_suffix`-wrapper false-positive fixed, see `structural_fallback`'s `kind_hints_positional_call`) | not tested this fixture | **Full recall** (both gaps CLOSED) |
+// | Kotlin (kotlin-ng) | **YES — NEW** | **YES — NEW** | **YES — NEW** | N/A | **Total blackout → full recall** (every gap CLOSED) |
 //
-// ## Direct comparison against the CURRENT hand-written path
+// ## What remains structurally unreachable (honest, not silently dropped)
 //
-// `structural_engine_reaches_java_deep_path_parity_on_this_shape` and
-// `structural_engine_misses_every_c_definition_the_deep_path_finds` below run
+// **Rust's `impl` block.** `impl_item`'s kind is `"impl_item"` — it does not
+// contain `"function"`/`"method"`/`"class"`/`"struct"`/`"interface"`, nor
+// does it end with a definition-site suffix in the sense
+// `kind_hints_definition_role` checks (Rust names an impl by WHAT it
+// implements, a fundamentally different grammar shape than "a definition
+// with a name" that every other mechanism in this engine models). Reaching
+// it would require a THIRD, Rust-specific vocabulary entry
+// (`"impl_item"` itself, plus reading the `type` field as the enclosing
+// scope's name instead of `name`) — which is no longer a small, reusable,
+// cross-language rule; it is a per-construct special case for exactly one
+// grammar's exactly one idiom. This PR does not add it, and documents that
+// refusal here rather than silently leaving Rust's central OO idiom
+// unexplained.
+//
+// ## Direct comparisons against the CURRENT hand-written path
+//
+// `structural_engine_reaches_java_deep_path_parity_on_this_shape` (Java,
+// unaffected by this PR) and `structural_engine_now_matches_the_deep_path_on_c_definitions`
+// (C — flipped from "misses every definition" to "matches" by TIER 2) run
 // `crate::parser::parse_file` (the real production dispatch, unmodified by
-// this PR) side by side with `parse_structural` on the SAME source, and
-// assert the difference directly — not inferred from the table above.
-//
-// ## The four-capability verdict (issue #224's required answer)
-//
-// 1. **Call edges with receivers** — reachable structurally for 6 of the 10
-//    languages sampled (Go/Python/Rust/TypeScript/C/C++ via `function`+
-//    `arguments`; Java via `name`+`arguments`; Ruby/ObjC via `method`+
-//    `arguments`/`receiver`) using ONE shared classification rule, zero
-//    per-language code. Genuinely unreachable for Swift and kotlin-ng, whose
-//    `call_expression` carries no fields at all — no amount of query
-//    extension helps there either, since there is no field to point a query
-//    at; that gap needs a grammar-specific positional-child rule, which is
-//    exactly the per-language artifact this pivot rejected. Verdict: **data
-//    (a shared field-shape table) for most of the roster; structurally
-//    unreachable, not just uncoded, for grammars with zero-field call nodes.**
-// 2. **Imports with aliases** — NOT reachable by field shape at all (see
-//    `structural.rs`'s module doc): no field name is shared across Go
-//    (`path`), TypeScript (`source`), Rust (`argument`), Python (no
-//    path-shaped field), and Java (zero fields on `import_declaration`).
-//    Verdict: **needs code** — specifically a node-KIND heuristic (not
-//    field-based), and even that breaks on Rust's `use_declaration` (no
-//    "import" substring). This is the one of the four capabilities where the
-//    pivot's own "classify by structure" principle has the weakest evidence
-//    behind it.
-// 3. **Inheritance edges** — reachable structurally, and PROVEN in this PR
-//    for Java (`superclass`+`interfaces` fields, present verbatim in
-//    `node-types.json`), using a small (4-entry) GLOBAL field-candidate list
-//    checked identically for every language. TypeScript and C++ push
-//    heritage onto a child NODE (`class_heritage`/`base_class_clause`)
-//    rather than a field of the class node — reachable with one documented
-//    extra hop (look for a NAMED child whose subtree contains the class'
-//    heritage), not implemented in this PR. Verdict: **data for the
-//    field-carrying languages (proven); a small, still-generic structural
-//    extension (not per-language) for the child-node-carrying ones.**
-// 4. **Visibility** — Java's `modifiers` and TypeScript's
-//    `accessibility_modifier` are child NODE kinds, not fields, of their
-//    owning declaration (verified: `method_declaration`'s field list has no
-//    `modifiers` entry despite the grammar defining that node kind).
-//    Verdict: **structural, but node-KIND based, not field-based** — a
-//    "scan direct children for a kind named `modifiers`/`*_modifier`" rule
-//    is still zero per-language DATA (one global rule, not a table per
-//    language), but it is a different generalization mechanism than the
-//    field-shape rules used above, and is not implemented in this PR.
-//
-// ## What a language N+1 costs under this engine
-//
-// For any of the 6/10 languages whose grammar exposes the field shapes this
-// engine already checks (Python/Java/TypeScript/Ruby proven directly here;
-// Go proven in `diag_go`-style manual verification during development): add
-// the grammar crate to `Cargo.toml`, register one `StructuralSpec { language,
-// ts_language }` value (12 lines, no behavior), done — genuinely zero new
-// Rust logic, matching the "add the grammar crate, nothing else" target.
-// **For the other 4/10 (Rust's `impl` idiom, C-family's declarator nesting,
-// ObjC's fieldless class nodes, Swift/Kotlin's near-fieldless grammars), the
-// honest cost is NOT zero** — closing those gaps needs either a generic
-// (still zero-per-language) structural extension (the declarator-hop and
-// heritage-child-node cases) or an acceptance that some grammars structurally
-// cannot reach full recall this way. Given the ten-language sample is
-// disproportionately drawn from mainstream, actively-maintained grammars
-// with rich field annotations, and STILL failed on 4 of 10, the honest
-// projection for 180 languages is that a meaningful minority will behave
-// like Swift/Kotlin/C rather than like Java/Python/Ruby — this needs
-// measuring across a wider sample before committing to a rate, not assumed
-// from this ten-language pass.
+// this PR — `src/parser/mod.rs`'s diff is empty) side by side with
+// `parse_structural` on the SAME source, and assert the relationship
+// directly — not inferred from the table above.
 
 use super::structural::{parse_structural, StructuralSpec};
 use crate::parser::{
@@ -116,8 +75,18 @@ fn labels_of(nodes: &[crate::parser::ExtractedNode], label: &str) -> Vec<String>
     v
 }
 
+fn inherits_targets(refs: &[crate::parser::ExtractedRef]) -> Vec<String> {
+    let mut v: Vec<String> = refs
+        .iter()
+        .filter(|e| e.kind == "Inherits")
+        .map(|e| e.to_qualified_name.clone())
+        .collect();
+    v.sort();
+    v
+}
+
 // ---------------------------------------------------------------------------
-// Full-recall languages: Python, Java, TypeScript, Ruby.
+// Unaffected by this PR: Python, Java, Ruby (TIER 1 only, still full recall).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -152,31 +121,31 @@ fn java_defs_calls_and_inheritance_are_fully_recovered() {
     let (r, _stats) = parse_structural(&spec, src, "Greeter.java").expect("java structural parse");
     assert_eq!(labels_of(&r.nodes, LABEL_STRUCT), vec!["Greeter"]);
     assert_eq!(labels_of(&r.nodes, LABEL_METHOD), vec!["greet", "helper"]);
-    let inherits: Vec<&str> = r
-        .refs
-        .iter()
-        .filter(|e| e.kind == "Inherits")
-        .map(|e| e.to_qualified_name.as_str())
-        .collect();
-    // Keyword-stripped: the field text is literally "extends Base" /
-    // "implements Nameable"; `rightmost_named_leaf_text` must leave only the
-    // type name.
-    assert!(inherits.contains(&"Base"), "got {inherits:?}");
-    assert!(inherits.contains(&"Nameable"), "got {inherits:?}");
+    let inherits = inherits_targets(&r.refs);
+    assert!(inherits.contains(&"Base".to_string()), "got {inherits:?}");
+    assert!(
+        inherits.contains(&"Nameable".to_string()),
+        "got {inherits:?}"
+    );
 }
 
 #[test]
-fn typescript_defs_and_calls_are_fully_recovered_heritage_is_not() {
+fn java_visibility_is_recovered_via_the_modifiers_kind_child() {
+    // TIER 2 item 4: `modifiers` is a child NODE kind, not a field, of
+    // `method_declaration` (verified: the field list has no `modifiers`
+    // entry despite the grammar defining that kind).
     let spec = StructuralSpec {
-        language: Language::TypeScript,
-        ts_language: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        language: Language::Java,
+        ts_language: || tree_sitter_java::LANGUAGE.into(),
     };
-    let src = "function helper(): number {\n    return 1;\n}\n\nclass Greeter {\n    greet(): number {\n        return helper();\n    }\n}\n";
-    let (r, _stats) = parse_structural(&spec, src, "m.ts").expect("ts structural parse");
-    assert_eq!(labels_of(&r.nodes, LABEL_FUNCTION), vec!["helper"]);
-    assert_eq!(labels_of(&r.nodes, LABEL_STRUCT), vec!["Greeter"]);
-    assert_eq!(labels_of(&r.nodes, LABEL_METHOD), vec!["greet"]);
-    assert_eq!(labels_of(&r.nodes, LABEL_CALL_SITE), vec!["helper"]);
+    let src = "class Greeter {\n    public int greet() { return 1; }\n}\n";
+    let (r, _stats) = parse_structural(&spec, src, "Greeter.java").expect("java structural parse");
+    let greet = r
+        .nodes
+        .iter()
+        .find(|n| n.label == LABEL_METHOD && n.name == "greet")
+        .expect("greet method node");
+    assert_eq!(greet.visibility, "public");
 }
 
 #[test]
@@ -203,10 +172,27 @@ fn ruby_reaches_full_recall_with_zero_new_code() {
         .any(|e| e.kind == "HasMethod" && e.from_qualified_name.ends_with("Greeter")));
 }
 
+#[test]
+fn typescript_defs_calls_and_heritage_are_now_fully_recovered() {
+    // Before TIER 2: defs+calls full, heritage NOT reachable (`class_heritage`
+    // is a child NODE, not a field). After: `heritage_targets_via_child_hop`
+    // closes this gap.
+    let spec = StructuralSpec {
+        language: Language::TypeScript,
+        ts_language: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+    };
+    let src = "function helper(): number {\n    return 1;\n}\n\nclass Greeter extends Base {\n    greet(): number {\n        return helper();\n    }\n}\n";
+    let (r, _stats) = parse_structural(&spec, src, "m.ts").expect("ts structural parse");
+    assert_eq!(labels_of(&r.nodes, LABEL_FUNCTION), vec!["helper"]);
+    assert_eq!(labels_of(&r.nodes, LABEL_STRUCT), vec!["Greeter"]);
+    assert_eq!(labels_of(&r.nodes, LABEL_METHOD), vec!["greet"]);
+    assert_eq!(labels_of(&r.nodes, LABEL_CALL_SITE), vec!["helper"]);
+    assert_eq!(inherits_targets(&r.refs), vec!["Base".to_string()]);
+}
+
 // ---------------------------------------------------------------------------
-// Partial/failing languages — the honest half of the gap table, pinned so a
-// future "fix" is a deliberate, measured change, not a silent regression in
-// either direction.
+// Rust: unaffected by this PR (impl_item stays structurally unreached — see
+// the module doc's "what remains unreachable" section).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -220,61 +206,126 @@ fn rust_finds_top_level_functions_but_not_impl_block_methods() {
     assert_eq!(
         labels_of(&r.nodes, LABEL_FUNCTION),
         vec!["greet", "helper"],
-        "impl_item has no `name` field, so `greet` cannot become a Method — \
-         it is still found, just mislabeled Function at file scope"
+        "impl_item's kind does not match the TIER 2 definition-site vocabulary \
+         (see the module doc), so `greet` is still found only via the enclosing \
+         `impl` block being invisible as a scope — it lands at file scope, \
+         mislabeled Function, exactly as before this PR"
     );
     assert!(
         labels_of(&r.nodes, LABEL_STRUCT).is_empty(),
         "a unit struct (`struct Greeter;`) has no `body` field — genuinely \
-         undetectable by the name+body rule"
+         undetectable by the name+body rule, unchanged by this PR"
     );
 }
 
+// ---------------------------------------------------------------------------
+// C, C++, ObjC: TIER 2 declarator-chain descent + bounded identifier scan
+// close the definitions gap this PR targeted.
+// ---------------------------------------------------------------------------
+
 #[test]
-fn c_finds_calls_but_zero_definitions() {
+fn c_now_reaches_full_recall_via_declarator_chain_descent() {
     let spec = StructuralSpec {
         language: Language::C,
         ts_language: || tree_sitter_c::LANGUAGE.into(),
     };
     let src = "int helper() {\n    return 1;\n}\n\nint greet() {\n    return helper();\n}\n";
     let (r, _stats) = parse_structural(&spec, src, "m.c").expect("c structural parse");
-    assert!(
-        labels_of(&r.nodes, LABEL_FUNCTION).is_empty(),
-        "C's function_definition has no `name` field (nested two levels \
-         inside `declarator`) — this is the genuine gap, not a bug"
+    assert_eq!(
+        labels_of(&r.nodes, LABEL_FUNCTION),
+        vec!["greet", "helper"],
+        "declarator-chain descent (structural_fallback::resolve_name_via_declarator_chain) \
+         now resolves C's nested identifier — the prior gap is closed"
     );
     assert_eq!(labels_of(&r.nodes, LABEL_CALL_SITE), vec!["helper"]);
 }
 
 #[test]
-fn cpp_finds_the_class_shell_but_not_its_methods() {
+fn cpp_now_finds_the_method_and_its_heritage() {
     let spec = StructuralSpec {
         language: Language::Cpp,
         ts_language: || tree_sitter_cpp::LANGUAGE.into(),
     };
-    let src = "int helper() {\n    return 1;\n}\n\nclass Greeter {\npublic:\n    int greet() {\n        return helper();\n    }\n};\n";
+    let src = "int helper() {\n    return 1;\n}\n\nclass Greeter : public Base {\npublic:\n    int greet() {\n        return helper();\n    }\n};\n";
     let (r, _stats) = parse_structural(&spec, src, "m.cpp").expect("cpp structural parse");
+    assert_eq!(labels_of(&r.nodes, LABEL_FUNCTION), vec!["helper"]);
     assert_eq!(labels_of(&r.nodes, LABEL_STRUCT), vec!["Greeter"]);
-    assert!(labels_of(&r.nodes, LABEL_FUNCTION).is_empty());
-    assert!(labels_of(&r.nodes, LABEL_METHOD).is_empty());
+    assert_eq!(
+        labels_of(&r.nodes, LABEL_METHOD),
+        vec!["greet"],
+        "the method, previously invisible, is now found AND correctly scoped \
+         under Greeter (declarator-chain descent + resolve_scopes' existing \
+         type-like-ancestor rule)"
+    );
+    assert!(
+        r.refs
+            .iter()
+            .any(|e| e.kind == "HasMethod" && e.from_qualified_name.ends_with("Greeter")),
+        "got {:?}",
+        r.refs
+            .iter()
+            .map(|e| (&e.kind, &e.from_qualified_name))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        inherits_targets(&r.refs),
+        vec!["Base".to_string()],
+        "heritage-on-child-node hop (structural_fallback::heritage_targets_via_child_hop) \
+         reads C++'s base_class_clause, a child NODE not a field"
+    );
 }
 
 #[test]
-fn objc_finds_calls_only_no_definitions_at_all() {
+fn objc_now_finds_the_class_its_methods_and_its_superclass() {
     let spec = StructuralSpec {
         language: Language::ObjC,
         ts_language: || tree_sitter_objc::LANGUAGE.into(),
     };
     let src = "@interface Greeter : NSObject\n- (int)greet;\n@end\n\n@implementation Greeter\n- (int)greet {\n    return [self helper];\n}\n- (int)helper {\n    return 1;\n}\n@end\n";
     let (r, _stats) = parse_structural(&spec, src, "Greeter.m").expect("objc structural parse");
-    assert!(labels_of(&r.nodes, LABEL_STRUCT).is_empty());
-    assert!(labels_of(&r.nodes, LABEL_FUNCTION).is_empty());
-    assert!(labels_of(&r.nodes, LABEL_METHOD).is_empty());
+    assert_eq!(
+        labels_of(&r.nodes, LABEL_STRUCT),
+        vec!["Greeter", "Greeter"],
+        "TWO Greeter def sites: the @interface declaration and the \
+         @implementation definition are two separate, real AST nodes in \
+         ObjC's grammar — this is the language's own duplication, not an \
+         engine bug (see resolve_scopes' @{{line}} dedup suffix in the \
+         qualified names, exercised below)"
+    );
+    let qns: Vec<&str> = r
+        .nodes
+        .iter()
+        .filter(|n| n.label == LABEL_STRUCT)
+        .map(|n| n.qualified_name.as_str())
+        .collect();
+    assert!(qns.contains(&"Greeter.m::Greeter"));
+    assert!(qns.iter().any(|qn| qn.starts_with("Greeter.m::Greeter@")));
+    assert_eq!(
+        labels_of(&r.nodes, LABEL_METHOD),
+        vec!["greet", "greet", "helper"],
+        "the @interface's bodyless method signature (`- (int)greet;`) AND \
+         both @implementation methods are all real declaration sites"
+    );
     assert_eq!(labels_of(&r.nodes, LABEL_CALL_SITE), vec!["helper"]);
+    assert_eq!(
+        inherits_targets(&r.refs),
+        vec!["NSObject".to_string()],
+        "the `superclass` field was already TIER-1-readable — it was \
+         unreachable only because no def previously existed to hang the \
+         edge on; fixing the definition transitively fixed the heritage \
+         edge too, and it now correctly attaches to the interface's \
+         Greeter (verified: NOT the @implementation's Greeter@N)"
+    );
 }
 
+// ---------------------------------------------------------------------------
+// Swift, Kotlin (kotlin-ng): TIER 2 kind-substring fallback classifier +
+// positional call fallback close the fieldless-grammar gap this PR targeted
+// — the hardest case, per the task's own framing.
+// ---------------------------------------------------------------------------
+
 #[test]
-fn swift_finds_defs_but_cannot_split_function_from_class_no_calls() {
+fn swift_now_splits_function_from_method_from_class_and_finds_calls() {
     let spec = StructuralSpec {
         language: Language::Swift,
         ts_language: || tree_sitter_swift::LANGUAGE.into(),
@@ -282,43 +333,58 @@ fn swift_finds_defs_but_cannot_split_function_from_class_no_calls() {
     let src = "func helper() -> Int {\n    return 1\n}\n\nclass Greeter {\n    func greet() -> Int {\n        return helper()\n    }\n}\n";
     let (r, _stats) =
         parse_structural(&spec, src, "Greeter.swift").expect("swift structural parse");
-    // function_declaration has no `parameters`/`params` field, so it lands
-    // in the SAME bucket as class_declaration.
     assert_eq!(
-        labels_of(&r.nodes, LABEL_STRUCT),
-        vec!["Greeter", "greet", "helper"]
+        labels_of(&r.nodes, LABEL_FUNCTION),
+        vec!["helper"],
+        "resolve_def_role now consults the kind-substring vocabulary even \
+         when TIER 1's name+body check already matched (Swift's \
+         function_declaration has both fields), closing the \
+         Function-vs-Type ambiguity"
     );
-    assert!(labels_of(&r.nodes, LABEL_FUNCTION).is_empty());
-    assert!(
-        labels_of(&r.nodes, LABEL_CALL_SITE).is_empty(),
-        "call_expression has zero fields in this grammar — no call can be \
-         classified"
+    assert_eq!(labels_of(&r.nodes, LABEL_STRUCT), vec!["Greeter"]);
+    assert_eq!(labels_of(&r.nodes, LABEL_METHOD), vec!["greet"]);
+    assert_eq!(
+        labels_of(&r.nodes, LABEL_CALL_SITE),
+        vec!["helper"],
+        "positional call fallback finds call_expression's callee via its \
+         first named child, with the call_suffix false-positive excluded \
+         (see structural_fallback::kind_hints_positional_call)"
     );
 }
 
 #[test]
-fn kotlin_ng_finds_nothing_at_all() {
+fn kotlin_ng_now_reaches_full_recall() {
     let spec = StructuralSpec {
         language: Language::Kotlin,
         ts_language: || tree_sitter_kotlin_ng::LANGUAGE.into(),
     };
     let src = "fun helper(): Int {\n    return 1\n}\n\nclass Greeter {\n    fun greet(): Int {\n        return helper()\n    }\n}\n";
     let (r, stats) = parse_structural(&spec, src, "Greeter.kt").expect("kotlin structural parse");
+    assert_eq!(labels_of(&r.nodes, LABEL_FUNCTION), vec!["helper"]);
+    assert_eq!(labels_of(&r.nodes, LABEL_STRUCT), vec!["Greeter"]);
+    assert_eq!(labels_of(&r.nodes, LABEL_METHOD), vec!["greet"]);
+    assert_eq!(labels_of(&r.nodes, LABEL_CALL_SITE), vec!["helper"]);
     assert!(
-        r.nodes.is_empty(),
-        "expected zero nodes, got {} nodes with labels {:?}",
-        r.nodes.len(),
-        r.nodes.iter().map(|n| &n.label).collect::<Vec<_>>()
+        r.refs
+            .iter()
+            .any(|e| e.kind == "HasMethod" && e.from_qualified_name.ends_with("Greeter")),
+        "got {:?}",
+        r.refs
+            .iter()
+            .map(|e| (&e.kind, &e.from_qualified_name))
+            .collect::<Vec<_>>()
     );
-    assert!(
-        stats.unclassified_named_nodes_with_a_name_field > 0,
-        "kotlin-ng's sparse field set must show up in the honesty counter"
+    assert_eq!(
+        stats.unclassified_named_nodes_with_a_name_field, 0,
+        "kotlin-ng went from a total-blackout honesty counter to zero \
+         unclassified nodes on this shape"
     );
 }
 
 // ---------------------------------------------------------------------------
 // Direct comparisons against the CURRENT production hand-written path
-// (`crate::parser::parse_file`, unmodified by this PR).
+// (`crate::parser::parse_file`, unmodified by this PR — src/parser/mod.rs's
+// diff is empty).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -343,7 +409,10 @@ fn structural_engine_reaches_java_deep_path_parity_on_this_shape() {
 }
 
 #[test]
-fn structural_engine_misses_every_c_definition_the_deep_path_finds() {
+fn structural_engine_now_matches_the_deep_path_on_c_definitions() {
+    // Flipped from `structural_engine_misses_every_c_definition_the_deep_path_finds`
+    // (the PRE-TIER-2 pinned regression) now that declarator-chain descent
+    // closes the gap.
     let src = "int helper() {\n    return 1;\n}\n\nint greet() {\n    return helper();\n}\n";
     let deep = parse_file(src, "m.c", Language::C).expect("deep c parse");
     let spec = StructuralSpec {
@@ -353,12 +422,9 @@ fn structural_engine_misses_every_c_definition_the_deep_path_finds() {
     let (structural, _stats) = parse_structural(&spec, src, "m.c").expect("structural c parse");
     assert_eq!(
         labels_of(&deep.nodes, LABEL_FUNCTION),
-        vec!["greet", "helper"],
-        "the hand-written deep path finds both functions"
-    );
-    assert!(
-        labels_of(&structural.nodes, LABEL_FUNCTION).is_empty(),
-        "the structural engine finds none — the declarator-nesting gap, \
-         quantified directly against production output rather than inferred"
+        labels_of(&structural.nodes, LABEL_FUNCTION),
+        "the structural engine's Function set now equals the hand-written \
+         deep path's on this shape — quantified directly against production \
+         output, not inferred"
     );
 }
