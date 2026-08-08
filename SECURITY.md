@@ -134,6 +134,34 @@ worthless if you never run the verification. Binaries are **not** yet
 Apple-notarized, so macOS Gatekeeper will still prompt: that work is tracked in
 cdeust/enterprise-backlog#15 and is not claimed here.
 
+### Developer escape hatch (`AI_ARCHITECT_SOURCE_CHECKOUT=1`)
+
+The release-digest pin described above can be opted out of for a local dev
+build — plain source checkout or a live-mounted dev-symlink montage over a
+marketplace cache — via `AI_ARCHITECT_SOURCE_CHECKOUT=1`. Full mechanics in
+[README §Developer escape
+hatch](README.md#developer-escape-hatch-running-a-local-dev-build-in-place-of-the-release).
+The relevant security properties:
+
+- **Explicit and local only.** The flag is a shell environment variable the
+  developer sets; it is never read from a manifest, config file, or anything
+  a package can ship, so a malicious plugin release cannot trigger it.
+- **Scoped bypass.** It skips only the digest/provenance check on the
+  binary for that launch. It does not weaken the `Cargo.toml` /
+  `plugin.json` presence checks, and it does not touch the release download
+  path at all when unset (the default, which stays a hard `fatal` on any
+  mismatch).
+- **Not a new attack surface.** Anyone with write access to the plugin cache
+  — the precondition for the montage shape to even exist — already has write
+  access to `bin/ensure-binary.sh` and `bin/launch-plugin.sh` themselves, so
+  they could disable the pin entirely without this flag. The digest pin's
+  actual job is defending the *unmodified* default install path (an
+  untampered cache, flag unset) against a corrupted or substituted release
+  download, and that job is unaffected by the existence of this opt-in.
+- **Always announced.** Every accepted bypass is written to stderr — even
+  when the launcher requested quiet mode — naming the resolved dev path, so
+  a bypass in effect is never silent to whoever is watching the process.
+
 ## Out of Scope
 
 - Vulnerabilities in third-party dependencies that have not been patched
