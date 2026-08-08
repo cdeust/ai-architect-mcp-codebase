@@ -13,10 +13,18 @@ use crate::parser::{
     LABEL_FIELD, LABEL_FUNCTION, LABEL_METHOD, LABEL_TRAIT, LABEL_TYPE_ALIAS, LABEL_VARIANT,
 };
 
-/// Emits an interface (`Trait` + `Defines`), one `Extends` per base in its
-/// `extends_type_clause` (bare names only — no `generic_type` unwrapping, as in
-/// the hand-written walker), then recurses its body for method/property
-/// signatures.
+/// Emits an interface (`Trait` + `Defines`), a `bases` CSV property + one
+/// `Extends` ref per base in its `extends_type_clause` (bare names only — no
+/// `generic_type` unwrapping, as in the hand-written walker), then recurses
+/// its body for method/property signatures.
+///
+/// The `bases` property is what `resolver::extends::resolve_extends` reads
+/// (`s.bases`, queried per `Struct`/`Enum`/`Trait` label) — without it a
+/// `Trait`'s `extends` clause parses to a ref-only fact the indexer drops
+/// (`indexer::persist::edges::resolve_edge_table` defers/drops raw `Extends`
+/// refs pending the CSV property), so the edge would never resolve. Mirrors
+/// the `Struct`/`implements` fix for the parallel `interface extends Base`
+/// case (issue #212 root cause 2).
 pub(super) fn emit_interface(
     spec: &LangSpec,
     tf: &TsFamilySpec,
@@ -30,6 +38,12 @@ pub(super) fn emit_interface(
         return;
     }
     let qn = qual(scope, &name);
+    let bases = collect_interface_extends(tf, ctx.source, node);
+    let properties = if bases.is_empty() {
+        Vec::new()
+    } else {
+        vec![("bases".to_string(), bases.join(","))]
+    };
     ctx.nodes.push(ExtractedNode {
         label: LABEL_TRAIT.to_string(),
         name: name.clone(),
@@ -37,21 +51,29 @@ pub(super) fn emit_interface(
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: export_vis(is_exported),
-        properties: Vec::new(),
+        properties,
     });
     ctx.refs.push(ExtractedRef {
         kind: "Defines".to_string(),
         from_qualified_name: scope.to_string(),
         to_qualified_name: qn.clone(),
     });
-    emit_interface_extends(tf, ctx, node, &qn);
+    for name in &bases {
+        ctx.refs.push(ExtractedRef {
+            kind: "Extends".to_string(),
+            from_qualified_name: qn.clone(),
+            to_qualified_name: name.clone(),
+        });
+    }
     if let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) {
         emit_interface_body(spec, tf, ctx, body, &qn);
     }
 }
 
-/// One `Extends` edge per base named in an interface's `extends_type_clause`.
-fn emit_interface_extends(tf: &TsFamilySpec, ctx: &mut WalkCtx, node: Node, iface_qn: &str) {
+/// Collects one base name per interface base named in an
+/// `extends_type_clause`.
+fn collect_interface_extends(tf: &TsFamilySpec, source: &str, node: Node) -> Vec<String> {
+    let mut bases = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if !kind_in(tf.interface_extends_kinds, child.kind()) {
@@ -60,17 +82,14 @@ fn emit_interface_extends(tf: &TsFamilySpec, ctx: &mut WalkCtx, node: Node, ifac
         let mut hcursor = child.walk();
         for hchild in child.children(&mut hcursor) {
             if kind_in(tf.heritage_name_kinds, hchild.kind()) {
-                let name = node_text(ctx.source, hchild);
+                let name = node_text(source, hchild);
                 if !name.is_empty() {
-                    ctx.refs.push(ExtractedRef {
-                        kind: "Extends".to_string(),
-                        from_qualified_name: iface_qn.to_string(),
-                        to_qualified_name: name,
-                    });
+                    bases.push(name);
                 }
             }
         }
     }
+    bases
 }
 
 /// Recurses an interface body, emitting a `Method` (`is_async=false`) per

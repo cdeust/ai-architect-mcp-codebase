@@ -420,3 +420,111 @@ fn test_java_implements_and_extends_resolution() {
 
     let _ = fs::remove_dir_all(&tmp_root);
 }
+
+// ---------------------------------------------------------------------------
+// TypeScript implements + extends — issue #212 root cause 2. The dedicated
+// TS walker (parser::spec::walkers::typescript) only ever emitted
+// `Extends`/`Implements` REFS for `class X extends Y implements Z` /
+// `interface A extends B`; it never wrote the `bases`/`implements` CSV
+// properties `resolver::extends::resolve_extends` /
+// `resolver::implements::resolve_implements` actually read (`s.bases`,
+// `s.implements`), and `indexer::persist::edges::resolve_edge_table` drops
+// raw `Extends`/`Implements` refs (kind not in its match arms) rather than
+// persisting them directly. So every TS `implements`/class-`extends`/
+// interface-`extends` clause parsed correctly but produced zero graph
+// edges. Fixed by having the TS walker populate the same CSV properties
+// Java's `class_inheritance` convention does.
+// ---------------------------------------------------------------------------
+
+const FIXTURE_TYPESCRIPT: &str = r#"
+export interface Greeter {
+    greet(): string;
+}
+
+export interface Named extends Greeter {
+    name: string;
+}
+
+export class Animal {
+    breathe(): void {}
+}
+
+export class Dog extends Animal implements Named {
+    name: string = "Rex";
+    greet(): string {
+        return "woof";
+    }
+}
+"#;
+
+#[test]
+fn test_typescript_implements_and_extends_resolution() {
+    // issue #25 audit: process::id() collides across processes under PID
+    // reuse; tempfile's random suffix does not.
+    let tmp_root = tempfile::Builder::new()
+        .prefix("stage3b_typescript_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep();
+    let _ = fs::remove_dir_all(&tmp_root);
+    let src = tmp_root.join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("demo.ts"), FIXTURE_TYPESCRIPT).unwrap();
+
+    let graph_dir = tmp_root.join("graph");
+    indexer::index_codebase(&src, &graph_dir).expect("index");
+    let store = GraphStore::open_or_create(&graph_dir).expect("open");
+    let res = resolver::resolve_graph(&store).expect("resolve");
+
+    // TS `implements`: Dog -> Named (interface carries the Trait label).
+    let impl_edge = store
+        .execute_query(
+            "MATCH (s:Struct)-[:Implements_Struct_Trait]->(t:Trait) \
+         WHERE s.name = 'Dog' RETURN t.name",
+        )
+        .expect("query Implements_Struct_Trait");
+    assert!(
+        impl_edge
+            .rows
+            .iter()
+            .any(|r| r.first().map(|n| n == "Named").unwrap_or(false)),
+        "Dog must implement Named (TS implements); impls={}, got {:?}",
+        res.impls_resolved,
+        impl_edge.rows
+    );
+
+    // TS class `extends`: Dog -> Animal.
+    let ext_edge = store
+        .execute_query(
+            "MATCH (a:Struct)-[:Extends_Struct_Struct]->(b:Struct) \
+         WHERE a.name = 'Dog' RETURN b.name",
+        )
+        .expect("query Extends_Struct_Struct");
+    assert!(
+        ext_edge
+            .rows
+            .iter()
+            .any(|r| r.first().map(|n| n == "Animal").unwrap_or(false)),
+        "Dog must extend Animal (TS extends); extends={}, got {:?}",
+        res.extends_resolved,
+        ext_edge.rows
+    );
+
+    // TS interface `extends`: Named -> Greeter (Trait carries `bases` too).
+    let iface_ext_edge = store
+        .execute_query(
+            "MATCH (a:Trait)-[:Extends_Trait_Trait]->(b:Trait) \
+         WHERE a.name = 'Named' RETURN b.name",
+        )
+        .expect("query Extends_Trait_Trait");
+    assert!(
+        iface_ext_edge
+            .rows
+            .iter()
+            .any(|r| r.first().map(|n| n == "Greeter").unwrap_or(false)),
+        "Named must extend Greeter (TS interface extends); got {:?}",
+        iface_ext_edge.rows
+    );
+
+    let _ = fs::remove_dir_all(&tmp_root);
+}

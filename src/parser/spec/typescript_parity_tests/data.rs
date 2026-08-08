@@ -187,12 +187,17 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Method|serialize|app/mod.ts::Serializable::serialize|84|84||[(\"is_async\", \"false\"), (\"receiver_type\", \"app/mod.ts::Serializable\")]",
         "Method|speak|app/mod.ts::Animal::speak|64|66||[(\"is_async\", \"true\"), (\"receiver_type\", \"app/mod.ts::Animal\"), (\"return_type\", \"Promise<string>\")]",
         "Method|speak|app/mod.ts::Dog::speak|74|76||[(\"is_async\", \"false\"), (\"receiver_type\", \"app/mod.ts::Dog\"), (\"return_type\", \"Promise<string>\")]",
-        "Struct|Animal|app/mod.ts::Animal|41|71|pub|[]",
+        // #212: `bases`/`implements` CSV properties now carry the heritage
+        // clause the walker already emitted as `Extends`/`Implements` refs —
+        // `resolver::extends`/`resolver::implements` read the properties
+        // (`s.bases`/`s.implements`), not the raw refs, so without them the
+        // clause never resolved to a graph edge.
+        "Struct|Animal|app/mod.ts::Animal|41|71|pub|[(\"bases\", \"Base\"), (\"implements\", \"Serializable\")]",
         "Struct|Base|app/mod.ts::Base|37|39|pub|[]",
-        "Struct|Container|app/mod.ts::Container|79|81|pub|[]",
-        "Struct|Dog|app/mod.ts::Dog|73|77|pub|[]",
+        "Struct|Container|app/mod.ts::Container|79|81|pub|[(\"bases\", \"Wrapper\")]",
+        "Struct|Dog|app/mod.ts::Dog|73|77|pub|[(\"bases\", \"Animal\")]",
         "Struct|Widget|app/mod.ts::Widget|104|109|pub|[]",
-        "Trait|Serializable|app/mod.ts::Serializable|83|87|pub|[]",
+        "Trait|Serializable|app/mod.ts::Serializable|83|87|pub|[(\"bases\", \"Base\")]",
         "TypeAlias|LocalAlias|app/mod.ts::LocalAlias|101|101||[(\"target_type\", \"Map<string, number>\")]",
         "TypeAlias|StringOrNumber|app/mod.ts::StringOrNumber|100|100|pub|[(\"target_type\", \"string | number\")]",
         "Variant|Blue|app/mod.ts::Color::Blue|92|92||[]",

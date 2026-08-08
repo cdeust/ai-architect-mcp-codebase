@@ -178,9 +178,29 @@ fn emit_function(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, is
     }
 }
 
-/// Emits a class (`Struct` + `Defines`), its heritage edges
-/// (`extends` → `Extends`, `implements` → `Implements`), then recurses its
-/// body for methods and fields. Both `class_declaration` and
+/// A class's collected heritage: base-class names (`extends`) and
+/// interface names (`implements`), gathered once and reused for both the
+/// `bases`/`implements` node properties (what `resolver::extends`/
+/// `resolver::implements` actually read — `s.bases`/`s.implements` CSV
+/// columns, per `resolve_extends`/`resolve_one_implements`) and the
+/// `Extends`/`Implements` refs (kept for parity with the ref-level
+/// ground truth; the indexer defers/drops raw ref kinds and relies on the
+/// CSV properties for resolution — see `indexer::persist::edges::
+/// resolve_edge_table`).
+struct ClassHeritage {
+    extends: Vec<String>,
+    implements: Vec<String>,
+}
+
+impl ClassHeritage {
+    fn is_empty(&self) -> bool {
+        self.extends.is_empty() && self.implements.is_empty()
+    }
+}
+
+/// Emits a class (`Struct` + `Defines`), its heritage (`bases`/`implements`
+/// properties + `Extends`/`Implements` refs), then recurses its body for
+/// methods and fields. Both `class_declaration` and
 /// `abstract_class_declaration` route here.
 fn emit_class(
     spec: &LangSpec,
@@ -195,6 +215,7 @@ fn emit_class(
         return;
     }
     let qn = qual(scope, &name);
+    let heritage = collect_class_heritage(tf, ctx.source, node);
     ctx.nodes.push(ExtractedNode {
         label: LABEL_STRUCT.to_string(),
         name: name.clone(),
@@ -202,24 +223,43 @@ fn emit_class(
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: export_vis(is_exported),
-        properties: Vec::new(),
+        properties: class_heritage_properties(&heritage),
     });
     ctx.refs.push(ExtractedRef {
         kind: "Defines".to_string(),
         from_qualified_name: scope.to_string(),
         to_qualified_name: qn.clone(),
     });
-    emit_class_heritage(tf, ctx, node, &qn);
+    emit_class_heritage_refs(ctx, &heritage, &qn);
     if let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) {
         emit_class_body(spec, tf, ctx, body, &qn);
     }
 }
 
-/// Emits one `Extends`/`Implements` edge per base named in a class's
-/// `class_heritage` (an `extends_clause` → `Extends`, an `implements_clause` →
-/// `Implements`), unwrapping a `generic_type` base (`extends Wrapper<T>` →
-/// `Wrapper`). Reproduces `extract_class_heritage` + `extract_heritage_clause`.
-fn emit_class_heritage(tf: &TsFamilySpec, ctx: &mut WalkCtx, class_node: Node, class_qn: &str) {
+/// The `bases`/`implements` CSV properties for a `Struct` node, mirroring
+/// Java's `class_inheritance` convention (`JavaConventions::class_inheritance`):
+/// a property is recorded only when its clause is present.
+fn class_heritage_properties(heritage: &ClassHeritage) -> Vec<(String, String)> {
+    let mut properties = Vec::new();
+    if !heritage.extends.is_empty() {
+        properties.push(("bases".to_string(), heritage.extends.join(",")));
+    }
+    if !heritage.implements.is_empty() {
+        properties.push(("implements".to_string(), heritage.implements.join(",")));
+    }
+    properties
+}
+
+/// Collects the base-class (`extends_clause`) and interface (`implements_clause`)
+/// names out of a class's `class_heritage`, unwrapping a `generic_type` base
+/// (`extends Wrapper<T>` → `Wrapper`). Reproduces `extract_class_heritage` +
+/// `extract_heritage_clause`, but returns the names instead of emitting refs
+/// directly, so the same walk feeds both the CSV properties and the refs.
+fn collect_class_heritage(tf: &TsFamilySpec, source: &str, class_node: Node) -> ClassHeritage {
+    let mut heritage = ClassHeritage {
+        extends: Vec::new(),
+        implements: Vec::new(),
+    };
     let mut cursor = class_node.walk();
     for child in class_node.children(&mut cursor) {
         if !kind_in(tf.heritage_kinds, child.kind()) {
@@ -227,46 +267,60 @@ fn emit_class_heritage(tf: &TsFamilySpec, ctx: &mut WalkCtx, class_node: Node, c
         }
         let mut hcursor = child.walk();
         for clause in child.children(&mut hcursor) {
-            let edge = if kind_in(tf.extends_clause_kinds, clause.kind()) {
-                "Extends"
+            let target = if kind_in(tf.extends_clause_kinds, clause.kind()) {
+                &mut heritage.extends
             } else if kind_in(tf.implements_clause_kinds, clause.kind()) {
-                "Implements"
+                &mut heritage.implements
             } else {
                 continue;
             };
-            emit_heritage_names(tf, ctx, clause, class_qn, edge);
+            collect_heritage_names(tf, source, clause, target);
         }
     }
+    heritage
 }
 
-/// Emits one `edge` ref per base type named directly in a heritage `clause`: a
+/// Appends one name per base type named directly in a heritage `clause`: a
 /// bare `identifier`/`type_identifier`, or the `name` child of a `generic_type`.
-fn emit_heritage_names(
-    tf: &TsFamilySpec,
-    ctx: &mut WalkCtx,
-    clause: Node,
-    class_qn: &str,
-    edge: &str,
-) {
+fn collect_heritage_names(tf: &TsFamilySpec, source: &str, clause: Node, out: &mut Vec<String>) {
     let mut cursor = clause.walk();
     for child in clause.children(&mut cursor) {
         let name = if kind_in(tf.heritage_name_kinds, child.kind()) {
-            node_text(ctx.source, child)
+            node_text(source, child)
         } else if kind_in(tf.generic_type_kinds, child.kind()) {
             child
                 .child_by_field_name("name")
-                .map(|n| node_text(ctx.source, n))
+                .map(|n| node_text(source, n))
                 .unwrap_or_default()
         } else {
             continue;
         };
         if !name.is_empty() {
-            ctx.refs.push(ExtractedRef {
-                kind: edge.to_string(),
-                from_qualified_name: class_qn.to_string(),
-                to_qualified_name: name,
-            });
+            out.push(name);
         }
+    }
+}
+
+/// Emits one `Extends` ref per collected base-class name and one `Implements`
+/// ref per collected interface name — unchanged ref-level output, now sourced
+/// from the already-collected `ClassHeritage` instead of a second tree walk.
+fn emit_class_heritage_refs(ctx: &mut WalkCtx, heritage: &ClassHeritage, class_qn: &str) {
+    if heritage.is_empty() {
+        return;
+    }
+    for name in &heritage.extends {
+        ctx.refs.push(ExtractedRef {
+            kind: "Extends".to_string(),
+            from_qualified_name: class_qn.to_string(),
+            to_qualified_name: name.clone(),
+        });
+    }
+    for name in &heritage.implements {
+        ctx.refs.push(ExtractedRef {
+            kind: "Implements".to_string(),
+            from_qualified_name: class_qn.to_string(),
+            to_qualified_name: name.clone(),
+        });
     }
 }
 
