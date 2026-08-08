@@ -27,9 +27,9 @@ EXPECTED_REPOSITORY_URL="https://github.com/${EXPECTED_REPO}"
 EXPECTED_SIGNER_WORKFLOW="${EXPECTED_REPO}/.github/workflows/release.yml"
 # This is a release pin, not a floating minimum. The distribution identity gate
 # requires it to match Cargo.toml and every public manifest before merge.
-EXPECTED_VERSION="0.9.0"
-EXPECTED_PLUGIN_MANIFEST_SHA256="f6123131585f7b56eb16d4d3cbb909dc7ae4678314f536dd38cde52ac1d6b4a3"
-EXPECTED_CARGO_MANIFEST_SHA256="796000db3c3482058858b92e6552e64c5cb86f21a9b35f5a7f1a3eb3f5188945"
+EXPECTED_VERSION="0.9.1"
+EXPECTED_PLUGIN_MANIFEST_SHA256="d6e24b1566739a57a5d1dc870ef70df3d1a2d62baf9f79286dee6c04806e0dfa"
+EXPECTED_CARGO_MANIFEST_SHA256="8dc2fe8d284ad70e8efb3a13475b80ae8d38182c12952aa8df988e9829ac4e29"
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BIN="$ROOT/target/release/ai-architect-mcp-codebase"

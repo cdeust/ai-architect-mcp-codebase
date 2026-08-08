@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "ai-architect-mcp-codebase",
   "display_name": "AI Architect Codebase",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "license": "MIT",
   "author": {
     "name": "Clement Deust",
