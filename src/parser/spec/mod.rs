@@ -48,6 +48,8 @@ mod cpp_member_classification_tests;
 #[cfg(test)]
 mod cpp_parity_tests;
 #[cfg(test)]
+mod declarative_java_tests;
+#[cfg(test)]
 mod declarative_tests;
 #[cfg(test)]
 mod embedded_tests;
@@ -57,6 +59,8 @@ mod go_parity_tests;
 mod guard;
 #[cfg(test)]
 mod guard_grammar;
+#[cfg(test)]
+mod java_declarative_parity_tests;
 #[cfg(test)]
 mod java_parity_tests;
 #[cfg(test)]
