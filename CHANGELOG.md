@@ -6,6 +6,65 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.1] — Release-skew fix: ship the deps/ prune the published 0.9.0 binary was missing
+
+Issue #209: the marketplace 0.9.0 binary was built before #199 merged, so every
+install downstream of that release still walked vendored dependency trees the
+fix on `main` had already excluded. #209 closes that skew and ships two other
+merged-pending fixes alongside it.
+
+### Fixed
+
+- **Elixir/Erlang `deps/` pruned from the indexer walk (#199).** `should_skip`'s
+  prune list had no entry for `deps`, the standard Mix/rebar3 fetched-dependency
+  directory (also used ad hoc as a vendored-packages dir). Indexing the Cortex
+  repo walked into its gitignored `deps/` — 1.1 GB of vendored Python
+  site-packages including numpy's C headers — flooding the log with
+  duplicate-id warnings and timing out the Cortex→AP MCP client. Measured
+  impact on Cortex: **20.6 minutes / 28,124 files** on the pre-fix 0.9.0
+  release binary versus **43 seconds** with the fix applied. `deps` is now
+  pruned under `DependencyScope::None` and descended under `Full`, with
+  `test_dependency_scope_walk` extended to assert both.
+
+- **Live-mount source symlink accepted under `AI_ARCHITECT_SOURCE_CHECKOUT=1`
+  (#206, PR #208).** The marketplace-cache digest pin in `bin/ensure-binary.sh`
+  died FATAL when a dev-symlink montage pointed the installed binary at a
+  locally rebuilt dev binary, because the existing source-checkout escape
+  hatch required `$ROOT/.git` and a marketplace cache never has one. The same
+  explicit opt-in now also accepts a binary that is a symlink resolving
+  (outside `$ROOT`) into its own `.git`-bearing source tree, announcing the
+  resolved dev path on stderr exactly as the existing hatch does. The default
+  path (opt-in unset) is unchanged: digest pin, provenance verification, and
+  every other marketplace check still apply byte-for-byte. This also removes
+  the operational need to run unreleased dev builds through the montage just
+  to pick up merged fixes — the live-mount workaround is exactly how the
+  #199/0.9.0 skew went unnoticed.
+
+### Added
+
+- **File-level `References_File_File` edges from markdown and shell sources
+  (#205, PR #207).** Markdown and shell files were `File` nodes with no
+  cross-reference extraction, so fan-in queries were blind to the doc/script
+  hubs that dominate doc/script-heavy repos (undershoot by ~17x measured on
+  zetetic-team-subagents). Three markdown extraction methods (inline links,
+  backtick-quoted paths, bare relative-path mentions) and three shell
+  extraction methods (`source`/dot-command, direct invocation, `$VAR`/`-`
+  prefixed paths) are each resolved exact-match-only (no fuzzy suffix
+  guessing) and emitted as `References_File_File` edges distinct from the
+  code-only `Imports_File_File` edges.
+
+### Lesson
+
+- **A dev-symlink montage can make "43s on Cortex" describe a binary nobody
+  downloaded.** The bench that motivated #199 ran against a live-mounted dev
+  rebuild labeled 0.9.0, not the published 0.9.0 release artifact. Once the
+  #206 interim workaround was rolled back to the release binary, the
+  pre-#199 behavior resurfaced in production — the fix existed on `main` but
+  had never shipped. Release-skew is now a named failure mode: a bench number
+  is only evidence for the artifact it actually ran against, and cutting a
+  release is the only way to close the gap between a merged fix and an
+  installed one.
+
 ### Added
 
 - **Canonical AI Architect Codebase distribution identity.** The repository,
