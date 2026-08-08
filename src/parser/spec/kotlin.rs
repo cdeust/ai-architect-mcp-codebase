@@ -15,9 +15,10 @@
 //     `function_body_kinds` (data) and `body_field: None`.
 //   - Supertypes are a `delegation_specifiers` CHILD (not an `extends` field),
 //     and Kotlin does not split `extends` from `implements` at parse time — all
-//     supertypes are one comma list → `Extends` refs. That is the
-//     `class_inheritance` override; no `bases` property is recorded (parity with
-//     the hand-written walker).
+//     supertypes are one comma list → `Extends` refs AND a `bases` CSV
+//     property (issue #216 fix — the property is what
+//     `resolver::extends::resolve_extends` actually reads; a ref alone is
+//     dropped at ingestion). That is the `class_inheritance` override.
 //   - Enum members are `enum_entry` nodes emitted as `Constant`s carrying an
 //     `enum_entry=true` marker (NOT `Variant`s), their name read from the
 //     entry's identifier child. Properties (`val`/`var`, class-member and

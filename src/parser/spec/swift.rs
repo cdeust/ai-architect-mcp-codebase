@@ -11,8 +11,10 @@
 //     conformances are `inheritance_specifier` children (each naming its
 //     supertype in an `inherits_from` field); Swift, like Kotlin, does not split
 //     the superclass from the conformance list at parse time, so every entry is
-//     an `Extends` ref (issue #97). That is the `class_inheritance` override; an
-//     `extension` additionally carries an `is_extension=true` property.
+//     an `Extends` ref AND a `bases` CSV property (issue #97, issue #216 fix —
+//     the property is what `resolver::extends::resolve_extends` actually
+//     reads). That is the `class_inheritance` override; an `extension`
+//     additionally carries an `is_extension=true` property.
 //   - `init` / `deinit` / `subscript` are their OWN declaration kinds with no
 //     usable `name` field; the graph names them synthetically (`init`/`deinit`/
 //     `subscript`) and marks them with a `member_kind` property. They route
@@ -251,27 +253,44 @@ impl LanguageConventions for SwiftConventions {
         // Swift, like Kotlin, does NOT split the superclass from the protocol
         // list at parse time — the grammar gives one undifferentiated
         // `inheritance_specifier` sequence — so every entry is an `Extends` ref,
-        // matching KotlinConventions::class_inheritance (kotlin.rs). No `bases`
-        // property is recorded (Kotlin parity; targets kept verbatim, the
-        // resolver normalizes on lookup — java.rs/kotlin.rs precedent). An
-        // `extension` additionally carries an `is_extension=true` property so
-        // downstream tooling can merge it into the extended type.
-        let mut refs: Vec<(&'static str, String)> = Vec::new();
+        // matching KotlinConventions::class_inheritance (kotlin_conventions.rs).
+        //
+        // issue #216 (same defect class as #212 root cause 2 / PR #215): this
+        // used to record NO `bases` property, only the `Extends` refs above.
+        // `resolver::extends::resolve_extends` reads `s.bases` (the CSV
+        // property), not refs — and `indexer::persist::edges::
+        // resolve_edge_table` drops raw `Extends` refs at ingestion. So every
+        // Swift `: Base`/`: Protocol` clause parsed correctly but produced
+        // zero graph edges. Fixed by also setting `bases` from the same
+        // collected names (Kotlin gets the identical fix, same commit).
+        // Protocol (Trait) targets still resolve to nothing today: the schema
+        // has no `Extends_Struct_Trait` table (only same-label
+        // `Extends_Struct_Struct`/`Extends_Enum_Enum`/`Extends_Trait_Trait`),
+        // and Swift never splits the list into a separate `implements`
+        // property the way Java/TypeScript do — a pre-existing design gap,
+        // not this defect class, left untouched here. An `extension`
+        // additionally carries an `is_extension=true` property so downstream
+        // tooling can merge it into the extended type.
+        let mut names: Vec<String> = Vec::new();
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == SW_INHERITANCE_SPECIFIER {
                 let name = node_field_text(source, child, SW_INHERITS_FROM);
                 let name = name.trim();
                 if !name.is_empty() {
-                    refs.push(("Extends", name.to_string()));
+                    names.push(name.to_string());
                 }
             }
         }
-        let properties = if Self::declaration_kind(source, node) == SW_EXTENSION {
-            vec![("is_extension".to_string(), "true".to_string())]
-        } else {
+        let refs = names.iter().map(|n| ("Extends", n.clone())).collect();
+        let mut properties = if names.is_empty() {
             Vec::new()
+        } else {
+            vec![("bases".to_string(), names.join(","))]
         };
+        if Self::declaration_kind(source, node) == SW_EXTENSION {
+            properties.push(("is_extension".to_string(), "true".to_string()));
+        }
         ClassInheritance { properties, refs }
     }
 

@@ -204,9 +204,13 @@ pub(super) fn emit_class_like(
         return;
     }
     let qn = qual(scope, &name);
+    let bases = collect_bases(cf, ctx.source, node);
     let mut props = Vec::new();
     if is_class {
         props.push(("is_class".to_string(), "true".to_string()));
+    }
+    if !bases.is_empty() {
+        props.push(("bases".to_string(), bases.join(",")));
     }
     ctx.nodes.push(ExtractedNode {
         label: LABEL_STRUCT.to_string(),
@@ -222,17 +226,35 @@ pub(super) fn emit_class_like(
         from_qualified_name: scope.to_string(),
         to_qualified_name: qn.clone(),
     });
-    emit_bases(cf, ctx, node, &qn);
+    for base in &bases {
+        ctx.refs.push(ExtractedRef {
+            kind: "Extends".to_string(),
+            from_qualified_name: qn.clone(),
+            to_qualified_name: base.clone(),
+        });
+    }
     walk_cpp_defs(spec, cf, ctx, body, &qn, Some(&qn));
 }
 
-/// Emits one `Extends` edge per base type in the node's `base_clause_kind`
-/// child. The base clause is a DIRECT child of the class/struct node (it has no
-/// `bases` field), and each base is a `base_type_kinds` child of that clause
-/// (access specifiers and virtual/attribute tokens are skipped).
+/// Collects one base-type name per `base_type_kinds` child of the node's
+/// `base_clause_kind` child. The base clause is a DIRECT child of the
+/// class/struct node (it has no `bases` field), and each base is a
+/// `base_type_kinds` child of that clause (access specifiers and
+/// virtual/attribute tokens are skipped).
 /// source: tree-sitter-cpp 0.23.4 (class_specifier children include
 /// base_class_clause; base_class_clause has no `bases` field).
-fn emit_bases(cf: &CppFamilySpec, ctx: &mut WalkCtx, node: Node, class_qn: &str) {
+///
+/// issue #216 (same defect class as #212 root cause 2 / PR #215): this used
+/// to emit `Extends` refs directly (`emit_bases`) without ever setting a
+/// `bases` CSV property on the `Struct` node.
+/// `resolver::extends::resolve_extends` reads `s.bases`, not refs — and
+/// `indexer::persist::edges::resolve_edge_table` drops raw `Extends` refs at
+/// ingestion. So every C++ `: public Base` clause parsed correctly but
+/// produced zero graph edges. Fixed by collecting the names once and using
+/// them for both the `bases` property (`emit_class_like`) and the unchanged
+/// `Extends` refs, mirroring the TypeScript walker's fix.
+fn collect_bases(cf: &CppFamilySpec, source: &str, node: Node) -> Vec<String> {
+    let mut bases = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() != cf.base_clause_kind {
@@ -243,17 +265,13 @@ fn emit_bases(cf: &CppFamilySpec, ctx: &mut WalkCtx, node: Node, class_qn: &str)
             if !kind_in(cf.base_type_kinds, base.kind()) {
                 continue;
             }
-            let t = node_text(ctx.source, base).trim().to_string();
-            if t.is_empty() {
-                continue;
+            let t = node_text(source, base).trim().to_string();
+            if !t.is_empty() {
+                bases.push(t);
             }
-            ctx.refs.push(ExtractedRef {
-                kind: "Extends".to_string(),
-                from_qualified_name: class_qn.to_string(),
-                to_qualified_name: t,
-            });
         }
     }
+    bases
 }
 
 /// The owner an out-of-body definition belongs to: the `::`-joined

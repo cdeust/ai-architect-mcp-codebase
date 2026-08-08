@@ -14,7 +14,9 @@
 //     interface, its implementation, and a category all collapse onto ONE QN
 //     (`{file}::{Class}`). A category is the same node carrying a `category`
 //     field (→ `is_category=true` + `category` props). The `superclass` field
-//     → one `Extends`; protocol conformance (`<Drawable>`) is NOT emitted.
+//     → a `bases` CSV property AND one `Extends` ref (issue #216 fix — the
+//     property is what `resolver::extends::resolve_extends` actually reads);
+//     protocol conformance (`<Drawable>`) is NOT emitted.
 //   - `@protocol` → a `Trait` + `Defines`, with NO member extraction (the
 //     hand-written walker never walked a protocol's method declarations).
 //   - A method name is its selector's FIRST keyword only (`doWith`, not
@@ -102,15 +104,27 @@ fn find_name(spec: &LangSpec, of: &ObjcFamilySpec, source: &str, node: Node) -> 
 
 /// Emits an `@interface`/`@implementation`/category as a `Struct` keyed by NAME
 /// (so all three collapse onto one QN), records `is_category`/`category` props
-/// when the `category_field` is present, emits one `Extends` per `superclass_field`,
-/// then walks the class for its method members (direct children plus one level
-/// of grouping). Matches the hand-written `extract_class`.
+/// when the `category_field` is present, records the superclass as both a
+/// `bases` CSV property and an `Extends` ref, then walks the class for its
+/// method members (direct children plus one level of grouping). Matches the
+/// hand-written `extract_class`'s node/ref shape.
+///
+/// issue #216 (same defect class as #212 root cause 2 / PR #215): this used
+/// to emit only the `Extends` ref, without ever setting a `bases` CSV
+/// property. `resolver::extends::resolve_extends` reads `s.bases`, not
+/// refs — and `indexer::persist::edges::resolve_edge_table` drops raw
+/// `Extends` refs at ingestion. So every ObjC `@interface Dog : Animal`
+/// clause parsed correctly but produced zero graph edges. Fixed by also
+/// setting `bases` from the same `superclass_field` text, mirroring the
+/// TypeScript walker's fix. Protocol conformance (`<Drawable>`) remains
+/// unextracted — unchanged, pre-existing scope (see module doc).
 fn emit_class(spec: &LangSpec, of: &ObjcFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     let name = find_name(spec, of, ctx.source, node);
     if name.is_empty() {
         return;
     }
     let qn = qual(scope, &name);
+    let superclass = node_field_text(ctx.source, node, of.superclass_field);
     let mut props = Vec::new();
     if node.child_by_field_name(of.category_field).is_some() {
         props.push(("is_category".to_string(), "true".to_string()));
@@ -118,6 +132,9 @@ fn emit_class(spec: &LangSpec, of: &ObjcFamilySpec, ctx: &mut WalkCtx, node: Nod
         if !cat.is_empty() {
             props.push(("category".to_string(), cat));
         }
+    }
+    if !superclass.is_empty() {
+        props.push(("bases".to_string(), superclass.clone()));
     }
     ctx.nodes.push(ExtractedNode {
         label: LABEL_STRUCT.to_string(),
@@ -133,7 +150,6 @@ fn emit_class(spec: &LangSpec, of: &ObjcFamilySpec, ctx: &mut WalkCtx, node: Nod
         from_qualified_name: scope.to_string(),
         to_qualified_name: qn.clone(),
     });
-    let superclass = node_field_text(ctx.source, node, of.superclass_field);
     if !superclass.is_empty() {
         ctx.refs.push(ExtractedRef {
             kind: "Extends".to_string(),

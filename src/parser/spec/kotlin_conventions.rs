@@ -381,23 +381,38 @@ impl LanguageConventions for KotlinConventions {
         // Supertypes are a `delegation_specifiers` CHILD: a comma list of
         // `Parent()`/`Interface`. Kotlin does not distinguish superclass from
         // interface at parse time, so every supertype is an `Extends` ref (the
-        // `()` constructor-call suffix is trimmed). No `bases` property is
-        // recorded (parity with the hand-written walker; targets are kept
-        // verbatim, the resolver normalizes on lookup).
-        let refs: Vec<(&'static str, String)> =
-            match Self::child_of_kind(node, KT_DELEGATION_SPECIFIERS) {
-                Some(supers) => node_text(source, supers)
-                    .split(',')
-                    .map(|s| s.trim().trim_end_matches("()"))
-                    .filter(|s| !s.is_empty())
-                    .map(|s| ("Extends", s.to_string()))
-                    .collect(),
-                None => Vec::new(),
-            };
-        ClassInheritance {
-            properties: Vec::new(),
-            refs,
-        }
+        // `()` constructor-call suffix is trimmed).
+        //
+        // issue #216 (same defect class as #212 root cause 2 / PR #215): this
+        // used to record NO `bases` property, only the `Extends` refs above.
+        // `resolver::extends::resolve_extends` reads `s.bases` (the CSV
+        // property), not refs — and `indexer::persist::edges::
+        // resolve_edge_table` drops raw `Extends` refs at ingestion
+        // (`edges.rs`, "deferred to the resolver pass"). So every Kotlin
+        // `: Base`/`: Interface` clause parsed correctly but produced zero
+        // graph edges. Fixed by also setting `bases` from the same collected
+        // names, mirroring Java's/TypeScript's `class_inheritance` convention.
+        // Interface (Trait) targets still resolve to nothing today: the
+        // schema has no `Extends_Struct_Trait` table (only same-label
+        // `Extends_Struct_Struct`/`Extends_Enum_Enum`/`Extends_Trait_Trait`),
+        // and Kotlin never splits a supertype list into a separate
+        // `implements` property the way Java/TypeScript do — a pre-existing
+        // design gap, not this defect class, left untouched here.
+        let names: Vec<String> = match Self::child_of_kind(node, KT_DELEGATION_SPECIFIERS) {
+            Some(supers) => node_text(source, supers)
+                .split(',')
+                .map(|s| s.trim().trim_end_matches("()").to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            None => Vec::new(),
+        };
+        let refs = names.iter().map(|n| ("Extends", n.clone())).collect();
+        let properties = if names.is_empty() {
+            Vec::new()
+        } else {
+            vec![("bases".to_string(), names.join(","))]
+        };
+        ClassInheritance { properties, refs }
     }
 }
 
