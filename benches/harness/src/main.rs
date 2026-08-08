@@ -32,7 +32,8 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     all: bool,
 
-    /// Path to the MCP server binary. Defaults to `target/release/ai-architect-mcp`.
+    /// Path to the MCP server binary. Defaults to
+    /// `target/release/ai-architect-mcp-codebase`.
     #[arg(long)]
     binary: Option<PathBuf>,
 
@@ -51,7 +52,7 @@ fn main() -> ExitCode {
     let binary = cli
         .binary
         .clone()
-        .unwrap_or_else(|| repo_root.join("target/release/ai-architect-mcp"));
+        .unwrap_or_else(|| repo_root.join("target/release/ai-architect-mcp-codebase"));
     let corpora_root = cli
         .corpora_root
         .clone()
