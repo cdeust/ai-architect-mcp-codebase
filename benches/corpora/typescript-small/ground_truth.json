@@ -44,16 +44,17 @@
 
     {
       "query_id": "q4",
+      "_note": "issue #210: caller is the enclosing method containing the `new ConsoleLogger(...)` call site (app.ts::App::constructor), not the App class itself — the class has no call-site identity of its own. Matches the method/function-granularity convention used by every other q4 label in this corpus (see rust-self). Verified against app.ts source: the construction happens inside App's constructor body.",
       "input": { "qualified_name": "logger.ts::ConsoleLogger" },
       "expected": {
-        "callers": ["app.ts::App"]
+        "callers": ["app.ts::App::constructor"]
       }
     },
     {
       "query_id": "q4",
       "input": { "qualified_name": "store.ts::MemoryStore" },
       "expected": {
-        "callers": ["app.ts::App"]
+        "callers": ["app.ts::App::constructor"]
       }
     },
 
