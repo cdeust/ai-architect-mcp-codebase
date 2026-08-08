@@ -33,6 +33,19 @@ mod swift;
 mod typescript;
 mod walkers;
 
+// The generic grammar-introspection extraction engine (issue #224) and its
+// coverage-proof tests. Not wired into any language's production dispatch in
+// this PR (see `structural`'s module doc), so both are `#[cfg(test)]`-gated
+// like the other comparison-only modules above — nothing outside
+// `structural_coverage_tests` calls `structural` yet. `cargo clippy
+// --all-targets` compiles `lib` separately from `unittests`, so leaving
+// either reachable only from test code but not test-gated would warn there
+// and nowhere else.
+#[cfg(test)]
+mod structural;
+#[cfg(test)]
+mod structural_coverage_tests;
+
 #[cfg(test)]
 mod c_extraction_tests;
 #[cfg(test)]
