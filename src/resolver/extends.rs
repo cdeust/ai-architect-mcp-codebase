@@ -33,6 +33,7 @@ use super::*;
 pub(super) fn resolve_extends(
     store: &GraphStore,
     idx: &SymbolIndex,
+    file_imports: &HashMap<String, Vec<String>>,
     buf: &mut EdgeBuffer,
 ) -> PhaseResult {
     let mut resolved = 0u64;
@@ -44,13 +45,13 @@ pub(super) fn resolve_extends(
         ("Enum", "Extends_Enum_Enum"),
         ("Trait", "Extends_Trait_Trait"),
     ] {
-        let q = format!("MATCH (s:{label}) RETURN s.id, s.bases");
+        let q = format!("MATCH (s:{label}) RETURN s.id, s.bases, s.language");
         let qr = match store.execute_query(&q) {
             Ok(r) => r,
             Err(_) => continue,
         };
         for row in &qr.rows {
-            if row.len() < 2 {
+            if row.len() < 3 {
                 continue;
             }
             let child_qn = &row[0];
@@ -58,14 +59,22 @@ pub(super) fn resolve_extends(
             if bases_csv.is_empty() || bases_csv == "Null(String)" {
                 continue;
             }
+            let provider = crate::language_provider::provider_for(&row[2]);
+            let ctx = ExtendsContext { idx, file_imports };
             for raw_base in bases_csv.split(',') {
                 let raw_base = raw_base.trim();
                 if raw_base.is_empty() {
                     continue;
                 }
                 total += 1;
-                let (r, u) =
-                    resolve_one_extends_base(idx, buf, label, table_self, child_qn, raw_base);
+                let candidate = ExtendsCandidate {
+                    provider,
+                    label,
+                    table_self,
+                    child_qn,
+                    raw_base,
+                };
+                let (r, u) = resolve_one_extends_base(&ctx, buf, &candidate);
                 resolved += r;
                 unresolved.extend(u);
             }
@@ -75,25 +84,56 @@ pub(super) fn resolve_extends(
     Ok((resolved, total, unresolved))
 }
 
+/// Read-only lookup context shared by every base name resolved for one file's
+/// worth of Struct/Enum/Trait nodes — bundles what `resolve_one_extends_base`
+/// only ever reads together, per coding-standards.md §4.4 (>4 params is a
+/// missing data type). Mirrors `implements.rs`'s `ResolveContext`.
+pub(super) struct ExtendsContext<'a> {
+    pub(super) idx: &'a SymbolIndex,
+    pub(super) file_imports: &'a HashMap<String, Vec<String>>,
+}
+
+/// One base-class/interface name candidate being resolved: its owning
+/// node's label/self-table/QN, the raw name text, and the language provider
+/// for that node's file (issue #216 — needed to classify a base name that
+/// resolves to nothing in the corpus as genuinely external, not just
+/// missing). Mirrors `implements.rs`'s `ImplementsCandidate`.
+pub(super) struct ExtendsCandidate<'a> {
+    pub(super) provider: &'a dyn crate::language_provider::LanguageProvider,
+    pub(super) label: &'a str,
+    pub(super) table_self: &'a str,
+    pub(super) child_qn: &'a str,
+    pub(super) raw_base: &'a str,
+}
+
 /// Resolves one base-class/interface name for one Struct/Enum/Trait node.
 /// postcondition: `(1, vec![])` iff the base name matched a corpus symbol
 /// and a schema-known rel table exists for the (label, target.label) pair
-/// (regardless of `AddOutcome`); `(0, vec![one entry])` otherwise.
+/// (regardless of `AddOutcome`); `(0, vec![one entry])` otherwise, its
+/// `UnresolvedRef.reason` set to `EXTERNAL_UNRESOLVED_REASON` when the name
+/// matches a known-external import in the same file (issue #216), or
+/// `"no_target_in_corpus"`/`"no_rel_table_for_..."` otherwise.
 /// Extracted from `resolve_extends` to keep that function under the §4.2
-/// size limit; behavior is identical to the pre-extraction inline loop body.
+/// size limit; behavior is identical to the pre-extraction inline loop body
+/// except for the external-reason classification.
 pub(super) fn resolve_one_extends_base(
-    idx: &SymbolIndex,
+    ctx: &ExtendsContext,
     buf: &mut EdgeBuffer,
-    label: &str,
-    table_self: &str,
-    child_qn: &str,
-    raw_base: &str,
+    candidate: &ExtendsCandidate,
 ) -> (u64, Vec<UnresolvedRef>) {
+    let ExtendsCandidate {
+        provider,
+        label,
+        table_self,
+        child_qn,
+        raw_base,
+    } = *candidate;
     // Look up by last `.`-separated segment so `typing.NamedTuple` resolves
     // on `NamedTuple` if present. Cortex uses `::` in QNs but base names
     // came from source so they may carry `.`.
     let lookup = raw_base.rsplit('.').next().unwrap_or(raw_base);
-    let candidates = match idx.by_name.get(lookup) {
+    let unresolved_reason = || unresolved_base_reason(provider, ctx.file_imports, child_qn, lookup);
+    let candidates = match ctx.idx.by_name.get(lookup) {
         Some(v) => v,
         None => {
             return (
@@ -102,7 +142,7 @@ pub(super) fn resolve_one_extends_base(
                     kind: "Extends".to_string(),
                     from_id: child_qn.to_string(),
                     target_text: raw_base.to_string(),
-                    reason: "no_target_in_corpus".to_string(),
+                    reason: unresolved_reason(),
                 }],
             )
         }
@@ -122,7 +162,7 @@ pub(super) fn resolve_one_extends_base(
                     kind: "Extends".to_string(),
                     from_id: child_qn.to_string(),
                     target_text: raw_base.to_string(),
-                    reason: "no_target_in_corpus".to_string(),
+                    reason: unresolved_reason(),
                 }],
             )
         }

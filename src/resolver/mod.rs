@@ -18,7 +18,7 @@ mod implements;
 mod imports;
 mod uses;
 #[cfg(test)]
-use extends::resolve_one_extends_base;
+use extends::{resolve_one_extends_base, ExtendsCandidate, ExtendsContext};
 #[cfg(test)]
 use imports::resolve_glob_import;
 #[cfg(test)]
@@ -63,6 +63,50 @@ fn check_known_rel_table(table: &str, from_id: &str, to_id: &str) -> bool {
 /// cross-repo bridge candidate filter in main.rs) key off this constant
 /// instead of duplicating the literal.
 pub const EXTERNAL_UNRESOLVED_REASON: &str = "external crate";
+
+/// Classifies a base-class/interface name that failed to resolve to a corpus
+/// symbol: `EXTERNAL_UNRESOLVED_REASON` iff it matches the last segment of a
+/// KNOWN EXTERNAL import in the same file, `"no_target_in_corpus"` otherwise.
+///
+/// source: issue #216 — fixing the `bases`/`implements` CSV-property bug for
+/// Kotlin/Swift/ObjC/C++ activated `resolve_extends`/`resolve_implements` on
+/// heritage clauses that previously never resolved at all (the property was
+/// never set, so the resolver never even looked). That surfaced a NEW
+/// blast-radius gap for Kotlin: `class MainViewModel : ViewModel()` where
+/// `ViewModel` comes from `import androidx.lifecycle.ViewModel` (itself
+/// correctly classified external by `resolve_imports`) started producing an
+/// `UnresolvedRef` tagged `"no_target_in_corpus"` — a reason
+/// `cross_repo_bridge.rs`'s cross-repo-candidate filter does NOT recognize as
+/// external, so a genuinely external superclass leaked into the candidate
+/// pool as noise (`kotlin_external_unresolveds_produce_empty_cross_repo_
+/// candidates`, issue #31 defense 2). This gives base-name resolution the
+/// same external classification import resolution already has.
+///
+/// precondition: `lookup` is the base name's last `.`-separated segment (the
+/// same text a matching import's `import_last_segment` would produce).
+/// postcondition: `EXTERNAL_UNRESOLVED_REASON` iff some import in `file_id`
+/// is both `provider.is_external_import` and its `import_last_segment`
+/// equals `lookup`; `"no_target_in_corpus"` otherwise.
+fn unresolved_base_reason(
+    provider: &dyn crate::language_provider::LanguageProvider,
+    file_imports: &HashMap<String, Vec<String>>,
+    child_qn: &str,
+    lookup: &str,
+) -> String {
+    let file_id = extract_file_from_qn(child_qn);
+    let is_external = file_imports
+        .get(&file_id)
+        .into_iter()
+        .flatten()
+        .any(|path| {
+            provider.is_external_import(path) && provider.import_last_segment(path) == lookup
+        });
+    if is_external {
+        EXTERNAL_UNRESOLVED_REASON.to_string()
+    } else {
+        "no_target_in_corpus".to_string()
+    }
+}
 
 pub struct ResolutionResult {
     pub imports_resolved: u64,
@@ -187,9 +231,9 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     let (call_resolved, call_total, call_unresolved) =
         calls::resolve_calls(store, &idx, &file_imports, &mut buf)?;
     let (impl_resolved, impl_total, impl_unresolved) =
-        implements::resolve_implements(store, &idx, &mut buf)?;
+        implements::resolve_implements(store, &idx, &file_imports, &mut buf)?;
     let (ext_resolved, ext_total, ext_unresolved) =
-        extends::resolve_extends(store, &idx, &mut buf)?;
+        extends::resolve_extends(store, &idx, &file_imports, &mut buf)?;
     let (uses_resolved, uses_total, uses_unresolved) =
         uses::resolve_uses(store, &idx, &file_imports, &mut buf)?;
 

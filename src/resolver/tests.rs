@@ -143,15 +143,20 @@ fn test_resolve_one_extends_base_success_stages_edge() {
         by_parent_module: HashMap::new(),
     };
     let mut buf = EdgeBuffer::new(HashSet::new());
+    let file_imports = HashMap::new();
+    let ctx = ExtendsContext {
+        idx: &idx,
+        file_imports: &file_imports,
+    };
+    let candidate = ExtendsCandidate {
+        provider: crate::language_provider::provider_for("rust"),
+        label: "Struct",
+        table_self: "Extends_Struct_Struct",
+        child_qn: "demo::Dog",
+        raw_base: "Animal",
+    };
 
-    let (resolved, unresolved) = resolve_one_extends_base(
-        &idx,
-        &mut buf,
-        "Struct",
-        "Extends_Struct_Struct",
-        "demo::Dog",
-        "Animal",
-    );
+    let (resolved, unresolved) = resolve_one_extends_base(&ctx, &mut buf, &candidate);
     assert_eq!(resolved, 1);
     assert!(unresolved.is_empty());
     let staged: usize = buf.by_table.values().map(|v| v.len()).sum();
@@ -181,15 +186,20 @@ fn test_resolve_one_extends_base_unknown_target_not_counted_resolved() {
         by_parent_module: HashMap::new(),
     };
     let mut buf = EdgeBuffer::new(HashSet::new());
+    let file_imports = HashMap::new();
+    let ctx = ExtendsContext {
+        idx: &idx,
+        file_imports: &file_imports,
+    };
+    let candidate = ExtendsCandidate {
+        provider: crate::language_provider::provider_for("rust"),
+        label: "Struct",
+        table_self: "Extends_Struct_Struct",
+        child_qn: "demo::Dog",
+        raw_base: "Weird",
+    };
 
-    let (resolved, unresolved) = resolve_one_extends_base(
-        &idx,
-        &mut buf,
-        "Struct",
-        "Extends_Struct_Struct",
-        "demo::Dog",
-        "Weird",
-    );
+    let (resolved, unresolved) = resolve_one_extends_base(&ctx, &mut buf, &candidate);
     assert_eq!(
         resolved, 0,
         "no successful insert must not increment resolved"

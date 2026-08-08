@@ -26,6 +26,7 @@ use super::*;
 pub(super) fn resolve_implements(
     store: &GraphStore,
     idx: &SymbolIndex,
+    file_imports: &HashMap<String, Vec<String>>,
     buf: &mut EdgeBuffer,
 ) -> PhaseResult {
     let mut resolved = 0u64;
@@ -66,11 +67,14 @@ pub(super) fn resolve_implements(
                 if resolve_one_implements(&ctx, buf, &candidate, &mut created_stdlib)? {
                     resolved += 1;
                 } else {
+                    // issue #216: same external-vs-missing classification as
+                    // resolve_one_extends_base — see unresolved_base_reason.
+                    let lookup = provider.import_last_segment(name);
                     unresolved.push(UnresolvedRef {
                         kind: "Implements".to_string(),
                         from_id: from_id.clone(),
                         target_text: name.to_string(),
-                        reason: "no_target_in_corpus".to_string(),
+                        reason: unresolved_base_reason(provider, file_imports, from_id, lookup),
                     });
                 }
             }
