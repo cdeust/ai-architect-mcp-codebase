@@ -23,6 +23,8 @@ use ai_architect_mcp::resolver;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+mod common;
+use common::TempDirExt;
 
 // ---------------------------------------------------------------------------
 // Expected graph for each fixture file
@@ -381,6 +383,20 @@ fn index_fixture(fixture_root: &Path, graph_path: &Path) -> Observed {
     let mut edges_by_kind: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
     let mut table_counts: BTreeMap<String, usize> = BTreeMap::new();
     for (name, _from, _to) in REL_TABLES {
+        // Full-AST layer (`Defines_File_AstNode`, `AstChild_AstNode_AstNode`)
+        // is orthogonal to this scorer: it is EVERY tree-sitter node, not the
+        // semantic symbol subset these fixtures encode ground truth for, and
+        // its own completeness is proven separately
+        // (tests/full_ast_completeness.rs, ratio == 1.0 across languages).
+        // Folding it into the `Defines`/(new) `AstChild` buckets here would
+        // compare against ground truth that was never meant to cover it —
+        // observed 2026-08-09: `Defines_File_AstNode` collapsing into the
+        // `Defines` bucket alongside `Defines_File_Function` etc. manufactured
+        // a false positive and failed the REGRESSION floor on a fixture whose
+        // actual Defines extraction was unchanged.
+        if name.contains("AstNode") {
+            continue;
+        }
         let q = format!("MATCH (a)-[r:{name}]->(b) RETURN a.id, b.id");
         let res = match store.execute_query(&q) {
             Ok(r) => r,
@@ -663,7 +679,7 @@ fn print_diff(fixture: &Fixture, observed: &Observed) {
 // The test
 // ---------------------------------------------------------------------------
 
-fn fixture_root_for(test_name: &str) -> PathBuf {
+fn fixture_root_for(test_name: &str) -> common::TestTempDir {
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not (test_name is kept as a
     // human-readable prefix for debuggability, not for uniqueness).
@@ -671,7 +687,7 @@ fn fixture_root_for(test_name: &str) -> PathBuf {
         .prefix(&format!("graph_accuracy_{test_name}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).expect("create tempdir");
     tmp

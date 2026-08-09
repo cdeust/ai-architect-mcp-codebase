@@ -18,11 +18,27 @@
 # (e.g. a deployed release binary run outside cargo), so production capacity
 # is unaffected by this bound.
 [env]
-# 512 MiB (2^29 bytes — must be a power of two per lbug's
-# BufferManager::verifySizeParams). source: measured 2026-07-15 — the
-# largest test fixture in this workspace (tests/scalability_bench.rs, a
-# 500-file synthetic Rust fixture: 6000 nodes / 5500 edges) produces a 34 MB
-# on-disk lbug database (`du -sh` on the graph dir during a debug test run).
-# 512 MiB gives ~15x headroom over that measured ceiling while reserving a
-# small fraction of the 8 TiB lbug reserves by default.
-AP_LBUG_TEST_MAX_DB_SIZE = "536870912"
+# 4 GiB (2^32 bytes — must be a power of two per lbug's
+# BufferManager::verifySizeParams). Was 512 MiB (source: measured 2026-07-15
+# — the largest test fixture at the time, tests/scalability_bench.rs's
+# 500-file synthetic Rust fixture, produced a 34 MB on-disk database).
+#
+# Raised for full-AST persistence (issue full-ast-index): `AstNode` +
+# `AstChild_AstNode_AstNode` add one row per tree-sitter node (named AND
+# anonymous), not just the semantic-symbol subset — roughly 2x the row count
+# of the pre-existing symbol-only schema, PLUS the parent->child edges at the
+# same cardinality. `indexer::tests::test_index_own_project` indexes THIS
+# repo's own `src/` (the largest fixture ANY test in this workspace indexes)
+# at full scale, and 512 MiB was hit mid-run — the lbug buffer manager
+# returned a clean `Query execution failed: ... Maximum database size ...`
+# error, but a SUBSEQUENT unrelated query on the same connection then
+# SIGSEGV'd (observed 2026-08-09, reproduced twice) — hitting the cap
+# mid-transaction appears to leave the embedded engine's C++ state
+# unrecoverable, not just refuse the one write. Raising the ceiling avoids
+# ever exercising that condition in the test suite; it does not fix the
+# underlying lbug fragility, which is out of this crate's control (a Rust
+# wrapper around a vendored C++ engine). 4 GiB gives >2x headroom over the
+# largest full-AST measurement taken for this PR (see PR description for the
+# exact number) while staying a small fraction of the 8 TiB lbug reserves by
+# default.
+AP_LBUG_TEST_MAX_DB_SIZE = "4294967296"
