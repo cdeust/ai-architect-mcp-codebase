@@ -59,34 +59,31 @@
 // ## What this engine does NOT reach (reported, not hidden — see the
 // coverage table and the PR body's four-capability verdict)
 //
-//   - Imports: no field-name convention holds across the ten sampled
-//     grammars (Go uses `path`, TypeScript uses `source`, Rust uses
-//     `argument`, Python's import nodes carry no path-shaped field at all —
-//     `name` holds the dotted module text — and Java's `import_declaration`
-//     has ZERO fields). Import extraction under a pure field-shape approach
-//     therefore has no honest single rule; it needs either a node-KIND
-//     substring heuristic (weaker, and still breaks on Rust's
-//     `use_declaration`, which does not contain the substring "import") or a
-//     small ecosystem-wide alias table. Not implemented in this PR.
+//   - Imports: CLOSED by the issue #224 imports follow-up
+//     (`structural_imports.rs`) — the field-shape approach documented above
+//     genuinely has no honest single rule for imports (still true, and still
+//     why this is a SEPARATE mechanism from the field-shape classifier
+//     above), but a lexical one does: every sampled grammar marks its import
+//     keyword as an anonymous child token, which `structural_imports.rs`
+//     anchors on directly. See that module's doc for the full mechanism,
+//     the tables involved, and what remains unreached (Elixir, Bash, Zig).
 //   - Visibility: Java's `modifiers` and TypeScript's `accessibility_modifier`
 //     are child NODE kinds, not fields, on their owning declaration (probed
 //     directly: `method_declaration`'s field set has no `modifiers` entry
-//     even though the grammar defines a `modifiers` node kind). Detectable
-//     structurally by scanning direct children for a kind literally named
-//     `modifiers`/`*_modifier` — a node-KIND heuristic, not a field probe —
-//     but not implemented in this PR.
+//     even though the grammar defines a `modifiers` node kind). CLOSED by
+//     TIER 2's `visibility_via_modifier_child` (`structural_fallback.rs`) —
+//     a node-KIND heuristic, not a field probe, scanning direct children for
+//     a kind containing `"modifier"`.
 //   - Swift and Kotlin (kotlin-ng) calls: BOTH grammars' `call_expression`
 //     node carries ZERO named fields (verified against their
-//     `node-types.json`) — their call syntax is fully positional. No field
-//     probe can classify a call in either grammar; this is the sharpest
-//     honest limit this design hits on the ten-language sample, not a
-//     Ruby-only edge case.
+//     `node-types.json`) — their call syntax is fully positional. CLOSED by
+//     TIER 2's positional call fallback (`kind_hints_positional_call` +
+//     `first_named_child` in `structural_fallback.rs`).
 //   - Kotlin (kotlin-ng) definitions: `function_declaration` exposes only a
 //     `name` field (no `body`, no `parameters`); `class_declaration`
-//     likewise exposes only `name`. kotlin-ng's grammar is close to fully
-//     positional — this engine extracts names but cannot classify
-//     function-vs-type for Kotlin by field shape at all (falls through to
-//     "no match").
+//     likewise exposes only `name`. CLOSED by TIER 2's kind-substring
+//     fallback classifier (`kind_hints_definition_role` +
+//     `has_parameter_like_child` in `structural_fallback.rs`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -97,9 +94,13 @@ use super::structural_fallback::{
     kind_hints_definition_role, kind_hints_positional_call, resolve_name_via_bounded_scan,
     resolve_name_via_declarator_chain, visibility_via_modifier_child, KindRole,
 };
+use super::structural_imports::{
+    has_import_anchor_ancestor, import_alias_text, import_call_path, import_entries,
+    import_path_text, is_import_anchor, IMPORT_CALL_NAMES,
+};
 use super::structural_scope::{
-    any_field, enclosing_def_index, end_line_of, has_field, last_segment, line_of, resolve_scopes,
-    rightmost_named_leaf_text, CallEntry, DefEntry, DefRole,
+    any_field, emit_imports, enclosing_def_index, end_line_of, has_field, last_segment, line_of,
+    resolve_scopes, rightmost_named_leaf_text, CallEntry, DefEntry, DefRole, ImportEntry,
 };
 use crate::parser::{
     collect_error_ranges, count_parse_errors, node_text, parse_tree_too_deep, parse_with_timeout,
@@ -274,10 +275,29 @@ pub(crate) fn parse_structural(
     // before because every prior fixture had at most one heritage-bearing
     // definition, so any reordering coincidentally still hit index 0).
     let mut heritage: Vec<(usize, String)> = Vec::new(); // (defining node id, target name)
+                                                         // Issue #224 follow-up: import extraction (see `structural_imports.rs`).
+                                                         // Collected independently of `classify`'s Def/Call branches below — a
+                                                         // node can be an import anchor while classify() returns `Role::None`
+                                                         // (Java's `import_declaration` matches no def/call field shape at all),
+                                                         // so this is an orthogonal check on the same walk, not a third arm of
+                                                         // the match.
+    let mut imports: Vec<ImportEntry> = Vec::new();
 
     let mut stack = vec![tree.root_node()];
     while let Some(node) = stack.pop() {
         if node.is_named() {
+            if is_import_anchor(node) && !has_import_anchor_ancestor(node) {
+                for entry in import_entries(node) {
+                    if let Some(path) = import_path_text(source, entry) {
+                        let alias = import_alias_text(source, entry);
+                        imports.push(ImportEntry {
+                            node: entry,
+                            path,
+                            alias,
+                        });
+                    }
+                }
+            }
             match classify(node) {
                 Role::Def { role, name_node } => {
                     let name = node_text(source, name_node);
@@ -321,6 +341,21 @@ pub(crate) fn parse_structural(
                 Role::Call { callee_node } => {
                     let callee = last_segment(&node_text(source, callee_node));
                     if !callee.is_empty() {
+                        // Ruby's/Lua's `require`-family (structural_imports
+                        // module doc item 5): these are ordinary `call`
+                        // nodes TIER 1 already classifies above, not
+                        // keyword-anchored statements — a call whose callee
+                        // matches also emits an Import, in addition to its
+                        // normal CallSite/Calls edge.
+                        if IMPORT_CALL_NAMES.contains(&callee.as_str()) {
+                            if let Some(path) = import_call_path(source, node) {
+                                imports.push(ImportEntry {
+                                    node,
+                                    path,
+                                    alias: None,
+                                });
+                            }
+                        }
                         calls.push(CallEntry { node, callee });
                     }
                 }
@@ -346,8 +381,10 @@ pub(crate) fn parse_structural(
         .map(|(i, d)| (d.node.id(), i))
         .collect();
 
-    let mut nodes: Vec<ExtractedNode> = Vec::with_capacity(defs.len() + calls.len());
-    let mut refs: Vec<ExtractedRef> = Vec::with_capacity(defs.len() + calls.len() + heritage.len());
+    let mut nodes: Vec<ExtractedNode> =
+        Vec::with_capacity(defs.len() + calls.len() + imports.len());
+    let mut refs: Vec<ExtractedRef> =
+        Vec::with_capacity(defs.len() + calls.len() + heritage.len() + imports.len());
 
     for def in &defs {
         let scope = match enclosing_def_index(def.node, &node_id_to_def) {
@@ -418,6 +455,16 @@ pub(crate) fn parse_structural(
             to_qualified_name: call.callee.clone(),
         });
     }
+
+    // Issue #224 follow-up: emit each resolved import (structural_imports.rs
+    // for extraction, structural_scope.rs's `emit_imports` for the
+    // ExtractedNode/ExtractedRef shape — split out purely for the
+    // coding-standards.md §4.1 500-line file cap, no new mechanism there;
+    // returns rather than mutates in place to stay within §4.4's 4-parameter
+    // cap).
+    let (import_nodes, import_refs) = emit_imports(&imports, &defs, &node_id_to_def, file_path);
+    nodes.extend(import_nodes);
+    refs.extend(import_refs);
 
     Ok((
         ParseResult {
