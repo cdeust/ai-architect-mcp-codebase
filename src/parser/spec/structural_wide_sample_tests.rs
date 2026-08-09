@@ -7,9 +7,21 @@
 // shipped binary, the production dispatch, or the end-result bench — see
 // `Cargo.toml`'s comment at the dependency declaration). None of these
 // languages were consulted while designing `structural.rs`/
-// `structural_fallback.rs`'s TIER 1/TIER 2 rules — this file is the honesty
-// check on whether those rules generalize, not a fixture tuned to make them
-// look good.
+// `structural_fallback.rs`'s original TIER 1/TIER 2 rules (PR #225/#226).
+//
+// ## THIS SAMPLE IS NOW TUNED-AGAINST — do not read its recall number as an
+// out-of-sample projection
+// Issue #224's Elixir/Zig/Bash follow-up (this file's own documented
+// failures from PR #226/#230) is the reason those three languages' import
+// rules exist at all — Elixir/Bash/Zig were named, individually, as the
+// task that produced the global-table extensions in `structural.rs`/
+// `structural_fallback.rs`/`structural_imports.rs`. That makes THIS sample a
+// training set for that follow-up's rules, not a held-out one, even though
+// the rules are still expressed as global tables, never per-language code.
+// A NEW, disjoint, prevalence-ranked held-out sample
+// (`structural_held_out_sample_tests.rs`) was added and run AFTER those
+// rules were frozen, to measure genuine out-of-sample generalization — see
+// that file's own module doc for the honest 180-language predictor.
 //
 // ## Method
 // One minimal snippet per language: a free function/method-shaped
@@ -92,10 +104,15 @@ fn wide_samples() -> Vec<WideSample> {
             ts_language: || tree_sitter_elixir::LANGUAGE.into(),
             src: "def helper() do\n  1\nend\n\ndef greet() do\n  helper()\nend\n",
             file: "m.ex",
-            // Verified unreachable (structural_imports.rs module doc):
-            // `import Enum` parses as a `call` node with FIELD `target`,
-            // which `call_callee_field` does not recognize — the same
-            // reason Elixir's ordinary calls are already unreached.
+            // CLOSED (issue #224's Elixir follow-up): `import Enum` parses
+            // as a `call` node with FIELD `target`, now a recognized callee
+            // field (`structural.rs`'s `call_callee_field`, gated on an
+            // `arguments`-KIND child to stay safe against Swift's own
+            // `target`-field nodes); `IMPORT_CALL_NAMES` then flags the
+            // classified call's `target` text ("import") as also an import.
+            // `def`/ordinary calls (`helper()`) reach `CallSite` the same
+            // way but are NOT definitions — Elixir's homoiconic `def` stays
+            // unreached as a Def, unchanged, see the trailing comment below.
             import_src: Some("import Enum\n"),
         },
         WideSample {
@@ -110,10 +127,14 @@ fn wide_samples() -> Vec<WideSample> {
             ts_language: || tree_sitter_bash::LANGUAGE.into(),
             src: "helper() {\n  return 1\n}\n\ngreet() {\n  helper\n}\n",
             file: "m.sh",
-            // Verified unreachable (structural_imports.rs module doc):
-            // `source ./foo.sh` is a `command` node (`name`+`argument`
-            // fields, singular `argument`), not keyword-anchored or
-            // `call_callee_field`-shaped.
+            // CLOSED (issue #224's Bash follow-up): `source ./foo.sh` is a
+            // `command` node (`name`+`argument` fields, singular
+            // `argument`) — `structural.rs`'s `ARGUMENTS_FIELD_CANDIDATES`
+            // now accepts the singular spelling too, so the node classifies
+            // as an ordinary `name`+argument CallSite (callee "source");
+            // `IMPORT_CALL_NAMES` then flags it as also an import. The same
+            // one-character widening is what flips Bash's ordinary-call
+            // recall below (`calls=YES`, previously `no`).
             import_src: Some("source ./foo.sh\n"),
         },
         WideSample {
@@ -128,9 +149,14 @@ fn wide_samples() -> Vec<WideSample> {
             ts_language: || tree_sitter_zig::LANGUAGE.into(),
             src: "fn helper() i32 {\n    return 1;\n}\n\nfn greet() i32 {\n    return helper();\n}\n",
             file: "m.zig",
-            // Verified unreachable (structural_imports.rs module doc):
-            // `@import("std")` is a `builtin_function` node, neither
-            // keyword-anchored nor `call_callee_field`-shaped.
+            // CLOSED (issue #224's Zig follow-up): `@import("std")` is a
+            // `builtin_function` node with ZERO fields at all —
+            // `structural_fallback.rs`'s fieldless-call tier
+            // (`is_fieldless_call_with_positional_arguments`) now recognizes
+            // any node whose children are ALL positional (no field-tagged
+            // child) but that carries an `arguments`-kind child as a call,
+            // callee = the first named child (`@import`, the
+            // `builtin_identifier`); `IMPORT_CALL_NAMES` then flags it.
             import_src: Some("const std = @import(\"std\");\n"),
         },
         WideSample {
@@ -259,13 +285,21 @@ fn wide_sample_imports_recall_is_measured_not_assumed() {
     assert_eq!(total, 12);
 }
 
-// ## Why the 4 non-recalled languages fail (verified by direct grammar
-// introspection during development — a `#[cfg(test)] mod diag_failures`
-// tree-dump harness identical in spirit to `structural_fallback`'s own
-// development diagnostics, since deleted — each finding below is a real
-// grammar-design fact, not a wrong-snippet artifact; ruling that out is the
-// same discipline the ORIGINAL 10-language table applied per its own
-// "Method" section):
+// ## Why the remaining non-recalled def/call cases fail (verified by direct
+// grammar introspection — a `#[cfg(test)] mod diag_vocab_224` tree-dump
+// harness identical in spirit to `structural_fallback`'s own development
+// diagnostics, since deleted — each finding below is a real grammar-design
+// fact, not a wrong-snippet artifact; ruling that out is the same discipline
+// the ORIGINAL 10-language table applied per its own "Method" section).
+//
+// Issue #224's Elixir/Zig/Bash follow-up CLOSED the three-language import
+// wall (12/12 = 100% on this sample, up from 9/12 = 75%) and Bash's
+// def/call gap (`calls` now YES, via the same `argument`-singular field
+// widening) through GLOBAL table extensions only — see
+// `structural.rs`/`structural_fallback.rs`/`structural_imports.rs`'s module
+// docs for the mechanism. Two genuinely different-shaped gaps remain, NOT
+// patched, because no global rule reaches them without becoming
+// per-construct special-casing:
 //
 // - **Haskell**: a top-level binding is `bind { name, match { expression } }`
 //   — neither `name`+`body` (it's `name`+`match`, and `match`'s own payload
@@ -274,24 +308,26 @@ fn wide_sample_imports_recall_is_measured_not_assumed() {
 //   declaration/definition/interface/implementation). Genuinely outside
 //   both TIER 1 and TIER 2's vocabulary — equational function definition is
 //   a different shape than every other grammar in either sample uses.
-// - **Elixir**: `def helper() do 1 end` parses as a `call` node itself
-//   (`target`="def" identifier, `arguments`=[the nested call `helper()`],
-//   plus a `do_block`) — a direct consequence of Elixir's homoiconic macro
-//   system, where `def` is syntactically a function call, not a distinct
-//   definition-shaped node kind at all. No definition/call distinction this
-//   engine draws applies; reaching it would require modeling macro
-//   expansion, not adding a field name.
 // - **OCaml**: `let helper () = 1` is a `value_definition` wrapping a
 //   `let_binding` with fields `pattern`(the name)+`parameter`+`body` — the
 //   name field is called `pattern`, a THIRD spelling (after `name` and
 //   Rust's absent-field case) this engine's vocabulary does not include,
 //   and `value_definition`'s kind does not end with this engine's suffix
-//   vocabulary either.
-// - **Bash** (calls only — definitions ARE recalled): `command` nodes use
-//   field `argument` (singular), not `arguments` (plural) — one character
-//   away from `call_callee_field`'s exact match. A real, minimal, arguably
-//   generalizable gap, deliberately NOT patched here: this file's entire
-//   purpose is measuring the engine's rules as designed against languages
-//   that did not inform their design; adding an `"argument"` candidate
-//   after seeing Bash fail would be curve-fitting the sample, which is
-//   exactly what an unbiased recall measurement must not do.
+//   vocabulary either. (OCaml's CALLS are now recalled as a side effect of
+//   the Elixir fix — `application_expression` has both `function`+`argument`
+//   fields, matching `call_callee_field`'s widened arguments-field check —
+//   but its DEFINITIONS remain unreached, so the combined defs-AND-calls
+//   metric below still counts it as a miss.)
+// - **Elixir's `def`/`defmodule`/ordinary calls are Calls, not Defs**:
+//   `def helper() do 1 end` parses as a `call` node itself (`target`="def"
+//   identifier, positional `arguments`=[the nested call `helper()`], plus a
+//   `do_block` child) — a direct consequence of Elixir's homoiconic macro
+//   system, where `def` is syntactically a function call, not a distinct
+//   definition-shaped node kind at all. The follow-up's `target`-field
+//   branch correctly reaches this node as a CallSite (callee "def") — which
+//   is the honest classification of what the node structurally IS — but no
+//   definition/call distinction this engine draws can ALSO recover a
+//   Function/Method node from it without modeling macro expansion, which is
+//   a different, harder problem than a field-name gap. Elixir's `calls=YES`
+//   below reflects `helper()` being reached as an ordinary call; `defs=no`
+//   is this same, now fully-understood, boundary.
