@@ -8,6 +8,7 @@
 use tree_sitter::Node;
 
 use super::structural_imports::*;
+use super::structural_imports_calls::import_call_path;
 
 fn parse(lang: tree_sitter::Language, src: &str) -> tree_sitter::Tree {
     let mut parser = tree_sitter::Parser::new();
