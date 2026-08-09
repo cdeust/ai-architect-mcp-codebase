@@ -4,6 +4,7 @@ use crate::parser::{self, Language};
 use std::collections::HashMap;
 use std::path::Path;
 
+mod ast;
 mod edges;
 mod nodes;
 
@@ -194,6 +195,10 @@ pub(super) fn index_single_file(
         restrict_to_public_api,
     );
     edges::accumulate_parsed_edges(batch, &parsed.refs, label_by_qn);
+    // Full-AST persistence layer (additive, best-effort — see
+    // `ast::persist_full_ast`'s doc comment for why a failure here never
+    // changes this file's `ParseOutcome`).
+    ast::persist_full_ast(store, rel_path, &source, lang);
     if parsed.parse_errors > 0 {
         ParseOutcome::Partial(parsed.error_ranges)
     } else {
