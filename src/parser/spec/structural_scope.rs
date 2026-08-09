@@ -10,7 +10,10 @@ use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
-use crate::parser::{node_text, qual, ExtractedNode, ExtractedRef, LABEL_IMPORT};
+use crate::parser::{
+    node_text, qual, ExtractedNode, ExtractedRef, LABEL_CALL_SITE, LABEL_FUNCTION, LABEL_IMPORT,
+    LABEL_METHOD, LABEL_STRUCT,
+};
 
 const QN_SEP: &str = "::";
 
@@ -56,6 +59,26 @@ pub(super) fn has_field(node: Node, field: &str) -> bool {
 
 pub(super) fn any_field(node: Node, fields: &[&str]) -> bool {
     fields.iter().any(|f| has_field(node, f))
+}
+
+/// Whether any NAMED child of `node` has kind EXACTLY `kind` — a
+/// positional-child probe complementing `has_field`/`any_field`, for
+/// grammars that expose a construct as a plain child NODE rather than a
+/// named FIELD. Verified necessary (issue #224's Elixir/Zig follow-up):
+/// Elixir's `call` node carries a positional `arguments` child with no
+/// `arguments` FIELD at all (its only field is `target`); Zig's
+/// `builtin_function` carries the same positional `arguments` child with NO
+/// fields whatsoever. See `structural.rs`'s `call_callee_field` and
+/// `structural_fallback.rs`'s fieldless-call tier, both of which use this to
+/// distinguish "call-shaped node with an argument list" from any other node
+/// that happens to share a candidate field name (`target`) for an unrelated
+/// purpose (Swift's `assignment`/`navigation_expression`/etc. also have a
+/// `target` field but, verified via `node-types.json`, never carry an
+/// `arguments`-kind child at all).
+pub(super) fn has_child_of_kind(node: Node, kind: &str) -> bool {
+    let mut cursor = node.walk();
+    let found = node.named_children(&mut cursor).any(|c| c.kind() == kind);
+    found
 }
 
 pub(super) fn line_of(node: Node) -> u64 {
@@ -165,6 +188,116 @@ pub(super) fn emit_imports(
             kind: "Imports".to_string(),
             from_qualified_name: qn,
             to_qualified_name: import.path.clone(),
+        });
+    }
+    (nodes, refs)
+}
+
+const QN_CALL_SEP: &str = "::";
+
+/// Builds the `ExtractedNode`/`ExtractedRef` pair for every classified
+/// definition PLUS its heritage edges — split out of `structural.rs`'s
+/// `parse_structural` purely for the coding-standards.md §4.1 500-line file
+/// cap once the Elixir/Zig/Bash follow-up landed (mirrors why `emit_imports`
+/// above already lives here rather than in `structural.rs`); no new
+/// mechanism, only the emission step for data `structural.rs`'s classify
+/// loop already produced. `heritage` is `(defining node id, target name)`
+/// pairs, resolved via `node_id_to_def` — NOT a raw index into `defs` — for
+/// the reason documented at `structural.rs`'s own heritage-collection site
+/// (a plain index goes stale across `defs.sort_by_key`). Returns rather than
+/// mutates in place, and takes 4 parameters, both to respect
+/// coding-standards.md §4.4's cap at the call site.
+pub(super) fn emit_defs(
+    defs: &[DefEntry],
+    heritage: &[(usize, String)],
+    node_id_to_def: &HashMap<usize, usize>,
+    file_path: &str,
+) -> (Vec<ExtractedNode>, Vec<ExtractedRef>) {
+    let mut nodes = Vec::with_capacity(defs.len());
+    let mut refs = Vec::with_capacity(defs.len() + heritage.len());
+
+    for def in defs {
+        let scope = match enclosing_def_index(def.node, node_id_to_def) {
+            Some(idx) => defs[idx].qn.clone(),
+            None => file_path.to_string(),
+        };
+        let label = match def.role {
+            DefRole::FunctionLike if def.is_method => LABEL_METHOD,
+            DefRole::FunctionLike => LABEL_FUNCTION,
+            DefRole::TypeLike => LABEL_STRUCT,
+        };
+        nodes.push(ExtractedNode {
+            label: label.to_string(),
+            name: def.name.clone(),
+            qualified_name: def.qn.clone(),
+            start_line: line_of(def.node),
+            end_line: end_line_of(def.node),
+            // TIER 2 item 4: node-KIND heuristic (`visibility_via_modifier_child`),
+            // not field-based — see `structural.rs`'s module doc and
+            // `structural_fallback`'s.
+            visibility: def.visibility.clone(),
+            properties: Vec::new(),
+        });
+        let edge_kind = if def.role == DefRole::FunctionLike && def.is_method {
+            "HasMethod"
+        } else {
+            "Defines"
+        };
+        refs.push(ExtractedRef {
+            kind: edge_kind.to_string(),
+            from_qualified_name: scope,
+            to_qualified_name: def.qn.clone(),
+        });
+    }
+
+    for (node_id, target) in heritage {
+        if let Some(&idx) = node_id_to_def.get(node_id) {
+            refs.push(ExtractedRef {
+                kind: "Inherits".to_string(),
+                from_qualified_name: defs[idx].qn.clone(),
+                to_qualified_name: target.clone(),
+            });
+        }
+    }
+
+    (nodes, refs)
+}
+
+/// Builds the `ExtractedNode`/`ExtractedRef` pair for every classified call
+/// site — same split rationale as `emit_defs` above, kept as a SEPARATE
+/// function (rather than folded into `emit_defs`) purely to stay within
+/// coding-standards.md §4.4's 4-parameter cap: a single combined function
+/// bundling `defs`+`heritage`+`calls`+`node_id_to_def`+`file_path` would need
+/// 5.
+pub(super) fn emit_calls(
+    calls: &[CallEntry],
+    node_id_to_def: &HashMap<usize, usize>,
+    defs: &[DefEntry],
+    file_path: &str,
+) -> (Vec<ExtractedNode>, Vec<ExtractedRef>) {
+    let mut nodes = Vec::with_capacity(calls.len());
+    let mut refs = Vec::with_capacity(calls.len());
+    for call in calls {
+        let caller_qn = match enclosing_def_index(call.node, node_id_to_def) {
+            Some(idx) => defs[idx].qn.clone(),
+            None => file_path.to_string(),
+        };
+        let line = line_of(call.node);
+        let col = call.node.start_position().column as u64 + 1;
+        let qn = format!("{caller_qn}{QN_CALL_SEP}call@{line}:{col}");
+        nodes.push(ExtractedNode {
+            label: LABEL_CALL_SITE.to_string(),
+            name: call.callee.clone(),
+            qualified_name: qn.clone(),
+            start_line: line,
+            end_line: end_line_of(call.node),
+            visibility: String::new(),
+            properties: vec![("callee_name".to_string(), call.callee.clone())],
+        });
+        refs.push(ExtractedRef {
+            kind: "Calls".to_string(),
+            from_qualified_name: qn,
+            to_qualified_name: call.callee.clone(),
         });
     }
     (nodes, refs)
