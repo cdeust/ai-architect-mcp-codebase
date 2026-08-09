@@ -51,6 +51,12 @@ mod structural_coverage_tests;
 #[cfg(test)]
 mod structural_fallback;
 #[cfg(test)]
+mod structural_imports;
+#[cfg(test)]
+mod structural_imports_coverage_tests;
+#[cfg(test)]
+mod structural_imports_tests;
+#[cfg(test)]
 mod structural_scope;
 #[cfg(test)]
 mod structural_wide_sample_tests;
