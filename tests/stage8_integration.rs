@@ -9,8 +9,7 @@ use ai_architect_mcp::indexer;
 use ai_architect_mcp::resolver;
 use ai_architect_mcp::security_gates;
 use std::fs;
-mod common;
-use common::TempDirExt;
+use std::path::PathBuf;
 
 // Fixture: one auth-pattern fn (`verify_token`) and a caller — Louvain puts
 // them in the same community (direct Calls edge + same-file containment).
@@ -40,7 +39,7 @@ pub fn untested_helper() -> u32 {
 }
 "#;
 
-fn tmp(tag: &str) -> common::TestTempDir {
+fn tmp(tag: &str) -> PathBuf {
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not (tag is kept as a
     // human-readable prefix for debuggability, not for uniqueness).
@@ -48,7 +47,7 @@ fn tmp(tag: &str) -> common::TestTempDir {
         .prefix(&format!("stage8_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep_managed()
+        .keep()
 }
 
 fn build_fixture_graph(fixture_dir: &std::path::Path, graph_dir: &std::path::Path) -> GraphStore {

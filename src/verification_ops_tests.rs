@@ -16,13 +16,12 @@ use std::fs;
 
 const NOW: &str = "2026-07-28T00:00:00Z";
 
-fn tmp_out(tag: &str) -> crate::test_support::TestTempDir {
-    use crate::test_support::TempDirExt;
+fn tmp_out(tag: &str) -> PathBuf {
     tempfile::Builder::new()
         .prefix(&format!("verification_ops_{tag}_"))
         .tempdir()
         .expect("tempdir")
-        .keep_managed()
+        .keep()
 }
 
 /// A minimal but schema-valid `stage-1.refined.json`, which start_verification

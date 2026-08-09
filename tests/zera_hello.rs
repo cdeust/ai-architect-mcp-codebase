@@ -28,8 +28,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 use zera::{hello, EdgeRef, GraphState, HelloRequest, NodeRef};
-mod common;
-use common::TempDirExt;
 
 fn opt_in() -> bool {
     std::env::var("CORTEX_FULL_CORPUS").ok().as_deref() == Some("1")
@@ -339,7 +337,7 @@ fn zera_hello_on_cortex_mcp_server() {
         .prefix("zera_s1_")
         .tempdir()
         .expect("create temp dir")
-        .keep_managed();
+        .keep();
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).expect("mkdir");
     let graph_path = tmp.join("graph.lbug");

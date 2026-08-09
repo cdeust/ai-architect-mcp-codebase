@@ -25,13 +25,12 @@ const F_SVC: &str = r#"
 pub fn run_a() -> String { String::from("a") }
 "#;
 
-fn build_fixture(tag: &str) -> (crate::test_support::TestTempDir, PathBuf) {
-    use crate::test_support::TempDirExt;
+fn build_fixture(tag: &str) -> PathBuf {
     let tmp_root = tempfile::Builder::new()
         .prefix(&format!("prd_handlers_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep_managed();
+        .keep();
     let _ = fs::remove_dir_all(&tmp_root);
     let src = tmp_root.join("fixture/src");
     fs::create_dir_all(&src).expect("create fixture src");
@@ -44,16 +43,15 @@ fn build_fixture(tag: &str) -> (crate::test_support::TestTempDir, PathBuf) {
     crate::resolver::resolve_graph(&store).expect("resolve");
     crate::clustering::cluster_graph(&store, 1.0).expect("cluster");
     drop(store);
-    (tmp_root, graph_dir)
+    graph_dir
 }
 
-fn tmp_dir(tag: &str) -> crate::test_support::TestTempDir {
-    use crate::test_support::TempDirExt;
+fn tmp_dir(tag: &str) -> PathBuf {
     tempfile::Builder::new()
         .prefix(&format!("prd_handlers_{tag}_"))
         .tempdir()
         .expect("tempdir")
-        .keep_managed()
+        .keep()
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +203,7 @@ fn run_prepare_prd_input_wraps_failures_in_the_stage_4_envelope() {
 
 #[test]
 fn prepare_prd_input_in_feature_mode_grounds_against_the_graph() {
-    let (_graph_guard, graph) = build_fixture("feature");
+    let graph = build_fixture("feature");
     let out_dir = tmp_dir("feature_out");
     let out = run_prepare_prd_input(&json!({
         "feature_description": "change run_a to return a number",
@@ -267,7 +265,7 @@ fn run_verify_semantic_diff_says_which_side_of_the_comparison_is_missing() {
     // Two sides, two distinct reasons: an agent that just built the "after"
     // graph needs to know which end it failed to supply. One generic
     // "diff failed" would send it to re-index both.
-    let (_present_guard, present) = build_fixture("diff_side");
+    let present = build_fixture("diff_side");
     let good = present.to_str().unwrap();
 
     let missing_before = run_verify_semantic_diff(&json!({
@@ -300,8 +298,8 @@ fn run_verify_semantic_diff_falls_back_to_the_generic_reason() {
 
 #[test]
 fn verify_semantic_diff_compares_two_real_graphs() {
-    let (_before_guard, before) = build_fixture("diff_before");
-    let (_after_guard, after) = build_fixture("diff_after");
+    let before = build_fixture("diff_before");
+    let after = build_fixture("diff_after");
     let report_dir = tmp_dir("diff_report");
     let report_path = report_dir.join("report.json");
 
@@ -334,8 +332,8 @@ fn verify_semantic_diff_compares_two_real_graphs() {
 fn verify_semantic_diff_writes_no_report_when_none_was_asked_for() {
     // Negative assertion: the write is opt-in. A tool that always writes
     // leaves files in a caller's tree that the caller never requested.
-    let (_before_guard, before) = build_fixture("diff_noreport_a");
-    let (_after_guard, after) = build_fixture("diff_noreport_b");
+    let before = build_fixture("diff_noreport_a");
+    let after = build_fixture("diff_noreport_b");
     let out = run_verify_semantic_diff(&json!({
         "before_graph_path": before.to_str().unwrap(),
         "after_graph_path": after.to_str().unwrap(),
@@ -381,7 +379,7 @@ fn run_validate_prd_wraps_failures_in_the_stage_6_envelope() {
 
 #[test]
 fn validate_prd_checks_a_prd_against_a_real_graph() {
-    let (_graph_guard, graph) = build_fixture("validate");
+    let graph = build_fixture("validate");
     let dir = tmp_dir("validate_prd");
     let prd = dir.join("prd.md");
     fs::write(
@@ -488,7 +486,7 @@ fn check_security_gates_validates_its_arguments() {
 fn check_security_gates_requires_the_changed_symbol_array() {
     // Reached only after the graph exists, so it needs a real one. An absent
     // array is not an empty change set — it is a malformed call.
-    let (_graph_guard, graph) = build_fixture("gates_args");
+    let graph = build_fixture("gates_args");
     let err = do_check_security_gates(&json!({"graph_path": graph.to_str().unwrap()}))
         .expect_err("no changed_symbols");
     assert!(err.contains("changed_symbols"), "{err}");
@@ -504,7 +502,7 @@ fn run_check_security_gates_wraps_failures_in_the_stage_8_envelope() {
 
 #[test]
 fn check_security_gates_reports_a_verdict_and_counts() {
-    let (_graph_guard, graph) = build_fixture("gates");
+    let graph = build_fixture("gates");
     let out = run_check_security_gates(&json!({
         "graph_path": graph.to_str().unwrap(),
         "changed_symbols": ["svc.rs::run_a"],
@@ -532,7 +530,7 @@ fn non_string_entries_in_changed_symbols_are_dropped_not_fatal() {
     // `filter_map(as_str)` silently skips non-strings. That is the shipped
     // behaviour; pinning it means a later change to reject them is a
     // deliberate decision rather than an accident.
-    let (_graph_guard, graph) = build_fixture("gates_mixed");
+    let graph = build_fixture("gates_mixed");
     let out = run_check_security_gates(&json!({
         "graph_path": graph.to_str().unwrap(),
         "changed_symbols": ["svc.rs::run_a", 7, null],
@@ -547,7 +545,7 @@ fn non_string_entries_in_changed_symbols_are_dropped_not_fatal() {
 
 #[test]
 fn security_artifacts_are_written_only_with_the_full_id_triple() {
-    let (_graph_guard, graph) = build_fixture("gates_write");
+    let graph = build_fixture("gates_write");
     let out_dir = tmp_dir("gates_write_out");
 
     // Any incomplete combination writes nothing.
@@ -594,7 +592,7 @@ fn security_artifacts_are_written_only_with_the_full_id_triple() {
 
 #[test]
 fn validation_artifacts_follow_the_same_triple_rule() {
-    let (_graph_guard, graph) = build_fixture("validate_write");
+    let graph = build_fixture("validate_write");
     let out_dir = tmp_dir("validate_write_out");
     let prd_dir = tmp_dir("validate_write_prd");
     let prd = prd_dir.join("prd.md");

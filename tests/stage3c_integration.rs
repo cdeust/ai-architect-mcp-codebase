@@ -11,8 +11,6 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use ai_architect_mcp::resolver;
 use std::fs;
-mod common;
-use common::TempDirExt;
 
 // ---------------------------------------------------------------------------
 // Fixture: multi-module project with known call structure
@@ -70,7 +68,7 @@ fn test_clustering_and_process_tracing() {
         .prefix("stage3c_integration_")
         .tempdir()
         .expect("create temp dir")
-        .keep_managed();
+        .keep();
     let _ = fs::remove_dir_all(&tmp_root);
 
     // Set up fixture project
@@ -249,7 +247,7 @@ fn test_cluster_graph_returns_mapping() {
         .prefix("stage3c_mapping_")
         .tempdir()
         .expect("create temp dir")
-        .keep_managed();
+        .keep();
     let _ = fs::remove_dir_all(&tmp_root);
 
     let fixture_dir = tmp_root.join("fixture/src");
@@ -327,7 +325,7 @@ fn test_cluster_graph_is_idempotent() {
         .prefix("stage3c_idempotent_")
         .tempdir()
         .expect("create temp dir")
-        .keep_managed();
+        .keep();
     let _ = fs::remove_dir_all(&tmp_root);
 
     let fixture_dir = tmp_root.join("fixture/src");

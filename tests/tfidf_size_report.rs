@@ -6,8 +6,6 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use ai_architect_mcp::search::vector;
 use std::fs;
-mod common;
-use common::TempDirExt;
 
 #[test]
 fn report_tfidf_index_size() {
@@ -17,7 +15,7 @@ fn report_tfidf_index_size() {
         .prefix("tfidf_size_")
         .tempdir()
         .expect("create temp dir")
-        .keep_managed();
+        .keep();
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
     let graph_dir = tmp.join("graph");

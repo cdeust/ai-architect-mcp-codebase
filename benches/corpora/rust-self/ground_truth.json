@@ -737,7 +737,6 @@
       },
       "expected": {
         "imports": [
-          "columns",
           "config",
           "ddl",
           "lbug::Connection",
@@ -746,7 +745,6 @@
           "lbug::PreparedStatement",
           "lbug::SystemConfig",
           "lbug::Value",
-          "recovery",
           "schema",
           "serialize",
           "std::cell::RefCell",

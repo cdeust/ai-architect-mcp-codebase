@@ -13,8 +13,6 @@ use ai_architect_mcp::resolver;
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
-mod common;
-use common::TempDirExt;
 
 const FIXTURE_MAIN: &str = r#"
 fn main() {
@@ -35,7 +33,7 @@ pub struct Tool {
 }
 "#;
 
-fn tmp(tag: &str) -> common::TestTempDir {
+fn tmp(tag: &str) -> PathBuf {
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not (tag is kept as a
     // human-readable prefix for debuggability, not for uniqueness). Callers
@@ -45,7 +43,7 @@ fn tmp(tag: &str) -> common::TestTempDir {
         .prefix(&format!("stage6_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep_managed()
+        .keep()
 }
 
 fn build_fixture_graph(fixture_dir: &std::path::Path, graph_dir: &std::path::Path) -> GraphStore {
