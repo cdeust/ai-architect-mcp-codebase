@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
-use crate::parser::{node_text, qual};
+use crate::parser::{node_text, qual, ExtractedNode, ExtractedRef, LABEL_IMPORT};
 
 const QN_SEP: &str = "::";
 
@@ -36,6 +36,18 @@ pub(super) struct DefEntry<'t> {
 pub(super) struct CallEntry<'t> {
     pub node: Node<'t>,
     pub callee: String,
+}
+
+/// One resolved import statement (issue #224 follow-up,
+/// `structural_imports.rs`): `node` is the ENTRY node (the import-anchor
+/// itself, or one of its per-spec sub-nodes for grouped imports like Go's
+/// `import_spec_list`), used only to resolve the enclosing scope and source
+/// line — the actual path/alias text was already extracted by
+/// `structural_imports` before this entry was built.
+pub(super) struct ImportEntry<'t> {
+    pub node: Node<'t>,
+    pub path: String,
+    pub alias: Option<String>,
 }
 
 pub(super) fn has_field(node: Node, field: &str) -> bool {
@@ -99,6 +111,65 @@ pub(super) fn rightmost_named_leaf_text(source: &str, node: Node) -> String {
 
 /// Finds the nearest ancestor of `node` already present in `node_id_to_def`,
 /// returning its index. `None` means file scope.
+/// Builds the `ExtractedNode`/`ExtractedRef` pair for every resolved import
+/// (issue #224 follow-up — extraction itself is `structural_imports.rs`;
+/// this is purely the shape/scope/dedup step, split out of `structural.rs`
+/// for the same §4.1 size reason `DefEntry`'s own emission loop already
+/// lives there rather than in `structural.rs`). Mirrors `shallow.rs`'s
+/// `emit_import` shape (`LABEL_IMPORT` node, `"Imports"` edge,
+/// `import:{path}` qualified-name segment, `path` property) so downstream
+/// consumers see one consistent Import representation regardless of which
+/// extraction path produced it. Returns rather than mutates in place to
+/// respect coding-standards.md §4.4's 4-parameter cap at the call site.
+pub(super) fn emit_imports(
+    imports: &[ImportEntry],
+    defs: &[DefEntry],
+    node_id_to_def: &HashMap<usize, usize>,
+    file_path: &str,
+) -> (Vec<ExtractedNode>, Vec<ExtractedRef>) {
+    let mut nodes = Vec::with_capacity(imports.len());
+    let mut refs = Vec::with_capacity(imports.len());
+    let mut emitted_qns: HashSet<String> = HashSet::new();
+    for import in imports {
+        let scope = match enclosing_def_index(import.node, node_id_to_def) {
+            Some(idx) => defs[idx].qn.clone(),
+            None => file_path.to_string(),
+        };
+        let candidate = qual(&scope, &format!("import:{}", import.path));
+        let qn = if emitted_qns.insert(candidate.clone()) {
+            candidate
+        } else {
+            let unique = format!("{candidate}@{}", line_of(import.node));
+            emitted_qns.insert(unique.clone());
+            unique
+        };
+        let display = last_segment(&import.path);
+        let mut properties = vec![("path".to_string(), import.path.clone())];
+        if let Some(alias) = &import.alias {
+            properties.push(("alias".to_string(), alias.clone()));
+        }
+        nodes.push(ExtractedNode {
+            label: LABEL_IMPORT.to_string(),
+            name: if display.is_empty() {
+                import.path.clone()
+            } else {
+                display
+            },
+            qualified_name: qn.clone(),
+            start_line: line_of(import.node),
+            end_line: end_line_of(import.node),
+            visibility: String::new(),
+            properties,
+        });
+        refs.push(ExtractedRef {
+            kind: "Imports".to_string(),
+            from_qualified_name: qn,
+            to_qualified_name: import.path.clone(),
+        });
+    }
+    (nodes, refs)
+}
+
 pub(super) fn enclosing_def_index(
     node: Node,
     node_id_to_def: &HashMap<usize, usize>,
