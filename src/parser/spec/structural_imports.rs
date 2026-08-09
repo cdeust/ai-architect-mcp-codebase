@@ -62,30 +62,54 @@
 //    or `name`+`arguments` fields) that TIER 1's existing `call_callee_field`
 //    ALREADY classifies as a `CallSite`. This table lets a classified call
 //    ALSO emit an `Import` when its resolved callee name matches — still one
-//    small global table, never a per-language special case.
+//    small global table, never a per-language special case. Issue #224's
+//    Elixir/Zig/Bash follow-up adds four more entries to this SAME table
+//    (Elixir's `import`/`alias`/`use`, Zig's `@import`, Bash's `source`) —
+//    see `structural_imports_calls.rs`, split out purely for the
+//    coding-standards.md §4.1 500-line cap once this follow-up landed; it
+//    carries `IMPORT_CALL_NAMES` and `import_call_path` (the mechanism this
+//    item describes), while THIS file keeps the keyword-anchor mechanism
+//    (items 1-4). No new mechanism, just two files for one growing module.
 //
-// ## What this module does NOT reach (verified, not hidden)
-//   - **Elixir**: `import Enum` parses as a `call` node with FIELD `target`
-//     (not `function`/`method`/`name`), which TIER 1's `call_callee_field`
-//     does not recognize at all — Elixir's calls are already wholly
-//     unreached by this engine (pre-existing, see `structural_wide_sample_tests`),
-//     so its import-as-macro-call form is unreached for the same underlying
-//     reason, not a new gap.
-//   - **Zig**: `@import("std")` is a `builtin_function` node with NEITHER a
-//     `function`/`method`/`name` field (so it's not a recognized call) NOR an
-//     anonymous keyword child (`@import` is a single token of kind
-//     `"builtin_identifier"`'s parent `builtin_function`, not an anonymous
-//     leaf) — genuinely outside both mechanisms this module adds.
-//   - **Bash**: `source ./foo.sh` is a `command` node (`name`+`argument`
-//     fields, singular `argument`) — the same one-character gap
-//     `structural_wide_sample_tests` already documents and deliberately
-//     leaves unpatched for calls; it is not a keyword-anchored or
-//     `call_callee_field`-shaped construct either, so it stays unreached
-//     here too, for the same already-accepted reason.
+// ## What this module (plus `structural_imports_calls.rs`) still does NOT
+// reach (verified, not hidden)
+//    Nothing named-by-language remains after the Elixir/Zig/Bash follow-up;
+//    see `structural_wide_sample_tests`'s own "why the N non-recalled
+//    languages fail" comment for the languages (Haskell, OCaml) whose
+//    definitions are still genuinely unreached for unrelated (non-import)
+//    structural reasons.
 
 use tree_sitter::Node;
 
 use crate::parser::node_text;
+
+/// Delimiter characters stripped from an extracted path/alias — lexical
+/// cleanup (a string literal's or a C-family system-include's outer
+/// delimiters), not a language rule. Quote chars mirror `shallow.rs`'s
+/// identical constant (not shared across modules: the coding-standards.md
+/// §3.3 three-use threshold isn't crossed by these two independent call
+/// sites); `<`/`>` are added and verified necessary by C/C++/ObjC's
+/// `#include <stdio.h>`/`#import <Foundation/Foundation.h>` system-include
+/// syntax, whose `path` field node's own text includes the angle brackets.
+const QUOTE_CHARS: [char; 5] = ['"', '\'', '`', '<', '>'];
+
+/// Shared with `structural_imports_calls.rs` (the `IMPORT_CALL_NAMES`/
+/// `import_call_path` mechanism split out purely for the coding-standards.md
+/// §4.1 500-line cap) — both bound the SAME recursive searches to the same
+/// depth for the same reason (real grammar nesting never exceeds this in the
+/// sampled grammars; a cheap, generous ceiling against adversarial input).
+pub(super) const BOUNDED_SEARCH_DEPTH: u8 = 4;
+
+pub(super) fn text(source: &str, node: Node) -> String {
+    node_text(source, node)
+}
+
+pub(super) fn strip_quotes(raw: &str) -> String {
+    raw.trim()
+        .trim_matches(|c| QUOTE_CHARS.contains(&c))
+        .trim()
+        .to_string()
+}
 
 /// Anonymous-child KIND table that anchors an import statement. See module
 /// doc item 1 for why `"from"` is excluded.
@@ -103,43 +127,6 @@ const ALIAS_FIELD_CANDIDATES: [&str; 1] = ["alias"];
 /// See module doc item 4.
 const AS_KEYWORD: &str = "as";
 
-/// See module doc item 5: call names that mark an ALREADY-classified
-/// `CallSite` as also being an import (Ruby's/Lua's `require`-family).
-/// `"include"` is deliberately NOT in this table even though Ruby has a
-/// `include SomeModule` mixin call, because it is a module-inclusion
-/// mechanic, not a file/module IMPORT in this graph's sense, and adding it
-/// was not verified necessary by any real failing case.
-pub(super) const IMPORT_CALL_NAMES: [&str; 3] = ["require", "require_relative", "load"];
-
-/// Delimiter characters stripped from an extracted path/alias — lexical
-/// cleanup (a string literal's or a C-family system-include's outer
-/// delimiters), not a language rule. Quote chars mirror `shallow.rs`'s
-/// identical constant (not shared across modules: the coding-standards.md
-/// §3.3 three-use threshold isn't crossed by these two independent call
-/// sites); `<`/`>` are added and verified necessary by C/C++/ObjC's
-/// `#include <stdio.h>`/`#import <Foundation/Foundation.h>` system-include
-/// syntax, whose `path` field node's own text includes the angle brackets.
-const QUOTE_CHARS: [char; 5] = ['"', '\'', '`', '<', '>'];
-
-const BOUNDED_SEARCH_DEPTH: u8 = 4;
-
-fn text(source: &str, node: Node) -> String {
-    node_text(source, node)
-}
-
-fn strip_quotes(raw: &str) -> String {
-    raw.trim()
-        .trim_matches(|c| QUOTE_CHARS.contains(&c))
-        .trim()
-        .to_string()
-}
-
-/// Whether `node` itself carries a DIRECT anonymous child whose kind is an
-/// import keyword (module doc item 1). Deliberately direct children only —
-/// verified across all sampled grammars, the keyword always sits directly on
-/// the outermost import statement node, never on a nested wrapper (Rust's
-/// `use_as_clause`, Python's `aliased_import` carry no keyword child of their
-/// own — see the module doc and this file's tests).
 pub(super) fn is_import_anchor(node: Node) -> bool {
     let mut cursor = node.walk();
     let found = node
@@ -372,37 +359,6 @@ fn find_as_token_alias(source: &str, node: Node, depth: u8) -> Option<String> {
     }
     for child in children.iter().filter(|c| c.is_named()) {
         if let Some(found) = find_as_token_alias(source, *child, depth - 1) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-/// Ruby's/Lua's `require`-family call-as-import (module doc item 5): given a
-/// `call` node already classified by TIER 1 as a `CallSite`, extracts the
-/// path from the first string-shaped leaf under its `arguments` field —
-/// verified: Ruby's `argument_list` wraps a `string` node, Lua's `arguments`
-/// wraps a `string` node directly; both grammars name the kind literally
-/// `"string"`, so a kind-CONTAINS-"string" scan is exact on both without a
-/// per-language string-node-kind table.
-pub(super) fn import_call_path(source: &str, call_node: Node) -> Option<String> {
-    let args = call_node.child_by_field_name("arguments")?;
-    find_string_like_leaf(source, args, BOUNDED_SEARCH_DEPTH)
-}
-
-fn find_string_like_leaf(source: &str, node: Node, depth: u8) -> Option<String> {
-    if depth == 0 {
-        return None;
-    }
-    if node.is_named() && node.kind().contains("string") {
-        let candidate = strip_quotes(&text(source, node));
-        if !candidate.is_empty() {
-            return Some(candidate);
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if let Some(found) = find_string_like_leaf(source, child, depth - 1) {
             return Some(found);
         }
     }
