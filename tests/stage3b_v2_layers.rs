@@ -4,6 +4,8 @@
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::{indexer, macro_expansion, parser, resolver, stdlib_index};
 use std::fs;
+mod common;
+use common::TempDirExt;
 
 #[test]
 fn test_stdlib_table_size_rust() {
@@ -43,7 +45,7 @@ fn test_stdlib_resolution_push() {
         .prefix("stage3b_v2_stdlib_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let fixture = tmp_root.join("fixture");
     fs::create_dir_all(fixture.join("src")).unwrap();
@@ -100,7 +102,7 @@ fn test_macro_expansion_println_creates_edge() {
         .prefix("stage3b_v2_macro_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let fixture = tmp_root.join("fixture");
     fs::create_dir_all(fixture.join("src")).unwrap();

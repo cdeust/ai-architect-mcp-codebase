@@ -47,6 +47,8 @@ mod search;
 mod security_gates;
 mod semantic_diff;
 mod stdlib_index;
+#[cfg(test)]
+mod test_support;
 mod token_surface;
 mod tool_profile;
 mod tool_schemas;

@@ -6,6 +6,8 @@
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use std::fs;
+mod common;
+use common::TempDirExt;
 
 // ---------------------------------------------------------------------------
 // Fixture source files — small Rust project with known structure
@@ -76,7 +78,7 @@ fn test_full_pipeline_on_fixture() {
         .prefix("stage3a_integration_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
 
     // -- Set up fixture project --

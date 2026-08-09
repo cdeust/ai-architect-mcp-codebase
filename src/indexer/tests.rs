@@ -5,13 +5,14 @@ use super::*;
 
 #[test]
 fn test_index_own_project() {
+    use crate::test_support::TempDirExt;
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
     let tmp = tempfile::Builder::new()
         .prefix("indexer_test_graph_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
     // Ensure the directory is fully gone before creating a fresh DB.
     assert!(!tmp.exists(), "failed to clean temp dir: {}", tmp.display());
@@ -60,7 +61,14 @@ fn test_index_own_project() {
 /// Split out of a single 96-line test (coding-standards §4.2) into two
 /// focused tests that share this setup — one concern each (file-type
 /// coverage vs. light-link edges), not a behavior change.
-fn build_all_file_fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, IndexResult) {
+fn build_all_file_fixture(
+    tag: &str,
+) -> (
+    crate::test_support::TestTempDir,
+    crate::test_support::TestTempDir,
+    IndexResult,
+) {
+    use crate::test_support::TempDirExt;
     use std::io::Write;
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
@@ -68,7 +76,7 @@ fn build_all_file_fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf,
         .prefix(&format!("indexer_allfile_test_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("js")).unwrap();
     std::fs::create_dir_all(root.join("docs")).unwrap();
@@ -105,7 +113,7 @@ fn build_all_file_fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf,
         .prefix(&format!("indexer_allfile_graph_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
     let result = index_codebase(&root, &tmp).unwrap();
     (root, tmp, result)
@@ -192,6 +200,7 @@ fn test_symlink_skipped() {
     // We build a small directory with one real .rs file and one symlink
     // that points to a file OUTSIDE the tree (a decoy `/etc/hostname`).
     // collect_source_files must return only the real file.
+    use crate::test_support::TempDirExt;
     use std::os::unix::fs::symlink;
 
     // issue #25 audit: process::id() collides across processes under PID
@@ -200,7 +209,7 @@ fn test_symlink_skipped() {
         .prefix("indexer_symlink_test_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
 
@@ -234,13 +243,14 @@ fn test_dependency_scope_walk() {
     // while always excluding `.git`.
     // Fixture: root/app.rs, root/node_modules/dep.rs, root/deps/dep2.rs,
     // root/.git/hook.rs.
+    use crate::test_support::TempDirExt;
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
     let root = tempfile::Builder::new()
         .prefix("indexer_include_deps_test_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("node_modules")).unwrap();
     std::fs::create_dir_all(root.join("deps")).unwrap();
@@ -293,11 +303,12 @@ fn test_public_api_scope_filters_dependency_symbols_only() {
     // source: ADR-4253701 §Decision 1.
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
+    use crate::test_support::TempDirExt;
     let root = tempfile::Builder::new()
         .prefix("indexer_public_api_test_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("node_modules")).unwrap();
     std::fs::write(
@@ -317,7 +328,7 @@ fn test_public_api_scope_filters_dependency_symbols_only() {
         .prefix("indexer_public_api_graph_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&graph_path);
 
     index_codebase_with_language(&root, &graph_path, None, DependencyScope::PublicApi)
@@ -342,4 +353,68 @@ fn test_public_api_scope_filters_dependency_symbols_only() {
 
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&graph_path);
+}
+
+/// Cost-measurement probe for full-AST persistence: not a correctness
+/// assertion (that's `test_all_file_indexing_covers_every_file_type` and
+/// `tests/full_ast_completeness.rs`) — `#[ignore]`d, like this file's other
+/// manual-run probes, so `cargo test` never runs it automatically. Indexes
+/// this repo's own `src/` into a scratch dir under `std::env::temp_dir()`,
+/// prints node/edge counts, wall-clock, and on-disk size, and cleans up its
+/// scratch dir on every exit path (including a `panic!`/`expect` failure,
+/// via a drop guard) so a manual run never leaks. Run with:
+///   cargo test --release --lib indexer::tests::measure_full_ast_cost_on_own_src -- --ignored --nocapture
+#[test]
+#[ignore]
+fn measure_full_ast_cost_on_own_src() {
+    struct CleanupOnDrop(std::path::PathBuf);
+    impl Drop for CleanupOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let scratch = std::env::temp_dir().join("ap-full-ast-cost-probe");
+    let _guard = CleanupOnDrop(scratch.clone());
+    let _ = std::fs::remove_dir_all(&scratch);
+    let _ = std::fs::remove_file(&scratch);
+
+    let start = std::time::Instant::now();
+    let result = super::index_codebase(Path::new("src"), &scratch).expect("index");
+    let elapsed = start.elapsed();
+    let du_bytes = dir_size(&scratch);
+    eprintln!(
+        "COST MEASUREMENT: files_indexed={} node_count={} edge_count={} elapsed_ms={} \
+         reported_elapsed_ms={} on_disk_bytes={} on_disk_human={:.1} MiB",
+        result.files_indexed,
+        result.node_count,
+        result.edge_count,
+        elapsed.as_millis(),
+        result.elapsed_ms,
+        du_bytes,
+        du_bytes as f64 / (1024.0 * 1024.0)
+    );
+}
+
+#[cfg(test)]
+fn dir_size(path: &std::path::Path) -> u64 {
+    // lbug may materialize the database as a single file OR a directory
+    // depending on size/config — measure whichever it produced.
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.is_file() {
+            return meta.len();
+        }
+    }
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size(&p);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }

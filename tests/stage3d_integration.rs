@@ -11,8 +11,9 @@ use ai_architect_mcp::indexer;
 use ai_architect_mcp::resolver;
 use ai_architect_mcp::search;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+mod common;
+use common::TempDirExt;
 
 // ---------------------------------------------------------------------------
 // Fixture: multi-module project with known call structure
@@ -60,7 +61,7 @@ pub fn transform(input: &str) -> String {
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn setup_graph(test_name: &str) -> (PathBuf, GraphStore) {
+fn setup_graph(test_name: &str) -> (common::TestTempDir, GraphStore) {
     // issue #25 audit: the in-process COUNTER already disambiguates
     // concurrent calls within one test binary, but process::id() still
     // collides across separate process invocations under PID reuse.
@@ -70,7 +71,7 @@ fn setup_graph(test_name: &str) -> (PathBuf, GraphStore) {
         .prefix(&format!("stage3d_{test_name}_{n}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
 
     let fixture_dir = tmp_root.join("fixture/src");

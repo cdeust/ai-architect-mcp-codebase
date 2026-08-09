@@ -13,6 +13,8 @@ use ai_architect_mcp::indexer;
 use ai_architect_mcp::resolver;
 use std::path::Path;
 use std::process::Command;
+mod common;
+use common::TempDirExt;
 
 fn git(repo: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -68,7 +70,7 @@ fn test_index_history_builds_traversable_version_spine() {
         .prefix("history_it_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&repo);
     let src = repo.join("src");
     std::fs::create_dir_all(&src).unwrap();

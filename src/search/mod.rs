@@ -1304,14 +1304,15 @@ mod tests {
     use crate::indexer::index_codebase;
     use std::path::Path;
 
-    fn fresh_store(tag: &str) -> (std::path::PathBuf, GraphStore) {
+    fn fresh_store(tag: &str) -> (crate::test_support::TestTempDir, GraphStore) {
+        use crate::test_support::TempDirExt;
         // issue #25 audit: process::id() collides across processes under PID
         // reuse; tempfile's random suffix does not.
         let tmp = tempfile::Builder::new()
             .prefix(&format!("search_test_{tag}_"))
             .tempdir()
             .expect("create temp dir")
-            .keep();
+            .keep_managed();
         let _ = std::fs::remove_dir_all(&tmp);
         let r = index_codebase(Path::new("src"), &tmp).unwrap();
         let store = GraphStore::open_or_create(&r.graph_path).unwrap();

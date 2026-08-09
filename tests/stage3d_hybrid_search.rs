@@ -11,6 +11,8 @@ use ai_architect_mcp::search;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+mod common;
+use common::TempDirExt;
 
 // These tests run in parallel (cargo default). Each builds its own index in a
 // per-test temp dir and passes that dir EXPLICITLY to search_graph, so there
@@ -52,7 +54,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Returns (tmp_root, store, index_dir). The index_dir is passed explicitly to
 /// search_graph by each test — no shared env var, so the tests are parallel-safe.
-fn setup_with_search_index(test_name: &str) -> (PathBuf, GraphStore, PathBuf) {
+fn setup_with_search_index(test_name: &str) -> (common::TestTempDir, GraphStore, PathBuf) {
     // issue #25 audit: the in-process COUNTER already disambiguates
     // concurrent calls within one test binary, but process::id() still
     // collides across separate process invocations under PID reuse.
@@ -62,7 +64,7 @@ fn setup_with_search_index(test_name: &str) -> (PathBuf, GraphStore, PathBuf) {
         .prefix(&format!("stage3d_hybrid_{test_name}_{n}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
 
     let fixture_dir = tmp_root.join("fixture/src");

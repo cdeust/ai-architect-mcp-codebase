@@ -14,6 +14,8 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use ai_architect_mcp::resolver;
 use std::fs;
+mod common;
+use common::TempDirExt;
 
 // A trait (dynamic-dispatch surface), two declared implementors, and a function
 // that invokes the trait method through a trait object.
@@ -49,7 +51,7 @@ fn test_get_impact_reports_lower_bound_for_interface() {
         .prefix("stage3c_epistemic_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
 
     let fixture_dir = tmp_root.join("fixture/src");
@@ -120,7 +122,7 @@ fn test_get_impact_reports_exact_for_concrete_leaf() {
         .prefix("stage3c_epistemic_leaf_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
 
     let fixture_dir = tmp_root.join("fixture/src");

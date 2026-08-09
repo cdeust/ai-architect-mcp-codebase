@@ -16,6 +16,8 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use ai_architect_mcp::resolver;
 use std::fs;
+mod common;
+use common::TempDirExt;
 
 /// Indexes+resolves a single-file fixture and returns the store, so each
 /// per-language test can query its own inheritance edge.
@@ -24,7 +26,7 @@ fn index_and_resolve(prefix: &str, file_name: &str, source: &str) -> GraphStore 
         .prefix(prefix)
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let src = tmp_root.join("src");
     fs::create_dir_all(&src).unwrap();

@@ -12,6 +12,8 @@ use ai_architect_mcp::indexer;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
+mod common;
+use common::TempDirExt;
 
 /// Number of synthetic Rust files generated for the benchmark.
 /// 500 files × ~20 LOC each ≈ 10K LOC, roughly the size of this crate's src/.
@@ -30,7 +32,7 @@ fn test_index_500_file_synthetic_fixture() {
         .prefix("scalability_bench_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let src_dir = tmp_root.join("src");
     fs::create_dir_all(&src_dir).expect("create src dir");

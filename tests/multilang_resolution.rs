@@ -19,6 +19,8 @@ use ai_architect_mcp::indexer;
 use ai_architect_mcp::language_provider::{extract_file_prefix, provider_for};
 use ai_architect_mcp::resolver::{self, ResolutionResult};
 use std::fs;
+mod common;
+use common::TempDirExt;
 
 /// Index a set of (relative_path, source) files into a fresh graph and run
 /// the Stage-3b resolution pass. Returns the resolution result.
@@ -30,7 +32,7 @@ fn index_and_resolve(tag: &str, files: &[(&str, &str)]) -> ResolutionResult {
         .prefix(&format!("multilang_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&root);
     let src = root.join("src");
     for (rel, body) in files {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::TempDirExt;
 
 #[test]
 fn test_extract_verbatim_identifiers() {
@@ -76,7 +77,7 @@ fn test_homonymous_symbols_in_different_files_both_classify_as_exact() {
         .prefix("prd_input_issue14_homonym_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
     let src_dir = tmp.join("src");
     std::fs::create_dir_all(src_dir.join("a")).unwrap();
@@ -155,7 +156,7 @@ fn test_repro_issue14_lexical_false_positive_excluded_from_matched() {
         .prefix("prd_input_issue14_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
     let src_dir = tmp.join("src");
     std::fs::create_dir_all(&src_dir).unwrap();
@@ -227,7 +228,7 @@ fn test_repro_issue14_pure_lexical_description_yields_empty_matched() {
         .prefix("prd_input_issue14_empty_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
     let src_dir = tmp.join("src");
     std::fs::create_dir_all(&src_dir).unwrap();
@@ -277,7 +278,7 @@ fn test_issue18_hybrid_index_reduces_spurious_candidates() {
         .prefix("prd_input_issue18_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
     let src_dir = tmp.join("src");
     std::fs::create_dir_all(&src_dir).unwrap();
@@ -371,7 +372,7 @@ fn test_weak_token_before_exact_token_still_classifies_as_exact() {
         .prefix("prd_input_issue14_order_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
     let src_dir = tmp.join("src");
     std::fs::create_dir_all(&src_dir).unwrap();

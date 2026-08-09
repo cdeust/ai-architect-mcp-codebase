@@ -5,11 +5,12 @@ use serde_json::json;
 fn test_load_verified_rejects_false_flag() {
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
+    use crate::test_support::TempDirExt;
     let tmp = tempfile::Builder::new()
         .prefix("prd_input_false_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).unwrap();
     let body = json!({

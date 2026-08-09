@@ -17,6 +17,8 @@ use ai_architect_mcp::resolver;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
+mod common;
+use common::TempDirExt;
 
 // Provider repo (B): DEFINES process_payment. No local caller.
 const PROVIDER_LIB: &str = r#"
@@ -74,7 +76,7 @@ fn cross_repo_forward_reverse_and_homonym() {
         .prefix("cross_repo_bridge_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&root);
 
     let provider = build_graph(&root, "provider", "lib.rs", PROVIDER_LIB);

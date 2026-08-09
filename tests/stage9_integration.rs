@@ -7,6 +7,8 @@ use ai_architect_mcp::indexer;
 use ai_architect_mcp::semantic_diff::{self, SemanticDiffArgs};
 use std::fs;
 use std::path::PathBuf;
+mod common;
+use common::TempDirExt;
 
 // v1 fixture — has a helper function
 const FIXTURE_BEFORE_MAIN: &str = r#"
@@ -56,7 +58,7 @@ fn b() {
 }
 "#;
 
-fn tmp(tag: &str) -> PathBuf {
+fn tmp(tag: &str) -> common::TestTempDir {
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not (tag is kept as a
     // human-readable prefix for debuggability, not for uniqueness). Callers
@@ -66,7 +68,7 @@ fn tmp(tag: &str) -> PathBuf {
         .prefix(&format!("stage9_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep()
+        .keep_managed()
 }
 
 fn build_graph(root: &std::path::Path, name: &str, main_src: &str) -> PathBuf {

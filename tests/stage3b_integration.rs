@@ -7,6 +7,8 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use ai_architect_mcp::resolver;
 use std::fs;
+mod common;
+use common::TempDirExt;
 
 // ---------------------------------------------------------------------------
 // Fixture source files — cross-file references for resolution testing
@@ -71,7 +73,7 @@ fn test_resolution_pipeline() {
         .prefix("stage3b_integration_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
 
     // -- Set up fixture project --
@@ -149,7 +151,7 @@ fn test_field_type_uses_resolution() {
         .prefix("stage3b_uses_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
 
     let fixture_dir = tmp_root.join("fixture");
@@ -210,7 +212,7 @@ fn test_field_type_alias_uses_resolution() {
         .prefix("stage3b_uses_typealias_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
 
     let fixture_dir = tmp_root.join("fixture");
@@ -286,7 +288,7 @@ fn test_implements_resolution_declared() {
         .prefix("stage3b_impl_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let src = tmp_root.join("src");
     fs::create_dir_all(&src).unwrap();
@@ -373,7 +375,7 @@ fn test_java_implements_and_extends_resolution() {
         .prefix("stage3b_java_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let src = tmp_root.join("src");
     fs::create_dir_all(&src).unwrap();
@@ -465,7 +467,7 @@ fn test_typescript_implements_and_extends_resolution() {
         .prefix("stage3b_typescript_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let src = tmp_root.join("src");
     fs::create_dir_all(&src).unwrap();

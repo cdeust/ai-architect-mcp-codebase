@@ -7,6 +7,8 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use ai_architect_mcp::parser::{self, Language};
 use std::path::Path;
+mod common;
+use common::TempDirExt;
 
 #[test]
 fn test_multilang_auto_index() {
@@ -22,7 +24,7 @@ fn test_multilang_auto_index() {
         .prefix("multilang_test_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
 
     let result =
@@ -126,7 +128,7 @@ fn test_language_filter_rust_only() {
         .prefix("multilang_rust_only_")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = std::fs::remove_dir_all(&tmp);
 
     let result = indexer::index_codebase_with_language(

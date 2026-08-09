@@ -31,6 +31,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+mod common;
+use common::TempDirExt;
 
 #[derive(Debug, Deserialize)]
 struct CorpusFile {
@@ -206,7 +208,7 @@ fn run_corpus(corpus_path: &str) {
         .prefix(&format!("corpus_full_{target_tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).expect("mkdir tempdir");
     let graph_path = tmp.join("graph.lbug");

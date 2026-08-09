@@ -438,11 +438,12 @@ fn remove_stale_graph_artifact_handles_file_and_dir() {
     // error rather than panicking.
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
+    use crate::test_support::TempDirExt;
     let base = tempfile::Builder::new()
         .prefix("ap-remove-stale-")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&base);
     fs::create_dir_all(&base).unwrap();
     let graph = base.join("graph");
@@ -474,11 +475,12 @@ fn write_graph_meta_records_absolute_root() {
     // inside it — the graph itself stays portable.
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
+    use crate::test_support::TempDirExt;
     let base = tempfile::Builder::new()
         .prefix("ap-meta-")
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&base);
     fs::create_dir_all(&base).unwrap();
     let root = base.join("some/repo/root");

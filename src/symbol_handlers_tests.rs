@@ -30,12 +30,13 @@ pub fn sanitize(input: &str) -> String { input.trim().to_string() }
 /// Builds an indexed + resolved + clustered fixture graph, returns its dir.
 /// Mirrors `pagination_tests::build_fixture` — tempfile's random suffix rather
 /// than `process::id()`, which collides under PID reuse (issue #25 audit).
-fn build_fixture(tag: &str) -> std::path::PathBuf {
+fn build_fixture(tag: &str) -> (crate::test_support::TestTempDir, std::path::PathBuf) {
+    use crate::test_support::TempDirExt;
     let tmp_root = tempfile::Builder::new()
         .prefix(&format!("symbol_handlers_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let src = tmp_root.join("fixture/src");
     fs::create_dir_all(&src).expect("create fixture src");
@@ -51,7 +52,7 @@ fn build_fixture(tag: &str) -> std::path::PathBuf {
     // Drop the handle so the read-path cache opens its own; the embedded DB is
     // single-writer and tests share a process.
     drop(store);
-    graph_dir
+    (tmp_root, graph_dir)
 }
 
 /// An `graph_path` that is syntactically fine and absent on disk.
@@ -131,7 +132,7 @@ fn run_get_symbol_wraps_failures_in_the_error_envelope() {
 
 #[test]
 fn get_symbol_returns_the_node_and_its_edges() {
-    let graph = build_fixture("found");
+    let (_guard, graph) = build_fixture("found");
     let out = run_get_symbol(&json!({
         "graph_path": graph.to_str().unwrap(),
         "qualified_name": "helpers.rs::sanitize",
@@ -161,7 +162,7 @@ fn get_symbol_returns_the_node_and_its_edges() {
 fn get_symbol_resolves_a_natural_src_prefixed_name() {
     // Three-layer lookup: an agent writes the path it sees on disk
     // (`src/helpers.rs::sanitize`); the graph stores `helpers.rs::sanitize`.
-    let graph = build_fixture("prefix");
+    let (_guard, graph) = build_fixture("prefix");
     let out = run_get_symbol(&json!({
         "graph_path": graph.to_str().unwrap(),
         "qualified_name": "src/helpers.rs::sanitize",
@@ -172,7 +173,7 @@ fn get_symbol_resolves_a_natural_src_prefixed_name() {
 
 #[test]
 fn get_symbol_reports_an_unknown_symbol_with_suggestions() {
-    let graph = build_fixture("notfound");
+    let (_guard, graph) = build_fixture("notfound");
     let out = run_get_symbol(&json!({
         "graph_path": graph.to_str().unwrap(),
         "qualified_name": "helpers.rs::saniti",
@@ -196,7 +197,7 @@ fn get_symbol_reports_an_unknown_symbol_with_suggestions() {
 fn a_symbol_absent_everywhere_yields_no_sibling_claim() {
     // Negative assertion: with no sibling graphs configured the bridge is a
     // no-op and must not decorate the response with a foreign resolution.
-    let graph = build_fixture("nosibling");
+    let (_guard, graph) = build_fixture("nosibling");
     let out = run_get_symbol(&json!({
         "graph_path": graph.to_str().unwrap(),
         "qualified_name": "totally::absent::symbol",
@@ -234,7 +235,7 @@ fn run_resolve_graph_wraps_failures_with_its_own_reason() {
 
 #[test]
 fn resolve_graph_reports_counts_and_a_rate() {
-    let graph = build_fixture("resolve");
+    let (_guard, graph) = build_fixture("resolve");
     let out = run_resolve_graph(&json!({"graph_path": graph.to_str().unwrap()}));
 
     assert_eq!(out["status"], "ok", "response: {out}");
@@ -270,7 +271,7 @@ fn resolve_graph_adds_no_cross_repo_fields_without_siblings() {
     // Negative assertion: the bridge fields appear only when the caller asked
     // for siblings. A zero-valued `cross_repo_resolvable` would read as
     // "checked, found none" when nothing was checked.
-    let graph = build_fixture("nobridge");
+    let (_guard, graph) = build_fixture("nobridge");
     let out = run_resolve_graph(&json!({"graph_path": graph.to_str().unwrap()}));
     assert!(out.get("cross_repo_resolvable").is_none(), "{out}");
     assert!(out.get("cross_repo_sample").is_none(), "{out}");
@@ -305,7 +306,7 @@ fn run_cluster_graph_wraps_failures_with_its_own_reason() {
 
 #[test]
 fn cluster_graph_reports_communities_and_memberships() {
-    let graph = build_fixture("cluster");
+    let (_guard, graph) = build_fixture("cluster");
     let out = run_cluster_graph(&json!({"graph_path": graph.to_str().unwrap()}));
 
     assert_eq!(out["status"], "ok", "response: {out}");
@@ -335,7 +336,7 @@ fn cluster_graph_accepts_a_custom_resolution_parameter() {
     // `resolution_param` defaults to 1.0 when absent or non-numeric. Passing a
     // different gamma must be honoured rather than ignored, and passing
     // nonsense must fall back rather than fail the call.
-    let graph = build_fixture("gamma");
+    let (_guard, graph) = build_fixture("gamma");
     let path = graph.to_str().unwrap();
 
     let tuned = run_cluster_graph(&json!({"graph_path": path, "resolution_param": 0.5}));
@@ -382,7 +383,7 @@ fn every_triple_builds_a_query_the_store_accepts() {
     // runtime and silently drops that entire edge class from get_symbol's
     // answer — the failure mode where the tool looks healthy and under-reports.
     // Executing each triple's own query is the only way to catch it.
-    let graph = build_fixture("triples");
+    let (_guard, graph) = build_fixture("triples");
     let store = graph_store::GraphStore::open_or_create(&graph).expect("open fixture");
 
     let mut rejected = Vec::new();

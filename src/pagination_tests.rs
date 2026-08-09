@@ -29,15 +29,18 @@ const F_HELPERS: &str = r#"
 pub fn sanitize(input: &str) -> String { input.trim().to_string() }
 "#;
 
-/// Builds an indexed + resolved + clustered fixture graph, returns its dir.
-fn build_fixture(tag: &str) -> std::path::PathBuf {
+/// Builds an indexed + resolved + clustered fixture graph. Returns the
+/// tempdir guard (keep it alive for the caller's whole test — dropping it
+/// early deletes the graph out from under the test) alongside the graph dir.
+fn build_fixture(tag: &str) -> (crate::test_support::TestTempDir, std::path::PathBuf) {
+    use crate::test_support::TempDirExt;
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
     let tmp_root = tempfile::Builder::new()
         .prefix(&format!("pagination_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let src = tmp_root.join("fixture/src");
     fs::create_dir_all(&src).expect("create fixture src");
@@ -53,7 +56,7 @@ fn build_fixture(tag: &str) -> std::path::PathBuf {
     // Drop the store handle so the read-path cache opens its own; the
     // embedded DB is single-writer and tests share a process.
     drop(store);
-    graph_dir
+    (tmp_root, graph_dir)
 }
 
 /// Drives a tool's cursor to exhaustion: repeatedly calls `call(offset)`,
@@ -88,7 +91,7 @@ where
 
 #[test]
 fn get_processes_pages_through_everything() {
-    let graph = build_fixture("procs");
+    let (_guard, graph) = build_fixture("procs");
     let gp = graph.to_str().unwrap().to_string();
 
     let call = |offset: u64| -> Value {
@@ -125,7 +128,7 @@ fn get_processes_pages_through_everything() {
 
 #[test]
 fn get_impact_pages_callers_through_everything() {
-    let graph = build_fixture("impact");
+    let (_guard, graph) = build_fixture("impact");
     let gp = graph.to_str().unwrap().to_string();
 
     // Use the real node id from the graph (qualified_name format varies by
@@ -176,7 +179,7 @@ fn get_impact_pages_callers_through_everything() {
 
 #[test]
 fn search_codebase_pages_through_everything() {
-    let graph = build_fixture("search");
+    let (_guard, graph) = build_fixture("search");
     let gp = graph.to_str().unwrap().to_string();
 
     let call = |offset: u64| -> Value {
@@ -214,7 +217,7 @@ fn search_codebase_pages_through_everything() {
 
 #[test]
 fn query_graph_pages_through_ordered_query() {
-    let graph = build_fixture("query");
+    let (_guard, graph) = build_fixture("query");
     let gp = graph.to_str().unwrap().to_string();
     // ORDER BY makes the row order stable → cursor is safe (order_stable).
     let q = "MATCH (f:Function) RETURN f.qualified_name ORDER BY f.qualified_name";

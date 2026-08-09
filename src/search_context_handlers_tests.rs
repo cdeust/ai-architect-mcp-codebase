@@ -31,16 +31,20 @@ pub struct Sanitizer { pub strict: bool }
 "#;
 
 struct Fixture {
+    // Held for its Drop side effect (cleans the backing tempdir on a passing
+    // test, preserves it on a panicking one) — never read directly.
+    _guard: crate::test_support::TestTempDir,
     graph: PathBuf,
     src: PathBuf,
 }
 
 fn build_fixture(tag: &str) -> Fixture {
+    use crate::test_support::TempDirExt;
     let tmp_root = tempfile::Builder::new()
         .prefix(&format!("search_ctx_{tag}_"))
         .tempdir()
         .expect("create temp dir")
-        .keep();
+        .keep_managed();
     let _ = fs::remove_dir_all(&tmp_root);
     let src = tmp_root.join("fixture/src");
     fs::create_dir_all(&src).expect("create fixture src");
@@ -58,7 +62,11 @@ fn build_fixture(tag: &str) -> Fixture {
     // graph's PARENT, not the graph itself.
     search::build_search_index(&store, &tmp_root).expect("build search index");
     drop(store);
-    Fixture { graph, src }
+    Fixture {
+        _guard: tmp_root,
+        graph,
+        src,
+    }
 }
 
 fn graph_arg(f: &Fixture) -> &str {
