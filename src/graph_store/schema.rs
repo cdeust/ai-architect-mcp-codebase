@@ -2,10 +2,94 @@
 // predicates, and schema-membership queries.
 //
 // Extracted from graph_store.rs (Fowler "Move Function") to keep the file
-// under the §4.1 cap. Pure move; `use super::*` provides the shared store
-// vocabulary exactly as when this lived in one module.
+// under the §4.1 cap. Node/edge label constants live directly in this file
+// (moved from graph_store.rs in the same split that added `AstNode`/
+// `FileContent` — schema.rs no longer needs `use super::*` for them).
 
-use super::*;
+// ---------------------------------------------------------------------------
+// Node labels — source: stages/stage-3.md §schema (Shannon spec, 3a subset)
+// ---------------------------------------------------------------------------
+
+pub const NODE_DIRECTORY: &str = "Directory"; // source: stages/stage-3.md §schema
+pub const NODE_FILE: &str = "File"; // source: stages/stage-3.md §schema
+pub const NODE_MODULE: &str = "Module"; // source: stages/stage-3.md §schema
+pub const NODE_FUNCTION: &str = "Function"; // source: stages/stage-3.md §schema
+pub const NODE_METHOD: &str = "Method"; // source: stages/stage-3.md §schema
+pub const NODE_STRUCT: &str = "Struct"; // source: stages/stage-3.md §schema
+pub const NODE_ENUM: &str = "Enum"; // source: stages/stage-3.md §schema
+pub const NODE_VARIANT: &str = "Variant"; // source: stages/stage-3.md §schema
+pub const NODE_TRAIT: &str = "Trait"; // source: stages/stage-3.md §schema
+pub const NODE_FIELD: &str = "Field"; // source: stages/stage-3.md §schema
+pub const NODE_CONSTANT: &str = "Constant"; // source: stages/stage-3.md §schema
+pub const NODE_TYPE_ALIAS: &str = "TypeAlias"; // source: stages/stage-3.md §schema
+pub const NODE_IMPORT: &str = "Import"; // source: stages/stage-3.md §schema
+pub const NODE_CALL_SITE: &str = "CallSite"; // source: stages/stage-3.md §schema
+pub const NODE_COMMUNITY: &str = "Community"; // source: stages/stage-3c.md §4.1
+pub const NODE_PROCESS: &str = "Process"; // source: stages/stage-3c.md §4.1
+pub const NODE_STDLIB_SYMBOL: &str = "StdlibSymbol"; // source: stages/stage-3b-v2.md §5 Layer 5
+
+// History layer — temporal axis over the structural snapshot.
+// source: second-brain history requirement — the graph must track not just
+// the current state of an entity but its evolution: which commits touched it,
+// and the chain of its successive versions. A `Commit` is a point in git
+// history; a `Version` is one revision of an entity (a File or a symbol) as it
+// stood at a particular commit. The structural graph remains the HEAD
+// snapshot; the version spine hangs off it via VersionOf/ChangedIn edges so
+// every entity stays traversable in both directions across time.
+pub const NODE_COMMIT: &str = "Commit";
+pub const NODE_VERSION: &str = "Version";
+
+// Infrastructure-as-code layer (issue #63) — deployment surface as first-class
+// graph material, mirroring DeusData/codebase-memory-mcp's pass_k8s.c (Resource
+// nodes per K8s kind, Module nodes per Kustomize overlay) and pass_infrascan.c
+// (Dockerfile base image / stages / ports). AP adds these ALONGSIDE the existing
+// File node for each manifest (the File already exists post-index); the IaC pass
+// enriches, never replaces. source: issue #63 acceptance criteria 1-3.
+//
+// IacResource — one node per K8s manifest document (Deployment/Service/ConfigMap/
+// …) AND per Dockerfile build target. `resource_kind` discriminates the concrete
+// kind ("Deployment", "Dockerfile", …); `source` is "k8s" | "dockerfile". The id
+// is `<file-rel>::<discriminator>` so the incremental pass's per-file symbol
+// purge (`starts_with(id, "<rel>::")`) reclaims it on reparse with zero new purge
+// code (issue #62 integration).
+pub const NODE_IAC_RESOURCE: &str = "IacResource";
+// IacModule — one node per Kustomize overlay (kustomization.yaml). Mirrors CBM's
+// "Module" node; renamed to avoid colliding with the code `Module` label.
+pub const NODE_IAC_MODULE: &str = "IacModule";
+// IacImage — a container image reference (Dockerfile `FROM`, K8s container
+// `image:`). Shared/deduplicated external-ref node (like StdlibSymbol): keyed by
+// the normalized reference string, never per-file, so it is not purged per file.
+pub const NODE_IAC_IMAGE: &str = "IacImage";
+
+// Full-AST layer — every tree-sitter node of every parsed file, not just the
+// symbols the language-spec walkers extract. source: full-AST persistence
+// contract — "a parsed file is entirely indexed and queryable without
+// tokens": the pre-existing schema above is a purely SEMANTIC projection
+// (Function/Struct/... only), so any node the spec walkers don't recognize
+// (a raw expression, a punctuation token, a comment) was silently dropped.
+// `AstNode` is the lossless layer underneath it — one row per tree-sitter
+// node, named AND anonymous, reconstructible into the exact original tree.
+pub const NODE_AST_NODE: &str = "AstNode";
+// `FileContent` carries one row per parsed file: the zstd-compressed source
+// bytes, so any `AstNode`'s exact text is recoverable via
+// decompress-then-byte-slice — no second file read, no re-parse, no LLM
+// context spent reconstructing source the store already has.
+pub const NODE_FILE_CONTENT: &str = "FileContent";
+
+// ---------------------------------------------------------------------------
+// Edge kinds — source: stages/stage-3.md §schema (Shannon spec, 3a subset)
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
+pub const EDGE_CONTAINS: &str = "Contains"; // source: stages/stage-3.md §schema
+#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
+pub const EDGE_DEFINES: &str = "Defines"; // source: stages/stage-3.md §schema
+#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
+pub const EDGE_HAS_METHOD: &str = "HasMethod"; // source: stages/stage-3.md §schema
+#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
+pub const EDGE_HAS_FIELD: &str = "HasField"; // source: stages/stage-3.md §schema
+#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
+pub const EDGE_HAS_VARIANT: &str = "HasVariant"; // source: stages/stage-3.md §schema
 
 // ---------------------------------------------------------------------------
 // Schema DDL generators
@@ -35,6 +119,9 @@ pub(crate) const NODE_LABELS: &[&str] = &[
     NODE_IAC_RESOURCE,
     NODE_IAC_MODULE,
     NODE_IAC_IMAGE,
+    // Full-AST layer.
+    NODE_AST_NODE,
+    NODE_FILE_CONTENT,
 ];
 
 /// Single source of truth for all relationship tables: (name, from, to).
@@ -244,6 +331,14 @@ pub const REL_TABLES: &[(&str, &str, &str)] = &[
         NODE_IAC_MODULE,
         NODE_IAC_MODULE,
     ),
+    // Full-AST layer. `Defines_File_AstNode` (File -> the file's ROOT AstNode
+    // only) reuses the existing `Defines_` structural-provenance shape — free
+    // confidence/resolution_method, zero DDL special-casing. `AstChild_*` is
+    // the parent->child edge that makes the tree traversable in the graph
+    // itself (in addition to the `parent_id`/`child_index` node columns,
+    // which make it reconstructible without any edge traversal at all).
+    ("Defines_File_AstNode", NODE_FILE, NODE_AST_NODE),
+    ("AstChild_AstNode_AstNode", NODE_AST_NODE, NODE_AST_NODE),
 ];
 
 /// 3b resolution edge tables carry confidence + resolution_method properties.
@@ -289,6 +384,14 @@ pub(crate) fn is_cochange_rel(name: &str) -> bool {
 /// Runtime-observed call edge (issue #58): ingest_traces divergence signal.
 pub(crate) fn is_observed_calls_rel(name: &str) -> bool {
     name.starts_with("OBSERVED_CALLS_")
+}
+
+/// Full-AST parent->child edge: carries `child_index` + `field_name` so a
+/// graph-side traversal (not just the mirrored node columns) can reconstruct
+/// sibling order and the field a child occupies in its parent, without a
+/// second lookup per node.
+pub(crate) fn is_ast_child_rel(name: &str) -> bool {
+    name == "AstChild_AstNode_AstNode"
 }
 
 /// Symbol-level static Calls tables that ingest_traces annotates with an

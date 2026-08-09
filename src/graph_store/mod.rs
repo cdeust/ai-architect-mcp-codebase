@@ -10,12 +10,20 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
+mod columns;
 mod config;
 mod ddl;
+mod recovery;
 mod schema;
 mod serialize;
+use columns::*;
 pub use config::*;
 use ddl::*;
+// Only `tests.rs` reaches these via `use super::*` (production code calls
+// `Self::recover_from_stale_sidecars`/`is_stale_sidecar_db_id_error` through
+// their full paths) — gated to match, so a non-test build has no unused-import warning.
+#[cfg(test)]
+use recovery::*;
 pub use schema::*;
 use serialize::*;
 
@@ -35,76 +43,6 @@ pub type PropEdge = (String, String, EdgeProps);
 /// A batch of edges of the same relationship table, ready for
 /// `GraphStore::bulk_insert_edges`.
 pub type PropEdgeList = Vec<PropEdge>;
-
-// ---------------------------------------------------------------------------
-// Node labels — source: stages/stage-3.md §schema (Shannon spec, 3a subset)
-// ---------------------------------------------------------------------------
-
-pub const NODE_DIRECTORY: &str = "Directory"; // source: stages/stage-3.md §schema
-pub const NODE_FILE: &str = "File"; // source: stages/stage-3.md §schema
-pub const NODE_MODULE: &str = "Module"; // source: stages/stage-3.md §schema
-pub const NODE_FUNCTION: &str = "Function"; // source: stages/stage-3.md §schema
-pub const NODE_METHOD: &str = "Method"; // source: stages/stage-3.md §schema
-pub const NODE_STRUCT: &str = "Struct"; // source: stages/stage-3.md §schema
-pub const NODE_ENUM: &str = "Enum"; // source: stages/stage-3.md §schema
-pub const NODE_VARIANT: &str = "Variant"; // source: stages/stage-3.md §schema
-pub const NODE_TRAIT: &str = "Trait"; // source: stages/stage-3.md §schema
-pub const NODE_FIELD: &str = "Field"; // source: stages/stage-3.md §schema
-pub const NODE_CONSTANT: &str = "Constant"; // source: stages/stage-3.md §schema
-pub const NODE_TYPE_ALIAS: &str = "TypeAlias"; // source: stages/stage-3.md §schema
-pub const NODE_IMPORT: &str = "Import"; // source: stages/stage-3.md §schema
-pub const NODE_CALL_SITE: &str = "CallSite"; // source: stages/stage-3.md §schema
-pub const NODE_COMMUNITY: &str = "Community"; // source: stages/stage-3c.md §4.1
-pub const NODE_PROCESS: &str = "Process"; // source: stages/stage-3c.md §4.1
-pub const NODE_STDLIB_SYMBOL: &str = "StdlibSymbol"; // source: stages/stage-3b-v2.md §5 Layer 5
-
-// History layer — temporal axis over the structural snapshot.
-// source: second-brain history requirement — the graph must track not just
-// the current state of an entity but its evolution: which commits touched it,
-// and the chain of its successive versions. A `Commit` is a point in git
-// history; a `Version` is one revision of an entity (a File or a symbol) as it
-// stood at a particular commit. The structural graph remains the HEAD
-// snapshot; the version spine hangs off it via VersionOf/ChangedIn edges so
-// every entity stays traversable in both directions across time.
-pub const NODE_COMMIT: &str = "Commit";
-pub const NODE_VERSION: &str = "Version";
-
-// Infrastructure-as-code layer (issue #63) — deployment surface as first-class
-// graph material, mirroring DeusData/codebase-memory-mcp's pass_k8s.c (Resource
-// nodes per K8s kind, Module nodes per Kustomize overlay) and pass_infrascan.c
-// (Dockerfile base image / stages / ports). AP adds these ALONGSIDE the existing
-// File node for each manifest (the File already exists post-index); the IaC pass
-// enriches, never replaces. source: issue #63 acceptance criteria 1-3.
-//
-// IacResource — one node per K8s manifest document (Deployment/Service/ConfigMap/
-// …) AND per Dockerfile build target. `resource_kind` discriminates the concrete
-// kind ("Deployment", "Dockerfile", …); `source` is "k8s" | "dockerfile". The id
-// is `<file-rel>::<discriminator>` so the incremental pass's per-file symbol
-// purge (`starts_with(id, "<rel>::")`) reclaims it on reparse with zero new purge
-// code (issue #62 integration).
-pub const NODE_IAC_RESOURCE: &str = "IacResource";
-// IacModule — one node per Kustomize overlay (kustomization.yaml). Mirrors CBM's
-// "Module" node; renamed to avoid colliding with the code `Module` label.
-pub const NODE_IAC_MODULE: &str = "IacModule";
-// IacImage — a container image reference (Dockerfile `FROM`, K8s container
-// `image:`). Shared/deduplicated external-ref node (like StdlibSymbol): keyed by
-// the normalized reference string, never per-file, so it is not purged per file.
-pub const NODE_IAC_IMAGE: &str = "IacImage";
-
-// ---------------------------------------------------------------------------
-// Edge kinds — source: stages/stage-3.md §schema (Shannon spec, 3a subset)
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
-pub const EDGE_CONTAINS: &str = "Contains"; // source: stages/stage-3.md §schema
-#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
-pub const EDGE_DEFINES: &str = "Defines"; // source: stages/stage-3.md §schema
-#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
-pub const EDGE_HAS_METHOD: &str = "HasMethod"; // source: stages/stage-3.md §schema
-#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
-pub const EDGE_HAS_FIELD: &str = "HasField"; // source: stages/stage-3.md §schema
-#[allow(dead_code)] // used in stage 3b — resolution edge kind lookup
-pub const EDGE_HAS_VARIANT: &str = "HasVariant"; // source: stages/stage-3.md §schema
 
 // ---------------------------------------------------------------------------
 // Cypher string escaping — security-critical.
@@ -187,123 +125,6 @@ pub struct GraphStore {
     //   (a) `_db` is never moved out or dropped before `conn`,
     //   (b) lbug's own test suite uses the same stack-lifetime pattern,
     //   (c) struct fields drop in declaration order (conn drops before _db).
-}
-
-// ---------------------------------------------------------------------------
-// Stale-sidecar recovery — source: issue #201.
-//
-// lbug writes temporary sidecars next to the database: `<db>.wal`,
-// `<db>.wal.checkpoint`, `<db>.shadow`, `<db>.tmp`. Each carries the UUID of
-// the database that produced it, and `FileDBIDUtils::verifyDatabaseID`
-// (lbug-src/src/storage/file_db_id_utils.cpp) throws when it does not match
-// the database being opened:
-//
-//   "Database ID for temporary file '<path>' does not match the current
-//    database. This file may have been left behind from a previous database
-//    with the same name. If it is safe to do so, please delete this file and
-//    restart the database."
-//
-// Observed on a June-vintage graph dir in the 2026-08-06 A/B ingestion bench:
-// every subsequent open failed hard and the only remedy was deleting the whole
-// directory by hand.
-//
-// The throw sites are wal_replayer.cpp and shadow_file.cpp — the SIDECARS, never
-// the main database file. So recovery does not need to discard the index: move
-// the mismatched sidecars aside and reopen. A sidecar whose UUID belongs to a
-// different database describes transactions that are not this database's, so
-// replaying it would be wrong; discarding it is what upstream advises.
-//
-// Deliberately narrow. The recovery runs ONLY for this error signature: a full
-// disk or a permission fault must never be "fixed" by removing files, so every
-// other open failure keeps its existing annotate_write_failure path.
-// ---------------------------------------------------------------------------
-
-/// Temporary sidecar suffixes lbug appends to the database path.
-/// Source: lbug-src/src/include/common/constants.h StorageConstants
-/// (WAL_FILE_SUFFIX / CHECKPOINT_WAL_FILE_SUFFIX / SHADOWING_SUFFIX /
-/// TEMP_FILE_SUFFIX).
-const LBUG_SIDECAR_SUFFIXES: &[&str] = &["wal", "wal.checkpoint", "shadow", "tmp"];
-
-/// True iff `err` is lbug's stale-sidecar database-ID mismatch.
-///
-/// Matches on two co-occurring fragments of the upstream message rather than
-/// the whole string, so incidental rewording upstream does not silently turn
-/// recovery off, while an unrelated error cannot accidentally match.
-pub(crate) fn is_stale_sidecar_db_id_error(err: &str) -> bool {
-    err.contains("Database ID") && err.contains("does not match")
-}
-
-impl GraphStore {
-    /// Moves mismatched lbug sidecars aside so the database can be reopened.
-    ///
-    /// Returns Ok(()) when the caller should retry the open. Returns Err when
-    /// the error was not the stale-sidecar signature (the caller must surface
-    /// the original failure unchanged) or when nothing could be quarantined.
-    ///
-    /// Quarantine, not delete: the sidecars are renamed to
-    /// `<name>.stale-<unix_millis>` beside the database. They are small, the
-    /// operation is reversible, and a wrong call is then recoverable — which a
-    /// delete would not be. Every action is logged with the reason.
-    fn recover_from_stale_sidecars(path: &Path, err: &str) -> Result<(), String> {
-        if !is_stale_sidecar_db_id_error(err) {
-            // Not our condition — hand the original error back untouched so
-            // ENOSPC/permission diagnostics keep their existing contract.
-            return Err(crate::write_diagnostics::annotate_write_failure(
-                path,
-                &format!("lbug database open failed: {err}"),
-            ));
-        }
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let mut moved = 0usize;
-        for suffix in LBUG_SIDECAR_SUFFIXES {
-            let mut sidecar = path.as_os_str().to_owned();
-            sidecar.push(format!(".{suffix}"));
-            let sidecar = std::path::PathBuf::from(sidecar);
-            // symlink_metadata: never follow a symlink planted at the sidecar
-            // path, and only ever touch a regular file.
-            match std::fs::symlink_metadata(&sidecar) {
-                Ok(meta) if meta.is_file() => {
-                    let mut dest = sidecar.as_os_str().to_owned();
-                    dest.push(format!(".stale-{stamp}"));
-                    let dest = std::path::PathBuf::from(dest);
-                    match std::fs::rename(&sidecar, &dest) {
-                        Ok(()) => {
-                            moved += 1;
-                            eprintln!(
-                                "[ap] graph recovery: {} carried a foreign database ID \
-                                 (left by a previous database of the same name); moved to {} \
-                                 and reopening — the index itself is untouched (issue #201)",
-                                sidecar.display(),
-                                dest.display()
-                            );
-                        }
-                        Err(e) => {
-                            return Err(format!(
-                                "graph recovery: could not quarantine stale sidecar {}: {e}",
-                                sidecar.display()
-                            ));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        if moved == 0 {
-            // The signature said stale sidecar but none is present next to the
-            // database — do not silently retry an open that will fail the same
-            // way; say what was looked for.
-            return Err(format!(
-                "graph recovery: lbug reported a stale-sidecar database-ID mismatch for {} \
-                 but no sidecar ({}) was found to quarantine; original error: {err}",
-                path.display(),
-                LBUG_SIDECAR_SUFFIXES.join(", ")
-            ));
-        }
-        Ok(())
-    }
 }
 
 impl GraphStore {
@@ -480,6 +301,40 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Inserts one `FileContent` row: the file's zstd-compressed source
+    /// bytes, keyed by the file's relative path (matches `File.id`).
+    ///
+    /// Bypasses the Cypher-string-literal path (`insert_node`/`cypher_str`)
+    /// entirely and the bulk UNWIND path (`bulk_insert_nodes`) — both go
+    /// through `literal_to_value`, which parses UTF-8 text into typed
+    /// values; compressed bytes are not valid UTF-8 and cannot be safely
+    /// represented as a Cypher string literal. This builds a typed
+    /// `Value::Blob` directly and binds it via a prepared statement with
+    /// named parameters, the same FFI path `bulk_insert_nodes` uses for its
+    /// struct rows, just without the UNWIND/List wrapper (one row per call).
+    ///
+    /// Cached like every other prepared statement on this store (see
+    /// `run_prepared`): the cypher text is identical on every call (only the
+    /// parameter VALUES differ per file), so caching turns N calls into one
+    /// plan + N binds instead of N plans.
+    pub(crate) fn insert_file_content(
+        &self,
+        file_id: &str,
+        content_zstd: Vec<u8>,
+        original_size: i64,
+    ) -> Result<(), String> {
+        let compressed_size = content_zstd.len() as i64;
+        let cypher = "CREATE (:FileContent {id: $id, content_zstd: $content, \
+                       original_size: $original_size, compressed_size: $compressed_size})";
+        let params = vec![
+            ("id", Value::String(file_id.to_string())),
+            ("content", Value::Blob(content_zstd)),
+            ("original_size", Value::Int64(original_size)),
+            ("compressed_size", Value::Int64(compressed_size)),
+        ];
+        self.run_prepared_params(cypher, params)
+    }
+
     /// Executes an arbitrary Cypher query and returns columns + rows.
     ///
     /// Intentionally UNBOUNDED. This is a shared internal primitive: 70+ callers
@@ -596,6 +451,29 @@ impl GraphStore {
             .expect("statement just inserted into cache");
         self.conn
             .execute(stmt, vec![("rows", rows)])
+            .map(|_| ())
+            .map_err(|e| format!("execute [{cypher}]: {e}"))
+    }
+
+    /// Generalization of `run_prepared` for statements with more than one
+    /// (or a non-`rows`-named) parameter — currently only
+    /// `insert_file_content`'s named-field `CREATE`. Shares the same
+    /// prepared-statement cache: identical cypher text across calls, only
+    /// the bound values differ.
+    fn run_prepared_params(&self, cypher: &str, params: Vec<(&str, Value)>) -> Result<(), String> {
+        let mut cache = self.stmt_cache.borrow_mut();
+        if !cache.contains_key(cypher) {
+            let stmt = self
+                .conn
+                .prepare(cypher)
+                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
+            cache.insert(cypher.to_string(), stmt);
+        }
+        let stmt = cache
+            .get_mut(cypher)
+            .expect("statement just inserted into cache");
+        self.conn
+            .execute(stmt, params)
             .map(|_| ())
             .map_err(|e| format!("execute [{cypher}]: {e}"))
     }

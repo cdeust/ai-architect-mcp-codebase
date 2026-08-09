@@ -139,6 +139,24 @@ pub(crate) fn node_table_ddl() -> Vec<String> {
              source STRING, path STRING, start_line INT64"),
         ddl_node(NODE_IAC_IMAGE,
             "id STRING, reference STRING, name STRING, tag STRING, registry STRING"),
+        // Full-AST layer. `id` = "{file_id}::ast::{preorder_counter}" — stable
+        // and deterministic (same source -> same ids). `parent_id` is "" for
+        // the tree root. `child_index` is the node's 0-based position among
+        // ALL of its parent's children (named AND anonymous), the same order
+        // `Node::child(i)`/`TreeCursor` iterate — replaying rows ordered by
+        // (parent_id, child_index) reconstructs the tree exactly.
+        // source: full-AST persistence contract.
+        ddl_node(NODE_AST_NODE,
+            "id STRING, file_id STRING, kind STRING, is_named BOOLEAN, \
+             start_byte INT64, end_byte INT64, start_line INT64, start_col INT64, \
+             end_line INT64, end_col INT64, field_name STRING, child_index INT64, \
+             parent_id STRING, language STRING"),
+        // One row per parsed file: the whole source, zstd-compressed. Every
+        // `AstNode.start_byte`/`end_byte` indexes into the DECOMPRESSED bytes
+        // of this row — exact text recoverable from the store alone, no file
+        // read, no re-parse. `id` = the file's relative path (matches File.id).
+        ddl_node(NODE_FILE_CONTENT,
+            "id STRING, content_zstd BLOB, original_size INT64, compressed_size INT64"),
     ]
 }
 
@@ -201,6 +219,13 @@ pub(crate) fn rel_table_ddl() -> Vec<String> {
                 format!(
                     "CREATE REL TABLE IF NOT EXISTS {name}(\
                      FROM {from} TO {to}, depth INT64)"
+                )
+            } else if is_ast_child_rel(name) {
+                // Full-AST layer: mirrors the AstNode.child_index/field_name
+                // columns on the edge itself, for a graph-side descent.
+                format!(
+                    "CREATE REL TABLE IF NOT EXISTS {name}(\
+                     FROM {from} TO {to}, child_index INT64, field_name STRING)"
                 )
             } else {
                 format!("CREATE REL TABLE IF NOT EXISTS {name}(FROM {from} TO {to})")
