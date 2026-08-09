@@ -196,7 +196,21 @@ fn collect_symbol_nodes(store: &GraphStore) -> Result<SymbolNodeCollection, Stri
     let mut labels = Vec::new();
     let mut map: HashMap<String, usize> = HashMap::new();
     for label in CLUSTER_NODE_LABELS {
-        let cypher = format!("MATCH (n:{label}) RETURN n.id");
+        // ORDER BY: without it, Kuzu's row order for an unordered MATCH is
+        // an internal storage-scan detail, not a stability guarantee across
+        // query executions. This function assigns each id its adjacency
+        // INDEX by push order, so an unordered scan makes node index
+        // assignment (and everything downstream: `one_level`'s `for i in
+        // 0..n` processing order, and float-summation order in `ki_in`)
+        // non-deterministic run-to-run even for byte-identical graph
+        // content — invisible on a small graph (few near-tie modularity
+        // decisions), increasingly visible as the graph grows (more
+        // decision points where a different accumulation order flips a
+        // `gain > best_gain` comparison by float-rounding noise). Root
+        // cause of a real bug, not a tolerance to loosen: two identical
+        // `cluster_graph` calls on an unchanged graph must return the same
+        // partition (Q12/Q13 ARI reproducibility requirement).
+        let cypher = format!("MATCH (n:{label}) RETURN n.id ORDER BY n.id");
         let qr = match store.execute_query(&cypher) {
             Ok(q) => q,
             Err(_) => continue,
@@ -228,7 +242,16 @@ fn collect_weighted_edges(
         if w == 0.0 {
             continue;
         }
-        let cypher = format!("MATCH (a:{from_label})-[:{rel}]->(b:{to_label}) RETURN a.id, b.id");
+        // ORDER BY: same determinism requirement as `collect_symbol_nodes`
+        // above — each `neighbors[i]` push happens in query-row order, and
+        // `ki_in`'s per-node weight accumulation (`one_level`) sums in that
+        // same order; floating-point addition is not strictly associative,
+        // so an unordered scan can flip a near-tie `gain > best_gain`
+        // comparison between otherwise-identical runs.
+        let cypher = format!(
+            "MATCH (a:{from_label})-[:{rel}]->(b:{to_label}) \
+             RETURN a.id, b.id ORDER BY a.id, b.id"
+        );
         let qr = match store.execute_query(&cypher) {
             Ok(q) => q,
             Err(_) => continue,
