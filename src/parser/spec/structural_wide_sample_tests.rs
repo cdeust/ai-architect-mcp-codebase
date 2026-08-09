@@ -22,13 +22,21 @@
 // binary, auditable measure — not a partial-credit score.
 
 use super::structural::{parse_structural, StructuralSpec};
-use crate::parser::{Language, LABEL_CALL_SITE, LABEL_FUNCTION, LABEL_METHOD};
+use crate::parser::{Language, LABEL_CALL_SITE, LABEL_FUNCTION, LABEL_IMPORT, LABEL_METHOD};
 
 struct WideSample {
     name: &'static str,
     ts_language: fn() -> tree_sitter::Language,
     src: &'static str,
     file: &'static str,
+    /// A minimal, real, idiomatic import statement for this language,
+    /// measured SEPARATELY from `src` (issue #224's imports follow-up: the
+    /// def/call snippet above never contains an import, so recall needs its
+    /// own source). `None` marks a language with no single-statement import
+    /// construct simple enough to isolate without also pulling in unrelated
+    /// syntax (none in this sample — kept as an `Option` so a future
+    /// addition to this table isn't forced to invent one).
+    import_src: Option<&'static str>,
 }
 
 fn has_any_function_or_method(nodes: &[crate::parser::ExtractedNode]) -> bool {
@@ -41,86 +49,120 @@ fn has_any_call(nodes: &[crate::parser::ExtractedNode]) -> bool {
     nodes.iter().any(|n| n.label == LABEL_CALL_SITE)
 }
 
+fn has_any_import(nodes: &[crate::parser::ExtractedNode]) -> bool {
+    nodes.iter().any(|n| n.label == LABEL_IMPORT)
+}
+
 /// Runs the whole wide sample and returns `(recalled, total, per_language)`.
 /// A dedicated `#[test]` below asserts on the aggregate; this function is
 /// also reused by `wide_sample_recall_report` to print the honest per-language
 /// breakdown that the PR body's recall rate is drawn from.
-fn run_wide_sample() -> (usize, usize, Vec<(&'static str, bool, bool)>) {
-    let samples: Vec<WideSample> = vec![
+fn wide_samples() -> Vec<WideSample> {
+    vec![
         WideSample {
             name: "C#",
             ts_language: || tree_sitter_c_sharp::LANGUAGE.into(),
             src: "int Helper() {\n    return 1;\n}\n\nint Greet() {\n    return Helper();\n}\n",
             file: "m.cs",
+            import_src: Some("using System.Collections.Generic;\n"),
         },
         WideSample {
             name: "PHP",
             ts_language: || tree_sitter_php::LANGUAGE_PHP.into(),
             src: "<?php\nfunction helper() {\n    return 1;\n}\n\nfunction greet() {\n    return helper();\n}\n",
             file: "m.php",
+            import_src: Some("<?php\nuse Foo\\Bar;\n"),
         },
         WideSample {
             name: "Scala",
             ts_language: || tree_sitter_scala::LANGUAGE.into(),
             src: "def helper(): Int = {\n  1\n}\n\ndef greet(): Int = {\n  helper()\n}\n",
             file: "m.scala",
+            import_src: Some("import scala.collection.mutable\n"),
         },
         WideSample {
             name: "Haskell",
             ts_language: || tree_sitter_haskell::LANGUAGE.into(),
             src: "helper :: Int\nhelper = 1\n\ngreet :: Int\ngreet = helper\n",
             file: "m.hs",
+            import_src: Some("import Data.List\n"),
         },
         WideSample {
             name: "Elixir",
             ts_language: || tree_sitter_elixir::LANGUAGE.into(),
             src: "def helper() do\n  1\nend\n\ndef greet() do\n  helper()\nend\n",
             file: "m.ex",
+            // Verified unreachable (structural_imports.rs module doc):
+            // `import Enum` parses as a `call` node with FIELD `target`,
+            // which `call_callee_field` does not recognize — the same
+            // reason Elixir's ordinary calls are already unreached.
+            import_src: Some("import Enum\n"),
         },
         WideSample {
             name: "Lua",
             ts_language: || tree_sitter_lua::LANGUAGE.into(),
             src: "function helper()\n  return 1\nend\n\nfunction greet()\n  return helper()\nend\n",
             file: "m.lua",
+            import_src: Some("local foo = require('foo')\n"),
         },
         WideSample {
             name: "Bash",
             ts_language: || tree_sitter_bash::LANGUAGE.into(),
             src: "helper() {\n  return 1\n}\n\ngreet() {\n  helper\n}\n",
             file: "m.sh",
+            // Verified unreachable (structural_imports.rs module doc):
+            // `source ./foo.sh` is a `command` node (`name`+`argument`
+            // fields, singular `argument`), not keyword-anchored or
+            // `call_callee_field`-shaped.
+            import_src: Some("source ./foo.sh\n"),
         },
         WideSample {
             name: "JavaScript",
             ts_language: || tree_sitter_javascript::LANGUAGE.into(),
             src: "function helper() {\n    return 1;\n}\n\nfunction greet() {\n    return helper();\n}\n",
             file: "m.js",
+            import_src: Some("import { foo } from 'bar';\n"),
         },
         WideSample {
             name: "Zig",
             ts_language: || tree_sitter_zig::LANGUAGE.into(),
             src: "fn helper() i32 {\n    return 1;\n}\n\nfn greet() i32 {\n    return helper();\n}\n",
             file: "m.zig",
+            // Verified unreachable (structural_imports.rs module doc):
+            // `@import("std")` is a `builtin_function` node, neither
+            // keyword-anchored nor `call_callee_field`-shaped.
+            import_src: Some("const std = @import(\"std\");\n"),
         },
         WideSample {
             name: "Julia",
             ts_language: || tree_sitter_julia::LANGUAGE.into(),
             src: "function helper()\n    return 1\nend\n\nfunction greet()\n    return helper()\nend\n",
             file: "m.jl",
+            import_src: Some("using Foo\n"),
         },
         WideSample {
             name: "Dart",
             ts_language: || tree_sitter_dart::LANGUAGE.into(),
             src: "int helper() {\n  return 1;\n}\n\nint greet() {\n  return helper();\n}\n",
             file: "m.dart",
+            import_src: Some("import 'dart:core';\n"),
         },
         WideSample {
             name: "OCaml",
             ts_language: || tree_sitter_ocaml::LANGUAGE_OCAML.into(),
             src: "let helper () = 1\n\nlet greet () = helper ()\n",
             file: "m.ml",
+            import_src: Some("open Foo\n"),
         },
-    ];
+    ]
+}
 
+/// Runs the whole wide sample and returns `(recalled, total, per_language)`.
+/// A dedicated `#[test]` below asserts on the aggregate; this function is
+/// also reused by `wide_sample_recall_report` to print the honest per-language
+/// breakdown that the PR body's recall rate is drawn from.
+fn run_wide_sample() -> (usize, usize, Vec<(&'static str, bool, bool)>) {
+    let samples = wide_samples();
     let mut results = Vec::with_capacity(samples.len());
     let mut recalled = 0usize;
     let total = samples.len();
@@ -141,6 +183,36 @@ fn run_wide_sample() -> (usize, usize, Vec<(&'static str, bool, bool)>) {
     (recalled, total, results)
 }
 
+/// Issue #224 follow-up: the imports column, measured SEPARATELY from
+/// `run_wide_sample`'s defs/calls metric (a different snippet, a different
+/// pass/fail criterion — "is there ANY `Import` node") rather than folded
+/// into the existing pinned defs-AND-calls binary, so neither measurement's
+/// history is disturbed by adding the other.
+fn run_wide_sample_imports() -> (usize, usize, Vec<(&'static str, bool)>) {
+    let samples: Vec<WideSample> = wide_samples();
+    let mut results = Vec::with_capacity(samples.len());
+    let mut recalled = 0usize;
+    let total = samples.len();
+    for sample in &samples {
+        let Some(import_src) = sample.import_src else {
+            continue;
+        };
+        let spec = StructuralSpec {
+            language: Language::Rust, // unused by parse_structural beyond error messages
+            ts_language: sample.ts_language,
+        };
+        let import_ok = match parse_structural(&spec, import_src, sample.file) {
+            Ok((r, _stats)) => has_any_import(&r.nodes),
+            Err(_) => false,
+        };
+        if import_ok {
+            recalled += 1;
+        }
+        results.push((sample.name, import_ok));
+    }
+    (recalled, total, results)
+}
+
 #[test]
 fn wide_sample_recall_report() {
     let (recalled, total, results) = run_wide_sample();
@@ -156,6 +228,16 @@ fn wide_sample_recall_report() {
         "== recalled {recalled}/{total} ({:.0}%) ==\n",
         100.0 * recalled as f64 / total as f64
     );
+
+    let (imports_recalled, imports_total, import_results) = run_wide_sample_imports();
+    eprintln!("== Widened-sample IMPORTS recall (issue #224 imports follow-up) ==");
+    for (name, import_ok) in &import_results {
+        eprintln!("{name:12} import={}", if *import_ok { "YES" } else { "no" });
+    }
+    eprintln!(
+        "== imports recalled {imports_recalled}/{imports_total} ({:.0}%) ==\n",
+        100.0 * imports_recalled as f64 / imports_total as f64
+    );
 }
 
 #[test]
@@ -166,6 +248,13 @@ fn wide_sample_recall_is_measured_not_assumed() {
     // across all 12 grammars, so `wide_sample_recall_report`'s printed
     // numbers are trustworthy.
     let (_recalled, total, results) = run_wide_sample();
+    assert_eq!(results.len(), total);
+    assert_eq!(total, 12);
+}
+
+#[test]
+fn wide_sample_imports_recall_is_measured_not_assumed() {
+    let (_recalled, total, results) = run_wide_sample_imports();
     assert_eq!(results.len(), total);
     assert_eq!(total, 12);
 }
