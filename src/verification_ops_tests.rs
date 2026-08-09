@@ -12,16 +12,25 @@
 //! response that says `verified: true` while no receipt was persisted is the
 //! exact shape of the bug this stage exists to prevent.
 use super::*;
+use crate::test_support::TempGraphDir;
 use std::fs;
 
 const NOW: &str = "2026-07-28T00:00:00Z";
 
-fn tmp_out(tag: &str) -> PathBuf {
-    tempfile::Builder::new()
+/// precondition: `tag` need only be unique enough for debuggability —
+/// tempfile's random suffix guarantees uniqueness.
+/// postcondition: the returned guard derefs to the fixture's `&Path`; on
+/// drop, the directory is removed unless this thread is unwinding from a
+/// panic (see `test_support::TempGraphDir`) — every one of this file's 24
+/// call sites previously leaked its `output_dir` on every run, pass or
+/// fail, because no caller removed it.
+fn tmp_out(tag: &str) -> TempGraphDir {
+    let path = tempfile::Builder::new()
         .prefix(&format!("verification_ops_{tag}_"))
         .tempdir()
         .expect("tempdir")
-        .keep()
+        .keep();
+    TempGraphDir::whole(path)
 }
 
 /// A minimal but schema-valid `stage-1.refined.json`, which start_verification

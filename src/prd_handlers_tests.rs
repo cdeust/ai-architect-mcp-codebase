@@ -15,6 +15,7 @@
 use super::*;
 use crate::graph_store;
 use crate::indexer;
+use crate::test_support::TempGraphDir;
 use std::fs;
 
 const F_MAIN: &str = r#"
@@ -25,7 +26,19 @@ const F_SVC: &str = r#"
 pub fn run_a() -> String { String::from("a") }
 "#;
 
-fn build_fixture(tag: &str) -> PathBuf {
+/// Builds a real indexed+resolved+clustered `GraphStore` fixture.
+///
+/// precondition: `tag` is unique enough within this file's test run to
+/// avoid colliding with a concurrently-running test's tempdir prefix
+/// (tempfile's random suffix already guarantees this; `tag` is only for
+/// debuggability).
+/// postcondition: returns a guard exposing the graph directory's path
+/// (`&Path` via `Deref`); on drop, both the graph directory and the
+/// `fixture/src` tree built alongside it are removed unless this thread
+/// is unwinding from a panic (see `test_support::TempGraphDir`) — a
+/// fixture this heavy (full indexed graph) must not survive a passing
+/// test, or every `cargo test` run leaks one per call site.
+fn build_fixture(tag: &str) -> TempGraphDir {
     let tmp_root = tempfile::Builder::new()
         .prefix(&format!("prd_handlers_{tag}_"))
         .tempdir()
@@ -43,15 +56,16 @@ fn build_fixture(tag: &str) -> PathBuf {
     crate::resolver::resolve_graph(&store).expect("resolve");
     crate::clustering::cluster_graph(&store, 1.0).expect("cluster");
     drop(store);
-    graph_dir
+    TempGraphDir::subdir(tmp_root, graph_dir)
 }
 
-fn tmp_dir(tag: &str) -> PathBuf {
-    tempfile::Builder::new()
+fn tmp_dir(tag: &str) -> TempGraphDir {
+    let path = tempfile::Builder::new()
         .prefix(&format!("prd_handlers_{tag}_"))
         .tempdir()
         .expect("tempdir")
-        .keep()
+        .keep();
+    TempGraphDir::whole(path)
 }
 
 // ---------------------------------------------------------------------------

@@ -384,5 +384,8 @@ mod pagination_tests;
 #[path = "temporal_runtime_tests.rs"]
 mod temporal_runtime_tests;
 #[cfg(test)]
+#[path = "test_support.rs"]
+mod test_support;
+#[cfg(test)]
 #[path = "token_surface_tools_tests.rs"]
 mod token_surface_tools_tests;
