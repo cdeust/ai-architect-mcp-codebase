@@ -228,14 +228,17 @@ fn apply_changes(
     for d in &changes.changed {
         purge_file_symbols(store, &d.rel)?;
         purge_outbound_light_links(store, &d.rel)?;
+        purge_file_content(store, &d.rel)?;
     }
     for rel in &changes.deleted {
         purge_file_symbols(store, rel)?;
         purge_file_node(store, rel)?;
+        purge_file_content(store, rel)?;
     }
     for r in &changes.renamed {
         purge_file_symbols(store, &r.old_rel)?;
         purge_file_node(store, &r.old_rel)?;
+        purge_file_content(store, &r.old_rel)?;
     }
 
     // ---- 3. Re-parse changed/added/renamed-new files ------------------------
@@ -954,6 +957,33 @@ fn purge_file_symbols(store: &GraphStore, rel: &str) -> Result<(), String> {
 fn purge_file_node(store: &GraphStore, rel: &str) -> Result<(), String> {
     let id = cypher_str(rel);
     let cypher = format!("MATCH (f:File) WHERE f.id = {id} DETACH DELETE f");
+    store.execute_query(&cypher)?;
+    Ok(())
+}
+
+/// Deletes the `FileContent` row for `rel`, when one exists.
+///
+/// `FileContent.id` equals the File node's bare `"<rel>"` id (by design —
+/// `MATCH (fc:FileContent {id: file_id})` is a direct lookup), which is
+/// exactly the shape `purge_file_symbols`'s `"<rel>::"`-PREFIX scan does NOT
+/// cover (same reason `purge_file_node` needs its own exact-id delete rather
+/// than reusing the prefix scan). Root cause of a real bug (found via CI,
+/// not by inspection): a MODIFIED file keeps its File node across a reparse,
+/// so without this call its stale FileContent row (from the file's PREVIOUS
+/// content) was never purged; `persist_full_ast`'s
+/// `insert_file_content` then hit lbug's primary-key uniqueness constraint
+/// on the re-insert, the error was logged and swallowed (best-effort, by
+/// design — a FileContent failure must not fail the file's indexing), and
+/// the file was silently left with STALE content and a missing fresh
+/// FileContent node — an incremental-fill graph that diverged from a
+/// from-scratch full index by exactly one node per re-touched file.
+/// Called for every purge site `purge_file_symbols`/`purge_file_node`
+/// already runs (changed/deleted/renamed-old): safe as a no-op when no
+/// FileContent row exists yet (added files, or a graph indexed before this
+/// layer existed).
+fn purge_file_content(store: &GraphStore, rel: &str) -> Result<(), String> {
+    let id = cypher_str(rel);
+    let cypher = format!("MATCH (fc:FileContent) WHERE fc.id = {id} DETACH DELETE fc");
     store.execute_query(&cypher)?;
     Ok(())
 }
