@@ -11,16 +11,16 @@ use super::kotlin::KOTLIN_SPEC;
 use super::lang_spec::LangSpec;
 use super::objc::OBJC_SPEC;
 use super::python::PYTHON_SPEC;
-use super::typescript::TS_SPEC;
-// Only the (test-only) SHALLOW_SPECS table reads these, so they are gated with
-// it — an ungated import would be an unused-import warning in release builds.
-#[cfg(test)]
 use super::ruby::RUBY_SPEC;
+use super::typescript::TS_SPEC;
+// Only the (test-only) SHALLOW_SPECS table reads this, so it stays gated with
+// it — an ungated import would be an unused-import warning in release builds.
 use super::rust::RUST_SPEC;
 #[cfg(test)]
 use super::shallow::ShallowSpec;
 use super::swift::SWIFT_SPEC;
 use crate::parser::Language;
+use tree_sitter::Language as TsLanguage;
 
 /// Returns the spec row for a migrated language, or `None` if the language is
 /// still served by its hand-written walker. Migrated so far (ADR-0055):
@@ -42,6 +42,81 @@ pub(crate) fn lang_spec(language: Language) -> Option<&'static LangSpec> {
         // Every core language is migrated; any remaining `Language` variant
         // (e.g. the shallow-only Ruby row) has no deep spec.
         _ => None,
+    }
+}
+
+/// Resolves the tree-sitter grammar for `language`/`file_path` — exactly the
+/// grammar `parse_with_spec`/`parse_shallow` would select for the same pair.
+/// The single grammar-selection table in the crate: full-AST capture
+/// (`parser::ast_capture`) reuses this instead of adding a second per-language
+/// match, so a language's grammar is named in exactly one place.
+///
+/// Every language resolves: the ten deep-spec rows via `lang_spec` (honoring
+/// `ts_language_by_ext` for TypeScript's typescript/tsx split), and Ruby —
+/// the one language with no deep spec — via its shallow row directly. This is
+/// the one unavoidable branch: Ruby's grammar factory lives on a different
+/// struct type (`ShallowSpec`, not `LangSpec`) because it is genuinely a
+/// different extraction depth (ADR-0056), not new per-language logic.
+pub(crate) fn grammar_for(language: Language, file_path: &str) -> Option<TsLanguage> {
+    if let Some(spec) = lang_spec(language) {
+        return Some(match spec.ts_language_by_ext {
+            Some(select) => select(file_path),
+            None => (spec.ts_language)(),
+        });
+    }
+    if language == Language::Ruby {
+        return Some((RUBY_SPEC.ts_language)());
+    }
+    None
+}
+
+#[cfg(test)]
+mod grammar_for_tests {
+    use super::grammar_for;
+    use crate::parser::Language;
+
+    /// Every `Language` variant must resolve a grammar — full-AST capture
+    /// has nothing to fall back to if one is silently missing.
+    #[test]
+    fn every_language_resolves_a_grammar() {
+        for lang in [
+            Language::Rust,
+            Language::Python,
+            Language::TypeScript,
+            Language::Java,
+            Language::Kotlin,
+            Language::Swift,
+            Language::ObjC,
+            Language::C,
+            Language::Cpp,
+            Language::Go,
+            Language::Ruby,
+        ] {
+            assert!(
+                grammar_for(lang, "f.txt").is_some(),
+                "{lang:?} must resolve a tree-sitter grammar"
+            );
+        }
+    }
+
+    /// TypeScript's `.tsx`/`.ts` split must route through `ts_language_by_ext`
+    /// here exactly as it does in `parse_with_spec` — a JSX construct only
+    /// parses under the tsx grammar, so picking the wrong one would make the
+    /// completeness test see spurious ERROR nodes.
+    #[test]
+    fn typescript_grammar_selection_honors_file_extension() {
+        let ts = grammar_for(Language::TypeScript, "a.ts").unwrap();
+        let tsx = grammar_for(Language::TypeScript, "a.tsx").unwrap();
+        // `tree_sitter::Language` has no public identity/Debug API to compare
+        // directly; its `node_kind_count()` is a real structural signal —
+        // the tsx grammar adds JSX node kinds the plain ts grammar lacks, so
+        // an equal count here would mean the extension routing collapsed to
+        // one grammar (exactly the bug `ts_language_by_ext` exists to avoid).
+        assert_ne!(
+            ts.node_kind_count(),
+            tsx.node_kind_count(),
+            ".ts and .tsx must select different grammars (JSX kinds only in tsx)"
+        );
     }
 }
 

@@ -82,6 +82,7 @@ use std::time::{Duration, Instant};
 
 use tree_sitter::{Node, ParseOptions, ParseState, Parser, Tree};
 
+pub mod ast_capture;
 mod language;
 pub use language::Language;
 

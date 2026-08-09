@@ -109,6 +109,7 @@ pub(crate) use java::JAVA_SPEC;
 pub(crate) use kotlin::KOTLIN_SPEC;
 pub(crate) use objc::OBJC_SPEC;
 pub(crate) use python::PYTHON_SPEC;
+pub(crate) use registry::grammar_for;
 pub(crate) use ruby::RUBY_SPEC;
 pub(crate) use rust::RUST_SPEC;
 pub(crate) use shallow::parse_shallow;
