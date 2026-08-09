@@ -111,60 +111,6 @@ tempfile = "3"
 # Source: ZERA S1 — the zera-hello integration test needs the crate to
 # call hello() against a real indexed graph from this workspace.
 zera = { path = "crates/zera" }
-# source: issue #224 follow-up — widened-sample recall measurement for the
-# generic structural-introspection engine (parser::spec::structural). These
-# 12 grammars are NOT wired into any production dispatch path (test-only,
-# hence dev-dependencies, hence zero effect on the shipped binary or the
-# end-result bench) — they exist solely so `structural_wide_sample_tests`
-# can measure recall on languages nobody has hand-tuned an extractor for,
-# per the task's "projection to 180 must rest on a measured rate over a
-# wider sample" requirement. Each is an official tree-sitter grammar crate
-# published on crates.io, MIT or Apache-2.0 licensed.
-tree-sitter-c-sharp = "0.23"
-tree-sitter-php = "0.24"
-tree-sitter-scala = "0.26"
-tree-sitter-haskell = "0.23"
-tree-sitter-elixir = "0.3"
-tree-sitter-lua = "0.5"
-tree-sitter-bash = "0.25"
-tree-sitter-javascript = "0.25"
-tree-sitter-zig = "1.1"
-tree-sitter-julia = "0.23"
-tree-sitter-dart = "0.2"
-tree-sitter-ocaml = "0.25"
-# source: issue #224's Elixir/Zig/Bash follow-up — a SECOND, DISJOINT
-# held-out sample (`structural_held_out_sample_tests`), added and run only
-# AFTER the Elixir/Zig/Bash global-table rules above were frozen, because the
-# 12-grammar sample above named those three languages individually and is
-# therefore now tuned-against (see that test file's own module doc). Selected
-# by GitHub-Linguist-ranked real-world prevalence, per owner correction, not
-# by crates.io availability: SQL/HTML/CSS/PowerShell/R/Perl/Groovy/YAML/
-# Dockerfile/HCL(Terraform) are each an official or community tree-sitter
-# grammar crate, MIT or Apache-2.0 licensed, test-only (dev-dependency, zero
-# effect on the shipped binary, production dispatch, or end-result bench).
-# tree-sitter-sql (official, 0.0.2) pins tree-sitter 0.19 via the OLD
-# `pub fn language() -> tree_sitter::Language` binding style, which is a
-# DIFFERENT, incompatible `Language` type from this crate's tree-sitter 0.26
-# — verified it does not compile against this crate. `tree-sitter-sequel`
-# (github.com/derekstride/tree-sitter-sql, MIT) is the actively-maintained
-# fork using the modern `LanguageFn` shim (`tree-sitter-language`), verified
-# ABI-compatible; used instead, same grammar lineage, newer binding only.
-tree-sitter-sequel = "0.3"
-tree-sitter-html = "0.23"
-tree-sitter-css = "0.25"
-tree-sitter-powershell = "0.26"
-tree-sitter-r = "1.3"
-tree-sitter-perl = "1.1"
-tree-sitter-groovy = "0.1"
-tree-sitter-yaml = "0.7"
-# tree-sitter-dockerfile (official, 0.2.0) has the SAME old-binding
-# incompatibility as tree-sitter-sql above (pins tree-sitter 0.20 via
-# `pub fn language()`) — verified it does not compile against this crate.
-# `tree-sitter-containerfile` (github.com/wharflab/tree-sitter-containerfile,
-# MIT) is the actively-maintained fork using the modern `LanguageFn` shim;
-# used instead.
-tree-sitter-containerfile = "0.9"
-tree-sitter-hcl = "1.1"
 
 [profile.release]
 opt-level = 3

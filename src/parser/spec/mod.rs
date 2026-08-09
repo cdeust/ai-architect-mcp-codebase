@@ -44,28 +44,6 @@ mod walkers;
 // compiles `lib` separately from `unittests`, so leaving any of them
 // reachable only from test code but not test-gated would warn there and
 // nowhere else.
-#[cfg(test)]
-mod structural;
-#[cfg(test)]
-mod structural_coverage_tests;
-#[cfg(test)]
-mod structural_fallback;
-#[cfg(test)]
-mod structural_fallback_tests;
-#[cfg(test)]
-mod structural_held_out_sample_tests;
-#[cfg(test)]
-mod structural_imports;
-#[cfg(test)]
-mod structural_imports_calls;
-#[cfg(test)]
-mod structural_imports_coverage_tests;
-#[cfg(test)]
-mod structural_imports_tests;
-#[cfg(test)]
-mod structural_scope;
-#[cfg(test)]
-mod structural_wide_sample_tests;
 
 #[cfg(test)]
 mod c_extraction_tests;
