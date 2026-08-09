@@ -31,12 +31,21 @@
 //   method + arguments                   -> call site, callee = `method`
 //                                           (Ruby-shaped: receiver optional)
 //   name + arguments, no function/method -> call site, callee = `name`
-//                                           (Java's `method_invocation`)
+//                                           (Java's `method_invocation`;
+//                                           `arguments` here also matches
+//                                           Bash's singular `argument` field
+//                                           — issue #224's Bash follow-up,
+//                                           see `ARGUMENTS_FIELD_CANDIDATES`)
 //   method + receiver, no arguments      -> call site, callee = `method`
 //                                           (Objective-C's message send,
 //                                           which has no `arguments` field —
 //                                           its keyword-argument parts are
 //                                           unnamed children)
+//   target + an `arguments`-KIND child,
+//   no `arguments`/`argument` FIELD      -> call site, callee = `target`
+//                                           (Elixir's `call` node — issue
+//                                           #224's Elixir follow-up, see
+//                                           `call_callee_field`'s own doc)
 //
 // A function-like definition is further split into Method vs Function: EITHER
 // it carries a `receiver` field itself (Go's method), OR its nearest
@@ -65,8 +74,17 @@
 //     why this is a SEPARATE mechanism from the field-shape classifier
 //     above), but a lexical one does: every sampled grammar marks its import
 //     keyword as an anonymous child token, which `structural_imports.rs`
-//     anchors on directly. See that module's doc for the full mechanism,
-//     the tables involved, and what remains unreached (Elixir, Bash, Zig).
+//     anchors on directly. Elixir's `import`/`alias`/`require`/`use` and
+//     Bash's `source` are NOT keyword-anchored at all (they are ordinary
+//     calls, per that module's doc item 5) — CLOSED instead by this module's
+//     own `target`-field branch (Elixir) and `ARGUMENTS_FIELD_CANDIDATES`
+//     widening (Bash) making them classify as calls in the first place, then
+//     `IMPORT_CALL_NAMES` (issue #224's Elixir/Zig/Bash follow-up) flagging
+//     the classified call as also being an import. Zig's `@import(...)` is
+//     CLOSED by this module's fieldless-call fallback
+//     (`is_fieldless_call_with_positional_arguments`, `structural_fallback.rs`)
+//     feeding the same `IMPORT_CALL_NAMES` mechanism. See that module's doc
+//     for the full mechanism and tables.
 //   - Visibility: Java's `modifiers` and TypeScript's `accessibility_modifier`
 //     are child NODE kinds, not fields, on their owning declaration (probed
 //     directly: `method_declaration`'s field set has no `modifiers` entry
@@ -91,24 +109,23 @@ use tree_sitter::{Language as TsLanguage, Node};
 
 use super::structural_fallback::{
     first_named_child, has_parameter_like_child, heritage_targets_via_child_hop,
-    kind_hints_definition_role, kind_hints_positional_call, resolve_name_via_bounded_scan,
-    resolve_name_via_declarator_chain, visibility_via_modifier_child, KindRole,
+    is_fieldless_call_with_positional_arguments, kind_hints_definition_role,
+    kind_hints_positional_call, resolve_name_via_bounded_scan, resolve_name_via_declarator_chain,
+    visibility_via_modifier_child, KindRole,
 };
 use super::structural_imports::{
-    has_import_anchor_ancestor, import_alias_text, import_call_path, import_entries,
-    import_path_text, is_import_anchor, IMPORT_CALL_NAMES,
+    has_import_anchor_ancestor, import_alias_text, import_entries, import_path_text,
+    is_import_anchor,
 };
+use super::structural_imports_calls::{import_call_path, IMPORT_CALL_NAMES};
 use super::structural_scope::{
-    any_field, emit_imports, enclosing_def_index, end_line_of, has_field, last_segment, line_of,
+    any_field, emit_calls, emit_defs, emit_imports, has_child_of_kind, has_field, last_segment,
     resolve_scopes, rightmost_named_leaf_text, CallEntry, DefEntry, DefRole, ImportEntry,
 };
 use crate::parser::{
     collect_error_ranges, count_parse_errors, node_text, parse_tree_too_deep, parse_with_timeout,
-    ExtractedNode, ExtractedRef, Language, ParseResult, LABEL_CALL_SITE, LABEL_FUNCTION,
-    LABEL_METHOD, LABEL_STRUCT, MAX_TREE_DEPTH,
+    Language, ParseResult, MAX_TREE_DEPTH,
 };
-
-const QN_SEP: &str = "::";
 
 /// Field names probed to normalize a possibly-multi-part definition-like
 /// parameter list. Both spellings are real: `parameters` (Go/Python/Java/
@@ -120,6 +137,22 @@ const PARAMETER_FIELD_CANDIDATES: [&str; 2] = ["parameters", "params"];
 /// `trait` (Rust's `impl Trait for Type`). A language whose grammar uses
 /// none of these contributes no `Inherits` edges — see the module doc.
 const HERITAGE_FIELD_CANDIDATES: [&str; 4] = ["superclass", "superclasses", "interfaces", "trait"];
+
+/// Field names probed for a call's argument list, checked via `any_field`
+/// wherever `call_callee_field` requires (or excludes) one. Both spellings
+/// are real, verified against real grammars: `arguments` (Go/Java/Python/
+/// Rust/TypeScript/C-family/Ruby/Lua) and, issue #224's Bash follow-up,
+/// singular `argument` — Bash's `command` node names its (repeatable)
+/// argument-list field `argument`, one character off `arguments`, verified
+/// via `tree-sitter-bash`'s `node-types.json` (`command: {fields: {name,
+/// argument, redirect}}`). Checked as a candidate LIST rather than widened
+/// to a substring match so a grammar using an unrelated `argument`-named
+/// field for something else (C's `unary_expression.argument`, Python's
+/// `not_operator.argument`, OCaml's `application_expression.argument` — all
+/// verified via the same `node-types.json` survey) is only swept in when it
+/// ALSO satisfies one of `call_callee_field`'s other required fields
+/// (`function`/`method`/`name`), never on its own.
+const ARGUMENTS_FIELD_CANDIDATES: [&str; 2] = ["arguments", "argument"];
 
 /// A language described by its grammar alone (issue #224's "zero
 /// per-language artifact" requirement, made literal: this struct carries no
@@ -141,18 +174,40 @@ pub(crate) struct StructuralStats {
 
 /// One classified call site: the callee-bearing field name to read, chosen by
 /// which structural signature the node matched. `None` when nothing matched.
+///
+/// The final branch (issue #224's Elixir follow-up) is structurally
+/// different from the other four: Elixir's `call` node (its `import`/
+/// `alias`/`require`/`use`/`def` macros are ALL ordinary calls — homoiconic
+/// macro system, verified via `node-types.json`) declares only a `target`
+/// FIELD; its argument list is a positional CHILD node of kind `arguments`,
+/// never a field at all. Gating on `has_child_of_kind(node, "arguments")`
+/// rather than a field check is what lets this branch reach Elixir without
+/// misfiring on Swift's OWN `target`-field nodes (`assignment`,
+/// `navigation_expression`, `postfix_expression`, `prefix_expression`,
+/// `check_expression`) — verified via `node-types.json` that none of those
+/// five Swift node kinds ever declare an `arguments`-kind child at all, so
+/// the gate excludes them with no per-language exception.
 fn call_callee_field(node: Node) -> Option<&'static str> {
-    if has_field(node, "function") && has_field(node, "arguments") {
+    if has_field(node, "function") && any_field(node, &ARGUMENTS_FIELD_CANDIDATES) {
         return Some("function");
     }
-    if has_field(node, "method") && has_field(node, "arguments") {
+    if has_field(node, "method") && any_field(node, &ARGUMENTS_FIELD_CANDIDATES) {
         return Some("method");
     }
-    if has_field(node, "name") && has_field(node, "arguments") && !has_field(node, "body") {
+    if has_field(node, "name")
+        && any_field(node, &ARGUMENTS_FIELD_CANDIDATES)
+        && !has_field(node, "body")
+    {
         return Some("name");
     }
-    if has_field(node, "method") && has_field(node, "receiver") && !has_field(node, "arguments") {
+    if has_field(node, "method")
+        && has_field(node, "receiver")
+        && !any_field(node, &ARGUMENTS_FIELD_CANDIDATES)
+    {
         return Some("method");
+    }
+    if has_field(node, "target") && has_child_of_kind(node, "arguments") {
+        return Some("target");
     }
     None
 }
@@ -220,7 +275,15 @@ fn classify(node: Node) -> Role {
             };
         }
     }
-    if kind_hints_positional_call(node.kind()) {
+    // Issue #224's Zig follow-up: `kind_hints_positional_call` keys on a
+    // kind-name vocabulary (`"call"` substring + `"expression"` suffix),
+    // which Zig's `builtin_function` (`@import(...)`) never matches — no
+    // stable kind-name convention exists for fieldless builtin/prefix calls
+    // the way it does for `call_expression`. `is_fieldless_call_with_positional_arguments`
+    // is the structural (not kind-name) equivalent: see its doc in
+    // `structural_fallback.rs`.
+    if kind_hints_positional_call(node.kind()) || is_fieldless_call_with_positional_arguments(node)
+    {
         if let Some(callee_node) = first_named_child(node) {
             return Role::Call { callee_node };
         }
@@ -381,87 +444,16 @@ pub(crate) fn parse_structural(
         .map(|(i, d)| (d.node.id(), i))
         .collect();
 
-    let mut nodes: Vec<ExtractedNode> =
-        Vec::with_capacity(defs.len() + calls.len() + imports.len());
-    let mut refs: Vec<ExtractedRef> =
-        Vec::with_capacity(defs.len() + calls.len() + heritage.len() + imports.len());
-
-    for def in &defs {
-        let scope = match enclosing_def_index(def.node, &node_id_to_def) {
-            Some(idx) => defs[idx].qn.clone(),
-            None => file_path.to_string(),
-        };
-        let label = match def.role {
-            DefRole::FunctionLike if def.is_method => LABEL_METHOD,
-            DefRole::FunctionLike => LABEL_FUNCTION,
-            DefRole::TypeLike => LABEL_STRUCT,
-        };
-        nodes.push(ExtractedNode {
-            label: label.to_string(),
-            name: def.name.clone(),
-            qualified_name: def.qn.clone(),
-            start_line: line_of(def.node),
-            end_line: end_line_of(def.node),
-            // TIER 2 item 4: node-KIND heuristic (`visibility_via_modifier_child`),
-            // not field-based — see the module doc and `structural_fallback`'s.
-            visibility: def.visibility.clone(),
-            properties: Vec::new(),
-        });
-        let edge_kind = if def.role == DefRole::FunctionLike && def.is_method {
-            "HasMethod"
-        } else {
-            "Defines"
-        };
-        refs.push(ExtractedRef {
-            kind: edge_kind.to_string(),
-            from_qualified_name: scope,
-            to_qualified_name: def.qn.clone(),
-        });
-    }
-
-    for (node_id, target) in &heritage {
-        // Resolved via the POST-sort `node_id_to_def` map, not a raw index
-        // into `defs` — see the collection site's comment for why a plain
-        // index would go stale across `defs.sort_by_key` above.
-        if let Some(&idx) = node_id_to_def.get(node_id) {
-            refs.push(ExtractedRef {
-                kind: "Inherits".to_string(),
-                from_qualified_name: defs[idx].qn.clone(),
-                to_qualified_name: target.clone(),
-            });
-        }
-    }
-
-    for call in &calls {
-        let caller_qn = match enclosing_def_index(call.node, &node_id_to_def) {
-            Some(idx) => defs[idx].qn.clone(),
-            None => file_path.to_string(),
-        };
-        let line = line_of(call.node);
-        let col = call.node.start_position().column as u64 + 1;
-        let qn = format!("{caller_qn}{QN_SEP}call@{line}:{col}");
-        nodes.push(ExtractedNode {
-            label: LABEL_CALL_SITE.to_string(),
-            name: call.callee.clone(),
-            qualified_name: qn.clone(),
-            start_line: line,
-            end_line: end_line_of(call.node),
-            visibility: String::new(),
-            properties: vec![("callee_name".to_string(), call.callee.clone())],
-        });
-        refs.push(ExtractedRef {
-            kind: "Calls".to_string(),
-            from_qualified_name: qn,
-            to_qualified_name: call.callee.clone(),
-        });
-    }
-
-    // Issue #224 follow-up: emit each resolved import (structural_imports.rs
-    // for extraction, structural_scope.rs's `emit_imports` for the
-    // ExtractedNode/ExtractedRef shape — split out purely for the
-    // coding-standards.md §4.1 500-line file cap, no new mechanism there;
-    // returns rather than mutates in place to stay within §4.4's 4-parameter
-    // cap).
+    // Emission is split across `structural_scope.rs`'s `emit_defs`/
+    // `emit_calls`/`emit_imports` purely for the coding-standards.md §4.1
+    // 500-line file cap (this function was pushing past it once the
+    // Elixir/Zig/Bash follow-up's classification landed) — no new mechanism,
+    // only where the ExtractedNode/ExtractedRef shape gets built from the
+    // data the walk above already produced.
+    let (mut nodes, mut refs) = emit_defs(&defs, &heritage, &node_id_to_def, file_path);
+    let (call_nodes, call_refs) = emit_calls(&calls, &node_id_to_def, &defs, file_path);
+    nodes.extend(call_nodes);
+    refs.extend(call_refs);
     let (import_nodes, import_refs) = emit_imports(&imports, &defs, &node_id_to_def, file_path);
     nodes.extend(import_nodes);
     refs.extend(import_refs);
