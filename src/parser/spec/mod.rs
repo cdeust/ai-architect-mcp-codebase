@@ -48,6 +48,24 @@ mod walkers;
 mod structural;
 #[cfg(test)]
 mod structural_coverage_tests;
+// issue #232: rule AUTO-DERIVATION — enumerates candidate rules from the
+// grammar's own field/kind vocabulary observed over a real corpus, scores
+// each by resolution against that corpus (never against this project's own
+// extractor output — see the module doc). `structural_derive_tests` is where
+// the control result (Go/Python rediscovering the known-correct rule) and
+// the SQL/PowerShell resolution measurements live. Test-only for the same
+// reason as `structural` above: no production dispatch calls this module.
+#[cfg(test)]
+mod structural_derive;
+// IMPORT-only half of derivation, split out purely for the §4.1 500-line
+// cap — see that module's own doc.
+#[cfg(test)]
+mod structural_derive_import;
+// DEFINITION+CALL pairing half of derivation, same split rationale.
+#[cfg(test)]
+mod structural_derive_pairing;
+#[cfg(test)]
+mod structural_derive_tests;
 #[cfg(test)]
 mod structural_fallback;
 #[cfg(test)]
