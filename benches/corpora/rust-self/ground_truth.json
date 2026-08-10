@@ -515,30 +515,83 @@
     },
     {
       "query_id": "q8",
-      "_note": "top-level fns in clustering/community.rs (18 fns, refreshed 2026-07-05 after clustering.rs split; derived from source grep '^(pub )?fn ')",
+      "_note": "top-level fns in clustering/community.rs (1 fn — the file was split into community_{membership,adjacency,louvain,repair,persist}.rs to respect the 500-line cap after the full-AST persistence PR; community.rs is now the composition root, verified via source grep)",
       "input": {
         "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'clustering/community.rs' RETURN n.qualified_name"
       },
       "expected": {
+        "symbols": ["clustering/community.rs::cluster_graph"]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in clustering/community_adjacency.rs (split out of clustering/community.rs, see that entry's note; verified via source grep)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'clustering/community_adjacency.rs' RETURN n.qualified_name"
+      },
+      "expected": {
         "symbols": [
-          "clustering/community.rs::collect_cluster_memberships",
-          "clustering/community.rs::sort_and_cap_memberships",
-          "clustering/community.rs::cluster_id_from_community_id",
-          "clustering/community.rs::edge_weight",
-          "clustering/community.rs::extract_adjacency",
-          "clustering/community.rs::collect_symbol_nodes",
-          "clustering/community.rs::collect_weighted_edges",
-          "clustering/community.rs::edge_rel_tables",
-          "clustering/community.rs::louvain",
-          "clustering/community.rs::one_level",
-          "clustering/community.rs::aggregate_graph",
-          "clustering/community.rs::renumber_communities",
-          "clustering/community.rs::compute_modularity",
-          "clustering/community.rs::repair_c2",
-          "clustering/community.rs::connected_components_within",
-          "clustering/community.rs::purge_prior_clustering",
-          "clustering/community.rs::persist_communities",
-          "clustering/community.rs::cluster_graph"
+          "clustering/community_adjacency.rs::extract_adjacency",
+          "clustering/community_adjacency.rs::collect_symbol_nodes",
+          "clustering/community_adjacency.rs::collect_weighted_edges",
+          "clustering/community_adjacency.rs::edge_rel_tables",
+          "clustering/community_adjacency.rs::edge_weight"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in clustering/community_louvain.rs (split out of clustering/community.rs, see that entry's note; verified via source grep)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'clustering/community_louvain.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "clustering/community_louvain.rs::louvain",
+          "clustering/community_louvain.rs::one_level",
+          "clustering/community_louvain.rs::aggregate_graph",
+          "clustering/community_louvain.rs::renumber_communities",
+          "clustering/community_louvain.rs::compute_modularity"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in clustering/community_repair.rs (split out of clustering/community.rs, see that entry's note; verified via source grep)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'clustering/community_repair.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "clustering/community_repair.rs::repair_c2",
+          "clustering/community_repair.rs::connected_components_within"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in clustering/community_persist.rs (split out of clustering/community.rs, see that entry's note; verified via source grep)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'clustering/community_persist.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "clustering/community_persist.rs::purge_prior_clustering",
+          "clustering/community_persist.rs::persist_communities"
+        ]
+      }
+    },
+    {
+      "query_id": "q8",
+      "_note": "top-level fns in clustering/community_membership.rs (split out of clustering/community.rs, see that entry's note; verified via source grep)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'clustering/community_membership.rs' RETURN n.qualified_name"
+      },
+      "expected": {
+        "symbols": [
+          "clustering/community_membership.rs::collect_cluster_memberships",
+          "clustering/community_membership.rs::sort_and_cap_memberships",
+          "clustering/community_membership.rs::cluster_id_from_community_id"
         ]
       }
     },
@@ -679,11 +732,17 @@
     },
     {
       "query_id": "q9",
+      "_note": "refreshed after the full-AST persistence PR split this file into 5 sibling modules (community_{membership,adjacency,louvain,repair,persist}.rs) to respect the 500-line cap — the 5 new `mod` declarations are Import nodes, same convention as graph_store/mod.rs's `mod config;`/`mod ddl;` etc.",
       "input": {
         "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'clustering/community.rs' RETURN n.path"
       },
       "expected": {
         "imports": [
+          "community_adjacency",
+          "community_louvain",
+          "community_membership",
+          "community_persist",
+          "community_repair",
           "crate::graph_store::GraphStore",
           "std::collections::HashMap",
           "std::collections::HashSet",
