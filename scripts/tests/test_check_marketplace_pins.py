@@ -102,51 +102,149 @@ class TestPinBehindTag(unittest.TestCase):
 
 
 class TestGithubPin(unittest.TestCase):
+    """check_github_pin(name, repo, pin, list_tags=..., pending=...).
+
+    `list_tags` returns the FULL tag list (not just latest) because
+    PIN_VERSION_UNPUBLISHED needs set-membership: a pin can be simultaneously
+    "not the latest" AND "not published at all" (marketplace_pins_github.py
+    ``list_release_tags`` docstring). Every test below supplies the full list.
+    """
+
     def test_stale_flagged_with_count(self):
+        tags = ["2.29.0", "2.30.0", "2.31.0", "2.32.0", "2.33.0", "2.34.0", "2.35.0"]
         failure, notice = gate.check_github_pin(
-            "p", "o/r", "2.29.0", fetch=lambda r: "v2.34.0", count=lambda *a: 6
+            "p", "o/r", "2.29.0", list_tags=lambda r: tags
         )
         self.assertIn("PIN_BEHIND_RELEASE", failure)
+        # v2.30.0..v2.35.0: six releases strictly after the pin, up to latest.
         self.assertIn("6 release(s)", failure)
         self.assertIsNone(notice)
 
-    def test_stale_flagged_count_degraded(self):
-        failure, _ = gate.check_github_pin(
-            "p", "o/r", "2.29.0", fetch=lambda r: "v2.34.0", count=lambda *a: None
+    def test_current_pin_passes(self):
+        self.assertEqual(
+            gate.check_github_pin(
+                "p", "o/r", "2.34.0", list_tags=lambda r: ["2.34.0"]
+            ),
+            (None, None),
         )
-        self.assertIn("PIN_BEHIND_RELEASE", failure)
-        self.assertNotIn("None", failure)
 
-    def test_current_and_ahead_pass(self):
-        self.assertEqual(
-            gate.check_github_pin("p", "o/r", "2.34.0", fetch=lambda r: "v2.34.0"),
-            (None, None),
+    def test_ahead_pin_now_flagged_unpublished(self):
+        """The bug PIN_VERSION_UNPUBLISHED exists to close: a pin naming a
+        version nobody ever tagged used to compare `pin < latest` (false)
+        and pass silently. It must now fail loudly instead — this is the
+        cortex-viz "3.0.0" incident (marketplace_pins_github.py docstring):
+        the pin sat ahead of every real tag and PIN_BEHIND_RELEASE could
+        not see it because "ahead" is invisible to a "behind" comparison.
+        """
+        failure, notice = gate.check_github_pin(
+            "p", "o/r", "3.0.0", list_tags=lambda r: ["2.6.0", "2.7.0", "2.8.0"]
         )
-        self.assertEqual(
-            gate.check_github_pin("p", "o/r", "2.35.0", fetch=lambda r: "v2.34.0"),
-            (None, None),
+        self.assertIsNotNone(failure)
+        self.assertIn("PIN_VERSION_UNPUBLISHED", failure)
+        self.assertIn("2.8.0", failure)  # names the latest that DOES exist
+        self.assertIsNone(notice)
+
+    def test_pin_version_unpublished_and_behind_reports_unpublished_only(self):
+        """A pin can be simultaneously unpublished AND numerically behind the
+        latest tag. PIN_VERSION_UNPUBLISHED is the stronger, more specific
+        statement (this version was never cut, full stop) and must win —
+        check_github_pin checks it FIRST and returns before ever reaching
+        the PIN_BEHIND_RELEASE comparison.
+        """
+        failure, notice = gate.check_github_pin(
+            "p", "o/r", "2.29.5", list_tags=lambda r: ["2.30.0", "2.31.0"]
         )
+        self.assertIn("PIN_VERSION_UNPUBLISHED", failure)
+        self.assertNotIn("PIN_BEHIND_RELEASE", failure)
+        self.assertIsNone(notice)
+
+    def test_pin_version_unpublished_pending_degrades_to_notice(self):
+        failure, notice = gate.check_github_pin(
+            "p",
+            "o/r",
+            "3.0.0",
+            list_tags=lambda r: ["2.8.0"],
+            pending={"p": "https://github.com/o/r/pull/1"},
+        )
+        self.assertIsNone(failure)
+        self.assertIn("PENDING", notice)
+        self.assertIn("https://github.com/o/r/pull/1", notice)
 
     def test_network_failure_degrades_to_notice(self):
         def down(_repo):
             raise urllib.error.URLError("offline")
 
-        failure, notice = gate.check_github_pin("p", "o/r", "2.29.0", fetch=down)
+        failure, notice = gate.check_github_pin("p", "o/r", "2.29.0", list_tags=down)
         self.assertIsNone(failure)  # fail-open: no red run from an outage
         self.assertIn("network degraded", notice)
 
     def test_no_releases_repo_is_notice_not_keyerror(self):
         failure, notice = gate.check_github_pin(
-            "p", "o/r", "1.0.0", fetch=lambda r: None
+            "p", "o/r", "1.0.0", list_tags=lambda r: None
         )
         self.assertIsNone(failure)
         self.assertIn("no published releases", notice)
 
-    def test_unparseable_tag_reported(self):
+    def test_unparseable_pin_reported(self):
         failure, _ = gate.check_github_pin(
-            "p", "o/r", "1.0.0", fetch=lambda r: "nightly"
+            "p", "o/r", "nightly", list_tags=lambda r: ["1.0.0"]
         )
         self.assertIn("UNPARSEABLE", failure)
+        self.assertIn("nightly", failure)
+
+    def test_unparseable_tag_list_reported(self):
+        failure, _ = gate.check_github_pin(
+            "p", "o/r", "1.0.0", list_tags=lambda r: ["nightly"]
+        )
+        self.assertIn("UNPARSEABLE", failure)
+        self.assertIn("nightly", failure)
+
+
+class TestPinSha(unittest.TestCase):
+    """check_pin_sha(name, repo, sha, branch=..., compare=...) —
+    PIN_SHA_UNREACHABLE (Cortex #351: a pinned sha that is an unmerged PR
+    head, invisible to any version check because the pin's *version* reads
+    current while its *commit* does not resolve from the default branch).
+    """
+
+    def test_identical_or_behind_default_branch_passes(self):
+        for status in ("identical", "behind"):
+            failure, notice = gate.check_pin_sha(
+                "p", "o/r", "deadbeef", branch=lambda r: "main", compare=lambda *a: status
+            )
+            self.assertIsNone(failure, status)
+            self.assertIsNone(notice, status)
+
+    def test_ahead_of_default_branch_flagged_unreachable(self):
+        failure, notice = gate.check_pin_sha(
+            "p", "o/r", "deadbeef", branch=lambda r: "main", compare=lambda *a: "ahead"
+        )
+        self.assertIn("PIN_SHA_UNREACHABLE", failure)
+        self.assertIn("ahead", failure)
+        self.assertIsNone(notice)
+
+    def test_sha_not_found_flagged_unreachable(self):
+        failure, notice = gate.check_pin_sha(
+            "p", "o/r", "deadbeef", branch=lambda r: "main", compare=lambda *a: None
+        )
+        self.assertIn("PIN_SHA_UNREACHABLE", failure)
+        self.assertIn("does not resolve commit", failure)
+        self.assertIsNone(notice)
+
+    def test_repo_not_found_degrades_to_notice(self):
+        failure, notice = gate.check_pin_sha(
+            "p", "o/r", "deadbeef", branch=lambda r: None, compare=lambda *a: "identical"
+        )
+        self.assertIsNone(failure)
+        self.assertIn("does not resolve", notice)
+
+    def test_network_failure_degrades_to_notice(self):
+        def down(_repo):
+            raise urllib.error.URLError("offline")
+
+        failure, notice = gate.check_pin_sha("p", "o/r", "deadbeef", branch=down)
+        self.assertIsNone(failure)
+        self.assertIn("network degraded", notice)
 
 
 class TestRootManifestSplit(unittest.TestCase):
