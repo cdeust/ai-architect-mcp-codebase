@@ -238,7 +238,9 @@ fn test_leading_path_component_is_stripped_before_unverifiable_verdict() {
     let _ = fs::remove_dir_all(&root);
 }
 
-// source: issue #13 — automatised-pipeline does not index bash (.sh); a PRD
+// source: issue #13 — ai-architect-mcp-codebase does not index bash function
+// symbols (light_link's shell extractor resolves file-level `source`/import
+// references only, per issue #205 — no tree-sitter grammar for bash exists);
 // claiming to modify a real bash function must not be reported as a
 // `critical` hallucination (the file was never in the indexer's coverage,
 // so the graph cannot confirm or refute the claim).

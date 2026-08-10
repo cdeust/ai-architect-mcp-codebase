@@ -145,7 +145,7 @@ fn fresh_clone_bootstrap_matches_original_graph() {
     let gitattrs =
         fs::read_to_string(repo.join(".gitattributes")).expect("gitattributes must exist");
     assert!(
-        gitattrs.contains(".automatised-pipeline/graph.zst binary merge=ours"),
+        gitattrs.contains(".ai-architect-mcp-codebase/graph.zst binary merge=ours"),
         "gitattributes must carry the merge=ours entry, got:\n{gitattrs}"
     );
 

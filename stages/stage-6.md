@@ -1,6 +1,6 @@
 # Stage 6 — `validate_prd_against_graph`
 
-**Status:** spec (pre-implementation). Consumes the PRD produced by `prd-spec-generator` (stage 5) and the resolved+clustered graph (stages 3a-3c). Emits a validation report.
+**Status:** spec (pre-implementation). Consumes the PRD produced by `ai-architect-mcp-spec` (stage 5) and the resolved+clustered graph (stages 3a-3c). Emits a validation report.
 
 **Source:** NOTES.md stage 6 row; architect's open question on value-add vs multi-judge verification; stages/stage-3c.md community schema; src/prd_input.rs matched-symbol contract.
 
@@ -8,7 +8,7 @@
 
 ## 1. Shannon framing
 
-**Question.** What defects can a *graph-aware* validator catch in a PRD that a *multi-judge LLM panel* (which prd-spec-generator already runs) cannot?
+**Question.** What defects can a *graph-aware* validator catch in a PRD that a *multi-judge LLM panel* (which ai-architect-mcp-spec already runs) cannot?
 
 **The quantity.** Let a PRD P claim a set of changes C = {c_i}. Each claim c_i has a *truth condition* T(c_i) defined against the graph G. Define:
 
@@ -81,7 +81,7 @@ If any row returns, the PRD's claim is contradicted by the call graph. **This is
 
 ## 3. What we do NOT validate
 
-Explicitly out of scope (owned by prd-spec-generator's multi-judge):
+Explicitly out of scope (owned by ai-architect-mcp-spec's multi-judge):
 - Prose quality, tone, formatting, completeness of the problem statement.
 - Business value justification, stakeholder rationale, KPI selection.
 - Feasibility of non-code claims (timelines, team readiness, rollout plan).
@@ -109,7 +109,7 @@ The PRD is free-form markdown. To run graph queries we need a list of symbol cla
 
 **Rationale.** Option B gives high precision/recall and keeps this stage LLM-free (axiom). Option A alone has noisy false positives (e.g., `` `JSON` `` in prose). Option C violates the stage's purity constraint.
 
-**Contract with prd-spec-generator.** The PRD (or a companion JSON sidecar the generator already produces as part of its 9-file export) must contain:
+**Contract with ai-architect-mcp-spec.** The PRD (or a companion JSON sidecar the generator already produces as part of its 9-file export) must contain:
 
 ```yaml
 affected_symbols:
@@ -126,7 +126,9 @@ scope_claims:
     processes: ["process::src/main.rs::main"]  # processes the PRD claims NOT to affect
 ```
 
-**Contract location.** The prd-spec-generator already outputs multiple JSON files; we require one named `stage-5.affected_symbols.json` alongside the main PRD. If absent, stage 6 degrades to regex-only mode with a `contract_missing: true` warning at the top of the report (informational, not fail).
+**Contract location.** The ai-architect-mcp-spec already outputs multiple JSON files; we require one named `stage-5.affected_symbols.json` alongside the main PRD. If absent, stage 6 degrades to regex-only mode with a `contract_missing: true` warning at the top of the report (informational, not fail).
+
+**Zero-claims case — not the same as absent.** "Absent" means the generator run produced no structured extraction at all; it says nothing about whether the extraction, had it run, would have found zero claims. These are different states and this stage distinguishes them: when the generator runs its structured-extraction step and determines a PRD makes no code-level claims (e.g. a docs-only or infra-only change), it **MUST still emit** `stage-5.affected_symbols.json` with `affected_symbols: []` and `scope_claims: []` — an empty array, never an omitted file. Only the true absence of the file (the generator's structured-extraction step did not run for this PRD at all) triggers the §4.3 regex fallback. Conflating "zero claims" with "no file" would silently route a legitimate zero-change PRD through the low-precision regex path instead of reporting the correct, structured `affected_symbol_count: 0`. This is a requirement on the generator, not a discretionary choice on stage 6's side — stage 6 has no way to tell "ran and found nothing" apart from "did not run" except by the file's presence.
 
 ### 4.3 Regex fallback rules
 
@@ -254,7 +256,7 @@ Total estimate: **~330 LOC** in new `src/prd_validator.rs`. Extract to module fr
 
 ## 9. Open questions
 
-1. **Does prd-spec-generator already emit a structured affected-symbols file?** If yes, use its exact schema. If no, §4.2's contract requires an agreement with that skill's owner. **Resolution: check prd-spec-generator's 9-file export list before implementing step 2. If absent, file an enhancement request there AND ship regex fallback first.**
+1. **Does ai-architect-mcp-spec already emit a structured affected-symbols file?** If yes, use its exact schema. If no, §4.2's contract requires an agreement with that skill's owner. **Resolution: check ai-architect-mcp-spec's 9-file export list before implementing step 2. If absent, file an enhancement request there AND ship regex fallback first.**
 2. **Threshold for V2 community-count warning.** Proposed: warn if distinct communities > 2. **Defer tuning:** ship with 2; revisit after first 10 real PRDs.
 3. **Scope keywords for V5.** Initial list: `small`, `minor`, `refactor`, `quick`, `trivial`, `one-liner`. **Deferred:** make configurable via an optional `scope_keywords` parameter; ship with a hardcoded list.
 4. **Degrade when stage 3c hasn't run?** V2 requires communities. **Resolution:** detect absence, emit `info` finding "community scope validation skipped: no Community nodes", continue other axes.
@@ -265,7 +267,7 @@ Total estimate: **~330 LOC** in new `src/prd_validator.rs`. Extract to module fr
 
 | Claim | Source |
 |---|---|
-| Multi-judge panels can't check ground truth | prd-spec-generator skill description; architect's brief. |
+| Multi-judge panels can't check ground truth | ai-architect-mcp-spec skill description; architect's brief. |
 | Community schema | stages/stage-3c.md §4.1 |
 | Process schema | stages/stage-3c.md §4.1, §5.2 |
 | MemberOf edge tables | stages/stage-3c.md §4.2 |

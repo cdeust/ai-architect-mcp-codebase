@@ -38,6 +38,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai-architect-mcp-codebase-fuzz"
+version = "0.0.0"
+dependencies = [
+ "ai-architect-mcp",
+ "arbitrary",
+ "libfuzzer-sys",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -89,15 +98,6 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
-
-[[package]]
-name = "automatised-pipeline-fuzz"
-version = "0.0.0"
-dependencies = [
- "ai-architect-mcp",
- "arbitrary",
- "libfuzzer-sys",
-]
 
 [[package]]
 name = "base64"

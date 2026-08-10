@@ -202,7 +202,7 @@ We claim novelty in the *integration*. We do not claim novelty in any individual
 
 ## 11. Reference implementation plan
 
-Reference impl lives in `ai-automatised-pipeline/crates/zera/` (new workspace member). Rust source-of-truth, compiles to native + WASM. Two binaries:
+Reference impl lives in this repo's `crates/zera/` (workspace member). Rust source-of-truth, compiles to native + WASM. Two binaries:
 
 ```
 zera-encode  --in <graph.json> --codebook <path> --grammar <path> --out <session.zera>

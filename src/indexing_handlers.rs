@@ -56,6 +56,11 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
     if !codebase.exists() {
         return Err(format!("path does not exist: {}", codebase.display()));
     }
+    // Issue #195: migrate the pre-rename artifact dir before anything below
+    // walks the tree or reads it — this is the earliest touchpoint for a
+    // full-index call, and `artifact::migrate_legacy_dir` is a cheap no-op
+    // once migrated.
+    artifact::migrate_legacy_dir(&codebase);
     let output_dir = require_absolute(output_str, "output_dir")?;
     fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir: {e}"))?;
     let graph_dir = output_dir.join("graph");

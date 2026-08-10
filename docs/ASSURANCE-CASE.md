@@ -10,7 +10,7 @@ requirements; this document argues that they are met.*
 
 ## What this software is, in threat terms
 
-`automatised-pipeline` is a **local MCP server**. An agent host (Claude Code or
+`ai-architect-mcp-codebase` is a **local MCP server**. An agent host (Claude Code or
 another MCP client) starts it over stdio and calls its 26 tools. It parses a
 source tree into a LadybugDB property graph, resolves relationships across
 files, and answers structural questions about the code.
@@ -187,7 +187,7 @@ cut the tag that triggered it. A tag signature would answer that narrower
 question and is the weaker of the two statements, so the assurance is spent on
 the artifact instead. `version_tags_signed` therefore stays **Unmet** — reported
 honestly rather than argued around — while `signed_releases` is **Met** on
-artifact evidence. The sibling project cdeust/prd-spec-generator answers both
+artifact evidence. The sibling project cdeust/ai-architect-mcp-spec answers both
 criteria the same way.
 
 The **windows-x86_64 asset is missing**. `v0.8.2` shipped one; the `v0.8.3`

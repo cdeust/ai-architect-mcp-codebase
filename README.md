@@ -414,12 +414,12 @@ Every stage is a tool. Stages build on each other but are independently callable
 | **3b** | `resolve_graph`, `lsp_resolve` | Import/call/impl resolution with confidence scoring + optional LSP deep resolution (rust-analyzer / pyright / typescript-language-server) |
 | **3c** | `cluster_graph`, `get_processes`, `get_impact` | Leiden-class community detection (Louvain + C2 repair) + BFS execution-flow tracing from entry points |
 | **3d** | `search_codebase`, `get_context`, `analyze_codebase`, `detect_changes` | Hybrid BM25 + sparse TF-IDF + RRF search · 360° symbol view · all-in-one analysis · git-diff impact |
-| **4** | `prepare_prd_input` | Bundle verified finding + graph intel → artifact for prd-spec-generator |
+| **4** | `prepare_prd_input` | Bundle verified finding + graph intel → artifact for ai-architect-mcp-spec |
 | **6** | `validate_prd_against_graph` | Symbol hallucination · community consistency · process-impact contradiction |
 | **8** | `check_security_gates` | Auth-critical community · unsafe symbol · public-API change · unresolved-import intro · test-coverage gap |
 | **9** | `verify_semantic_diff` | Before/after graph diff with Tarjan SCC cycle detection and regression scoring |
 
-> Stages 5 (PRD generation), 7 (implementation), 10 (benchmark), 11 (deployment), 12 (PR) belong to other systems in the pipeline: [prd-spec-generator](https://github.com/cdeust/prd-spec-generator), the coding agent, CI, and `gh`. This project is the **read-only intelligence** half.
+> Stages 5 (PRD generation), 7 (implementation), 10 (benchmark), 11 (deployment), 12 (PR) belong to other systems in the pipeline: [ai-architect-mcp-spec](https://github.com/cdeust/ai-architect-mcp-spec), the coding agent, CI, and `gh`. This project is the **read-only intelligence** half.
 
 ---
 
@@ -453,25 +453,35 @@ Each tool has a JSON Schema enforced at the wire, reason codes on error (no cryp
 clone the repo never have to cold-index it.
 
 - `index_codebase` with `"export_artifact": true` writes, after a successful
-  index, a `tar → zstd` snapshot to `<path>/.automatised-pipeline/graph.zst`
+  index, a `tar → zstd` snapshot to `<path>/.ai-architect-mcp-codebase/graph.zst`
   plus a `graph.meta.json` sidecar (schema version, git sha, tool version,
   node/edge counts). It also appends a `.gitattributes` entry
-  (`.automatised-pipeline/graph.zst binary merge=ours`) so the committed binary
-  never produces merge conflicts across branches. Commit both files.
+  (`.ai-architect-mcp-codebase/graph.zst binary merge=ours`) so the committed
+  binary never produces merge conflicts across branches. Commit both files.
+  A repo indexed before the project rename (issue #195) carries this snapshot
+  under the old `.automatised-pipeline/` directory name; the first touch of
+  the artifact (export, bootstrap, or even a `hook-augment` Grep/Glob check)
+  migrates it to the current name in place — a one-shot rename, not a
+  permanent dual-path read.
 - `index_codebase` with `"bootstrap": true` — when there is no local graph at
   `<output_dir>/graph` but a committed artifact is present — decompresses the
   snapshot instead of cold-indexing. **Staleness is checked first** by comparing
   the artifact's git sha with the repo's current HEAD:
-  - shas equal → import;
-  - shas differ → by **default the import is refused** and a full index runs; a
-    stderr line reports how many commits behind the artifact is, and the tool
-    response carries a `bootstrap_skipped` object;
-  - `"accept_stale": true` → import the stale snapshot anyway, and the response
-    carries a `stale_artifact` `{artifact_sha, head_sha, commits_behind}` report
-    so a stale graph is never mistaken for a fresh one.
+  - shas equal → import as-is (nothing to fill), response `source='artifact_bootstrap'`,
+    `graph_state='fresh'`;
+  - shas differ → by **default the snapshot is imported, then incrementally
+    filled** up to the working tree (only the artifact→HEAD diff is
+    re-parsed), response `source='artifact_bootstrap_fill'`,
+    `graph_state='filled_to_working_tree'`, carrying `fill_method` and
+    `{changed, added, deleted, renamed, unchanged}` counts;
+  - `"accept_stale": true` → import the stale snapshot anyway and **skip the
+    fill**, and the response carries a `stale_artifact`
+    `{artifact_sha, head_sha, commits_behind}` report so a stale graph is
+    never mistaken for a fresh one.
 
-  An import failure also falls back to a full index explicitly (logged to
-  stderr), never a silent partial graph.
+  A fill that fails (no git diff and no bundled manifest) falls back to a
+  full index, as does an import failure — both explicit (logged to stderr,
+  never a silent partial graph) and reported via a `bootstrap_skipped` note.
 
 All three flags default to `false`, so existing behavior and the `core`/`core8`
 profiles are unchanged. The artifact is entirely optional: without it,
@@ -503,7 +513,7 @@ core modules:
     lsp_{client,resolver}  — optional LSP deep resolution
     clustering         — inline Louvain + C2 repair + process tracing
     search/{bm25,vector,rrf,mod}  — hybrid search (Tantivy + sparse TF-IDF + RRF)
-    prd_input          — stage 4: bundle for prd-spec-generator
+    prd_input          — stage 4: bundle for ai-architect-mcp-spec
     prd_validator      — stage 6: validate PRD claims against graph
     security_gates     — stage 8: auth/unsafe/API/imports/coverage checks
     semantic_diff      — stage 9: before/after graph regression scoring
@@ -676,7 +686,7 @@ precision/recall/token/tool-call numbers above stand on their own.
       └──────┬──────────────────┬────────────────────────┘
              │                  │
              │                  └────→  stage 5 (PRD gen)
-             │                          [prd-spec-generator]
+             │                         [ai-architect-mcp-spec]
              ↓                          TypeScript / Node
      ┌─────────────────┐                    │
      │     Cortex      │                    │
@@ -697,7 +707,7 @@ precision/recall/token/tool-call numbers above stand on their own.
 
 - **Cortex** — every architectural decision made during a pipeline run gets remembered. When the next finding touches a similar area, Cortex surfaces the prior reasoning before you re-derive it.
 - **zetetic-team-subagents** — the genius agents (Shannon, Lamport, Simon, Popper, Feynman, Fermi, dba, architect, security-auditor, engineer) designed this project stage by stage. Every major decision in `stages/*.md` traces to an agent dispatch.
-- **prd-spec-generator** — consumes our `stage-4.prd_input.json` artifact via disk or MCP-to-MCP query of `search_codebase` / `get_context` / `get_impact`. Each in its ideal language: our performance-critical graph work in Rust, their document generation in TypeScript.
+- **ai-architect-mcp-spec** — consumes our `stage-4.prd_input.json` artifact via disk or MCP-to-MCP query of `search_codebase` / `get_context` / `get_impact`. Each in its ideal language: our performance-critical graph work in Rust, their document generation in TypeScript.
 
 ---
 

@@ -141,3 +141,77 @@ fn is_hex_sha_guards_arg_injection() {
     assert!(!is_hex_sha("--all")); // git flag smuggling attempt
     assert!(!is_hex_sha("HEAD~1")); // non-hex revision expression
 }
+
+// -- issue #195: legacy artifact-dir migration ------------------------------
+
+#[test]
+fn migrate_legacy_dir_renames_in_place() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    let legacy = repo.join(LEGACY_ARTIFACT_DIR);
+    fs::create_dir_all(&legacy).expect("mk legacy dir");
+    fs::write(legacy.join(ARTIFACT_FILE), b"payload").expect("write legacy artifact");
+
+    migrate_legacy_dir(&repo);
+
+    assert!(!legacy.exists(), "legacy dir must be gone after migration");
+    let current = repo.join(ARTIFACT_DIR);
+    assert!(current.is_dir(), "current dir must exist after migration");
+    assert_eq!(
+        fs::read(current.join(ARTIFACT_FILE)).expect("read migrated artifact"),
+        b"payload"
+    );
+}
+
+#[test]
+fn migrate_legacy_dir_is_a_noop_without_a_legacy_dir() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).expect("mk repo");
+    migrate_legacy_dir(&repo); // must not panic or create anything
+    assert!(!repo.join(ARTIFACT_DIR).exists());
+    assert!(!repo.join(LEGACY_ARTIFACT_DIR).exists());
+}
+
+#[test]
+fn migrate_legacy_dir_never_clobbers_an_existing_current_dir() {
+    // Both present (e.g. a re-export already happened under the new name
+    // before an old .automatised-pipeline leftover was cleaned up): the
+    // current dir wins untouched, and the legacy one is left for the caller
+    // to notice — silently deleting it would be worse than a stray directory.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    let legacy = repo.join(LEGACY_ARTIFACT_DIR);
+    let current = repo.join(ARTIFACT_DIR);
+    fs::create_dir_all(&legacy).expect("mk legacy dir");
+    fs::write(legacy.join(ARTIFACT_FILE), b"stale").expect("write legacy artifact");
+    fs::create_dir_all(&current).expect("mk current dir");
+    fs::write(current.join(ARTIFACT_FILE), b"fresh").expect("write current artifact");
+
+    migrate_legacy_dir(&repo);
+
+    assert!(
+        legacy.exists(),
+        "legacy dir must be left alone, not deleted"
+    );
+    assert_eq!(
+        fs::read(current.join(ARTIFACT_FILE)).expect("read current artifact"),
+        b"fresh",
+        "current dir must not be clobbered"
+    );
+}
+
+#[test]
+fn export_artifact_migrates_a_legacy_dir_before_writing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    let graph = tmp.path().join("out/graph");
+    fs::create_dir_all(&graph).expect("mk graph");
+    fs::write(graph.join("x.bin"), b"x").expect("write x");
+    fs::create_dir_all(repo.join(LEGACY_ARTIFACT_DIR)).expect("mk legacy dir");
+
+    export_artifact(&graph, &repo, 1, 0, None, None).expect("export");
+
+    assert!(artifact_exists(&repo));
+    assert!(!repo.join(LEGACY_ARTIFACT_DIR).exists());
+}

@@ -262,7 +262,7 @@ fn hook_augment_emits_suggestion_when_graph_present() {
         .unwrap();
     let proj = tmp.path().join("proj");
     // The graph marker: the committed artifact dir under the project cwd.
-    std::fs::create_dir_all(proj.join(".automatised-pipeline")).unwrap();
+    std::fs::create_dir_all(proj.join(".ai-architect-mcp-codebase")).unwrap();
     let payload = json!({
         "tool_name": "Grep",
         "cwd": proj.to_string_lossy(),
@@ -285,13 +285,48 @@ fn hook_augment_is_silent_without_a_graph() {
         .tempdir()
         .unwrap();
     let proj = tmp.path().join("proj");
-    std::fs::create_dir_all(&proj).unwrap(); // no .automatised-pipeline marker
+    std::fs::create_dir_all(&proj).unwrap(); // no .ai-architect-mcp-codebase marker
     let payload =
         json!({"tool_name":"Grep","cwd":proj.to_string_lossy(),"tool_input":{"pattern":"x"}})
             .to_string();
     let (out, code) = hook_augment(tmp.path(), &payload);
     assert_eq!(code, 0, "must never block");
     assert!(out.trim().is_empty(), "no graph → silent, got: {out:?}");
+}
+
+#[test]
+fn hook_augment_migrates_and_recognizes_a_pre_rename_marker_dir() {
+    // Issue #195: a repo indexed before the rename carries the graph under
+    // the old directory name. The real compiled binary's hook-augment path
+    // must self-heal it (via `artifact::migrate_legacy_dir`) on first touch,
+    // not just recognize the new name.
+    let tmp = tempfile::Builder::new()
+        .prefix("hook_legacy_")
+        .tempdir()
+        .unwrap();
+    let proj = tmp.path().join("proj");
+    std::fs::create_dir_all(proj.join(".automatised-pipeline")).unwrap();
+    let payload = json!({
+        "tool_name": "Grep",
+        "cwd": proj.to_string_lossy(),
+        "tool_input": { "pattern": "handle_tool" }
+    })
+    .to_string();
+    let (out, code) = hook_augment(tmp.path(), &payload);
+    assert_eq!(code, 0);
+    let v: Value = serde_json::from_str(out.trim()).expect("emits JSON — legacy dir recognized");
+    assert!(v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .contains("search_codebase"));
+    assert!(
+        proj.join(".ai-architect-mcp-codebase").is_dir(),
+        "legacy dir must be renamed in place, not merely tolerated"
+    );
+    assert!(
+        !proj.join(".automatised-pipeline").exists(),
+        "legacy dir must not be left behind after migration"
+    );
 }
 
 #[test]
