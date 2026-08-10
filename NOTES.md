@@ -25,7 +25,7 @@ Rust. Hand-rolled stdio JSON-RPC 2.0 (no MCP SDK). Two deps: `serde`, `serde_jso
 | 3c | `cluster_graph`, `get_processes`, `get_impact` | **live** | Clustering (Leiden) + Process tracing + blast radius. |
 | 3d | `search_codebase`, `get_context`, `analyze_codebase`, `detect_changes` | **live** | Hybrid search (BM25+vector+RRF), 360° context, diff→impact. |
 | 4  | `prepare_prd_input` | **live** | Bundle finding + graph intel (matched symbols, impacted communities, impacted processes, graph stats) into `stage-4.prd_input.json`. Read-only against the graph. |
-| 5  | *(generate-prd skill)* | **owned by prd-spec-generator** | PRD generation with its 9-step workflow, multi-judge verification, 9-file export. Out of scope for this MCP. |
+| 5  | *(generate-prd skill)* | **owned by ai-architect-mcp-spec** | PRD generation with its 9-step workflow, multi-judge verification, 9-file export. Out of scope for this MCP. |
 | 6 | `validate_prd_against_graph` | **live** | Symbol hallucination + community consistency + process impact validation against PRD claims |
 | 7  | *(implementation)* | **owned by coding agent** | Claude Code / Cursor / CLI agent consumes PRD + impact bundle and edits the target repo. Optional `prepare_implementation_handoff` tool on our side. |
 | 8 | `check_security_gates` | **live** | Auth-critical + unsafe + public-API + unresolved-import + test-coverage-gap gates |

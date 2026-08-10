@@ -128,6 +128,8 @@ scope_claims:
 
 **Contract location.** The ai-architect-mcp-spec already outputs multiple JSON files; we require one named `stage-5.affected_symbols.json` alongside the main PRD. If absent, stage 6 degrades to regex-only mode with a `contract_missing: true` warning at the top of the report (informational, not fail).
 
+**Zero-claims case — not the same as absent.** "Absent" means the generator run produced no structured extraction at all; it says nothing about whether the extraction, had it run, would have found zero claims. These are different states and this stage distinguishes them: when the generator runs its structured-extraction step and determines a PRD makes no code-level claims (e.g. a docs-only or infra-only change), it **MUST still emit** `stage-5.affected_symbols.json` with `affected_symbols: []` and `scope_claims: []` — an empty array, never an omitted file. Only the true absence of the file (the generator's structured-extraction step did not run for this PRD at all) triggers the §4.3 regex fallback. Conflating "zero claims" with "no file" would silently route a legitimate zero-change PRD through the low-precision regex path instead of reporting the correct, structured `affected_symbol_count: 0`. This is a requirement on the generator, not a discretionary choice on stage 6's side — stage 6 has no way to tell "ran and found nothing" apart from "did not run" except by the file's presence.
+
 ### 4.3 Regex fallback rules
 
 Only triggered when `stage-5.affected_symbols.json` is missing.

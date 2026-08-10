@@ -80,7 +80,7 @@ without an ADR that says what new information changed them.
   intelligence: it tells the system what is true about the code so another
   stage can act. Rename and refactor tools are out of scope for this reason.
 - **It will not generate PRDs.** That belongs to
-  [prd-spec-generator](https://github.com/cdeust/prd-spec-generator), which
+  [ai-architect-mcp-spec](https://github.com/cdeust/ai-architect-mcp-spec), which
   consumes this graph. One pipeline stage, one owner.
 - **It will not call the network at index time.** All processing is local, and
   a tool that reads your entire source tree keeping no network egress is a
