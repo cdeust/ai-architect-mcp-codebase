@@ -185,7 +185,10 @@ fn should_skip(name: &str, dependency_scope: DependencyScope) -> bool {
     // scope keeps a full index and an artifact-bootstrap fill identical: the
     // committed `graph.zst`/`file_manifest.json` never become File nodes, so the
     // artifact's presence in the tree can't perturb graph parity (issue #62/#55).
-    if name == crate::artifact::ARTIFACT_DIR {
+    // The pre-rename directory name is skipped too (issue #195) — a repo that
+    // has not yet had its artifact touched (so `artifact::migrate_legacy_dir`
+    // has not fired) must not have its stale snapshot walked as source.
+    if name == crate::artifact::ARTIFACT_DIR || name == crate::artifact::LEGACY_ARTIFACT_DIR {
         return true;
     }
     // PublicApi/Full both descend into vendored/build/cache dirs so the graph

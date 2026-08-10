@@ -15,7 +15,7 @@
 //
 // Shape (mirrors artifact.c):
 //   export = archive the graph dir (tar) → zstd-compress → write
-//            `<repo>/.automatised-pipeline/graph.zst` + a JSON sidecar
+//            `<repo>/.ai-architect-mcp-codebase/graph.zst` + a JSON sidecar
 //            (schema version, git sha, tool version, node/edge counts); then
 //            ensure a `.gitattributes` `merge=ours` entry so the binary blob
 //            never produces a merge conflict across branches.
@@ -39,11 +39,18 @@ use std::process::Command;
 
 /// Directory, relative to the indexed repo root, that holds the committed
 /// artifact and its sidecar.
-pub const ARTIFACT_DIR: &str = ".automatised-pipeline";
+pub const ARTIFACT_DIR: &str = ".ai-architect-mcp-codebase";
 /// The compressed graph snapshot filename.
 pub const ARTIFACT_FILE: &str = "graph.zst";
 /// The JSON metadata sidecar filename.
 pub const ARTIFACT_META: &str = "graph.meta.json";
+
+/// On-disk directory name before the project rename (issue #195). Recognized
+/// ONLY by `migrate_legacy_dir` for a one-shot rename-in-place; every actual
+/// artifact read/write goes through `ARTIFACT_DIR`. Not a permanent dual-path
+/// read — project preference is explicit contracts + one-shot migrations,
+/// never retro-compat shims.
+pub(crate) const LEGACY_ARTIFACT_DIR: &str = ".automatised-pipeline";
 
 /// Archive entry name for the bundled per-file manifest (issue #62). Kept equal
 /// to `indexer::manifest::MANIFEST_FILE` so that unpacking the archive into the
@@ -138,10 +145,40 @@ fn meta_file(repo_path: &Path) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// Legacy-name migration (issue #195)
+// ---------------------------------------------------------------------------
+
+/// One-shot migration for a repo indexed before the project rename (#195):
+/// renames `<repo>/.automatised-pipeline` to `<repo>/.ai-architect-mcp-codebase`
+/// in place. No-op when the current dir already exists (it always wins — no
+/// clobber) or the legacy dir is absent. Best-effort: a failed rename is
+/// logged, never fatal, so a permissions issue degrades to "re-index instead
+/// of bootstrap" rather than blocking the caller.
+///
+/// Called from every real touchpoint (`artifact_exists`, `export_artifact`,
+/// `hook_augment::graph_present_fs`, and `index_codebase` before it walks the
+/// tree) so the directory self-heals on first contact regardless of which
+/// operation runs first.
+pub fn migrate_legacy_dir(repo_path: &Path) {
+    let legacy = repo_path.join(LEGACY_ARTIFACT_DIR);
+    let current = artifact_dir(repo_path);
+    if current.exists() || !legacy.exists() {
+        return;
+    }
+    if let Err(e) = fs::rename(&legacy, &current) {
+        eprintln!(
+            "[ap] artifact: migrate legacy dir {} -> {}: {e}",
+            legacy.display(),
+            current.display()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
-/// Exports the graph at `graph_path` into `<repo_path>/.automatised-pipeline/`.
+/// Exports the graph at `graph_path` into `<repo_path>/.ai-architect-mcp-codebase/`.
 ///
 /// Preconditions: `graph_path` exists (a closed lbug database — a directory in
 /// lbug 0.15, but a single file is handled too) and the caller has already
@@ -161,6 +198,7 @@ pub fn export_artifact(
     manifest_path: Option<&Path>,
     coverage_path: Option<&Path>,
 ) -> Result<ExportStats, String> {
+    migrate_legacy_dir(repo_path);
     if !graph_path.exists() {
         return Err(format!(
             "artifact export: graph path does not exist: {}",
@@ -270,7 +308,7 @@ fn write_archive(
 // Import (bootstrap)
 // ---------------------------------------------------------------------------
 
-/// Imports the committed artifact at `<repo_path>/.automatised-pipeline/` into
+/// Imports the committed artifact at `<repo_path>/.ai-architect-mcp-codebase/` into
 /// `graph_path` (typically `<output_dir>/graph`).
 ///
 /// Preconditions: `artifact_exists(repo_path)` is true and `graph_path` does
@@ -381,6 +419,7 @@ fn is_hex_sha(s: &str) -> bool {
 
 /// True when a committed, schema-compatible artifact is present in `repo_path`.
 pub fn artifact_exists(repo_path: &Path) -> bool {
+    migrate_legacy_dir(repo_path);
     let zst = artifact_file(repo_path);
     let present = fs::metadata(&zst).map(|m| m.len() > 0).unwrap_or(false);
     if !present {

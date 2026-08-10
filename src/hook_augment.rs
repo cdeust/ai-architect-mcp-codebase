@@ -18,7 +18,9 @@ use std::path::Path;
 /// Marker that a project has an ai-architect graph. Convention: the committed
 /// artifact directory (issue #55) — its presence means the repo carries a graph
 /// a teammate can bootstrap, so suggesting the graph tools is worthwhile.
-pub const GRAPH_MARKER_DIR: &str = ".automatised-pipeline";
+/// Re-exported from `artifact` rather than duplicated as a literal, so the two
+/// modules cannot drift on the directory name (issue #195 rename fallout).
+pub const GRAPH_MARKER_DIR: &str = crate::artifact::ARTIFACT_DIR;
 
 /// Builds the PreToolUse `additionalContext` suggestion for a Grep/Glob call, or
 /// `None` in every case where nothing should be emitted (fail-open). NEVER errors.
@@ -66,8 +68,12 @@ where
 }
 
 /// Filesystem check the binary uses: a project has a graph iff the marker dir
-/// exists under `cwd`.
+/// exists under `cwd`. Runs the issue #195 one-shot legacy-dir migration
+/// first, so a repo indexed before the rename still resolves — this hook
+/// fires on every Grep/Glob, which makes it the highest-frequency touchpoint
+/// and the fastest place for an unmigrated repo to self-heal.
 pub fn graph_present_fs(cwd: &Path) -> bool {
+    crate::artifact::migrate_legacy_dir(cwd);
     cwd.join(GRAPH_MARKER_DIR).is_dir()
 }
 
@@ -117,6 +123,18 @@ mod tests {
     #[test]
     fn non_grep_tool_is_silent() {
         assert!(build_suggestion(&grep_payload("Read", "/repo", "x"), |_| true).is_none());
+    }
+
+    #[test]
+    fn graph_present_fs_migrates_a_legacy_marker_dir() {
+        // Issue #195: `graph_present_fs` is the highest-frequency touchpoint
+        // (fires on every Grep/Glob), so it must self-heal a pre-rename repo
+        // rather than silently going blind on it.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join(".automatised-pipeline")).expect("mk legacy dir");
+        assert!(graph_present_fs(tmp.path()));
+        assert!(tmp.path().join(GRAPH_MARKER_DIR).is_dir());
+        assert!(!tmp.path().join(".automatised-pipeline").exists());
     }
 
     #[test]
