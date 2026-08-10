@@ -6,13 +6,13 @@
     "url": "https://github.com/cdeust/ai-architect-mcp-codebase",
     "source": "github"
   },
-  "version": "0.9.1",
+  "version": "0.10.0",
   "websiteUrl": "https://ai-architect.tools",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/cdeust/ai-architect-mcp-codebase/releases/download/v0.9.1/ai-architect-mcp-codebase.mcpb",
-      "version": "0.9.1",
+      "identifier": "https://github.com/cdeust/ai-architect-mcp-codebase/releases/download/v0.10.0/ai-architect-mcp-codebase.mcpb",
+      "version": "0.10.0",
       "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "transport": {
         "type": "stdio"

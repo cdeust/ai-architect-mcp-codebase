@@ -318,7 +318,7 @@ Contract schema 1 requires `distribution`, `claude_plugin`,
 full commit SHA (tags can be moved), validate that the prefix equals
 `mcp__plugin_<claude_plugin>_<mcp_server>__`, and remove revoked prefixes from
 allowlists rather than retaining them as aliases. Consumer PRs record the full
-producer commit in their contract URL; the v0.9.1 release must not be assumed
+producer commit in their contract URL; the v0.10.0 release must not be assumed
 available until its verified-release workflow completes.
 The same contract is included in the crate, MCPB, and signed release assets.
 

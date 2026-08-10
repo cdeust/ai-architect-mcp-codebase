@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ai-architect-mcp-codebase"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "lbug",
  "serde",
