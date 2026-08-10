@@ -116,7 +116,7 @@ def complete_readme(
     languages: int = len(FAKE_LANGUAGES),
     tests: str = "1000",
     tool_list: tuple[str, ...] = FAKE_FULL,
-    layout: str = "automatised-pipeline/\n└── src/",
+    layout: str = "ai-architect-mcp-codebase/\n└── src/",
 ) -> str:
     """A README carrying one site for every claim the gate gates.
 

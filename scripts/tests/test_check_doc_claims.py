@@ -240,7 +240,7 @@ class CheckLayout(unittest.TestCase):
 
     def test_passes_when_every_path_exists(self):
         root, readme = self._repo(
-            "automatised-pipeline/\n"
+            "ai-architect-mcp-codebase/\n"
             "├── src/\n"
             "│   ├── tool_profile.rs\n"
             "│   └── parser/\n"
@@ -254,13 +254,13 @@ class CheckLayout(unittest.TestCase):
         # the tree glyphs, or a nested name is checked at the repo root and
         # wrongly reported missing.
         root, readme = self._repo(
-            "automatised-pipeline/\n├── src/\n│   ├── parser/\n│   │   ├── language.rs"
+            "ai-architect-mcp-codebase/\n├── src/\n│   ├── parser/\n│   │   ├── language.rs"
         )
         self.assertEqual(gate.check_layout(readme, root), [])
 
     def test_reports_a_path_the_repository_does_not_have(self):
         root, readme = self._repo(
-            "automatised-pipeline/\n├── src/\n│   ├── graph_store.rs"
+            "ai-architect-mcp-codebase/\n├── src/\n│   ├── graph_store.rs"
         )
         failures = gate.check_layout(readme, root)
         self.assertEqual(len(failures), 1)
@@ -272,7 +272,7 @@ class CheckLayout(unittest.TestCase):
         # Siblings are written `a.rs · b.rs` to keep the tree readable; a
         # checker that reads only the first would miss the rest.
         root, readme = self._repo(
-            "automatised-pipeline/\n├── src/\n│   ├── tool_profile.rs · gone.rs"
+            "ai-architect-mcp-codebase/\n├── src/\n│   ├── tool_profile.rs · gone.rs"
         )
         failures = gate.check_layout(readme, root)
         self.assertEqual(len(failures), 1)
