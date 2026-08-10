@@ -6,7 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] — Fix the MCP Registry publish path; generalize parsers to a data-driven engine
+
+`v0.9.1`'s `server.json` shipped a 144-character `description` — the MCP
+Registry rejects anything over 100 with HTTP 422, so that tag can never be
+published, and `io.github.cdeust/ai-architect-mcp-codebase` has had no
+registry entry at all since the rename (only the pre-rename
+`io.github.cdeust/automatised-pipeline` at 0.8.4 was discoverable). This
+release ships a 86-character description that satisfies both the registry
+and this repo's own doc-claims gate.
+
+Minor, not patch: this release adds backward-compatible functionality (new
+parser conventions, new language coverage, full-AST persistence, registry
+publish automation) with no breaking change to any consumer-facing
+behavior — see "Changed" for the two candidates considered and ruled
+non-breaking.
+
 ### Added
+- **Data-driven `LanguageConventions` parser engine**, proven on Go (#222)
+  then rolled out to Java (#223), with a generic tree-sitter tags-query
+  extraction engine (#225), generic descent/heritage-hop/fieldless-fallback
+  introspection (#226), and generic keyword-driven import extraction (#230).
+  Elixir, Zig, and Bash complete the global structural vocabulary on the
+  same engine (#231); the prior test-only structural engine is now dead
+  code and was deleted (#234).
+- **Full AST persistence.** `index_codebase` now persists the complete
+  parsed AST per file — a parsed file is entirely indexed, not just the
+  symbols the resolver currently reads (#236).
 - `publish_registry` job in `release.yml`: publishing `server.json` to the
   official MCP Registry is now automated, running after the GitHub Release
   is public and every asset verified, authenticated via `mcp-publisher
@@ -16,8 +42,51 @@ adheres to [Semantic Versioning](https://semver.org/).
   `workflow_dispatch` recovery path publishes an already-tagged, already
   public release — including the first publish under the current
   `io.github.cdeust/ai-architect-mcp-codebase` identity, which the registry
-  has never served (it still serves only the pre-rename
-  `io.github.cdeust/automatised-pipeline` name, frozen at 0.8.4).
+  has never served (#242).
+- `scripts/repin_bootstrap_digests.py`: one command to re-pin
+  `bin/ensure-binary.sh`'s `Cargo.toml`/`plugin.json` digest pins, applied
+  automatically by the pre-commit hook — every dependency bump used to fail
+  CI on "bootstrap Cargo manifest digest drifted" until re-pinned by hand
+  (#237).
+- `PENDING_SELF_PINS` in `scripts/marketplace_pins_self.py`: the marketplace
+  pin gate's self-hosted-plugin check had no escape valve for a release
+  genuinely in flight, unlike the equivalent `PENDING_PINS` valve its
+  github-source sibling check already had. A release PR is structurally
+  guaranteed to bump this repo's own pin ahead of its tag (the tag names the
+  PR's merge commit, which does not exist until after merge), so every
+  self-hosted release PR's own CI run of `check_marketplace_pins.py` failed
+  with `PIN_VERSION_UNPUBLISHED` before this fix — caught while cutting this
+  very release. Same audited-allowlist contract as `PENDING_PINS`: named,
+  printed as a NOTICE, never silent.
+
+### Changed
+- **`get_impact` returns TypeScript `implements` clauses and heritage edges
+  across every language declaring explicit `extends`/`implements`.**
+  Previously these were resolved only for a subset of languages; the fix
+  widens coverage without changing the response shape (#215, #221).
+- **On-disk artifact directory renamed** `.automatised-pipeline` →
+  `.ai-architect-mcp-codebase`, self-healing on every real touchpoint
+  (`artifact_exists`, `export_artifact`, the hook-augment graph-presence
+  check, `index_codebase`) so an existing install migrates transparently on
+  next use — never a silent dual-read (#241, issue #195). Considered as a
+  breaking change and ruled non-breaking: the migration is one-shot and
+  automatic, and the compatibility-alias binary (`[[bin]] automatised-
+  pipeline` in `Cargo.toml`, pre-existing from the earlier package rename)
+  is untouched.
+- `community.rs` split under the 500-line cap along its real seams (#240) —
+  behavior-preserving.
+
+### Fixed
+- Marketplace pin gate restored to byte-identity with its canonical copy in
+  `cdeust/Cortex` after the pin-gate module split (#243, #247).
+
+### Dependencies
+- `tree-sitter-rust` 0.23.3 → 0.24.2 and `tree-sitter-c` 0.23.4 → 0.24.2
+  (#245, #246): grammar bumps, confirmed inert for this repo's extraction
+  by a `node-types.json` diff and the accuracy gate.
+- `toml` 0.8.23 → 1.1.3+spec-1.1.0 (#183); the `cargo-minor-patch` group
+  (#227); the `github-actions` group (#229); `lbug` 0.18.3 → 0.19.1 (#244).
+  No functional change observed in this repo's behavior.
 
 ## [0.9.1] — Release-skew fix: ship the deps/ prune the published 0.9.0 binary was missing
 
@@ -1419,6 +1488,15 @@ First tagged release since v0.2.2; folds in the untagged 0.3.0 and 0.4.0 work
   and `Implements_Struct_Trait` edges.
 
 ## [0.1.0] — History layer, declared-implements resolution, indexer batching, all-direction get_impact
+
+> **No `v0.1.0` tag exists on this repository.** Audited 2026-08-10 against
+> every published tag: this section was never cut as a release (see
+> `v0.0.9` immediately below, which IS tagged, and `v0.2.0`, the next tag
+> up). Left in place, undated, per changelog provenance discipline — no
+> historical entry is rewritten or deleted. No breaking change is buried
+> here: the one behavior change below (`get_impact`'s response gained
+> fields) is additive, not a removal or a shape change to an existing
+> field.
 
 ### Added
 
