@@ -27,9 +27,36 @@ FROZEN_PINS = {
     "cortex-viz": "deprecation shim, frozen at the 2.8.0 pre-rename release",
 }
 
+# Same contract as PENDING_PINS (marketplace_pins_github.py) and
+# PENDING_REGISTRY (marketplace_pins_registry.py): degrades a real
+# PIN_VERSION_UNPUBLISHED finding to a named NOTICE while a committed,
+# tracked release is in flight — never a placeholder, never silence.
+# check_github_pin already had this valve for a *downstream* repo's
+# release-in-progress; check_self_pin had none for THIS repo's own
+# release-in-progress, which is structurally guaranteed to trip
+# PIN_VERSION_UNPUBLISHED every time — a release PR must bump the
+# self pin ahead of the tag (the tag names the PR's merge commit, which
+# does not exist until after merge), so the gate's own release-PR CI
+# run always compared a not-yet-tagged pin against the latest tag.
+# Verified 2026-08-10 by running the gate against the ai-architect-
+# mcp-codebase v0.10.0 release branch pre-merge: PIN_VERSION_UNPUBLISHED
+# fired on the self pin with no other change able to satisfy it, since
+# no tag can exist before the PR that creates it merges.
+PENDING_SELF_PINS: dict[str, str] = {}
 
-def check_self_pin(name: str, source: str, pin: str, root: Path) -> list[str]:
+
+def check_self_pin(
+    name: str,
+    source: str,
+    pin: str,
+    root: Path,
+    pending: dict[str, str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Returns (failures, notices) — mirrors check_github_pin's contract."""
+    if pending is None:
+        pending = PENDING_SELF_PINS
     failures: list[str] = []
+    notices: list[str] = []
     plugin_json = root / source / ".claude-plugin" / "plugin.json"
     if not plugin_json.is_file():
         plugin_json = root / source / "plugin.json"
@@ -42,24 +69,30 @@ def check_self_pin(name: str, source: str, pin: str, root: Path) -> list[str]:
             )
     if name in FROZEN_PINS:
         # frozen: manifest coherence still checked, tag advance is by-design
-        return failures
+        return failures, notices
     parsed_tags = local_semver_tags(root)
     pinned = parse_semver(pin)
     if not parsed_tags or pinned is None:
         # no tags to compare against, or an unparseable pin: nothing to say
-        return failures
+        return failures, notices
     published = {v for v, _ in parsed_tags}
     latest_v, latest_tag = max(parsed_tags)
     if pinned not in published:
+        if name in pending:
+            notices.append(
+                f"NOTICE: {name}: pins {pin}, no matching tag yet "
+                f"— PENDING: {pending[name]}"
+            )
+            return failures, notices
         failures.append(
             f"PIN_VERSION_UNPUBLISHED: {name}: pins {pin} but this repo has no "
             f"matching tag (latest tag is {latest_tag})"
         )
-        return failures
+        return failures, notices
     if pinned < latest_v:
         n = tags_between(root, pinned, latest_v)
         failures.append(
             f"PIN_BEHIND_TAG: {name}: pins {pin} but this repo's latest tag is "
             f"{latest_tag} ({n} release(s) never delivered to installs)"
         )
-    return failures
+    return failures, notices

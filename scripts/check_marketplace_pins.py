@@ -120,7 +120,11 @@ from marketplace_pins_registry import (  # noqa: E402
     check_registry_surface,
     check_registry_version,
 )
-from marketplace_pins_self import FROZEN_PINS, check_self_pin  # noqa: E402
+from marketplace_pins_self import (  # noqa: E402
+    FROZEN_PINS,
+    PENDING_SELF_PINS,
+    check_self_pin,
+)
 from marketplace_pins_semver import (  # noqa: E402
     latest_local_tag,
     parse_semver,
@@ -130,6 +134,7 @@ from marketplace_pins_semver import (  # noqa: E402
 __all__ = [
     "FROZEN_PINS",
     "PENDING_PINS",
+    "PENDING_SELF_PINS",
     "check_github_pin",
     "check_pin_sha",
     "check_root_manifests",
@@ -196,7 +201,9 @@ def _check_plugin_pin(name: str, pin: str, source, root: Path):
     failures: list[str] = []
     notices: list[str] = []
     if isinstance(source, str):
-        failures.extend(check_self_pin(name, source, pin, root))
+        self_failures, self_notices = check_self_pin(name, source, pin, root)
+        failures.extend(self_failures)
+        notices.extend(self_notices)
         primary = pin if source.strip("/") in ("", ".") else None
         return failures, notices, primary
     if isinstance(source, dict):

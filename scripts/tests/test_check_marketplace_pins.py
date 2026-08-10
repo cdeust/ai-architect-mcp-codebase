@@ -64,11 +64,12 @@ class TestPinBehindTag(unittest.TestCase):
             plug = root / ".claude-plugin"
             plug.mkdir()
             (plug / "plugin.json").write_text(json.dumps({"version": "0.8.0"}))
-            failures = gate.check_self_pin("ap", "./", "0.8.0", root)
+            failures, notices = gate.check_self_pin("ap", "./", "0.8.0", root)
             joined = "\n".join(failures)
             self.assertIn("PIN_BEHIND_TAG", joined)  # detection ORIGINATES here
             self.assertNotIn("SELF_PIN_MISMATCH", joined)  # manifests agree
             self.assertIn("2 release(s)", joined)  # v0.8.1 + v0.8.2 counted
+            self.assertEqual(notices, [])
 
     def test_current_pin_green(self):
         with TemporaryDirectory() as d:
@@ -76,12 +77,16 @@ class TestPinBehindTag(unittest.TestCase):
             plug = root / ".claude-plugin"
             plug.mkdir()
             (plug / "plugin.json").write_text(json.dumps({"version": "0.8.2"}))
-            self.assertEqual(gate.check_self_pin("ap", "./", "0.8.2", root), [])
+            self.assertEqual(
+                gate.check_self_pin("ap", "./", "0.8.2", root), ([], [])
+            )
 
     def test_untagged_repo_no_crash_no_flag(self):
         with TemporaryDirectory() as d:
             root = _git_repo_with_tags(d, [])
-            self.assertEqual(gate.check_self_pin("p", "./", "1.0.0", root), [])
+            self.assertEqual(
+                gate.check_self_pin("p", "./", "1.0.0", root), ([], [])
+            )
 
     def test_frozen_pin_skips_tag_check_keeps_coherence(self):
         with TemporaryDirectory() as d:
@@ -92,13 +97,46 @@ class TestPinBehindTag(unittest.TestCase):
             gate.FROZEN_PINS["frozen-test"] = "test"
             try:
                 self.assertEqual(
-                    gate.check_self_pin("frozen-test", "shim", "4.15.0", root), []
+                    gate.check_self_pin("frozen-test", "shim", "4.15.0", root),
+                    ([], []),
                 )
                 (shim / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
-                failures = gate.check_self_pin("frozen-test", "shim", "4.15.0", root)
+                failures, _notices = gate.check_self_pin(
+                    "frozen-test", "shim", "4.15.0", root
+                )
                 self.assertIn("SELF_PIN_MISMATCH", "\n".join(failures))
             finally:
                 gate.FROZEN_PINS.pop("frozen-test")
+
+    def test_pending_self_pin_degrades_unpublished_to_notice(self):
+        """Regression for the release-PR deadlock: a release PR must bump the
+        self pin ahead of the tag (the tag names the PR's merge commit, which
+        does not exist until after merge), so PIN_VERSION_UNPUBLISHED fires on
+        every self-hosted release PR's own CI run unless the pin names its own
+        in-flight release, mirroring check_github_pin's PENDING_PINS valve.
+        """
+        with TemporaryDirectory() as d:
+            root = _git_repo_with_tags(d, ["v0.9.1"])
+            plug = root / ".claude-plugin"
+            plug.mkdir()
+            (plug / "plugin.json").write_text(json.dumps({"version": "0.10.0"}))
+            failures, notices = gate.check_self_pin(
+                "ap", "./", "0.10.0", root, pending={"ap": "PR #999"}
+            )
+            self.assertEqual(failures, [])
+            self.assertIn("PENDING: PR #999", "\n".join(notices))
+
+    def test_unpending_unpublished_self_pin_still_fails(self):
+        with TemporaryDirectory() as d:
+            root = _git_repo_with_tags(d, ["v0.9.1"])
+            plug = root / ".claude-plugin"
+            plug.mkdir()
+            (plug / "plugin.json").write_text(json.dumps({"version": "0.10.0"}))
+            failures, notices = gate.check_self_pin(
+                "ap", "./", "0.10.0", root, pending={}
+            )
+            self.assertIn("PIN_VERSION_UNPUBLISHED", "\n".join(failures))
+            self.assertEqual(notices, [])
 
 
 class TestGithubPin(unittest.TestCase):
