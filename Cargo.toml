@@ -65,7 +65,7 @@ toml_edit = "0.25"
 sha2 = "0.11"
 # source: stages/stage-3.md §7 — LadybugDB graph store for code-intelligence graph.
 # In-process property graph DB, MIT licensed, Cypher query language.
-lbug = "0.18"
+lbug = "0.19"
 # source: stages/stage-3.md §3a — tree-sitter parser runtime + Rust grammar.
 # MIT licensed. Used by rust_parser.rs to extract typed symbols from .rs files.
 # Bumped 0.24 → 0.25: 0.25 is the first runtime supporting grammar ABI 15,
