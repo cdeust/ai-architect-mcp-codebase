@@ -14,6 +14,13 @@ on:
     paths:
       - ".claude-plugin/marketplace.json"
       - "scripts/check_marketplace_pins.py"
+      - "scripts/marketplace_pins_http.py"
+      - "scripts/marketplace_pins_semver.py"
+      - "scripts/marketplace_pins_github.py"
+      - "scripts/marketplace_pins_self.py"
+      - "scripts/marketplace_pins_manifests.py"
+      - "scripts/marketplace_pins_registry.py"
+      - "scripts/tests/test_check_marketplace_pins.py"
       - ".github/workflows/marketplace-pins.yml"
   push:
     branches: [main]
@@ -48,6 +55,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Diff against canonical
+        # All seven files that make up the gate — the composition root PLUS
+        # its five sibling modules, which now carry the actual checking
+        # logic (check_marketplace_pins.py's own module docstring asserts
+        # this diffs weekly and fails on drift; guarding one file out of
+        # seven made that claim false). One `diff` per file so a single
+        # drifted module fails the step with its own name in the output,
+        # rather than a combined diff that buries which file moved.
         run: |
-          curl -fsSL https://raw.githubusercontent.com/cdeust/Cortex/main/scripts/check_marketplace_pins.py -o /tmp/canonical.py
-          diff -u /tmp/canonical.py scripts/check_marketplace_pins.py
+          status=0
+          for f in check_marketplace_pins.py \
+                   marketplace_pins_http.py \
+                   marketplace_pins_semver.py \
+                   marketplace_pins_github.py \
+                   marketplace_pins_self.py \
+                   marketplace_pins_manifests.py \
+                   marketplace_pins_registry.py; do
+            curl -fsSL "https://raw.githubusercontent.com/cdeust/Cortex/main/scripts/$f" -o "/tmp/canonical-$f"
+            if ! diff -u "/tmp/canonical-$f" "scripts/$f"; then
+              status=1
+            fi
+          done
+          exit "$status"
