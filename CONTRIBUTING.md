@@ -198,6 +198,42 @@ that shipped v0.8.1 and v0.8.2 to zero installs (#67). The same class in
 `cdeust/Cortex` withheld six `zetetic-team-subagents` releases and two
 `cortex-viz` releases (cdeust/Cortex#179).
 
+### Publishing `server.json` to the MCP Registry
+
+**Automatic.** The `publish_registry` job in `.github/workflows/release.yml`
+publishes `server.json` to the official MCP Registry
+(`registry.modelcontextprotocol.io`) with the `mcp-publisher` CLI, after
+`publish_verified_release` succeeds — it can never run against a `.mcpb`
+release asset that does not exist yet or is still a draft. Authentication
+uses `mcp-publisher login github-oidc`: the job's GitHub Actions OIDC token
+is exchanged for a registry credential scoped to `io.github.cdeust/*`. No
+secret is stored or required. Source:
+[modelcontextprotocol/registry — GitHub OIDC (CI/CD)](https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/cli/commands.md)
+and [publishing from GitHub Actions](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/github-actions.mdx),
+verified 2026-08-10.
+
+`server.json`'s committed `packages[0].fileSha256` is a placeholder
+(`"000...0"`) **by design**: that digest is a property of the built `.mcpb`
+bundle and cannot be known before it is built. The `publish_registry` job
+downloads the public, checksum- and attestation-verified `.mcpb` asset,
+computes its real digest, and patches a runtime copy of `server.json`
+before publishing — the committed file is never rewritten. `version` and
+`packages[0].identifier`, which *are* known ahead of the build, are still
+asserted against the tag being published; a stale commit fails the job
+loudly instead of publishing wrong metadata.
+
+Before publishing, the job downloads and re-verifies the `.mcpb` asset's
+checksum and provenance attestation. After publishing, it queries the
+registry's own API and fails the job if the response does not match — a
+green `mcp-publisher publish` exit code is not treated as proof.
+
+**Recovery / first-publish path.** If the registry entry is missing or
+stale for a tag whose GitHub Release is already public — including the
+very first publish under a renamed identity — re-run `publish_registry` via
+`workflow_dispatch` on `release.yml` with the `tag` input set to the
+existing tag (e.g. `v0.9.1`). This does not rebuild or re-release anything;
+it refuses to run without an explicit tag.
+
 ---
 
 ## What NOT to do

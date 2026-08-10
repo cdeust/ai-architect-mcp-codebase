@@ -29,6 +29,18 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Recovery / first-publish path only. Existing release tag to
+          (re)publish to the MCP Registry, e.g. v0.9.1. The GitHub Release
+          for that tag must already be public (not draft) with the .mcpb
+          asset attached — this path does not rebuild or re-release
+          anything, it only (re)publishes server.json to the registry.
+          Required for workflow_dispatch; the workflow refuses to guess.
+        required: false
+        type: string
 
 # Least privilege (Scorecard Token-Permissions). The top level is READ-ONLY;
 # each job escalates to exactly what it needs, so a job that only builds can
@@ -53,6 +65,7 @@ jobs:
   # release, leaving Cortex's installer with no darwin asset.
   create_release:
     name: create release (${{ github.ref_name }})
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Creates the release and uploads notes; no attestation here.
     permissions:
@@ -88,6 +101,7 @@ jobs:
   build:
     name: build (${{ matrix.target_tag }})
     needs: create_release
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -295,6 +309,7 @@ jobs:
   sbom:
     name: SBOM (CycloneDX)
     needs: create_release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Uploads the SBOM asset and records signed provenance for it.
     permissions:
@@ -356,6 +371,7 @@ jobs:
   package_mcpb:
     name: package .mcpb bundle
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Uploads the .mcpb asset and records signed provenance for it.
     permissions:
@@ -468,6 +484,7 @@ jobs:
   verify_staged_assets:
     name: verify staged release contract
     needs: [build, sbom, package_mcpb]
+    if: github.event_name == 'push'
     outputs:
       checksums: ${{ steps.verify.outputs.checksums }}
       inventory_sha: ${{ steps.verify.outputs.inventory_sha }}
@@ -572,6 +589,7 @@ jobs:
   publish_verified_release:
     name: publish verified release
     needs: verify_staged_assets
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -625,3 +643,166 @@ jobs:
           test "$ACTUAL_INVENTORY_SHA" = "$VERIFIED_INVENTORY_SHA"
           rollback_required=no
           trap - ERR INT TERM
+
+  publish_registry:
+    # CONTRIBUTING.md "Releasing". Publishes server.json to the official MCP
+    # Registry (registry.modelcontextprotocol.io) after the GitHub Release is
+    # public and every asset verified (needs: publish_verified_release), so
+    # it can never point the registry at a .mcpb artifact that isn't there.
+    # This repo's current io.github.cdeust/ai-architect-mcp-codebase identity
+    # (renamed from io.github.cdeust/automatised-pipeline) has never been
+    # published under the new name — the registry serves only the old
+    # automatised-pipeline entry, frozen at 0.8.4. That gap, not a rebuild
+    # defect, is what this job and its workflow_dispatch recovery path close.
+    #
+    # fileSha256 is a build artifact property (the digest of the zipped
+    # .mcpb bundle), not knowable before that bundle is built — the
+    # committed server.json therefore carries a placeholder ("000...0") by
+    # design rather than by omission. This job computes the real digest from
+    # the public, checksum- and attestation-verified release asset and
+    # patches a RUNTIME copy of server.json before publishing; the committed
+    # file is never rewritten. version/identifier are still asserted to
+    # match the tag being published, so a stale commit fails loudly instead
+    # of silently publishing the wrong metadata.
+    name: Publish server.json to the MCP Registry
+    needs:
+      [
+        create_release,
+        build,
+        sbom,
+        package_mcpb,
+        verify_staged_assets,
+        publish_verified_release,
+      ]
+    if: |
+      always() &&
+      (github.event_name == 'workflow_dispatch' || needs.publish_verified_release.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC token the MCP Registry exchanges for a publish credential
+    steps:
+      # Fail loudly rather than silently skip: workflow_dispatch without an
+      # explicit tag would otherwise publish whatever ref happened to be
+      # selected in the UI, which is exactly the kind of unattended drift
+      # this job exists to close.
+      - name: Resolve target tag
+        id: resolve
+        run: |
+          set -euxo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+            if [ -z "$TAG" ]; then
+              echo "::error::workflow_dispatch requires a 'tag' input (e.g. v0.9.1) — refusing to guess which release to publish."
+              exit 1
+            fi
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.resolve.outputs.tag }}
+
+      - name: Verify server.json version matches the tag being published
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c "import json; print(json.load(open('server.json'))['version'])")
+          PKG_VERSION=$(python3 -c "import json; print(json.load(open('server.json'))['packages'][0]['version'])")
+          [ "$TAG" = "v$VERSION" ] || { echo "::error::server.json version $VERSION does not match tag $TAG" >&2; exit 1; }
+          [ "$VERSION" = "$PKG_VERSION" ] || { echo "::error::server.json top-level version $VERSION != packages[0].version $PKG_VERSION" >&2; exit 1; }
+          IDENTIFIER=$(python3 -c "import json; print(json.load(open('server.json'))['packages'][0]['identifier'])")
+          case "$IDENTIFIER" in
+            *"/releases/download/$TAG/"*) : ;;
+            *) echo "::error::server.json packages[0].identifier ($IDENTIFIER) does not reference tag $TAG" >&2; exit 1 ;;
+          esac
+
+      # The exact defect this job exists to prevent runs in both directions:
+      # a registry entry must never point at a release asset that does not
+      # exist or is not yet public. Download from the public release (not
+      # draft — publish_verified_release already flipped that), verify its
+      # checksum and provenance attestation exactly as the release workflow
+      # itself does, then use ITS digest — never a value taken on trust from
+      # the committed file.
+      - name: Download and verify the public .mcpb asset
+        id: mcpb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$REPOSITORY" \
+            --pattern 'ai-architect-mcp-codebase.mcpb' \
+            --pattern 'ai-architect-mcp-codebase.mcpb.sha256' \
+            --pattern 'ai-architect-mcp-codebase.mcpb.sigstore.json'
+          sha256sum --check ai-architect-mcp-codebase.mcpb.sha256
+          gh attestation verify ai-architect-mcp-codebase.mcpb --repo "$REPOSITORY" \
+            --signer-workflow "$REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$TAG" \
+            --bundle ai-architect-mcp-codebase.mcpb.sigstore.json
+          DIGEST=$(sha256sum ai-architect-mcp-codebase.mcpb | awk '{print $1}')
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # mcp-publisher has no first-party GitHub Action wrapper, so it is
+      # fetched as a release binary and checksum-verified against the
+      # registry project's own published checksums — the same supply-chain
+      # discipline the pinned Actions above get via commit SHA, applied to a
+      # raw binary download. Bump both MCP_PUBLISHER_VERSION and the SHA-256
+      # together from https://github.com/modelcontextprotocol/registry/releases.
+      - name: Install mcp-publisher (checksum-verified)
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+        run: |
+          set -euxo pipefail
+          curl -fsSLO "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher_linux_amd64.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
+          chmod +x mcp-publisher
+
+      # Patch a RUNTIME copy — the committed server.json keeps its
+      # placeholder fileSha256 (see the job header comment above for why
+      # that is by design, not a bug left unfixed).
+      - name: Patch fileSha256 into a runtime copy of server.json
+        env:
+          DIGEST: ${{ steps.mcpb.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 -c "import json, os; d = json.load(open('server.json')); d['packages'][0]['fileSha256'] = os.environ['DIGEST']; json.dump(d, open('server.runtime.json', 'w'), indent=2)"
+          cat server.runtime.json
+
+      # No secret: the OIDC pattern this job uses has no PyPI-Trusted-
+      # Publishing equivalent in THIS repo (it ships an mcpb binary, not a
+      # PyPI package) — it is the MCP Registry's own no-long-lived-
+      # credential mechanism. `mcp-publisher login github-oidc` exchanges
+      # this job's GitHub Actions OIDC token for a registry credential
+      # scoped to io.github.cdeust/*, using only the id-token: write
+      # permission above.
+      # Source: modelcontextprotocol/registry docs/reference/cli/commands.md
+      # ("GitHub OIDC (CI/CD)") and docs/modelcontextprotocol-io/github-actions.mdx
+      # ("OIDC authentication (recommended)"), verified 2026-08-10.
+      - name: Authenticate to the MCP Registry via GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json to the MCP Registry
+        run: ./mcp-publisher publish server.runtime.json
+
+      # A green `mcp-publisher publish` is not proof. Query the registry's
+      # own API and fail the job if it disagrees with what was published.
+      - name: Verify the registry now serves the published version
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euxo pipefail
+          VERSION=$(python3 -c "import json; print(json.load(open('server.runtime.json'))['version'])")
+          ACTUAL=$(curl -fsSL "https://registry.modelcontextprotocol.io/v0/servers?search=ai-architect-mcp-codebase" \
+            | python3 -c "import json, sys; d = json.load(sys.stdin); latest = next(s for s in d['servers'] if s['server']['name'] == 'io.github.cdeust/ai-architect-mcp-codebase' and s['_meta']['io.modelcontextprotocol.registry/official']['isLatest']); print(latest['server']['version'])")
+          echo "Registry reports latest version: ${ACTUAL} (expected ${VERSION})"
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::MCP Registry serves ${ACTUAL}, expected ${VERSION} after publish"
+            exit 1
+          fi

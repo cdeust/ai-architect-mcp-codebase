@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `publish_registry` job in `release.yml`: publishing `server.json` to the
+  official MCP Registry is now automated, running after the GitHub Release
+  is public and every asset verified, authenticated via `mcp-publisher
+  login github-oidc` (no stored credential). Computes the real
+  `packages[0].fileSha256` from the verified public `.mcpb` asset at
+  publish time rather than trusting the committed placeholder. A
+  `workflow_dispatch` recovery path publishes an already-tagged, already
+  public release — including the first publish under the current
+  `io.github.cdeust/ai-architect-mcp-codebase` identity, which the registry
+  has never served (it still serves only the pre-rename
+  `io.github.cdeust/automatised-pipeline` name, frozen at 0.8.4).
+
 ## [0.9.1] — Release-skew fix: ship the deps/ prune the published 0.9.0 binary was missing
 
 Issue #209: the marketplace 0.9.0 binary was built before #199 merged, so every
