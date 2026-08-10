@@ -187,7 +187,7 @@ cut the tag that triggered it. A tag signature would answer that narrower
 question and is the weaker of the two statements, so the assurance is spent on
 the artifact instead. `version_tags_signed` therefore stays **Unmet** — reported
 honestly rather than argued around — while `signed_releases` is **Met** on
-artifact evidence. The sibling project cdeust/prd-spec-generator answers both
+artifact evidence. The sibling project cdeust/ai-architect-mcp-spec answers both
 criteria the same way.
 
 The **windows-x86_64 asset is missing**. `v0.8.2` shipped one; the `v0.8.3`

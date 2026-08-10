@@ -414,12 +414,12 @@ Every stage is a tool. Stages build on each other but are independently callable
 | **3b** | `resolve_graph`, `lsp_resolve` | Import/call/impl resolution with confidence scoring + optional LSP deep resolution (rust-analyzer / pyright / typescript-language-server) |
 | **3c** | `cluster_graph`, `get_processes`, `get_impact` | Leiden-class community detection (Louvain + C2 repair) + BFS execution-flow tracing from entry points |
 | **3d** | `search_codebase`, `get_context`, `analyze_codebase`, `detect_changes` | Hybrid BM25 + sparse TF-IDF + RRF search · 360° symbol view · all-in-one analysis · git-diff impact |
-| **4** | `prepare_prd_input` | Bundle verified finding + graph intel → artifact for prd-spec-generator |
+| **4** | `prepare_prd_input` | Bundle verified finding + graph intel → artifact for ai-architect-mcp-spec |
 | **6** | `validate_prd_against_graph` | Symbol hallucination · community consistency · process-impact contradiction |
 | **8** | `check_security_gates` | Auth-critical community · unsafe symbol · public-API change · unresolved-import intro · test-coverage gap |
 | **9** | `verify_semantic_diff` | Before/after graph diff with Tarjan SCC cycle detection and regression scoring |
 
-> Stages 5 (PRD generation), 7 (implementation), 10 (benchmark), 11 (deployment), 12 (PR) belong to other systems in the pipeline: [prd-spec-generator](https://github.com/cdeust/prd-spec-generator), the coding agent, CI, and `gh`. This project is the **read-only intelligence** half.
+> Stages 5 (PRD generation), 7 (implementation), 10 (benchmark), 11 (deployment), 12 (PR) belong to other systems in the pipeline: [ai-architect-mcp-spec](https://github.com/cdeust/ai-architect-mcp-spec), the coding agent, CI, and `gh`. This project is the **read-only intelligence** half.
 
 ---
 
@@ -513,7 +513,7 @@ core modules:
     lsp_{client,resolver}  — optional LSP deep resolution
     clustering         — inline Louvain + C2 repair + process tracing
     search/{bm25,vector,rrf,mod}  — hybrid search (Tantivy + sparse TF-IDF + RRF)
-    prd_input          — stage 4: bundle for prd-spec-generator
+    prd_input          — stage 4: bundle for ai-architect-mcp-spec
     prd_validator      — stage 6: validate PRD claims against graph
     security_gates     — stage 8: auth/unsafe/API/imports/coverage checks
     semantic_diff      — stage 9: before/after graph regression scoring
@@ -686,7 +686,7 @@ precision/recall/token/tool-call numbers above stand on their own.
       └──────┬──────────────────┬────────────────────────┘
              │                  │
              │                  └────→  stage 5 (PRD gen)
-             │                          [prd-spec-generator]
+             │                         [ai-architect-mcp-spec]
              ↓                          TypeScript / Node
      ┌─────────────────┐                    │
      │     Cortex      │                    │
@@ -707,7 +707,7 @@ precision/recall/token/tool-call numbers above stand on their own.
 
 - **Cortex** — every architectural decision made during a pipeline run gets remembered. When the next finding touches a similar area, Cortex surfaces the prior reasoning before you re-derive it.
 - **zetetic-team-subagents** — the genius agents (Shannon, Lamport, Simon, Popper, Feynman, Fermi, dba, architect, security-auditor, engineer) designed this project stage by stage. Every major decision in `stages/*.md` traces to an agent dispatch.
-- **prd-spec-generator** — consumes our `stage-4.prd_input.json` artifact via disk or MCP-to-MCP query of `search_codebase` / `get_context` / `get_impact`. Each in its ideal language: our performance-critical graph work in Rust, their document generation in TypeScript.
+- **ai-architect-mcp-spec** — consumes our `stage-4.prd_input.json` artifact via disk or MCP-to-MCP query of `search_codebase` / `get_context` / `get_impact`. Each in its ideal language: our performance-critical graph work in Rust, their document generation in TypeScript.
 
 ---
 
