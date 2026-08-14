@@ -4,7 +4,7 @@
 
 use crate::conditions::visit_files;
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, DependencyScope};
+use ai_architect_mcp::indexer::{self, IndexOptions};
 use ai_architect_mcp::{clustering, resolver};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -28,7 +28,7 @@ pub fn index_language(corpus_root: &Path, lang: &str) -> Result<Indexed, String>
         .tempdir()
         .map_err(|e| format!("tempdir: {e}"))?;
     let graph_path = tmp.path().join("graph");
-    indexer::index_codebase_with_language(&src, &graph_path, None, DependencyScope::None)?;
+    indexer::index_codebase_with_language(&src, &graph_path, &IndexOptions::default())?;
     let store = GraphStore::open_or_create(&graph_path)?;
     resolver::resolve_graph(&store)?;
     clustering::cluster_graph(&store, 1.0)?;

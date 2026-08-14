@@ -10,7 +10,7 @@
 
 use ai_architect_mcp::clustering::{self, get_impact, get_processes};
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, DependencyScope};
+use ai_architect_mcp::indexer::{self, IndexOptions};
 use ai_architect_mcp::resolver;
 use std::path::Path;
 use tempfile::TempDir;
@@ -27,7 +27,7 @@ fn index(lang: &str) -> (GraphStore, TempDir) {
         .tempdir()
         .expect("tempdir");
     let graph_path = tmp.path().join("graph");
-    indexer::index_codebase_with_language(&src, &graph_path, None, DependencyScope::None)
+    indexer::index_codebase_with_language(&src, &graph_path, &IndexOptions::default())
         .expect("index corpus");
     let store = GraphStore::open_or_create(&graph_path).expect("open graph");
     resolver::resolve_graph(&store).expect("resolve");

@@ -16,9 +16,9 @@
 
 use ai_architect_mcp::artifact;
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, manifest, DependencyScope};
+use ai_architect_mcp::indexer::{self, manifest, IndexOptions};
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
@@ -103,14 +103,11 @@ fn apply_mutation(repo: &Path) {
     .unwrap();
 }
 
-fn main() {
-    let tmp = tempfile::Builder::new()
-        .prefix("incr_speed_")
-        .tempdir()
-        .expect("tmp");
-    let root = tmp.path();
-
-    // -- Fixture: a git repo of N symbol-dense modules ----------------------
+/// Builds the fixture: a git repo of N symbol-dense modules with a baseline
+/// full index + manifest + exported artifact, then a 4-file mutation commit
+/// (so the artifact/base is stale by exactly that diff). Returns
+/// `(repo, base_graph, base_manifest)`.
+fn build_fixture(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let repo = root.join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     for i in 0..N_MODULES {
@@ -120,15 +117,14 @@ fn main() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "initial"]);
 
-    // Baseline full index + manifest, and an exported artifact for the fill run.
     let base_out = root.join("base");
     std::fs::create_dir_all(&base_out).unwrap();
     let base_graph = base_out.join("graph");
     let base_manifest = manifest::manifest_path(&base_out);
     let result =
-        indexer::index_codebase_with_language(&repo, &base_graph, None, DependencyScope::None)
+        indexer::index_codebase_with_language(&repo, &base_graph, &IndexOptions::default())
             .unwrap();
-    indexer::write_full_manifest(&repo, &base_manifest, None, DependencyScope::None).unwrap();
+    indexer::write_full_manifest(&repo, &base_manifest, &IndexOptions::default()).unwrap();
     artifact::export_artifact(
         &base_graph,
         &repo,
@@ -141,39 +137,47 @@ fn main() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "artifact"]);
 
-    // Mutate + commit (the artifact/base is now stale by the 4-file diff).
     apply_mutation(&repo);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "changes"]);
+    (repo, base_graph, base_manifest)
+}
 
-    // -- Measure: full index of the mutated tree (best-of-N min) ------------
+/// Full index of the mutated tree, best-of-N minimum wall-clock.
+fn measure_full(root: &Path, repo: &Path) -> u64 {
     let mut full_ms = u64::MAX;
     for a in 0..ATTEMPTS {
         let g = root.join(format!("full_{a}"));
         let t = Instant::now();
-        indexer::index_codebase_with_language(&repo, &g, None, DependencyScope::None).unwrap();
+        indexer::index_codebase_with_language(repo, &g, &IndexOptions::default()).unwrap();
         full_ms = full_ms.min(t.elapsed().as_millis() as u64);
     }
+    full_ms
+}
 
-    // -- Measure: incremental re-index (copy pristine graph each attempt) ----
-    // The base graph reflects the PRE-mutation tree; classify against the tree.
+/// Incremental re-index (copying the pristine pre-mutation graph each
+/// attempt so classify runs against the same stale base), best-of-N.
+fn measure_incremental(root: &Path, repo: &Path, base_graph: &Path, base_manifest: &Path) -> u64 {
     let mut inc_ms = u64::MAX;
     for a in 0..ATTEMPTS {
         let g = root.join(format!("inc_g_{a}"));
         let m = root.join(format!("inc_m_{a}.json"));
-        copy_path(&base_graph, &g);
-        std::fs::copy(&base_manifest, &m).unwrap();
+        copy_path(base_graph, &g);
+        std::fs::copy(base_manifest, &m).unwrap();
         let prior = manifest::load(&m).unwrap();
         let t = Instant::now();
-        indexer::index_incremental(&repo, &g, &m, None, DependencyScope::None, &prior).unwrap();
+        indexer::index_incremental(repo, &g, &m, &IndexOptions::default(), &prior).unwrap();
         inc_ms = inc_ms.min(t.elapsed().as_millis() as u64);
     }
+    inc_ms
+}
 
-    // -- Measure: artifact bootstrap-fill after a fresh clone (best-of-N) ----
+/// Artifact bootstrap-fill after a fresh clone, best-of-N.
+fn measure_bootstrap_fill(root: &Path, repo: &Path) -> u64 {
     let clone = root.join("clone");
     let out = Command::new("git")
         .args(["clone", "-q"])
-        .arg(&repo)
+        .arg(repo)
         .arg(&clone)
         .output()
         .unwrap();
@@ -197,16 +201,33 @@ fn main() {
             &bm,
             &meta.commit,
             imported.as_ref(),
-            None,
-            DependencyScope::None,
+            &IndexOptions::default(),
         )
         .unwrap();
         fill_ms = fill_ms.min(t.elapsed().as_millis() as u64);
     }
+    fill_ms
+}
 
+fn main() {
+    let tmp = tempfile::Builder::new()
+        .prefix("incr_speed_")
+        .tempdir()
+        .expect("tmp");
+    let root = tmp.path();
+
+    let (repo, base_graph, base_manifest) = build_fixture(root);
+    let full_ms = measure_full(root, &repo);
+    let inc_ms = measure_incremental(root, &repo, &base_graph, &base_manifest);
+    let fill_ms = measure_bootstrap_fill(root, &repo);
+    report(&base_graph, full_ms, inc_ms, fill_ms);
+}
+
+/// Writes results.json and prints the human-readable summary.
+fn report(base_graph: &Path, full_ms: u64, inc_ms: u64, fill_ms: u64) {
     let inc_ratio = pct(inc_ms, full_ms);
     let fill_ratio = pct(fill_ms, full_ms);
-    let store = GraphStore::open_or_create(&base_graph).unwrap();
+    let store = GraphStore::open_or_create(base_graph).unwrap();
     let nodes = store.node_count().unwrap_or(0);
     let edges = store.edge_count().unwrap_or(0);
 

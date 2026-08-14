@@ -21,7 +21,7 @@
 // generated in-code) and prints a summary.
 
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, DependencyScope};
+use ai_architect_mcp::indexer::{self, IndexOptions};
 use ai_architect_mcp::token_surface::{render_list, Detail, Format};
 use ai_architect_mcp::{clustering, resolver, search};
 use serde_json::{json, Map, Value};
@@ -48,54 +48,78 @@ fn main() {
     let repo = tmp.path().join("repo");
     write_fixture(&repo);
 
-    let out = tmp.path().join("out");
+    let (store, graph) = index_fixture(tmp.path(), &repo);
+    let measured = run_workload(&store, &graph);
+    let totals = Totals::of(&measured);
+    // ---- (b) graph tools vs scripted grep/read transcript -----------------
+    let files_chars = simulate_grep_read(&repo, &measured);
+    let results = build_results(&measured, &totals, files_chars);
+    write_and_print(&results, &totals, files_chars);
+}
+
+/// Indexes, resolves and clusters the fixture repo; returns the opened store
+/// and the graph path.
+fn index_fixture(root: &Path, repo: &Path) -> (GraphStore, std::path::PathBuf) {
+    let out = root.join("out");
     std::fs::create_dir_all(&out).expect("mk out");
     let graph = out.join("graph");
-    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None)
-        .expect("index");
+    indexer::index_codebase_with_language(repo, &graph, &IndexOptions::default()).expect("index");
     let store = GraphStore::open_or_create(&graph).expect("open graph");
     resolver::resolve_graph(&store).expect("resolve");
     // cluster_graph runs community detection AND process tracing (it calls
     // trace_processes internally), so get_processes has data afterward.
     clustering::cluster_graph(&store, 1.0).expect("cluster");
+    (store, graph)
+}
 
-    let measured = vec![
+/// The fixed 5-query structural workload.
+fn run_workload(store: &GraphStore, graph: &Path) -> Vec<Measured> {
+    vec![
         measure_search(
-            &store,
-            &graph,
+            store,
+            graph,
             "process",
             "Q1: find functions matching 'process'",
         ),
-        measure_query_functions(&store, "Q2: list every function's qualified name"),
-        measure_processes(&store, "Q3: list all execution processes"),
+        measure_query_functions(store, "Q2: list every function's qualified name"),
+        measure_processes(store, "Q3: list all execution processes"),
         measure_impact(
-            &store,
+            store,
             "core::core_process",
             "Q4: who depends on core_process?",
         ),
-        measure_search(
-            &store,
-            &graph,
-            "config",
-            "Q5: find symbols matching 'config'",
-        ),
-    ];
+        measure_search(store, graph, "config", "Q5: find symbols matching 'config'"),
+    ]
+}
 
-    // ---- (a) ids/tabular vs current JSON ----------------------------------
-    let json_total: usize = measured.iter().map(|m| m.json_chars).sum();
-    let tabular_total: usize = measured.iter().map(|m| m.tabular_chars).sum();
-    let ids_total: usize = measured.iter().map(|m| m.ids_chars).sum();
-    // The compact-best per query: tabular when you need the fields, ids for a
-    // pure sweep. We report tabular as the apples-to-apples "same information"
-    // comparison and ids as the cheapest sweep.
-    let tabular_reduction = pct_reduction(json_total, tabular_total);
-    let ids_reduction = pct_reduction(json_total, ids_total);
+/// Comparison (a) aggregates: ids/tabular vs current JSON. Tabular is the
+/// apples-to-apples "same information" comparison; ids is the cheapest sweep.
+struct Totals {
+    json: usize,
+    tabular: usize,
+    ids: usize,
+    tabular_reduction: f64,
+    ids_reduction: f64,
+}
 
-    // ---- (b) graph tools vs scripted grep/read transcript -----------------
-    let files_chars = simulate_grep_read(&repo, &measured);
-    let graph_compact_total = tabular_total; // the "same information" graph answer
-    let files_ratio = files_chars as f64 / graph_compact_total.max(1) as f64;
+impl Totals {
+    fn of(measured: &[Measured]) -> Totals {
+        let json: usize = measured.iter().map(|m| m.json_chars).sum();
+        let tabular: usize = measured.iter().map(|m| m.tabular_chars).sum();
+        let ids: usize = measured.iter().map(|m| m.ids_chars).sum();
+        Totals {
+            json,
+            tabular,
+            ids,
+            tabular_reduction: pct_reduction(json, tabular),
+            ids_reduction: pct_reduction(json, ids),
+        }
+    }
+}
 
+/// Assembles the results.json document from the per-query measurements and
+/// the comparison aggregates.
+fn build_results(measured: &[Measured], t: &Totals, files_chars: usize) -> Value {
     let per_query: Vec<Value> = measured
         .iter()
         .map(|m| {
@@ -111,39 +135,45 @@ fn main() {
             })
         })
         .collect();
-
-    let results = json!({
+    let files_ratio = files_chars as f64 / t.tabular.max(1) as f64;
+    json!({
         "workload": "fixed 5-query structural workload on a generated fixture repo",
         "token_proxy": "characters of compact JSON serialization (~4 chars per token)",
         "comparison_a_ids_tabular_vs_json": {
-            "json_total_chars": json_total,
-            "tabular_total_chars": tabular_total,
-            "ids_total_chars": ids_total,
-            "tabular_reduction_pct": tabular_reduction,
-            "ids_reduction_pct": ids_reduction,
-            "meets_30pct_criterion": tabular_reduction >= 30.0 || ids_reduction >= 30.0,
+            "json_total_chars": t.json,
+            "tabular_total_chars": t.tabular,
+            "ids_total_chars": t.ids,
+            "tabular_reduction_pct": t.tabular_reduction,
+            "ids_reduction_pct": t.ids_reduction,
+            "meets_30pct_criterion": t.tabular_reduction >= 30.0 || t.ids_reduction >= 30.0,
         },
         "comparison_b_graph_vs_files": {
-            "graph_tabular_total_chars": graph_compact_total,
+            "graph_tabular_total_chars": t.tabular,
             "grep_read_transcript_chars": files_chars,
             "files_to_graph_ratio": round2(files_ratio),
             "note": "comparison (b) is a SCRIPTED simulation of a grep/read transcript, NOT a live agent run",
         },
         "per_query": per_query,
-    });
+    })
+}
 
-    // Write results.json next to this crate's Cargo.toml.
+/// Writes results.json next to this crate's Cargo.toml and prints the
+/// human-readable summary.
+fn write_and_print(results: &Value, t: &Totals, files_chars: usize) {
     let out_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("results.json");
-    let pretty = serde_json::to_string_pretty(&results).expect("encode results");
+    let pretty = serde_json::to_string_pretty(results).expect("encode results");
     std::fs::write(&out_path, &pretty).expect("write results.json");
 
+    let (json_total, tabular_total, ids_total) = (t.json, t.tabular, t.ids);
+    let (tabular_reduction, ids_reduction) = (t.tabular_reduction, t.ids_reduction);
+    let files_ratio = files_chars as f64 / t.tabular.max(1) as f64;
     println!("== token_surface_bench ==");
     println!(
         "(a) ids/tabular vs current JSON over 5 queries:\n    json={json_total}  tabular={tabular_total} ({tabular_reduction:.1}% less)  ids={ids_total} ({ids_reduction:.1}% less)"
     );
     println!(
-        "(b) graph (tabular) vs scripted grep/read transcript:\n    graph={graph_compact_total}  files={files_chars}  files/graph = {:.1}x",
-        files_ratio
+        "(b) graph (tabular) vs scripted grep/read transcript:\n    graph={}  files={files_chars}  files/graph = {:.1}x",
+        tabular_total, files_ratio
     );
     println!("wrote {}", out_path.display());
     println!(
