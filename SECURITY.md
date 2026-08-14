@@ -69,7 +69,7 @@ network calls during indexing; all processing is local.
 
 | Property | How you check it |
 |---|---|
-| The artifact was built by our release workflow and stable tag | `gh attestation verify <file> --repo cdeust/ai-architect-mcp-codebase --signer-workflow cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml --source-ref refs/tags/v0.10.0 --bundle <file>.sigstore.json` |
+| The artifact was built by our release workflow and stable tag | `gh attestation verify <file> --repo cdeust/ai-architect-mcp-codebase --signer-workflow cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml --source-ref refs/tags/v0.11.0 --bundle <file>.sigstore.json` |
 | The bytes were not altered in transit | `sha256sum -c <file>.sha256` |
 | The release tag was cut by the maintainer, not by whoever can push | **not claimed** — tags are unsigned; artifact provenance answers this instead (see below) |
 | What is inside the binary | the CycloneDX SBOM asset, `ai-architect-mcp-codebase.cdx.json` |
@@ -82,7 +82,7 @@ Verify a downloaded release before running it:
 gh attestation verify ai-architect-mcp-codebase-macos-aarch64.tar.gz \
   --repo cdeust/ai-architect-mcp-codebase \
   --signer-workflow cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.10.0 \
+  --source-ref refs/tags/v0.11.0 \
   --bundle ai-architect-mcp-codebase-macos-aarch64.tar.gz.sigstore.json
 sha256sum -c ai-architect-mcp-codebase-macos-aarch64.tar.gz.sha256
 ```

@@ -44,9 +44,9 @@ FROZEN_PINS = {
 # no tag can exist before the PR that creates it merges.
 PENDING_SELF_PINS: dict[str, str] = {
     "ai-architect-mcp-codebase": (
-        "https://github.com/cdeust/ai-architect-mcp-codebase/pull/248 "
-        "— v0.10.0 release, tag cut on merge; remove this entry once "
-        "v0.10.0 is tagged"
+        "https://github.com/cdeust/ai-architect-mcp-codebase/pull/252 "
+        "— v0.11.0 release, tag cut on merge; remove this entry once "
+        "v0.11.0 is tagged"
     ),
 }
 

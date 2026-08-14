@@ -6,6 +6,52 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] — User-controlled directory exclusion; graceful unreadable-directory degrade
+
+Minor, not patch: this release adds backward-compatible functionality (a new
+optional `exclude_dirs` parameter on two tools, plus a strictly more tolerant
+walk on permission-denied subdirectories) with no breaking change to any
+consumer-facing behavior.
+
+### Added
+
+- `exclude_dirs` (array of strings) on `index_codebase` AND `analyze_codebase`
+  (#249, #250): a bare name (no path separator) prunes every matching
+  directory anywhere in the tree, like the built-in skip list; an entry with a
+  separator prunes exactly one subtree relative to the indexed path. Exclusion
+  wins over every `dependency_scope` tier, including `full` — it is for
+  directories that must never be read, not a performance prune. No glob
+  support. Entries are canonicalized (`./`-prefixes, doubled and trailing
+  separators), and validated at the MCP boundary: absolute paths and `..`
+  components are rejected. Changing `exclude_dirs` on an existing graph
+  requires `full=true` (the manifest does not capture it, same caveat as
+  `dependency_scope`).
+- Coverage honesty (#57 follow-through): pruned directories are reported in
+  the coverage sidecar as skipped with reason `user_excluded`, unreadable ones
+  with reason `unreadable`, and the response receipt carries a distinct count
+  for each. Nothing is silently dropped.
+
+### Fixed
+
+- A single `PermissionDenied` subdirectory no longer aborts the whole index
+  (#249, #250): the directory is recorded and skipped and the walk continues.
+  An unreadable walk *root* stays fatal, and every other `read_dir` error
+  remains fatal.
+- Test-suite disk hygiene (#251): removed a `mem::forget` tempdir leak
+  (`tests/uses_edges_92.rs`) and converted the last raw
+  `std::env::temp_dir()`-based fixture (`tests/kotlin_ambiguous_calls.rs`) to
+  the managed RAII guard from #236. A passing full `cargo test` now leaves
+  zero new directories in `$TMPDIR` — leaked LadybugDB test databases were
+  ~368 MB each and contributed to filling a developer machine's disk on
+  2026-08-13.
+
+### Changed
+
+- Behavior-preserving test refactors (#250, #251): test functions across nine
+  test files split to the coding-standards §4.2 50-line cap; the workspace
+  bench binaries migrated to the new `IndexOptions` signature and their
+  `main`s split along phase boundaries.
+
 ## [0.10.0] — Fix the MCP Registry publish path; generalize parsers to a data-driven engine
 
 `v0.9.1`'s `server.json` shipped a 144-character `description` — the MCP

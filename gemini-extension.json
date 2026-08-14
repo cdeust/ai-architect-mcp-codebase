@@ -1,6 +1,6 @@
 {
   "name": "ai-architect-mcp-codebase",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Codebase-intelligence MCP server and portable workflows for codebase understanding, impact analysis, and change-plan validation. Requires the binary from `cargo install ai-architect-mcp-codebase` on PATH.",
   "mcpServers": {
     "ai-architect": {
