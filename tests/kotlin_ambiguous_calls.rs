@@ -21,12 +21,23 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use ai_architect_mcp::resolver;
 use std::fs;
+mod common;
+use common::TempDirExt;
 
+/// Writes `files` into a fresh tempdir, indexes and resolves it, and returns
+/// the open graph plus the tempdir guard (the on-disk graph outlives the
+/// queries; RAII cleans it up on drop — see tests/common).
 fn index_and_resolve(
     tag: &str,
     files: &[(&str, &str)],
-) -> (GraphStore, resolver::ResolutionResult) {
-    let root = std::env::temp_dir().join(format!("kotlin_ambiguous_{tag}_{}", std::process::id()));
+) -> (GraphStore, resolver::ResolutionResult, common::TestTempDir) {
+    // issue #25 audit: process::id() collides across processes under PID
+    // reuse; tempfile's random suffix does not.
+    let root = tempfile::Builder::new()
+        .prefix(&format!("kotlin_ambiguous_{tag}_"))
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
     let _ = fs::remove_dir_all(&root);
     let src = root.join("src");
     for (rel, body) in files {
@@ -40,7 +51,7 @@ fn index_and_resolve(
     indexer::index_codebase(&src, &graph_dir).expect("index_codebase");
     let store = GraphStore::open_or_create(&graph_dir).expect("open graph");
     let res = resolver::resolve_graph(&store).expect("resolve_graph");
-    (store, res)
+    (store, res, root)
 }
 
 fn calls_edge(store: &GraphStore, callee_contains: &str) -> Vec<Vec<String>> {
@@ -66,7 +77,7 @@ fn kotlin_bare_import_resolves_the_imported_candidate() {
     let a = "package pkg.a\n\nfun process(): Int = 1\n";
     let b = "package pkg.b\n\nfun process(): Int = 2\n";
     let caller = "package pkg.c\n\nimport pkg.b.process\n\nfun run() {\n    process()\n}\n";
-    let (store, res) = index_and_resolve(
+    let (store, res, _root) = index_and_resolve(
         "repro",
         &[
             ("pkg/a/A.kt", a),
@@ -94,7 +105,7 @@ fn kotlin_cross_package_import_resolves_with_import_match_confidence() {
     let a = "package pkg.alpha\n\nfun handle(): Int = 1\n";
     let b = "package pkg.beta\n\nfun handle(): Int = 2\n";
     let caller = "package pkg.gamma\n\nimport pkg.beta.handle\n\nfun run() {\n    handle()\n}\n";
-    let (store, res) = index_and_resolve(
+    let (store, res, _root) = index_and_resolve(
         "severe",
         &[
             ("pkg/alpha/A.kt", a),
@@ -128,7 +139,7 @@ fn kotlin_same_package_proximity_resolves_without_import() {
     let sibling = "package pkg.shared\n\nfun helper(): Int = 1\n";
     let unrelated = "package pkg.other\n\nfun helper(): Int = 2\n";
     let caller = "package pkg.shared\n\nfun run() {\n    helper()\n}\n";
-    let (store, res) = index_and_resolve(
+    let (store, res, _root) = index_and_resolve(
         "proximity",
         &[
             ("pkg/shared/Sibling.kt", sibling),
@@ -163,7 +174,7 @@ fn kotlin_genuine_ambiguity_is_labeled_not_dropped_or_guessed() {
     let a = "package pkg.x\n\nfun compute(): Int = 1\n";
     let b = "package pkg.y\n\nfun compute(): Int = 2\n";
     let caller = "package pkg.z\n\nfun run() {\n    compute()\n}\n";
-    let (store, res) = index_and_resolve(
+    let (store, res, _root) = index_and_resolve(
         "ambiguous",
         &[
             ("pkg/x/X.kt", a),
@@ -223,7 +234,7 @@ fun run() {
     viewModel.load()
 }
 "#;
-    let (store, res) = index_and_resolve(
+    let (store, res, _root) = index_and_resolve(
         "value_receiver",
         &[
             ("view/model/Decoy.kt", decoy),

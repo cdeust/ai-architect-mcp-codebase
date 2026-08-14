@@ -36,9 +36,11 @@ fn build_graph(files: &[(&str, &str)]) -> (GraphStore, TempDir) {
         .expect("index");
     let store = GraphStore::open_or_create(&graph_path).expect("open graph");
     resolver::resolve_graph(&store).expect("resolve");
-    // Keep both tempdirs alive for the duration of the queries: leak the source
-    // dir (small, cleaned at process exit) and return the graph dir handle.
-    std::mem::forget(src);
+    // `src` is only read during indexing (above) — dropping it here (RAII)
+    // is safe and cleans it up immediately instead of leaking it to
+    // "process exit" cleanup that macOS's $TMPDIR does not reliably do
+    // (root cause of the disk-fill incident this test-hygiene pass fixes).
+    // `graph_dir` must outlive the queries, so it alone is returned.
     (store, graph_dir)
 }
 
