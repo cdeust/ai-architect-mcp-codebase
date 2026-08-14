@@ -311,26 +311,17 @@ fn prod_default_is_valid_per_lbug_constraints() {
     );
 }
 
-#[test]
-fn prod_default_config_opens_a_real_database() {
-    // Proves DEFAULT_PROD_MAX_DB_SIZE_BYTES is not just internally
-    // consistent (prod_default_is_valid_per_lbug_constraints, above) but
-    // actually accepted by lbug's C++ BufferManager::verifySizeParams.
-    // Built directly via SystemConfig rather than through
-    // system_config(), because .cargo/config.toml's [env] table sets
-    // AP_LBUG_TEST_MAX_DB_SIZE for every cargo-spawned process (issue
-    // #21/#24) and mutating that process-wide var at runtime here would
-    // race other tests in this binary — see graph_cache.rs's
-    // `prod_default_bound_opens_max_cached_graphs_simultaneously` for the
-    // multi-open concurrency proof at this exact bound.
-    let dir = tempfile::Builder::new()
-        .prefix("graph_store_prod_default_test")
-        .tempdir()
-        .expect("create temp dir");
-    let cfg = SystemConfig::default().max_db_size(DEFAULT_PROD_MAX_DB_SIZE_BYTES);
-    let _store = GraphStore::open_or_create_with_config(&dir.path().join("testdb"), cfg)
-        .expect("prod default max_db_size must be accepted by lbug");
-}
+// `prod_default_config_opens_a_real_database` was removed with the 8 GiB-cap
+// repeal (2026-08-14, PR #255 review). It opened a real database at
+// DEFAULT_PROD_MAX_DB_SIZE_BYTES OUTSIDE the test bound — at the repealed
+// value (8 TiB) that is a full VM-region reservation inside a parallel
+// `cargo test` run, the exact multi-process mmap flake issue #25 measured,
+// at 1024x the address space. The property it proved is now tautological:
+// the prod default IS lbug's own sentinel-substituted default
+// (DEFAULT_VM_REGION_MAX_SIZE), the value every unconfigured lbug open —
+// including the engine's own test suite — already exercises.
+// `prod_default_is_valid_per_lbug_constraints` (above) keeps the
+// value-level guarantees (floor, power-of-two, exact ceiling equality).
 
 // ---------------------------------------------------------------------------
 // issue #201 — stale-sidecar recovery.

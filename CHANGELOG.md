@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Ingestion no longer aborts when the graph outgrows 8 GiB: the production
+  `max_db_size` default moves from the 8 GiB cap (issue #25) to lbug's own
+  8 TiB VM-region ceiling — the engine's behavior when `max_db_size` is left
+  unset. `max_db_size` sizes an mmap address-space reservation, not an
+  allocation, so disk and memory still grow only with real data. Multi-TiB
+  corpora now index to completion; operators who need a bound set
+  `AP_LBUG_MAX_DB_SIZE` (validation unchanged: power of two, 8 MiB floor).
+
+
 ## [0.11.0] — User-controlled directory exclusion; graceful unreadable-directory degrade
 
 Minor, not patch: this release adds backward-compatible functionality (a new

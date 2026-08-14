@@ -121,12 +121,14 @@ pub(crate) fn parse_and_validate_max_db_size(raw: &str, env_name: &str) -> Resul
 /// Precedence: `TEST_MAX_DB_SIZE_ENV` (`AP_LBUG_TEST_MAX_DB_SIZE`), when set,
 /// always wins — this preserves the issue #21/#24 test-bounding behavior
 /// unchanged. Otherwise `PROD_MAX_DB_SIZE_ENV` (`AP_LBUG_MAX_DB_SIZE`), when
-/// set, is used. Otherwise `DEFAULT_PROD_MAX_DB_SIZE_BYTES` (8 GiB) applies —
-/// this is the issue #25 fix: production no longer falls through to lbug's
-/// own 8 TiB sentinel default. Either env var, if set to a value that fails
-/// validation (not a power of two, or below lbug's 8 MiB floor), is rejected
-/// with an actionable error rather than silently falling back to a default
-/// the operator did not choose.
+/// set, is used. Otherwise `DEFAULT_PROD_MAX_DB_SIZE_BYTES` (8 TiB — lbug's
+/// own VM-region ceiling; see its doc comment for the 2026-08-14 repeal of
+/// the 8 GiB cap) applies. The choke point still earns its keep after the
+/// repeal: it is where the TEST bound and the operator override are
+/// enforced, and where an env var that fails validation (not a power of
+/// two, or below lbug's 8 MiB floor) is rejected with an actionable error
+/// rather than silently falling back to a default the operator did not
+/// choose.
 pub fn system_config() -> Result<SystemConfig, String> {
     let config = SystemConfig::default();
     if let Ok(raw) = std::env::var(TEST_MAX_DB_SIZE_ENV) {
