@@ -139,13 +139,13 @@ impl GraphStore {
     /// Opens (or creates) a LadybugDB database at `path` with an explicit
     /// `SystemConfig`, bypassing `system_config()`'s env-var resolution.
     ///
-    /// `pub(crate)` rather than a test-only cfg: exists solely so tests (in
-    /// this module and in `graph_cache`'s test module) can exercise a
-    /// specific `max_db_size` — in particular `DEFAULT_PROD_MAX_DB_SIZE_BYTES`
-    /// — without racing `.cargo/config.toml`'s process-wide
-    /// `AP_LBUG_TEST_MAX_DB_SIZE` override across parallel test threads.
-    /// `open_or_create` is the only production call site; it always resolves
-    /// through `system_config()` first, so production behavior is unchanged.
+    /// Since the 8 GiB-cap repeal (2026-08-14) its only caller is
+    /// `open_or_create` itself, which always resolves the config through
+    /// `system_config()` first — this is the seam between "decide the
+    /// config" and "open with it", not an alternate entry point. The tests
+    /// that once used it to open at an explicit `max_db_size` were removed
+    /// with the property they pinned (see `graph_store::tests` and
+    /// `graph_cache`'s amended capacity test).
     pub(crate) fn open_or_create_with_config(
         path: &Path,
         config: SystemConfig,

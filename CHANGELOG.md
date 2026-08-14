@@ -16,7 +16,6 @@ adheres to [Semantic Versioning](https://semver.org/).
   corpora now index to completion; operators who need a bound set
   `AP_LBUG_MAX_DB_SIZE` (validation unchanged: power of two, 8 MiB floor).
 
-
 ## [0.11.0] — User-controlled directory exclusion; graceful unreadable-directory degrade
 
 Minor, not patch: this release adds backward-compatible functionality (a new
