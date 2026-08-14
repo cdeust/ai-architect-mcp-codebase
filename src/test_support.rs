@@ -54,6 +54,19 @@ impl Drop for TestTempDir {
                 // Post-mortem artifact — mirrors the old (always-on) `.keep()`,
                 // now scoped to the one case it was meant for.
                 let _ = dir.keep();
+                return;
+            }
+            // DB fixtures hand this guard's PATH to the graph store, which in
+            // LadybugDB's single-file layout re-creates it as a FILE.
+            // `TempDir`'s own drop then calls remove_dir_all, which fails on a
+            // file — silently, because Drop swallows the error — and every
+            // such fixture leaked ~368 MB per test (measured 2026-08-14:
+            // search_test_* / indexer_test_graph_* files in $TMPDIR after a
+            // fully passing suite). Remove the file form explicitly and
+            // disable the doomed remove_dir_all via keep().
+            if dir.path().is_file() {
+                let path = dir.keep();
+                let _ = std::fs::remove_file(path);
             }
             // else: `dir` drops here and removes its backing directory.
         }
@@ -115,4 +128,26 @@ mod tests {
     // runs on stack unwind past the catch point, defeating the very check —
     // the guard's `Drop` genuinely needs a REAL unwind through the frame that
     // owns it, which only an actually-failing test provides.
+
+    #[test]
+    fn file_replacing_the_tempdir_path_is_removed_on_drop() {
+        // Regression (2026-08-14): LadybugDB's single-file layout re-creates
+        // the guard's path as a FILE; `TempDir`'s own drop calls
+        // remove_dir_all, which fails on a file — silently, in Drop — and
+        // every DB fixture leaked ~368 MB per test into $TMPDIR even on a
+        // fully passing suite. This test fails on the pre-fix Drop impl.
+        let dir = tempfile::Builder::new()
+            .prefix("test_support_file_")
+            .tempdir()
+            .expect("tempdir")
+            .keep_managed();
+        let path = dir.path().to_path_buf();
+        std::fs::remove_dir_all(&path).expect("clear backing dir");
+        std::fs::write(&path, b"single-file db").expect("re-create as file");
+        drop(dir);
+        assert!(
+            !path.exists(),
+            "a guard path re-created as a file must still be removed on drop"
+        );
+    }
 }

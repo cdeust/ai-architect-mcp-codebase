@@ -42,6 +42,15 @@ impl Drop for TestTempDir {
         if let Some(dir) = self.0.take() {
             if std::thread::panicking() {
                 let _ = dir.keep();
+                return;
+            }
+            // Mirror of src/test_support.rs: a DB fixture path re-created as
+            // a FILE (LadybugDB single-file layout) defeats TempDir's
+            // remove_dir_all, which fails silently in Drop and leaks ~368 MB
+            // per fixture. Remove the file form explicitly.
+            if dir.path().is_file() {
+                let path = dir.keep();
+                let _ = std::fs::remove_file(path);
             }
         }
     }
