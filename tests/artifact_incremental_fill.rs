@@ -27,7 +27,7 @@
 
 use ai_architect_mcp::artifact;
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, manifest, DependencyScope, FillMethod};
+use ai_architect_mcp::indexer::{self, manifest, FillMethod, IndexOptions};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -119,10 +119,9 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
     fs::create_dir_all(&idx_out).expect("mk idx_out");
     let idx_graph = idx_out.join("graph");
     let idx_manifest = manifest::manifest_path(&idx_out);
-    let result =
-        indexer::index_codebase_with_language(&repo, &idx_graph, None, DependencyScope::None)
-            .expect("full index");
-    indexer::write_full_manifest(&repo, &idx_manifest, None, DependencyScope::None)
+    let result = indexer::index_codebase_with_language(&repo, &idx_graph, &IndexOptions::default())
+        .expect("full index");
+    indexer::write_full_manifest(&repo, &idx_manifest, &IndexOptions::default())
         .expect("write manifest");
     artifact::export_artifact(
         &idx_graph,
@@ -200,8 +199,7 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
         &boot_manifest,
         &meta.commit,
         imported_manifest.as_ref(),
-        None,
-        DependencyScope::None,
+        &IndexOptions::default(),
     )
     .expect("incremental fill");
 
@@ -221,7 +219,7 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
     let full_out = tmp.path().join("full_out");
     fs::create_dir_all(&full_out).expect("mk full_out");
     let full_graph = full_out.join("graph");
-    indexer::index_codebase_with_language(&clone, &full_graph, None, DependencyScope::None)
+    indexer::index_codebase_with_language(&clone, &full_graph, &IndexOptions::default())
         .expect("full index of clone HEAD");
     let snap_boot = {
         let store = GraphStore::open_or_create(&boot_graph).expect("open filled graph");
@@ -256,11 +254,9 @@ fn fill_falls_back_to_content_hash_when_not_a_git_tree() {
     fs::create_dir_all(&idx_out).expect("mk idx_out");
     let idx_graph = idx_out.join("graph");
     let idx_manifest = manifest::manifest_path(&idx_out);
-    let result =
-        indexer::index_codebase_with_language(&repo, &idx_graph, None, DependencyScope::None)
-            .expect("index");
-    indexer::write_full_manifest(&repo, &idx_manifest, None, DependencyScope::None)
-        .expect("manifest");
+    let result = indexer::index_codebase_with_language(&repo, &idx_graph, &IndexOptions::default())
+        .expect("index");
+    indexer::write_full_manifest(&repo, &idx_manifest, &IndexOptions::default()).expect("manifest");
     artifact::export_artifact(
         &idx_graph,
         &repo,
@@ -289,8 +285,7 @@ fn fill_falls_back_to_content_hash_when_not_a_git_tree() {
         &boot_manifest,
         &meta.commit,
         imported.as_ref(),
-        None,
-        DependencyScope::None,
+        &IndexOptions::default(),
     )
     .expect("fill");
     assert_eq!(
@@ -306,7 +301,7 @@ fn fill_falls_back_to_content_hash_when_not_a_git_tree() {
     let full_out = tmp.path().join("full_out");
     fs::create_dir_all(&full_out).expect("mk full_out");
     let full_graph = full_out.join("graph");
-    indexer::index_codebase_with_language(&repo, &full_graph, None, DependencyScope::None)
+    indexer::index_codebase_with_language(&repo, &full_graph, &IndexOptions::default())
         .expect("full");
     let snap_boot = {
         let s = GraphStore::open_or_create(&boot_graph).expect("open boot");

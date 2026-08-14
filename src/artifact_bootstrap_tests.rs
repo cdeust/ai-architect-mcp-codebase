@@ -52,7 +52,7 @@ fn stale_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     // manifest is bundled so the export mirrors a real `export_artifact=true`.
     let manifest_path = indexer::manifest::manifest_path(&out1);
     let result = indexer::index_codebase(&repo, &graph1).expect("index");
-    indexer::write_full_manifest(&repo, &manifest_path, None, indexer::DependencyScope::None)
+    indexer::write_full_manifest(&repo, &manifest_path, &indexer::IndexOptions::default())
         .expect("manifest");
     artifact::export_artifact(
         &graph1,
@@ -90,8 +90,7 @@ fn bootstrap(
         fresh_graph,
         &manifest_path,
         accept_stale,
-        None,
-        indexer::DependencyScope::None,
+        &indexer::IndexOptions::default(),
     )
 }
 

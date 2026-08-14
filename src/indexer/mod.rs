@@ -30,8 +30,8 @@ pub use incremental::{
 use persist::{
     index_single_file, insert_ancestor_dirs, insert_dir_file_edge, insert_file_node, ParseOutcome,
 };
-pub use walk::DependencyScope;
 use walk::{collect_source_files, is_dependency_path, WalkOptions};
+pub use walk::{DependencyScope, ExcludeSet};
 
 // ---------------------------------------------------------------------------
 // Resource limits — source: security hardening (H1).
@@ -68,6 +68,26 @@ pub use crate::parser::MAX_PARSE_BYTES;
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
+
+/// Grouped indexing knobs threaded through every walk-configuring entry point
+/// (full index, incremental index, artifact fill, manifest rebuild).
+///
+/// Bundled into one value so none of those functions needs a 5th/6th/7th
+/// individual parameter for `exclude_dirs` (coding-standards §4.4's 4-param
+/// cap) — `language_filter` and `dependency_scope` were already threaded as
+/// two separate parameters everywhere a walk decision is made; adding a third
+/// loose parameter for `exclude_dirs` would push several call sites further
+/// over the cap they were already at. Replacing the pair with this struct
+/// nets every touched signature a parameter, not costs it one.
+#[derive(Debug, Clone, Default)]
+pub struct IndexOptions {
+    pub language_filter: Option<Language>,
+    pub dependency_scope: DependencyScope,
+    /// Issue #249 — user-specified directories to prune from the walk, in
+    /// addition to the built-in build/dependency skip list. Wins over every
+    /// `dependency_scope` tier.
+    pub exclude_dirs: ExcludeSet,
+}
 
 pub struct IndexResult {
     pub graph_path: PathBuf,
@@ -111,30 +131,46 @@ pub struct IncrementalResult {
 /// Convenience wrapper that auto-detects language by file extension.
 #[allow(dead_code)]
 pub fn index_codebase(codebase_path: &Path, graph_path: &Path) -> Result<IndexResult, String> {
-    index_codebase_with_language(codebase_path, graph_path, None, DependencyScope::None)
+    index_codebase_with_language(codebase_path, graph_path, &IndexOptions::default())
 }
 
-/// Indexes source files with an optional language filter.
+/// Indexes source files per `options` (language filter, dependency scope,
+/// user directory exclusions — see `IndexOptions`).
 ///
-/// `dependency_scope` controls dependency-directory ingestion (see
+/// `options.dependency_scope` controls dependency-directory ingestion (see
 /// `DependencyScope`): `None` prunes build/dependency dirs; `PublicApi`
 /// descends into them but persists only publicly visible symbols from files
-/// under them; `Full` descends and persists everything.
+/// under them; `Full` descends and persists everything. `options.exclude_dirs`
+/// (issue #249) prunes user-specified directories independent of, and prior
+/// to, that tier — it wins even under `Full`.
 pub fn index_codebase_with_language(
     codebase_path: &Path,
     graph_path: &Path,
-    language_filter: Option<Language>,
-    dependency_scope: DependencyScope,
+    options: &IndexOptions,
 ) -> Result<IndexResult, String> {
     let start = Instant::now();
     let store = GraphStore::open_or_create(graph_path)?;
     store.create_schema()?;
 
+    // Coverage-honesty accounting (issue #57): note every File node, and record
+    // the parse-incomplete / skipped / quarantined gaps as they occur. Created
+    // before the walk so directories pruned by `exclude_dirs`/unreadable
+    // permissions (issue #249) fold in immediately.
+    let mut collector = CoverageCollector::default();
     let walk_opts = WalkOptions {
-        language_filter,
-        dependency_scope,
+        language_filter: options.language_filter,
+        dependency_scope: options.dependency_scope,
+        exclude_dirs: options.exclude_dirs.clone(),
     };
-    let source_files = collect_source_files(codebase_path, walk_opts)?;
+    let walk_outcome = collect_source_files(codebase_path, walk_opts)?;
+    for rel in &walk_outcome.excluded_dirs {
+        collector.record_skipped(rel, "user_excluded".to_string());
+    }
+    for rel in &walk_outcome.unreadable_dirs {
+        collector.record_skipped(rel, "unreadable".to_string());
+    }
+    let source_files = walk_outcome.files;
+    let dependency_scope = options.dependency_scope;
     // label_by_qn: qualified_name/id -> label, populated as nodes are created.
     // Used to resolve edge tables without probing the database.
     // source: Fermi audit — probe_node_label was firing up to 9 MATCH queries
@@ -142,9 +178,6 @@ pub fn index_codebase_with_language(
     let mut label_by_qn: HashMap<String, String> = HashMap::new();
     let mut total_bytes: u64 = 0;
     let mut dir_nodes_inserted = std::collections::HashSet::<PathBuf>::new();
-    // Coverage-honesty accounting (issue #57): note every File node, and record
-    // the parse-incomplete / skipped / quarantined gaps as they occur.
-    let mut collector = CoverageCollector::default();
 
     // Symbol nodes + edges accumulate here and flush in large batches; the
     // global id set dedups across the whole run so one duplicate id can never

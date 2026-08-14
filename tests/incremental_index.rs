@@ -21,7 +21,7 @@
 //   8. Asserts a cross-file inbound edge into an edited file survived.
 
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, manifest, DependencyScope};
+use ai_architect_mcp::indexer::{self, manifest, IndexOptions};
 use std::fs;
 use std::path::Path;
 
@@ -106,9 +106,9 @@ fn incremental_matches_full_reindex() {
     fs::create_dir_all(&out_a).expect("mk out_a");
     let graph_a = out_a.join("graph");
     let manifest_a = manifest::manifest_path(&out_a);
-    indexer::index_codebase_with_language(&repo, &graph_a, None, DependencyScope::None)
+    indexer::index_codebase_with_language(&repo, &graph_a, &IndexOptions::default())
         .expect("full index A");
-    indexer::write_full_manifest(&repo, &manifest_a, None, DependencyScope::None)
+    indexer::write_full_manifest(&repo, &manifest_a, &IndexOptions::default())
         .expect("write manifest A");
 
     // -- 3. Mutate the tree -------------------------------------------------
@@ -141,8 +141,7 @@ fn incremental_matches_full_reindex() {
         &repo,
         &graph_a,
         &manifest_a,
-        None,
-        DependencyScope::None,
+        &IndexOptions::default(),
         &prior,
     )
     .expect("incremental pass");
@@ -150,7 +149,7 @@ fn incremental_matches_full_reindex() {
 
     // -- 5. Full index of the MUTATED tree from scratch (parity baseline) ---
     let graph_full = tmp.path().join("graph_full");
-    indexer::index_codebase_with_language(&repo, &graph_full, None, DependencyScope::None)
+    indexer::index_codebase_with_language(&repo, &graph_full, &IndexOptions::default())
         .expect("full index");
 
     // -- 7. Counts partition the change set exactly -------------------------
@@ -223,10 +222,8 @@ fn incremental_preserves_resolved_cross_file_edges() {
     fs::create_dir_all(&out).expect("mk out");
     let graph = out.join("graph");
     let manifest_p = manifest::manifest_path(&out);
-    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None)
-        .expect("index");
-    indexer::write_full_manifest(&repo, &manifest_p, None, DependencyScope::None)
-        .expect("manifest");
+    indexer::index_codebase_with_language(&repo, &graph, &IndexOptions::default()).expect("index");
+    indexer::write_full_manifest(&repo, &manifest_p, &IndexOptions::default()).expect("manifest");
 
     // Synthesise a resolved cross-file edge: caller() -> callee() across files.
     {
@@ -250,15 +247,9 @@ fn incremental_preserves_resolved_cross_file_edges() {
     .expect("edit target");
 
     let prior = manifest::load(&manifest_p).expect("load manifest");
-    let inc = indexer::index_incremental(
-        &repo,
-        &graph,
-        &manifest_p,
-        None,
-        DependencyScope::None,
-        &prior,
-    )
-    .expect("incremental");
+    let inc =
+        indexer::index_incremental(&repo, &graph, &manifest_p, &IndexOptions::default(), &prior)
+            .expect("incremental");
     assert_eq!(inc.changed, 1, "only target.py changed");
 
     let store = GraphStore::open_or_create(&graph).expect("reopen");

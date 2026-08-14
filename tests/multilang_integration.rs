@@ -28,7 +28,7 @@ fn test_multilang_auto_index() {
     let _ = std::fs::remove_dir_all(&tmp);
 
     let result =
-        indexer::index_codebase_with_language(fixture, &tmp, None, indexer::DependencyScope::None)
+        indexer::index_codebase_with_language(fixture, &tmp, &indexer::IndexOptions::default())
             .expect("index should succeed");
 
     assert_eq!(result.files_indexed, 3, "should index 3 files (rs, py, ts)");
@@ -134,8 +134,11 @@ fn test_language_filter_rust_only() {
     let result = indexer::index_codebase_with_language(
         fixture,
         &tmp,
-        Some(Language::Rust),
-        indexer::DependencyScope::None,
+        &indexer::IndexOptions {
+            language_filter: Some(Language::Rust),
+            dependency_scope: indexer::DependencyScope::None,
+            exclude_dirs: indexer::ExcludeSet::default(),
+        },
     )
     .expect("index should succeed");
 

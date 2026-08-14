@@ -334,8 +334,11 @@ fn index_fixture(fixture_root: &Path, graph_path: &Path) -> Observed {
     indexer::index_codebase_with_language(
         fixture_root,
         graph_path,
-        Some(Language::Python),
-        indexer::DependencyScope::None,
+        &indexer::IndexOptions {
+            language_filter: Some(Language::Python),
+            dependency_scope: indexer::DependencyScope::None,
+            exclude_dirs: indexer::ExcludeSet::default(),
+        },
     )
     .expect("indexer should succeed on a 1-file fixture");
 

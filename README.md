@@ -410,7 +410,7 @@ Every stage is a tool. Stages build on each other but are independently callable
 | **0** | `health_check` | Handshake + protocol + tool count |
 | **1** | `extract_finding`, `refine_finding` | Deterministic finding extraction + orchestrator-aware prompt refinement |
 | **2** | `start_verification`, `append_clarification`, `finalize_verification`, `abort_verification` | Human-gated clarification loop with SHA-256 transcript digest, atomic single-file session state |
-| **3a** | `index_codebase`, `query_graph`, `get_symbol` | tree-sitter AST → LadybugDB graph (16 node labels, 36+ relationship tables) |
+| **3a** | `index_codebase`, `query_graph`, `get_symbol` | tree-sitter AST → LadybugDB graph (16 node labels, 36+ relationship tables); user-configurable `exclude_dirs` and graceful skip of unreadable directories (issue #249) |
 | **3b** | `resolve_graph`, `lsp_resolve` | Import/call/impl resolution with confidence scoring + optional LSP deep resolution (rust-analyzer / pyright / typescript-language-server) |
 | **3c** | `cluster_graph`, `get_processes`, `get_impact` | Leiden-class community detection (Louvain + C2 repair) + BFS execution-flow tracing from entry points |
 | **3d** | `search_codebase`, `get_context`, `analyze_codebase`, `detect_changes` | Hybrid BM25 + sparse TF-IDF + RRF search · 360° symbol view · all-in-one analysis · git-diff impact |
@@ -482,6 +482,32 @@ clone the repo never have to cold-index it.
   A fill that fails (no git diff and no bundled manifest) falls back to a
   full index, as does an import failure — both explicit (logged to stderr,
   never a silent partial graph) and reported via a `bootstrap_skipped` note.
+
+### Excluding directories from the walk (issue #249)
+
+Both `index_codebase` and `analyze_codebase` accept `"exclude_dirs"`
+(default `[]`) — directory names or paths to prune from the walk in
+addition to the built-in build/dependency skip list (`node_modules`,
+`.venv`, `vendor`, `target`, …). This is for directories that must never be
+read (a secrets folder, a credentials mount), not a performance prune:
+
+- An entry **without** a path separator (e.g. `"secrets"`) is a bare name,
+  matched anywhere in the tree — like the built-in list.
+- An entry **with** a path separator (e.g. `"config/secrets"`) is a path
+  relative to `path`, matched as exactly one subtree. No glob support.
+- Exclusion **wins over every `dependency_scope` tier**, including `full` —
+  it is checked before, and independently of, dependency-directory descent.
+- Pruned directories are never silently dropped: each appears in the
+  coverage sidecar as `skipped` with reason `user_excluded`, and the
+  response's `coverage.skipped.user_excluded_count` carries the exact count.
+- Changing `exclude_dirs` on an existing graph requires `"full": true` — like
+  `dependency_scope`, the incremental-index manifest does not capture it.
+
+Independent of `exclude_dirs`, a directory the OS refuses to read
+(`EACCES`/`PermissionDenied`) no longer aborts the whole index: it is
+recorded in the coverage sidecar with reason `unreadable` and the walk
+continues past it, so one locked-down subdirectory can no longer discard an
+otherwise-successful index.
 
 All three flags default to `false`, so existing behavior and the `core`/`core8`
 profiles are unchanged. The artifact is entirely optional: without it,

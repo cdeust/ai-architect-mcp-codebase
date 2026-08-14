@@ -12,7 +12,7 @@
 use std::fs;
 
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, DependencyScope};
+use ai_architect_mcp::indexer::{self, IndexOptions};
 use ai_architect_mcp::resolver;
 use tempfile::TempDir;
 
@@ -32,7 +32,7 @@ fn build_graph(files: &[(&str, &str)]) -> (GraphStore, TempDir) {
         .tempdir()
         .expect("graph tempdir");
     let graph_path = graph_dir.path().join("graph");
-    indexer::index_codebase_with_language(src.path(), &graph_path, None, DependencyScope::None)
+    indexer::index_codebase_with_language(src.path(), &graph_path, &IndexOptions::default())
         .expect("index");
     let store = GraphStore::open_or_create(&graph_path).expect("open graph");
     resolver::resolve_graph(&store).expect("resolve");

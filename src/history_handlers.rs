@@ -4,7 +4,6 @@
 //! (Fowler: Extract Class).
 
 use crate::artifact;
-use crate::parser;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -232,8 +231,7 @@ pub(crate) fn attempt_bootstrap(
     graph_dir: &Path,
     manifest_path: &Path,
     accept_stale: bool,
-    language_filter: Option<parser::Language>,
-    dependency_scope: indexer::DependencyScope,
+    options: &indexer::IndexOptions,
 ) -> BootstrapOutcome {
     if !artifact::artifact_exists(codebase) {
         return BootstrapOutcome::Reindex(None);
@@ -260,8 +258,7 @@ pub(crate) fn attempt_bootstrap(
             manifest_path,
             &meta,
             info,
-            language_filter,
-            dependency_scope,
+            options,
         ),
     }
 }
@@ -327,8 +324,7 @@ pub(crate) fn bootstrap_import_and_fill(
     manifest_path: &Path,
     meta: &artifact::ArtifactMeta,
     info: artifact::StaleInfo,
-    language_filter: Option<parser::Language>,
-    dependency_scope: indexer::DependencyScope,
+    options: &indexer::IndexOptions,
 ) -> BootstrapOutcome {
     if let Err(e) = artifact::import_artifact(codebase, graph_dir) {
         eprintln!(
@@ -347,8 +343,7 @@ pub(crate) fn bootstrap_import_and_fill(
         manifest_path,
         &meta.commit,
         imported_manifest.as_ref(),
-        language_filter,
-        dependency_scope,
+        options,
     ) {
         Ok(f) => f,
         Err(e) => {

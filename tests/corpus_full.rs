@@ -170,8 +170,11 @@ fn index_target(target_root: &Path, graph_path: &Path) -> Result<(), String> {
     indexer::index_codebase_with_language(
         target_root,
         graph_path,
-        Some(Language::Python),
-        indexer::DependencyScope::None,
+        &indexer::IndexOptions {
+            language_filter: Some(Language::Python),
+            dependency_scope: indexer::DependencyScope::None,
+            exclude_dirs: indexer::ExcludeSet::default(),
+        },
     )?;
     let store = GraphStore::open_or_create(graph_path)?;
     let _ = resolver::resolve_graph(&store);

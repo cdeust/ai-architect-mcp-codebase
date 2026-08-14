@@ -350,7 +350,13 @@ fn index_codebase_schema() -> Value {
                 "full": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Issue #62 — force a from-scratch full rebuild. By DEFAULT index_codebase is incremental: when a prior graph at <output_dir>/graph and its file_manifest.json exist, only the files that changed since the last index are re-parsed (the response carries mode='incremental' and {changed, added, deleted, renamed, unchanged} counts). Pass full=true to bypass that and rebuild everything — required when you change 'language' or 'dependency_scope', which the manifest does not capture."
+                    "description": "Issue #62 — force a from-scratch full rebuild. By DEFAULT index_codebase is incremental: when a prior graph at <output_dir>/graph and its file_manifest.json exist, only the files that changed since the last index are re-parsed (the response carries mode='incremental' and {changed, added, deleted, renamed, unchanged} counts). Pass full=true to bypass that and rebuild everything — required when you change 'language', 'dependency_scope', or 'exclude_dirs', none of which the manifest captures."
+                },
+                "exclude_dirs": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Issue #249 — directory paths (relative to 'path', no leading '/' or '..') or bare directory names to prune from the walk, in addition to the built-in build/dependency skip list. An entry WITHOUT a path separator (e.g. \"secrets\") is a bare name matched anywhere in the tree, like the built-in list; an entry WITH one (e.g. \"config/secrets\") matches exactly that one subtree relative to 'path'. No glob support. Exclusion WINS over every 'dependency_scope' tier, including 'full' — this is for directories that must never be read, not a performance prune. Pruned directories are NEVER silently dropped: each is reported in the coverage sidecar as skipped (reason 'user_excluded'), and the response's coverage.skipped.user_excluded_count carries the total. Changing this value on an existing graph requires full=true (the manifest does not capture it, same caveat as 'dependency_scope'). A directory the OS refuses to read (permission denied) is handled independently and automatically — see the coverage 'unreadable' reason — even without listing it here."
                 },
                 "cochange": {
                     "type": "boolean",
@@ -711,6 +717,12 @@ fn analyze_codebase_schema() -> Value {
                     "type": "boolean",
                     "default": false,
                     "description": "Deprecated — use 'dependency_scope' instead ('true' maps to 'full', 'false' maps to 'none'). Kept as a compatibility alias for one release; emits a deprecation warning."
+                },
+                "exclude_dirs": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Issue #249 — directory paths (relative to 'path', no leading '/' or '..') or bare directory names to prune from the walk, in addition to the built-in build/dependency skip list. An entry WITHOUT a path separator (e.g. \"secrets\") is a bare name matched anywhere in the tree, like the built-in list; an entry WITH one (e.g. \"config/secrets\") matches exactly that one subtree relative to 'path'. No glob support. Exclusion WINS over every 'dependency_scope' tier, including 'full' — this is for directories that must never be read, not a performance prune. Pruned directories are NEVER silently dropped: each is reported in the coverage sidecar as skipped (reason 'user_excluded'), and the response's coverage.skipped.user_excluded_count carries the total. A directory the OS refuses to read (permission denied) is handled independently and automatically — see the coverage 'unreadable' reason — even without listing it here."
                 }
             }
         }

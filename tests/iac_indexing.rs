@@ -14,7 +14,7 @@
 use ai_architect_mcp::clustering::get_impact;
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer::coverage::{self, CoverageKind};
-use ai_architect_mcp::indexer::{self, manifest, DependencyScope};
+use ai_architect_mcp::indexer::{self, manifest, IndexOptions};
 use std::fs;
 use std::path::Path;
 
@@ -118,7 +118,7 @@ fn full_index_extracts_exact_iac_nodes_and_edges() {
     let out = tmp.path().join("out");
     fs::create_dir_all(&out).unwrap();
     let graph = out.join("graph");
-    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None)
+    indexer::index_codebase_with_language(&repo, &graph, &IndexOptions::default())
         .expect("full index");
 
     let store = GraphStore::open_or_create(&graph).unwrap();
@@ -251,7 +251,7 @@ fn broken_manifest_is_coverage_flagged_and_index_survives() {
     fs::create_dir_all(&out).unwrap();
     let graph = out.join("graph");
     // The index must COMPLETE despite the templated manifest.
-    let result = indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None)
+    let result = indexer::index_codebase_with_language(&repo, &graph, &IndexOptions::default())
         .expect("index survives a broken manifest");
     assert!(result.node_count > 0);
 
@@ -289,8 +289,8 @@ fn incremental_reprocesses_only_the_changed_manifest() {
     fs::create_dir_all(&out).unwrap();
     let graph = out.join("graph");
     let manifest_p = manifest::manifest_path(&out);
-    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None).unwrap();
-    indexer::write_full_manifest(&repo, &manifest_p, None, DependencyScope::None).unwrap();
+    indexer::index_codebase_with_language(&repo, &graph, &IndexOptions::default()).unwrap();
+    indexer::write_full_manifest(&repo, &manifest_p, &IndexOptions::default()).unwrap();
 
     // Snapshot the deployment resource's identity BEFORE the edit — it must not
     // be touched when we edit an unrelated manifest.
@@ -311,15 +311,9 @@ fn incremental_reprocesses_only_the_changed_manifest() {
     .unwrap();
 
     let prior = manifest::load(&manifest_p).unwrap();
-    let inc = indexer::index_incremental(
-        &repo,
-        &graph,
-        &manifest_p,
-        None,
-        DependencyScope::None,
-        &prior,
-    )
-    .expect("incremental");
+    let inc =
+        indexer::index_incremental(&repo, &graph, &manifest_p, &IndexOptions::default(), &prior)
+            .expect("incremental");
     assert_eq!(inc.changed, 1, "only service.yaml changed");
     assert_eq!(inc.files_reparsed, 1);
 
@@ -364,7 +358,7 @@ fn get_impact_traverses_iac_edges_both_directions() {
     let out = tmp.path().join("out");
     fs::create_dir_all(&out).unwrap();
     let graph = out.join("graph");
-    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None).unwrap();
+    indexer::index_codebase_with_language(&repo, &graph, &IndexOptions::default()).unwrap();
     let store = GraphStore::open_or_create(&graph).unwrap();
 
     // Direction 1 — a change to a code artifact a manifest references reports the
@@ -431,7 +425,7 @@ fn iac_heuristic_edges_surface_as_lower_bound_confident_edges_as_exact() {
     let out = tmp.path().join("out");
     fs::create_dir_all(&out).unwrap();
     let graph = out.join("graph");
-    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None).unwrap();
+    indexer::index_codebase_with_language(&repo, &graph, &IndexOptions::default()).unwrap();
     let store = GraphStore::open_or_create(&graph).unwrap();
 
     // configmap.yaml is reached ONLY through the 0.7 name-match edge → heuristic
@@ -482,7 +476,7 @@ fn query_graph_reaches_iac_labels() {
     let out = tmp.path().join("out");
     fs::create_dir_all(&out).unwrap();
     let graph = out.join("graph");
-    indexer::index_codebase_with_language(&repo, &graph, None, DependencyScope::None).unwrap();
+    indexer::index_codebase_with_language(&repo, &graph, &IndexOptions::default()).unwrap();
     let store = GraphStore::open_or_create(&graph).unwrap();
 
     // Every new label is reachable by an ordinary read query (what query_graph

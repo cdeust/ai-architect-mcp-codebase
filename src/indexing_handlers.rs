@@ -38,6 +38,12 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
         .ok_or("missing required field 'output_dir'")?;
     let lang_filter = parse_language_filter(args)?;
     let dependency_scope = parse_dependency_scope(args)?;
+    let exclude_dirs = parse_exclude_dirs(args)?;
+    let options = indexer::IndexOptions {
+        language_filter: lang_filter,
+        dependency_scope,
+        exclude_dirs,
+    };
     let want_export = parse_bool_arg(args, "export_artifact", false)?;
     let want_bootstrap = parse_bool_arg(args, "bootstrap", false)?;
     let accept_stale = parse_bool_arg(args, "accept_stale", false)?;
@@ -84,8 +90,7 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
             &graph_dir,
             &manifest_path,
             accept_stale,
-            lang_filter,
-            dependency_scope,
+            &options,
         ) {
             BootstrapOutcome::Imported(resp) => return Ok(resp),
             BootstrapOutcome::Reindex(note) => bootstrap_skipped = note,
@@ -103,8 +108,7 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
                 &codebase,
                 &graph_dir,
                 &manifest_path,
-                lang_filter,
-                dependency_scope,
+                &options,
                 &prior,
             ) {
                 Ok(inc) => {
@@ -134,21 +138,14 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
         remove_stale_graph_artifact(&graph_dir)?;
     }
 
-    let result = indexer::index_codebase_with_language(
-        &codebase,
-        &graph_dir,
-        lang_filter,
-        dependency_scope,
-    )?;
+    let result = indexer::index_codebase_with_language(&codebase, &graph_dir, &options)?;
     // Record the absolute source root beside the graph (relative file paths
     // stay in the graph; the root lets consumers reconstruct absolute paths).
     write_graph_meta(&output_dir, &codebase);
     // Issue #62: persist the per-file manifest so the NEXT index_codebase call
     // can run incrementally. Best-effort — a failed manifest write only forces
     // the next run to full-index, never fails this one.
-    if let Err(e) =
-        indexer::write_full_manifest(&codebase, &manifest_path, lang_filter, dependency_scope)
-    {
+    if let Err(e) = indexer::write_full_manifest(&codebase, &manifest_path, &options) {
         eprintln!("[ap] file manifest write failed (index succeeded): {e}");
     }
     // Issue #57: persist the coverage-honesty sidecar (parse-incomplete, skipped,
@@ -236,6 +233,11 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
     let mut partial_files = Vec::new();
     let mut skipped_files = Vec::new();
     let mut quarantined_files = Vec::new();
+    // Issue #249: directories pruned by an explicit `exclude_dirs` match carry
+    // a distinct count in the receipt, nested under `skipped` (they share its
+    // "not indexed at all" kind) rather than a bespoke top-level bucket — the
+    // `detail` field already carries the reason string per-file.
+    let mut user_excluded_count: u64 = 0;
     for (rel, cov) in &report.files {
         match cov.kind {
             CoverageKind::ParsePartial => {
@@ -244,6 +246,9 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
                 }
             }
             CoverageKind::Skipped => {
+                if cov.detail == "user_excluded" {
+                    user_excluded_count += 1;
+                }
                 if skipped_files.len() < COVERAGE_LIST_CAP {
                     skipped_files.push(json!({"path": rel, "reason": cov.detail}));
                 }
@@ -259,7 +264,11 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
         "index_mode": report.index_mode,
         "files_indexed": report.files_indexed,
         "parse_incomplete": { "count": partial, "files": partial_files },
-        "skipped": { "count": skipped, "files": skipped_files },
+        "skipped": {
+            "count": skipped,
+            "user_excluded_count": user_excluded_count,
+            "files": skipped_files
+        },
         "quarantined": { "count": quarantined, "files": quarantined_files },
         "caveat": COVERAGE_CAVEAT,
     })

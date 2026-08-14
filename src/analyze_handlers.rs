@@ -49,6 +49,12 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let enable_lsp = args.get("lsp").and_then(|v| v.as_bool()).unwrap_or(false);
     let lang_filter = parse_language_filter(args)?;
     let dependency_scope = parse_dependency_scope(args)?;
+    let exclude_dirs = parse_exclude_dirs(args)?;
+    let options = indexer::IndexOptions {
+        language_filter: lang_filter,
+        dependency_scope,
+        exclude_dirs,
+    };
 
     let codebase = require_absolute(path_str, "path")?;
     if !codebase.exists() {
@@ -67,12 +73,7 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let total_start = std::time::Instant::now();
 
     // Phase 1: index
-    let index_result = indexer::index_codebase_with_language(
-        &codebase,
-        &graph_dir,
-        lang_filter,
-        dependency_scope,
-    )?;
+    let index_result = indexer::index_codebase_with_language(&codebase, &graph_dir, &options)?;
     // Record the absolute source root beside the graph (see write_graph_meta).
     write_graph_meta(&output_dir, &codebase);
 

@@ -229,7 +229,8 @@ fn test_symlink_skipped() {
     };
     symlink(target, &link).unwrap();
 
-    let files = collect_source_files(&root, WalkOptions::default()).unwrap();
+    let outcome = collect_source_files(&root, WalkOptions::default()).unwrap();
+    let files = outcome.files;
     // Only the real file is indexed; the symlink is skipped.
     assert_eq!(files.len(), 1, "symlink must not be collected: {files:?}");
     assert_eq!(files[0].file_name().unwrap(), "real.rs");
@@ -263,6 +264,7 @@ fn test_dependency_scope_walk() {
     let names = |opts: WalkOptions| -> Vec<String> {
         let mut v: Vec<String> = collect_source_files(&root, opts)
             .unwrap()
+            .files
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
@@ -280,6 +282,7 @@ fn test_dependency_scope_walk() {
     let full = WalkOptions {
         language_filter: None,
         dependency_scope: DependencyScope::Full,
+        exclude_dirs: ExcludeSet::default(),
     };
     assert_eq!(names(full), vec!["app.rs", "dep.rs", "dep2.rs"]);
 
@@ -288,6 +291,7 @@ fn test_dependency_scope_walk() {
     let public_api = WalkOptions {
         language_filter: None,
         dependency_scope: DependencyScope::PublicApi,
+        exclude_dirs: ExcludeSet::default(),
     };
     assert_eq!(names(public_api), vec!["app.rs", "dep.rs", "dep2.rs"]);
 
@@ -331,8 +335,12 @@ fn test_public_api_scope_filters_dependency_symbols_only() {
         .keep_managed();
     let _ = std::fs::remove_dir_all(&graph_path);
 
-    index_codebase_with_language(&root, &graph_path, None, DependencyScope::PublicApi)
-        .expect("index should succeed");
+    let options = IndexOptions {
+        language_filter: None,
+        dependency_scope: DependencyScope::PublicApi,
+        exclude_dirs: ExcludeSet::default(),
+    };
+    index_codebase_with_language(&root, &graph_path, &options).expect("index should succeed");
 
     let store = GraphStore::open_or_create(&graph_path).unwrap();
     let qr = store

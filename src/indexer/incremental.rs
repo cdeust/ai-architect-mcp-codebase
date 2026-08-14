@@ -32,7 +32,6 @@
 //     rename in the response counts.
 
 use crate::graph_store::{cypher_str, GraphStore, REL_TABLES};
-use crate::parser::Language;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -41,7 +40,7 @@ use super::coverage::{self, CoverageCollector, FileCoverage};
 use super::manifest::{self, FileManifest, FileState};
 use super::persist::ParseOutcome;
 use super::walk::{collect_source_files, is_dependency_path, DependencyScope, WalkOptions};
-use super::{light_link, persist, relative_path, IncrementalResult, SymbolBatch};
+use super::{light_link, persist, relative_path, IncrementalResult, IndexOptions, SymbolBatch};
 use std::collections::BTreeMap;
 
 // Every symbol the parser emits carries a file-scoped qualified-name id
@@ -122,8 +121,7 @@ pub fn index_incremental(
     codebase: &Path,
     graph_dir: &Path,
     manifest_path: &Path,
-    language_filter: Option<Language>,
-    dependency_scope: DependencyScope,
+    options: &IndexOptions,
     prior: &FileManifest,
 ) -> Result<IncrementalResult, String> {
     let start = Instant::now();
@@ -136,11 +134,13 @@ pub fn index_incremental(
     // the redundant CREATE TABLE IF NOT EXISTS pass is the single largest
     // incremental speedup on small change sets.
 
+    let dependency_scope = options.dependency_scope;
     let walk_opts = WalkOptions {
-        language_filter,
+        language_filter: options.language_filter,
         dependency_scope,
+        exclude_dirs: options.exclude_dirs.clone(),
     };
-    let current = discover(codebase, walk_opts)?;
+    let (current, walk_gaps) = discover(codebase, walk_opts)?;
     let plan = classify(prior, &current);
 
     let (reparsed, reparsed_gaps) = apply_changes(
@@ -154,13 +154,17 @@ pub fn index_incremental(
     // Persist the refreshed manifest (built by classify, hashes reused).
     manifest::save(manifest_path, &plan.next_manifest)?;
 
-    // Coverage (issue #57): carry forward unchanged files' gaps, overlay the
-    // freshly-reparsed files' gaps (clearing any that are now clean), save.
+    // Coverage (issue #57/#249): carry forward unchanged files' gaps, overlay
+    // the freshly-reparsed files' gaps (clearing any that are now clean), plus
+    // the walk-level excluded/unreadable directories discovered this pass,
+    // save.
+    let mut merged_gaps = reparsed_gaps;
+    merged_gaps.extend(walk_gaps);
     save_incremental_coverage(
         graph_dir,
         &current,
         &plan.change_set,
-        reparsed_gaps,
+        merged_gaps,
         "incremental",
     );
 
@@ -413,22 +417,28 @@ fn save_incremental_coverage(
 /// `manifest_path`, so the NEXT `index_codebase` call can run incrementally.
 ///
 /// Preconditions: `codebase` is the tree just indexed with the same
-/// `language_filter`/`dependency_scope`; `manifest_path`'s parent exists.
-/// Postcondition on `Ok`: the manifest records (mtime, size, content_hash) for
-/// every file the full index visited, keyed by the File node id. Best-effort per
-/// file: a stat/read failure records a zeroed/empty state rather than aborting
-/// the whole index (the file simply re-classifies as changed next time).
+/// `options` (`language_filter`/`dependency_scope`/`exclude_dirs`);
+/// `manifest_path`'s parent exists. Postcondition on `Ok`: the manifest
+/// records (mtime, size, content_hash) for every file the full index visited,
+/// keyed by the File node id. Best-effort per file: a stat/read failure
+/// records a zeroed/empty state rather than aborting the whole index (the
+/// file simply re-classifies as changed next time).
+///
+/// Walk-level gaps (excluded/unreadable directories, issue #249) are
+/// discarded here — the caller (a just-completed full index) already wrote
+/// the coverage sidecar from its own walk; this re-walk exists only to build
+/// the manifest baseline for the NEXT incremental call.
 pub fn write_full_manifest(
     codebase: &Path,
     manifest_path: &Path,
-    language_filter: Option<Language>,
-    dependency_scope: DependencyScope,
+    options: &IndexOptions,
 ) -> Result<(), String> {
     let walk_opts = WalkOptions {
-        language_filter,
-        dependency_scope,
+        language_filter: options.language_filter,
+        dependency_scope: options.dependency_scope,
+        exclude_dirs: options.exclude_dirs.clone(),
     };
-    let current = discover(codebase, walk_opts)?;
+    let (current, _walk_gaps) = discover(codebase, walk_opts)?;
     let mut m = FileManifest::new();
     for d in &current {
         m.files.insert(
@@ -489,17 +499,18 @@ pub fn fill_after_bootstrap(
     manifest_path: &Path,
     artifact_sha: &str,
     imported_manifest: Option<&FileManifest>,
-    language_filter: Option<Language>,
-    dependency_scope: DependencyScope,
+    options: &IndexOptions,
 ) -> Result<FillResult, String> {
     let start = Instant::now();
+    let dependency_scope = options.dependency_scope;
     // No create_schema(): the imported artifact graph already carries the schema.
     let store = GraphStore::open_or_create(graph_dir)?;
     let walk_opts = WalkOptions {
-        language_filter,
+        language_filter: options.language_filter,
         dependency_scope,
+        exclude_dirs: options.exclude_dirs.clone(),
     };
-    let current = discover(codebase, walk_opts)?;
+    let (current, walk_gaps) = discover(codebase, walk_opts)?;
 
     // Choose the classification signal. git diff is precise and cheap on a fresh
     // clone (no mtimes to trust); the manifest hash fallback is correct but scans
@@ -540,16 +551,13 @@ pub fn fill_after_bootstrap(
     // artifact's (whose mtimes are meaningless on a fresh clone).
     manifest::save(manifest_path, &next_manifest)?;
 
-    // Coverage (issue #57): the artifact bundled the exporter's coverage (loaded
-    // from the sidecar unpacked beside the graph). Carry forward the files the
-    // fill did not touch, overlay the reparsed files' fresh gaps, save.
-    save_incremental_coverage(
-        graph_dir,
-        &current,
-        &changes,
-        reparsed_gaps,
-        "bootstrap_fill",
-    );
+    // Coverage (issue #57/#249): the artifact bundled the exporter's coverage
+    // (loaded from the sidecar unpacked beside the graph). Carry forward the
+    // files the fill did not touch, overlay the reparsed files' fresh gaps
+    // plus this pass's walk-level excluded/unreadable directories, save.
+    let mut merged_gaps = reparsed_gaps;
+    merged_gaps.extend(walk_gaps);
+    save_incremental_coverage(graph_dir, &current, &changes, merged_gaps, "bootstrap_fill");
 
     Ok(FillResult {
         result: IncrementalResult {
@@ -779,13 +787,26 @@ fn is_hex_sha(s: &str) -> bool {
 // Discovery + classification
 // ---------------------------------------------------------------------------
 
-/// Walks `codebase` and reads each file's (mtime, size). Postcondition: one
-/// `Discovered` per source file the full index would visit, with `rel` equal to
-/// the File node id the indexer assigns.
-fn discover(codebase: &Path, walk_opts: WalkOptions) -> Result<Vec<Discovered>, String> {
-    let files = collect_source_files(codebase, walk_opts)?;
-    let mut out = Vec::with_capacity(files.len());
-    for abs in files {
+/// Walks `codebase` and reads each file's (mtime, size), plus the walk-level
+/// coverage gaps (issue #249: directories excluded by `exclude_dirs`, or
+/// skipped because they were unreadable). Postcondition: one `Discovered` per
+/// source file the full index would visit, with `rel` equal to the File node
+/// id the indexer assigns; the returned map holds one `FileCoverage` entry per
+/// pruned directory, keyed by its walk-root-relative path.
+fn discover(
+    codebase: &Path,
+    walk_opts: WalkOptions,
+) -> Result<(Vec<Discovered>, BTreeMap<String, FileCoverage>), String> {
+    let outcome = collect_source_files(codebase, walk_opts)?;
+    let mut collector = CoverageCollector::default();
+    for rel in &outcome.excluded_dirs {
+        collector.record_skipped(rel, "user_excluded".to_string());
+    }
+    for rel in &outcome.unreadable_dirs {
+        collector.record_skipped(rel, "unreadable".to_string());
+    }
+    let mut out = Vec::with_capacity(outcome.files.len());
+    for abs in outcome.files {
         let rel = light_link::rel_id(codebase, &abs);
         let (mtime_ns, size) = match std::fs::metadata(&abs) {
             Ok(m) => (manifest::mtime_ns(&m), m.len()),
@@ -798,7 +819,7 @@ fn discover(codebase: &Path, walk_opts: WalkOptions) -> Result<Vec<Discovered>, 
             size,
         });
     }
-    Ok(out)
+    Ok((out, collector.into_files()))
 }
 
 /// Classifies `current` against `prior`. See `Plan`. Rename detection pairs a
@@ -1293,7 +1314,7 @@ mod tests {
         let moved_body = "def moved():\n    return 4\n";
         std::fs::write(root.join("moved_to.py"), moved_body).unwrap();
 
-        let current = discover(root, WalkOptions::default()).expect("discover");
+        let (current, _gaps) = discover(root, WalkOptions::default()).expect("discover");
         let hash_of = |rel: &str| manifest::hash_file(&root.join(rel)).unwrap();
 
         // Prior manifest: keep.py unchanged; edit.py with a stale hash (edited);

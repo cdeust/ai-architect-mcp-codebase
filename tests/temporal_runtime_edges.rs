@@ -9,7 +9,7 @@
 
 use ai_architect_mcp::cochange::{self, Mode};
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, DependencyScope};
+use ai_architect_mcp::indexer::{self, IndexOptions};
 use std::path::Path;
 use std::process::Command;
 
@@ -59,8 +59,7 @@ fn cochange_count(store: &GraphStore, a: &str, b: &str) -> Option<i64> {
 
 fn index(repo: &Path, out: &Path) -> std::path::PathBuf {
     let graph = out.join("graph");
-    indexer::index_codebase_with_language(repo, &graph, None, DependencyScope::None)
-        .expect("index");
+    indexer::index_codebase_with_language(repo, &graph, &IndexOptions::default()).expect("index");
     graph
 }
 

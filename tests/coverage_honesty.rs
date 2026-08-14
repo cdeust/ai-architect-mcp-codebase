@@ -7,7 +7,7 @@
 
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer::coverage::CoverageKind;
-use ai_architect_mcp::indexer::{self, coverage, manifest, DependencyScope};
+use ai_architect_mcp::indexer::{self, coverage, manifest, IndexOptions};
 use std::fs;
 use std::path::Path;
 
@@ -19,7 +19,7 @@ const GOOD_PY: &str = "def good_fn():\n    return 1\n";
 
 fn full_index(repo: &Path, out: &Path) -> indexer::IndexResult {
     let graph = out.join("graph");
-    let result = indexer::index_codebase_with_language(repo, &graph, None, DependencyScope::None)
+    let result = indexer::index_codebase_with_language(repo, &graph, &IndexOptions::default())
         .expect("index");
     // Persist the coverage sidecar the way the handler does, so sidecar-level
     // assertions (and the incremental carry-forward) have a baseline to read.
@@ -124,7 +124,7 @@ fn incremental_clears_a_parse_incomplete_flag_once_fixed() {
     let graph = out.join("graph");
     let manifest_path = manifest::manifest_path(&out);
     let result = full_index(&repo, &out);
-    indexer::write_full_manifest(&repo, &manifest_path, None, DependencyScope::None)
+    indexer::write_full_manifest(&repo, &manifest_path, &IndexOptions::default())
         .expect("manifest");
     // Baseline: both broken files flagged.
     assert!(result.coverage.files.contains_key("src/fixme.py"));
@@ -142,8 +142,7 @@ fn incremental_clears_a_parse_incomplete_flag_once_fixed() {
         &repo,
         &graph,
         &manifest_path,
-        None,
-        DependencyScope::None,
+        &IndexOptions::default(),
         &prior,
     )
     .expect("incremental");

@@ -1,4 +1,5 @@
 use crate::parser::Language;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -46,14 +47,77 @@ impl DependencyScope {
 }
 
 // ---------------------------------------------------------------------------
+// ExcludeSet — issue #249 user-configurable directory exclusion
+// ---------------------------------------------------------------------------
+
+/// The parsed `exclude_dirs` contract (issue #249). An entry WITHOUT a path
+/// separator is a bare directory NAME, matched against any directory anywhere
+/// in the tree — exactly like the built-in skip list (`should_skip`). An
+/// entry WITH a separator is a path relative to the walk root, matched
+/// against exactly one subtree. No glob support (explicitly deferred by the
+/// issue). Validation (rejecting absolute paths / `..` components) happens at
+/// the MCP argument boundary (`handler_util::parse_exclude_dirs`); this type
+/// only normalizes and matches.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExcludeSet {
+    /// Bare directory names, matched against any path component's name.
+    names: HashSet<String>,
+    /// Relative paths (forward-slash, no leading/trailing slash), matched
+    /// against the walk-root-relative path of the candidate directory.
+    paths: HashSet<String>,
+}
+
+impl ExcludeSet {
+    /// Builds an `ExcludeSet` from the raw `exclude_dirs` argument strings.
+    /// An entry containing `/` or `\` is treated as a relative path and
+    /// normalized to forward slashes with no leading/trailing slash, so it
+    /// compares equal to the walk's own rel-path formatting (`dir_rel`,
+    /// matching the `\`->`/` convention already used by
+    /// `light_link::rel_id`). An entry with neither is a bare name. Blank
+    /// entries are ignored.
+    pub fn new(entries: &[String]) -> Self {
+        let mut names = HashSet::new();
+        let mut paths = HashSet::new();
+        for raw in entries {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.contains('/') || trimmed.contains('\\') {
+                let normalized = trimmed.replace('\\', "/");
+                let normalized = normalized.trim_matches('/');
+                if !normalized.is_empty() {
+                    paths.insert(normalized.to_string());
+                }
+            } else {
+                names.insert(trimmed.to_string());
+            }
+        }
+        ExcludeSet { names, paths }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty() && self.paths.is_empty()
+    }
+
+    /// True when the bare directory `name` or its walk-root-relative path
+    /// `rel` (forward-slash) matches an excluded entry.
+    fn matches(&self, name: &str, rel: &str) -> bool {
+        self.names.contains(name) || self.paths.contains(rel)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Directory walking
 // ---------------------------------------------------------------------------
 
 /// Options controlling a directory walk.
 ///
 /// Bundled into one value so the recursive walker stays within the 4-parameter
-/// limit (coding-standards §4.4) as new traversal knobs are added.
-#[derive(Clone, Copy, Default)]
+/// limit (coding-standards §4.4) as new traversal knobs are added. Not `Copy`
+/// (issue #249's `ExcludeSet` owns growable collections) — callers pass it by
+/// value once per walk; the recursive walker itself borrows it (`&WalkOptions`).
+#[derive(Clone, Default)]
 pub(super) struct WalkOptions {
     /// When `Some(L)`, only collect files of language `L`; `None` collects all.
     pub language_filter: Option<Language>,
@@ -62,6 +126,24 @@ pub(super) struct WalkOptions {
     /// `Full` both descend into them (only `.git` is still skipped) — they
     /// differ at the persistence filter (`indexer::persist`), not the walk.
     pub dependency_scope: DependencyScope,
+    /// User-specified directories to prune (issue #249), independent of and
+    /// applied BEFORE `dependency_scope`: exclusion wins over every tier,
+    /// including `Full`.
+    pub exclude_dirs: ExcludeSet,
+}
+
+/// The result of a directory walk: the collected source files, plus every
+/// directory pruned along the way (issue #249) — never silently dropped, so
+/// the caller can fold them into the coverage-honesty report.
+pub(super) struct WalkOutcome {
+    pub files: Vec<PathBuf>,
+    /// Walk-root-relative (forward-slash) path of each directory pruned by an
+    /// explicit `exclude_dirs` match.
+    pub excluded_dirs: Vec<String>,
+    /// Walk-root-relative (forward-slash) path of each directory skipped
+    /// because `read_dir` returned `PermissionDenied` — the walk continues
+    /// past it instead of aborting (issue #249).
+    pub unreadable_dirs: Vec<String>,
 }
 
 /// Recursively collects source files, skipping hidden dirs, target/, node_modules/.
@@ -69,29 +151,63 @@ pub(super) struct WalkOptions {
 /// When None, collects all files with recognized extensions.
 /// When `opts.dependency_scope` descends into dependencies (`PublicApi` or
 /// `Full`), build/dependency dirs are also descended into (only `.git` is
-/// skipped).
+/// skipped) — UNLESS `opts.exclude_dirs` prunes them explicitly, which wins
+/// over every tier.
 ///
 /// Symlinks are intentionally NOT followed — source: security hardening (C4).
 /// This prevents a symlink inside the codebase from causing `read_dir` to
 /// silently traverse outside the tree (e.g. to `/etc/passwd` or `~/.ssh`).
-pub(super) fn collect_source_files(root: &Path, opts: WalkOptions) -> Result<Vec<PathBuf>, String> {
-    let mut result = Vec::new();
-    walk_dir_recursive(root, &mut result, opts, 0)?;
-    if result.len() > super::MAX_FILES {
+///
+/// A `PermissionDenied` directory (other than the walk root itself) is
+/// recorded and skipped rather than aborting the whole walk (issue #249); the
+/// walk root failing to read is still fatal — there is nothing to index.
+pub(super) fn collect_source_files(root: &Path, opts: WalkOptions) -> Result<WalkOutcome, String> {
+    let mut files = Vec::new();
+    let mut excluded_dirs = Vec::new();
+    let mut unreadable_dirs = Vec::new();
+    let ctx = WalkContext { root, opts: &opts };
+    let mut collectors = WalkCollectors {
+        files: &mut files,
+        excluded_dirs: &mut excluded_dirs,
+        unreadable_dirs: &mut unreadable_dirs,
+    };
+    walk_dir_recursive(root, &ctx, &mut collectors, 0)?;
+    if files.len() > super::MAX_FILES {
         return Err(format!(
             "too_many_files: codebase contains {} files, MAX_FILES is {}",
-            result.len(),
+            files.len(),
             super::MAX_FILES
         ));
     }
-    result.sort();
-    Ok(result)
+    files.sort();
+    Ok(WalkOutcome {
+        files,
+        excluded_dirs,
+        unreadable_dirs,
+    })
+}
+
+/// Immutable per-walk context: the walk root (needed to compute rel paths for
+/// exclusion matching and reporting) and the walk options.
+struct WalkContext<'a> {
+    root: &'a Path,
+    opts: &'a WalkOptions,
+}
+
+/// Mutable accumulators threaded through the recursive walk. Bundled so
+/// `walk_dir_recursive` stays within the 4-parameter limit (coding-standards
+/// §4.4) despite tracking three distinct outputs (files, excluded dirs,
+/// unreadable dirs).
+struct WalkCollectors<'a> {
+    files: &'a mut Vec<PathBuf>,
+    excluded_dirs: &'a mut Vec<String>,
+    unreadable_dirs: &'a mut Vec<String>,
 }
 
 fn walk_dir_recursive(
     dir: &Path,
-    out: &mut Vec<PathBuf>,
-    opts: WalkOptions,
+    ctx: &WalkContext,
+    collectors: &mut WalkCollectors,
     depth: usize,
 ) -> Result<(), String> {
     if depth > super::MAX_DEPTH {
@@ -101,68 +217,146 @@ fn walk_dir_recursive(
             dir.display()
         ));
     }
-    let entries = std::fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        // issue #249: a locked-down directory must not abort the whole walk.
+        // The walk root itself (depth 0) failing to read stays fatal — there
+        // is nothing to index at all, which is a different failure than "one
+        // subtree is unreadable".
+        Err(e) if depth > 0 && e.kind() == std::io::ErrorKind::PermissionDenied => {
+            collectors.unreadable_dirs.push(dir_rel(ctx.root, dir));
+            return Ok(());
+        }
+        Err(e) => return Err(format!("read_dir {}: {e}", dir.display())),
+    };
     for entry in entries {
         let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if should_skip(&name_str, opts.dependency_scope) {
-            continue;
-        }
-        // Use symlink_metadata (lstat) instead of metadata (stat) so symlinks
-        // are detected and skipped rather than silently followed.
-        // source: C4 fix — POSIX lstat(2), does not follow the final symlink.
-        let meta = match std::fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if meta.file_type().is_symlink() {
-            continue; // intentionally skip symlinks
-        }
-        if meta.is_dir() {
-            walk_dir_recursive(&path, out, opts, depth + 1)?;
-            if out.len() > super::MAX_FILES {
-                return Err(format!(
-                    "too_many_files: exceeded MAX_FILES ({}) during walk",
-                    super::MAX_FILES
-                ));
-            }
-        } else if meta.is_file() {
-            if meta.len() > super::MAX_FILE_BYTES {
-                eprintln!(
-                    "indexer: skipping oversized file ({} bytes > MAX_FILE_BYTES {}): {}",
-                    meta.len(),
-                    super::MAX_FILE_BYTES,
-                    path.display()
-                );
-                continue;
-            }
-            // File collection policy:
-            //   * language_filter = Some(L): collect ONLY files of language L
-            //     (a scoped re-index of a single language).
-            //   * language_filter = None: ALL-FILE indexing — collect every
-            //     file regardless of extension. Code files in a supported
-            //     language get a full AST; every other file still becomes a
-            //     File node (path/name/extension/size), and .js-family files
-            //     are light-linked (import/require → Imports_File_File) in a
-            //     post-pass. Oversized files are already skipped above and
-            //     build/dependency dirs are pruned by should_skip.
-            //     source: "the pipeline should index any kind of files" — so
-            //     every file a session touches is navigable in the graph.
-            match opts.language_filter {
-                Some(filter) => {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if Language::from_extension(ext) == Some(filter) {
-                            out.push(path);
-                        }
-                    }
-                }
-                None => out.push(path),
-            }
-        }
+        visit_entry(entry, ctx, collectors, depth)?;
     }
     Ok(())
+}
+
+/// Classifies and dispatches one directory entry: skip (built-in list or
+/// symlink), or hand off to the directory/file visitor. Split out of
+/// `walk_dir_recursive` (coding-standards §4.2) so each step stays a short,
+/// independently-reasoned unit.
+fn visit_entry(
+    entry: std::fs::DirEntry,
+    ctx: &WalkContext,
+    collectors: &mut WalkCollectors,
+    depth: usize,
+) -> Result<(), String> {
+    let path = entry.path();
+    let name = entry.file_name();
+    let name_str = name.to_string_lossy();
+    if should_skip(&name_str, ctx.opts.dependency_scope) {
+        return Ok(());
+    }
+    // Use symlink_metadata (lstat) instead of metadata (stat) so symlinks are
+    // detected and skipped rather than silently followed.
+    // source: C4 fix — POSIX lstat(2), does not follow the final symlink.
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(m) => m,
+        Err(_) => return Ok(()),
+    };
+    if meta.file_type().is_symlink() {
+        return Ok(()); // intentionally skip symlinks
+    }
+    if meta.is_dir() {
+        let candidate = DirCandidate {
+            path,
+            name: name_str.into_owned(),
+        };
+        visit_dir_entry(candidate, ctx, collectors, depth)
+    } else if meta.is_file() {
+        visit_file_entry(path, &meta, ctx, collectors);
+        Ok(())
+    } else {
+        Ok(())
+    }
+}
+
+/// A directory entry pending the exclude-check + recurse step. Bundles
+/// `path` and its bare `name` so `visit_dir_entry` stays within the
+/// 4-parameter limit (coding-standards §4.4).
+struct DirCandidate {
+    path: PathBuf,
+    name: String,
+}
+
+/// Applies `exclude_dirs` (issue #249, wins over every `dependency_scope`
+/// tier) then recurses, bounding the collected-file count as it returns.
+fn visit_dir_entry(
+    candidate: DirCandidate,
+    ctx: &WalkContext,
+    collectors: &mut WalkCollectors,
+    depth: usize,
+) -> Result<(), String> {
+    let DirCandidate { path, name } = candidate;
+    if !ctx.opts.exclude_dirs.is_empty() {
+        let rel = dir_rel(ctx.root, &path);
+        if ctx.opts.exclude_dirs.matches(&name, &rel) {
+            collectors.excluded_dirs.push(rel);
+            return Ok(());
+        }
+    }
+    walk_dir_recursive(&path, ctx, collectors, depth + 1)?;
+    if collectors.files.len() > super::MAX_FILES {
+        return Err(format!(
+            "too_many_files: exceeded MAX_FILES ({}) during walk",
+            super::MAX_FILES
+        ));
+    }
+    Ok(())
+}
+
+/// File collection policy:
+///   * `language_filter = Some(L)`: collect ONLY files of language L (a
+///     scoped re-index of a single language).
+///   * `language_filter = None`: ALL-FILE indexing — collect every file
+///     regardless of extension. Code files in a supported language get a
+///     full AST; every other file still becomes a File node
+///     (path/name/extension/size), and .js-family files are light-linked
+///     (import/require → Imports_File_File) in a post-pass. Oversized files
+///     are skipped here; build/dependency dirs are pruned by `should_skip`
+///     before this function is ever reached.
+///     source: "the pipeline should index any kind of files" — so every
+///     file a session touches is navigable in the graph.
+fn visit_file_entry(
+    path: PathBuf,
+    meta: &std::fs::Metadata,
+    ctx: &WalkContext,
+    collectors: &mut WalkCollectors,
+) {
+    if meta.len() > super::MAX_FILE_BYTES {
+        eprintln!(
+            "indexer: skipping oversized file ({} bytes > MAX_FILE_BYTES {}): {}",
+            meta.len(),
+            super::MAX_FILE_BYTES,
+            path.display()
+        );
+        return;
+    }
+    match ctx.opts.language_filter {
+        Some(filter) => {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if Language::from_extension(ext) == Some(filter) {
+                    collectors.files.push(path);
+                }
+            }
+        }
+        None => collectors.files.push(path),
+    }
+}
+
+/// The walk-root-relative, forward-slash path of `path` — shared by the
+/// `exclude_dirs` relative-path match and the coverage-report rel key.
+/// Mirrors `light_link::rel_id`'s `\`->`/` normalization.
+fn dir_rel(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// Returns true for directories that should be skipped during walk.
@@ -250,7 +444,9 @@ fn should_skip(name: &str, dependency_scope: DependencyScope) -> bool {
 ///
 /// Used by the indexer to scope the `PublicApi` visibility filter to
 /// dependency-tree symbols only: project files stay fully indexed regardless
-/// of `dependency_scope`.
+/// of `dependency_scope`. Note: a user-excluded directory (issue #249) never
+/// reaches this function at all — it is pruned at the walk, so no File node
+/// (and therefore no call to `is_dependency_path`) is ever produced for it.
 pub(super) fn is_dependency_path(root: &Path, file_path: &Path) -> bool {
     let rel = file_path.strip_prefix(root).unwrap_or(file_path);
     rel.parent()
@@ -258,3 +454,6 @@ pub(super) fn is_dependency_path(root: &Path, file_path: &Path) -> bool {
         .flat_map(|p| p.components())
         .any(|c| should_skip(&c.as_os_str().to_string_lossy(), DependencyScope::None))
 }
+
+#[cfg(test)]
+mod tests;
