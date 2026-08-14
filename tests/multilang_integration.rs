@@ -5,10 +5,92 @@
 
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
-use ai_architect_mcp::parser::{self, Language};
+use ai_architect_mcp::parser::{self, Language, ParseResult};
 use std::path::Path;
 mod common;
 use common::TempDirExt;
+
+/// Count parser-result nodes carrying `label` (reduces repeated
+/// `.iter().filter(...).count()` boilerplate across the parser-standalone
+/// tests below).
+fn count_label(result: &ParseResult, label: &str) -> usize {
+    result.nodes.iter().filter(|n| n.label == label).count()
+}
+
+/// Rust: 3 functions (greet, add, fetch_data) + 1 struct (Config) + 2 fields.
+fn assert_rust_symbols(store: &GraphStore) {
+    let rust_fns = store
+        .execute_query(
+            "MATCH (f:Function) WHERE f.qualified_name STARTS WITH 'sample.rs' RETURN f.name",
+        )
+        .unwrap();
+    assert!(
+        rust_fns.rows.len() >= 3,
+        "should find Rust functions, got {:?}",
+        rust_fns.rows
+    );
+
+    let rust_structs = store
+        .execute_query(
+            "MATCH (s:Struct) WHERE s.qualified_name STARTS WITH 'sample.rs' RETURN s.name",
+        )
+        .unwrap();
+    assert!(
+        !rust_structs.rows.is_empty(),
+        "should find Rust struct Config, got {:?}",
+        rust_structs.rows
+    );
+}
+
+/// Python: 2 functions (greet, add) + 1 struct/class (Config) + methods.
+fn assert_python_symbols(store: &GraphStore) {
+    let py_fns = store
+        .execute_query(
+            "MATCH (f:Function) WHERE f.qualified_name STARTS WITH 'sample.py' RETURN f.name",
+        )
+        .unwrap();
+    assert!(
+        py_fns.rows.len() >= 2,
+        "should find Python functions, got {:?}",
+        py_fns.rows
+    );
+
+    let py_classes = store
+        .execute_query(
+            "MATCH (s:Struct) WHERE s.qualified_name STARTS WITH 'sample.py' RETURN s.name",
+        )
+        .unwrap();
+    assert!(
+        !py_classes.rows.is_empty(),
+        "should find Python class Config (as Struct), got {:?}",
+        py_classes.rows
+    );
+}
+
+/// TypeScript: function greet + class Config + interface Serializable.
+fn assert_typescript_symbols(store: &GraphStore) {
+    let ts_fns = store
+        .execute_query(
+            "MATCH (f:Function) WHERE f.qualified_name STARTS WITH 'sample.ts' RETURN f.name",
+        )
+        .unwrap();
+    assert!(
+        !ts_fns.rows.is_empty(),
+        "should find TypeScript functions, got {:?}",
+        ts_fns.rows
+    );
+
+    let ts_traits = store
+        .execute_query(
+            "MATCH (t:Trait) WHERE t.qualified_name STARTS WITH 'sample.ts' RETURN t.name",
+        )
+        .unwrap();
+    assert!(
+        !ts_traits.rows.is_empty(),
+        "should find TypeScript interface (as Trait), got {:?}",
+        ts_traits.rows
+    );
+}
 
 #[test]
 fn test_multilang_auto_index() {
@@ -45,75 +127,9 @@ fn test_multilang_auto_index() {
 
     // Query the graph for language-specific symbols
     let store = GraphStore::open_or_create(&tmp).unwrap();
-
-    // Rust: 3 functions (greet, add, fetch_data) + 1 struct (Config) + 2 fields
-    let rust_fns = store
-        .execute_query(
-            "MATCH (f:Function) WHERE f.qualified_name STARTS WITH 'sample.rs' RETURN f.name",
-        )
-        .unwrap();
-    assert!(
-        rust_fns.rows.len() >= 3,
-        "should find Rust functions, got {:?}",
-        rust_fns.rows
-    );
-
-    let rust_structs = store
-        .execute_query(
-            "MATCH (s:Struct) WHERE s.qualified_name STARTS WITH 'sample.rs' RETURN s.name",
-        )
-        .unwrap();
-    assert!(
-        !rust_structs.rows.is_empty(),
-        "should find Rust struct Config, got {:?}",
-        rust_structs.rows
-    );
-
-    // Python: 2 functions (greet, add) + 1 struct/class (Config) + methods
-    let py_fns = store
-        .execute_query(
-            "MATCH (f:Function) WHERE f.qualified_name STARTS WITH 'sample.py' RETURN f.name",
-        )
-        .unwrap();
-    assert!(
-        py_fns.rows.len() >= 2,
-        "should find Python functions, got {:?}",
-        py_fns.rows
-    );
-
-    let py_classes = store
-        .execute_query(
-            "MATCH (s:Struct) WHERE s.qualified_name STARTS WITH 'sample.py' RETURN s.name",
-        )
-        .unwrap();
-    assert!(
-        !py_classes.rows.is_empty(),
-        "should find Python class Config (as Struct), got {:?}",
-        py_classes.rows
-    );
-
-    // TypeScript: function greet + class Config + interface Serializable
-    let ts_fns = store
-        .execute_query(
-            "MATCH (f:Function) WHERE f.qualified_name STARTS WITH 'sample.ts' RETURN f.name",
-        )
-        .unwrap();
-    assert!(
-        !ts_fns.rows.is_empty(),
-        "should find TypeScript functions, got {:?}",
-        ts_fns.rows
-    );
-
-    let ts_traits = store
-        .execute_query(
-            "MATCH (t:Trait) WHERE t.qualified_name STARTS WITH 'sample.ts' RETURN t.name",
-        )
-        .unwrap();
-    assert!(
-        !ts_traits.rows.is_empty(),
-        "should find TypeScript interface (as Trait), got {:?}",
-        ts_traits.rows
-    );
+    assert_rust_symbols(&store);
+    assert_python_symbols(&store);
+    assert_typescript_symbols(&store);
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&tmp);
@@ -180,19 +196,11 @@ class Dog(Animal):
     let result =
         parser::parse_file(src, "test.py", Language::Python).expect("parse should succeed");
 
-    let fn_count = result
-        .nodes
-        .iter()
-        .filter(|n| n.label == "Function")
-        .count();
-    let class_count = result.nodes.iter().filter(|n| n.label == "Struct").count();
-    let method_count = result.nodes.iter().filter(|n| n.label == "Method").count();
-    let import_count = result.nodes.iter().filter(|n| n.label == "Import").count();
-    let const_count = result
-        .nodes
-        .iter()
-        .filter(|n| n.label == "Constant")
-        .count();
+    let fn_count = count_label(&result, "Function");
+    let class_count = count_label(&result, "Struct");
+    let method_count = count_label(&result, "Method");
+    let import_count = count_label(&result, "Import");
+    let const_count = count_label(&result, "Constant");
 
     assert!(fn_count >= 1, "should find functions, got {fn_count}");
     assert!(
@@ -214,9 +222,8 @@ class Dog(Animal):
     assert!(extends, "Dog should extend Animal");
 }
 
-#[test]
-fn test_typescript_parser_standalone() {
-    let src = r#"
+fn typescript_standalone_source() -> &'static str {
+    r#"
 import { Router } from 'express';
 
 export const MAX_RETRIES = 3;
@@ -249,29 +256,22 @@ export enum Color {
 }
 
 export type Alias = string | number;
-"#;
+"#
+}
+
+#[test]
+fn test_typescript_parser_standalone() {
+    let src = typescript_standalone_source();
     let result =
         parser::parse_file(src, "test.ts", Language::TypeScript).expect("parse should succeed");
 
-    let fn_count = result
-        .nodes
-        .iter()
-        .filter(|n| n.label == "Function")
-        .count();
-    let class_count = result.nodes.iter().filter(|n| n.label == "Struct").count();
-    let trait_count = result.nodes.iter().filter(|n| n.label == "Trait").count();
-    let enum_count = result.nodes.iter().filter(|n| n.label == "Enum").count();
-    let type_alias_count = result
-        .nodes
-        .iter()
-        .filter(|n| n.label == "TypeAlias")
-        .count();
-    let import_count = result.nodes.iter().filter(|n| n.label == "Import").count();
-    let const_count = result
-        .nodes
-        .iter()
-        .filter(|n| n.label == "Constant")
-        .count();
+    let fn_count = count_label(&result, "Function");
+    let class_count = count_label(&result, "Struct");
+    let trait_count = count_label(&result, "Trait");
+    let enum_count = count_label(&result, "Enum");
+    let type_alias_count = count_label(&result, "TypeAlias");
+    let import_count = count_label(&result, "Import");
+    let const_count = count_label(&result, "Constant");
 
     assert!(fn_count >= 1, "should find function greet, got {fn_count}");
     assert!(
@@ -298,16 +298,10 @@ export type Alias = string | number;
     assert!(extends, "Dog should extend Animal");
 }
 
-#[test]
-fn test_swift_parser_standalone() {
-    // Regression guard for the ABI-15 defect: tree-sitter-swift 0.7.3 needs a
-    // runtime supporting grammar ABI 15 (tree-sitter >= 0.25). If the runtime is
-    // too old, `set_language` fails and `parse_swift_file` returns Err, so the
-    // `.expect` below panics — this test fails loudly instead of Swift being
-    // silently skipped by the indexer (the original defect). It also exercises
-    // every member kind swift.rs classifies, which had no fixture before.
-    // source: alex-pinkus/tree-sitter-swift v0.7.3 node kinds.
-    let src = r#"
+/// source: alex-pinkus/tree-sitter-swift v0.7.3 node kinds. Exercises every
+/// member kind swift.rs classifies, which had no fixture before.
+fn swift_standalone_source() -> &'static str {
+    r#"
 import Foundation
 import UIKit
 
@@ -348,26 +342,28 @@ extension Animal {
 }
 
 typealias Handler = () -> Void
-"#;
+"#
+}
+
+#[test]
+fn test_swift_parser_standalone() {
+    // Regression guard for the ABI-15 defect: tree-sitter-swift 0.7.3 needs a
+    // runtime supporting grammar ABI 15 (tree-sitter >= 0.25). If the runtime is
+    // too old, `set_language` fails and `parse_swift_file` returns Err, so the
+    // `.expect` below panics — this test fails loudly instead of Swift being
+    // silently skipped by the indexer (the original defect).
+    let src = swift_standalone_source();
     let result = parser::parse_file(src, "test.swift", Language::Swift)
         .expect("Swift parse should succeed (ABI 15 runtime required)");
 
-    let fn_count = result
-        .nodes
-        .iter()
-        .filter(|n| n.label == "Function")
-        .count();
-    let struct_count = result.nodes.iter().filter(|n| n.label == "Struct").count();
-    let enum_count = result.nodes.iter().filter(|n| n.label == "Enum").count();
-    let variant_count = result.nodes.iter().filter(|n| n.label == "Variant").count();
-    let trait_count = result.nodes.iter().filter(|n| n.label == "Trait").count();
-    let method_count = result.nodes.iter().filter(|n| n.label == "Method").count();
-    let const_count = result
-        .nodes
-        .iter()
-        .filter(|n| n.label == "Constant")
-        .count();
-    let import_count = result.nodes.iter().filter(|n| n.label == "Import").count();
+    let fn_count = count_label(&result, "Function");
+    let struct_count = count_label(&result, "Struct");
+    let enum_count = count_label(&result, "Enum");
+    let variant_count = count_label(&result, "Variant");
+    let trait_count = count_label(&result, "Trait");
+    let method_count = count_label(&result, "Method");
+    let const_count = count_label(&result, "Constant");
+    let import_count = count_label(&result, "Import");
 
     assert!(
         import_count >= 2,

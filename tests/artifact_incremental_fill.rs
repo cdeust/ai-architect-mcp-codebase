@@ -27,9 +27,9 @@
 
 use ai_architect_mcp::artifact;
 use ai_architect_mcp::graph_store::GraphStore;
-use ai_architect_mcp::indexer::{self, manifest, FillMethod, IndexOptions};
+use ai_architect_mcp::indexer::{self, manifest, FillMethod, FillResult, IndexOptions};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // Enough files for a meaningful parity check across edit/add/delete/rename; the
@@ -97,35 +97,31 @@ fn snapshot_queries(store: &GraphStore) -> Vec<(String, Vec<Vec<String>>)> {
         .collect()
 }
 
-#[test]
-fn stale_clone_bootstrap_fill_matches_full_index() {
-    let tmp = tempfile::Builder::new()
-        .prefix("artifact_fill_")
-        .tempdir()
-        .expect("temp dir");
-
-    // -- 1. Fixture repo, initial commit ------------------------------------
-    let repo = tmp.path().join("repo");
+/// -- 1. Fixture repo, initial commit -------------------------------------
+fn write_and_commit_initial_fixture(repo: &Path) {
     fs::create_dir_all(repo.join("src")).expect("mk repo/src");
     for i in 0..N_MODULES {
         fs::write(repo.join(format!("src/mod{i:03}.py")), module_body(i)).expect("write module");
     }
-    init_git(&repo);
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "initial"]);
+    init_git(repo);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "initial"]);
+}
 
-    // -- 2. Full index + export artifact (with bundled manifest) ------------
-    let idx_out = tmp.path().join("idx_out");
+/// -- 2. Full index + export artifact (with bundled manifest), then commit
+/// it -----------------------------------------------------------------------
+fn export_and_commit_artifact(tmp: &Path, repo: &Path) {
+    let idx_out = tmp.join("idx_out");
     fs::create_dir_all(&idx_out).expect("mk idx_out");
     let idx_graph = idx_out.join("graph");
     let idx_manifest = manifest::manifest_path(&idx_out);
-    let result = indexer::index_codebase_with_language(&repo, &idx_graph, &IndexOptions::default())
+    let result = indexer::index_codebase_with_language(repo, &idx_graph, &IndexOptions::default())
         .expect("full index");
-    indexer::write_full_manifest(&repo, &idx_manifest, &IndexOptions::default())
+    indexer::write_full_manifest(repo, &idx_manifest, &IndexOptions::default())
         .expect("write manifest");
     artifact::export_artifact(
         &idx_graph,
-        &repo,
+        repo,
         result.node_count,
         result.edge_count,
         Some(&idx_manifest),
@@ -133,11 +129,13 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
     )
     .expect("export artifact");
 
-    // -- 3. Commit the artifact, then commit source changes -----------------
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "commit artifact"]);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "commit artifact"]);
+}
 
-    // edit / add / delete / rename, all committed → the artifact is now stale.
+/// -- 3. edit / add / delete / rename, all committed → the artifact is now
+/// stale. -----------------------------------------------------------------
+fn mutate_and_commit_source_changes(repo: &Path) {
     fs::write(
         repo.join("src/mod000.py"),
         "def brand_new_fn():\n    return 999\n\ndef another_new():\n    return 0\n",
@@ -154,14 +152,17 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
         repo.join("src/mod002_renamed.py"),
     )
     .expect("rename");
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "changes"]);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "changes"]);
+}
 
-    // -- 4. Simulate a fresh clone (carries the committed artifact) ---------
-    let clone = tmp.path().join("clone");
+/// -- 4. Simulate a fresh clone (carries the committed artifact). Returns
+/// the clone's path.
+fn clone_repo(tmp: &Path, repo: &Path) -> PathBuf {
+    let clone = tmp.join("clone");
     let out = Command::new("git")
         .args(["clone", "-q"])
-        .arg(&repo)
+        .arg(repo)
         .arg(&clone)
         .output()
         .expect("git clone");
@@ -174,9 +175,12 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
         artifact::artifact_exists(&clone),
         "the cloned repo must carry the committed artifact"
     );
+    clone
+}
 
-    // -- 5. Bootstrap-import then incremental fill --------------------------
-    let boot_out = tmp.path().join("boot_out");
+/// -- 5. Bootstrap-import then incremental fill. Returns (boot_graph, fill).
+fn bootstrap_and_fill(tmp: &Path, clone: &Path) -> (PathBuf, FillResult) {
+    let boot_out = tmp.join("boot_out");
     fs::create_dir_all(&boot_out).expect("mk boot_out");
     let boot_graph = boot_out.join("graph");
     let boot_manifest = manifest::manifest_path(&boot_out);
@@ -185,7 +189,7 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
         "fresh clone starts with no local graph"
     );
 
-    let meta = artifact::import_artifact(&clone, &boot_graph).expect("bootstrap import");
+    let meta = artifact::import_artifact(clone, &boot_graph).expect("bootstrap import");
     assert!(boot_graph.exists(), "import materialises the graph");
     assert!(
         boot_manifest.exists(),
@@ -194,7 +198,7 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
     let imported_manifest = manifest::load(&boot_manifest);
 
     let fill = indexer::fill_after_bootstrap(
-        &clone,
+        clone,
         &boot_graph,
         &boot_manifest,
         &meta.commit,
@@ -202,8 +206,11 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
         &IndexOptions::default(),
     )
     .expect("incremental fill");
+    (boot_graph, fill)
+}
 
-    // -- 7. Fill reported the exact change partition, via git diff ----------
+/// -- 7. Fill reported the exact change partition, via git diff ----------
+fn assert_fill_partition_via_git_diff(fill: &FillResult) {
     assert_eq!(
         fill.method,
         FillMethod::GitDiff,
@@ -214,15 +221,17 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
     assert_eq!(fill.result.deleted, 1, "mod001.py removed");
     assert_eq!(fill.result.renamed, 1, "mod002.py -> mod002_renamed.py");
     assert_eq!(fill.result.files_reparsed, 3, "changed+added+renamed-new");
+}
 
-    // -- 6. Parity: filled graph == a from-scratch full index of HEAD -------
-    let full_out = tmp.path().join("full_out");
+/// -- 6. Parity: filled graph == a from-scratch full index of HEAD -------
+fn assert_fill_parity_with_full_index(tmp: &Path, clone: &Path, boot_graph: &Path) {
+    let full_out = tmp.join("full_out");
     fs::create_dir_all(&full_out).expect("mk full_out");
     let full_graph = full_out.join("graph");
-    indexer::index_codebase_with_language(&clone, &full_graph, &IndexOptions::default())
+    indexer::index_codebase_with_language(clone, &full_graph, &IndexOptions::default())
         .expect("full index of clone HEAD");
     let snap_boot = {
-        let store = GraphStore::open_or_create(&boot_graph).expect("open filled graph");
+        let store = GraphStore::open_or_create(boot_graph).expect("open filled graph");
         snapshot_queries(&store)
     };
     let snap_full = {
@@ -236,6 +245,70 @@ fn stale_clone_bootstrap_fill_matches_full_index() {
 }
 
 #[test]
+fn stale_clone_bootstrap_fill_matches_full_index() {
+    let tmp = tempfile::Builder::new()
+        .prefix("artifact_fill_")
+        .tempdir()
+        .expect("temp dir");
+    let repo = tmp.path().join("repo");
+
+    write_and_commit_initial_fixture(&repo);
+    export_and_commit_artifact(tmp.path(), &repo);
+    mutate_and_commit_source_changes(&repo);
+
+    let clone = clone_repo(tmp.path(), &repo);
+    let (boot_graph, fill) = bootstrap_and_fill(tmp.path(), &clone);
+
+    assert_fill_partition_via_git_diff(&fill);
+    assert_fill_parity_with_full_index(tmp.path(), &clone, &boot_graph);
+}
+
+fn write_and_export_nogit_fixture(tmp: &Path, repo: &Path) {
+    fs::create_dir_all(repo.join("src")).expect("mk src");
+    for i in 0..12 {
+        fs::write(repo.join(format!("src/m{i}.py")), module_body(i)).expect("write");
+    }
+
+    let idx_out = tmp.join("idx_out");
+    fs::create_dir_all(&idx_out).expect("mk idx_out");
+    let idx_graph = idx_out.join("graph");
+    let idx_manifest = manifest::manifest_path(&idx_out);
+    let result = indexer::index_codebase_with_language(repo, &idx_graph, &IndexOptions::default())
+        .expect("index");
+    indexer::write_full_manifest(repo, &idx_manifest, &IndexOptions::default()).expect("manifest");
+    artifact::export_artifact(
+        &idx_graph,
+        repo,
+        result.node_count,
+        result.edge_count,
+        Some(&idx_manifest),
+        None,
+    )
+    .expect("export");
+}
+
+/// Bootstrap-imports + fills `repo` (no git → content-hash fallback).
+/// Returns (boot_graph, fill).
+fn bootstrap_and_fill_nogit(tmp: &Path, repo: &Path) -> (PathBuf, FillResult) {
+    let boot_out = tmp.join("boot_out");
+    fs::create_dir_all(&boot_out).expect("mk boot_out");
+    let boot_graph = boot_out.join("graph");
+    let boot_manifest = manifest::manifest_path(&boot_out);
+    let meta = artifact::import_artifact(repo, &boot_graph).expect("import");
+    let imported = manifest::load(&boot_manifest);
+    let fill = indexer::fill_after_bootstrap(
+        repo,
+        &boot_graph,
+        &boot_manifest,
+        &meta.commit,
+        imported.as_ref(),
+        &IndexOptions::default(),
+    )
+    .expect("fill");
+    (boot_graph, fill)
+}
+
+#[test]
 fn fill_falls_back_to_content_hash_when_not_a_git_tree() {
     // When git can't diff (here: the codebase is not a git working tree), the
     // fill classifies against the bundled manifest's content hashes and still
@@ -245,49 +318,14 @@ fn fill_falls_back_to_content_hash_when_not_a_git_tree() {
         .tempdir()
         .expect("temp dir");
     let repo = tmp.path().join("repo"); // NOT a git repo
-    fs::create_dir_all(repo.join("src")).expect("mk src");
-    for i in 0..12 {
-        fs::write(repo.join(format!("src/m{i}.py")), module_body(i)).expect("write");
-    }
-
-    let idx_out = tmp.path().join("idx_out");
-    fs::create_dir_all(&idx_out).expect("mk idx_out");
-    let idx_graph = idx_out.join("graph");
-    let idx_manifest = manifest::manifest_path(&idx_out);
-    let result = indexer::index_codebase_with_language(&repo, &idx_graph, &IndexOptions::default())
-        .expect("index");
-    indexer::write_full_manifest(&repo, &idx_manifest, &IndexOptions::default()).expect("manifest");
-    artifact::export_artifact(
-        &idx_graph,
-        &repo,
-        result.node_count,
-        result.edge_count,
-        Some(&idx_manifest),
-        None,
-    )
-    .expect("export");
+    write_and_export_nogit_fixture(tmp.path(), &repo);
 
     // Mutate after export (no git): edit + add + delete.
     fs::write(repo.join("src/m0.py"), "def changed0():\n    return 1\n").expect("edit");
     fs::write(repo.join("src/m_new.py"), "def newsym():\n    return 2\n").expect("add");
     fs::remove_file(repo.join("src/m1.py")).expect("delete");
 
-    // Bootstrap import + fill (no git → content-hash fallback).
-    let boot_out = tmp.path().join("boot_out");
-    fs::create_dir_all(&boot_out).expect("mk boot_out");
-    let boot_graph = boot_out.join("graph");
-    let boot_manifest = manifest::manifest_path(&boot_out);
-    let meta = artifact::import_artifact(&repo, &boot_graph).expect("import");
-    let imported = manifest::load(&boot_manifest);
-    let fill = indexer::fill_after_bootstrap(
-        &repo,
-        &boot_graph,
-        &boot_manifest,
-        &meta.commit,
-        imported.as_ref(),
-        &IndexOptions::default(),
-    )
-    .expect("fill");
+    let (boot_graph, fill) = bootstrap_and_fill_nogit(tmp.path(), &repo);
     assert_eq!(
         fill.method,
         FillMethod::ContentHash,

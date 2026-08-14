@@ -238,12 +238,22 @@ fn test_symlink_skipped() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Fixture for `test_dependency_scope_walk`: root/app.rs,
+/// root/node_modules/dep.rs, root/deps/dep2.rs, root/.git/hook.rs.
+fn write_dependency_scope_fixture(root: &Path) {
+    std::fs::create_dir_all(root.join("node_modules")).unwrap();
+    std::fs::create_dir_all(root.join("deps")).unwrap();
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("app.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("node_modules/dep.rs"), "fn dep() {}\n").unwrap();
+    std::fs::write(root.join("deps/dep2.rs"), "fn dep2() {}\n").unwrap();
+    std::fs::write(root.join(".git/hook.rs"), "fn hook() {}\n").unwrap();
+}
+
 #[test]
 fn test_dependency_scope_walk() {
     // Proves DependencyScope toggles descent into build/dependency dirs
     // while always excluding `.git`.
-    // Fixture: root/app.rs, root/node_modules/dep.rs, root/deps/dep2.rs,
-    // root/.git/hook.rs.
     use crate::test_support::TempDirExt;
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
@@ -253,13 +263,7 @@ fn test_dependency_scope_walk() {
         .expect("create temp dir")
         .keep_managed();
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("node_modules")).unwrap();
-    std::fs::create_dir_all(root.join("deps")).unwrap();
-    std::fs::create_dir_all(root.join(".git")).unwrap();
-    std::fs::write(root.join("app.rs"), "fn main() {}\n").unwrap();
-    std::fs::write(root.join("node_modules/dep.rs"), "fn dep() {}\n").unwrap();
-    std::fs::write(root.join("deps/dep2.rs"), "fn dep2() {}\n").unwrap();
-    std::fs::write(root.join(".git/hook.rs"), "fn hook() {}\n").unwrap();
+    write_dependency_scope_fixture(&root);
 
     let names = |opts: WalkOptions| -> Vec<String> {
         let mut v: Vec<String> = collect_source_files(&root, opts)
@@ -298,22 +302,10 @@ fn test_dependency_scope_walk() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-#[test]
-fn test_public_api_scope_filters_dependency_symbols_only() {
-    // Fixture: a project file (app.rs, one pub + one private fn) and a
-    // dependency file under node_modules (dep.rs, one pub + one private
-    // fn). PublicApi must drop the PRIVATE fn from dep.rs only — the
-    // project file's private fn stays, and dep.rs's pub fn stays too.
-    // source: ADR-4253701 §Decision 1.
-    // issue #25 audit: process::id() collides across processes under PID
-    // reuse; tempfile's random suffix does not.
-    use crate::test_support::TempDirExt;
-    let root = tempfile::Builder::new()
-        .prefix("indexer_public_api_test_")
-        .tempdir()
-        .expect("create temp dir")
-        .keep_managed();
-    let _ = std::fs::remove_dir_all(&root);
+/// Fixture for `test_public_api_scope_filters_dependency_symbols_only`: a
+/// project file (app.rs, one pub + one private fn) and a dependency file
+/// under node_modules (dep.rs, one pub + one private fn).
+fn write_public_api_scope_fixture(root: &Path) {
     std::fs::create_dir_all(root.join("node_modules")).unwrap();
     std::fs::write(
         root.join("app.rs"),
@@ -325,6 +317,23 @@ fn test_public_api_scope_filters_dependency_symbols_only() {
         "pub fn dep_pub() {}\nfn dep_private() {}\n",
     )
     .unwrap();
+}
+
+#[test]
+fn test_public_api_scope_filters_dependency_symbols_only() {
+    // PublicApi must drop the PRIVATE fn from dep.rs only — the project
+    // file's private fn stays, and dep.rs's pub fn stays too.
+    // source: ADR-4253701 §Decision 1.
+    // issue #25 audit: process::id() collides across processes under PID
+    // reuse; tempfile's random suffix does not.
+    use crate::test_support::TempDirExt;
+    let root = tempfile::Builder::new()
+        .prefix("indexer_public_api_test_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let _ = std::fs::remove_dir_all(&root);
+    write_public_api_scope_fixture(&root);
 
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.

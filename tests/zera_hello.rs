@@ -25,9 +25,9 @@ use ai_architect_mcp::indexer;
 use ai_architect_mcp::parser::Language;
 use ai_architect_mcp::resolver;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
-use zera::{hello, EdgeRef, GraphState, HelloRequest, NodeRef};
+use zera::{hello, EdgeRef, GraphState, HelloRequest, HelloResponse, NodeRef};
 mod common;
 use common::TempDirExt;
 
@@ -324,15 +324,23 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-#[test]
-fn zera_hello_on_cortex_mcp_server() {
-    if !opt_in() {
-        eprintln!("[skipped] zera_hello_on_cortex_mcp_server — set CORTEX_FULL_CORPUS=1");
-        return;
-    }
-    let target = PathBuf::from("/Users/cdeust/Developments/Cortex/mcp_server");
-    assert!(target.is_dir(), "Cortex not at {}", target.display());
+/// One indexed-and-hello'd run: the canonical graph state, both handshake
+/// responses, and the phase timings — bundled so downstream helpers take one
+/// parameter object instead of six positional values (§4.4).
+struct HelloRun {
+    state: GraphState,
+    cold: HelloResponse,
+    warm: HelloResponse,
+    t_index: std::time::Duration,
+    t_state: std::time::Duration,
+    t_hash: std::time::Duration,
+}
 
+/// Indexes `target` into a scratch graph, builds the canonical `GraphState`,
+/// and runs the cold + warm HELLO handshake. Also re-derives the state a
+/// second time to assert content-hash determinism across reads of the same
+/// store — the contract every later slice depends on.
+fn index_and_hello(target: &Path) -> HelloRun {
     // issue #25 audit: process::id() collides across processes under PID
     // reuse; tempfile's random suffix does not.
     let tmp = tempfile::Builder::new()
@@ -346,7 +354,7 @@ fn zera_hello_on_cortex_mcp_server() {
 
     let t0 = Instant::now();
     indexer::index_codebase_with_language(
-        &target,
+        target,
         &graph_path,
         &indexer::IndexOptions {
             language_filter: Some(Language::Python),
@@ -374,10 +382,6 @@ fn zera_hello_on_cortex_mcp_server() {
     );
     let t_hash = t2.elapsed();
 
-    // Determinism: indexing twice in the same session must produce the
-    // identical content id. The current indexer is single-pass so this
-    // is a tautology in this run, but the assertion documents the
-    // contract every later slice depends on.
     let state2 = graph_state_from_store(&store);
     assert_eq!(
         state.content_id(),
@@ -385,12 +389,24 @@ fn zera_hello_on_cortex_mcp_server() {
         "content_hash MUST be deterministic across reads of the same store"
     );
 
-    // Hard contract assertions:
+    HelloRun {
+        state,
+        cold,
+        warm,
+        t_index,
+        t_state,
+        t_hash,
+    }
+}
+
+/// Hard contract assertions on the cold/warm HELLO responses.
+fn assert_hello_contracts(run: &HelloRun) {
+    let cold = &run.cold;
     assert!(
         !cold.cache_hit,
         "cold path: client has no cached id, must miss"
     );
-    assert!(warm.cache_hit, "warm path: same id supplied, must hit");
+    assert!(run.warm.cache_hit, "warm path: same id supplied, must hit");
     assert!(
         cold.baseline_json_bytes > 100_000,
         "baseline at Cortex scale should exceed 100 KB, got {}",
@@ -408,22 +424,29 @@ fn zera_hello_on_cortex_mcp_server() {
         cold.manifest_bytes,
         cold.baseline_json_bytes,
     );
+}
 
-    // Render report.
+/// Renders the HTML report to `target/zera-s1/hello.html` and returns its
+/// path.
+fn write_report(target: &Path, run: &HelloRun) -> PathBuf {
     let artifact_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/zera-s1");
     fs::create_dir_all(&artifact_dir).expect("mkdir artifact_dir");
     let html_path = artifact_dir.join("hello.html");
     let html = render_report_html(
         target.to_str().unwrap_or("?"),
-        &state,
-        &cold,
-        &warm,
-        t_index.as_millis(),
-        t_state.as_millis(),
-        t_hash.as_millis(),
+        &run.state,
+        &run.cold,
+        &run.warm,
+        run.t_index.as_millis(),
+        run.t_state.as_millis(),
+        run.t_hash.as_millis(),
     );
     fs::write(&html_path, &html).expect("write html");
+    html_path
+}
 
+fn print_summary(target: &Path, run: &HelloRun, html_path: &Path) {
+    let (state, cold) = (&run.state, &run.cold);
     println!(
         "\n=== ZERA S1 — HELLO handshake on {} ===\n\
          nodes: {}\n\
@@ -444,9 +467,25 @@ fn zera_hello_on_cortex_mcp_server() {
         cold.manifest_bytes,
         cold.baseline_json_bytes as f64 / cold.manifest_bytes as f64,
         cold.manifest_bytes as f64 * 100.0 / cold.baseline_json_bytes as f64,
-        t_index.as_millis(),
-        t_state.as_millis(),
-        t_hash.as_millis(),
+        run.t_index.as_millis(),
+        run.t_state.as_millis(),
+        run.t_hash.as_millis(),
         html_path.display(),
     );
+}
+
+#[test]
+fn zera_hello_on_cortex_mcp_server() {
+    if !opt_in() {
+        eprintln!("[skipped] zera_hello_on_cortex_mcp_server — set CORTEX_FULL_CORPUS=1");
+        return;
+    }
+    let target = PathBuf::from("/Users/cdeust/Developments/Cortex/mcp_server");
+    assert!(target.is_dir(), "Cortex not at {}", target.display());
+
+    let run = index_and_hello(&target);
+    assert_hello_contracts(&run);
+
+    let html_path = write_report(&target, &run);
+    print_summary(&target, &run, &html_path);
 }

@@ -89,17 +89,49 @@ struct Fixture {
 //   All builtins (len, set, list, text.lower, _SPLIT_RE.split): unresolved.
 //   With Bug #11 in play they produce NO Calls edge at all.
 
-fn fixture_text_py() -> Fixture {
+/// Pushes one CallSite `ExpectedNode` per `(callee, line)` under
+/// `caller_qn::callsite::{callee}::{line}`. CallSite QNs carry synthetic
+/// placeholders (the real byte-offset suffix is producer-determined); the
+/// scorer matches CallSites by (caller, callee, line) heuristic instead.
+fn push_callsite_nodes(nodes: &mut Vec<ExpectedNode>, caller_qn: &str, sites: &[(&str, u64)]) {
+    for (callee, line) in sites {
+        nodes.push(ExpectedNode {
+            qn: format!("{caller_qn}::callsite::{callee}::{line}"),
+            label: "CallSite",
+            start_line: *line,
+        });
+    }
+}
+
+/// Pushes one function → CallSite `Defines` edge per `(callee, line)` —
+/// the edge-side counterpart of `push_callsite_nodes`.
+fn push_callsite_defines_edges(
+    edges: &mut Vec<ExpectedEdge>,
+    caller_qn: &str,
+    sites: &[(&str, u64)],
+) {
+    for (callee, line) in sites {
+        edges.push(ExpectedEdge {
+            kind: "Defines",
+            from_qn: caller_qn.to_string(),
+            to_qn: format!("{caller_qn}::callsite::{callee}::{line}"),
+        });
+    }
+}
+
+/// Call sites — every Python call expression in a function body gets one,
+/// with id = "{caller_qn}::call@{line}:{col}#{byte_start}-{byte_end}". We
+/// assert by (caller_qn, callee, line) since byte offsets shift if the file
+/// is even one byte different. Call sites in extract_keywords: set() @185,
+/// text.lower() @188 (Bug #10: dropped today), _SPLIT_RE.split() @188 (Bug
+/// #10: dropped today), len() @189 x2. Call sites in
+/// extract_keywords_array: list() @195, extract_keywords() @195.
+fn fixture_text_py_nodes() -> Vec<ExpectedNode> {
     let file = "shared/text.py".to_string();
     let n = |qn: &str, label: &'static str, start_line: u64| ExpectedNode {
         qn: qn.to_string(),
         label,
         start_line,
-    };
-    let e = |kind: &'static str, from: &str, to: &str| ExpectedEdge {
-        kind,
-        from_qn: from.to_string(),
-        to_qn: to.to_string(),
     };
     let mut nodes = vec![
         // File node (auto-materialized by indexer)
@@ -118,46 +150,33 @@ fn fixture_text_py() -> Fixture {
         n("shared/text.py::extract_keywords_array", "Function", 193),
     ];
 
-    // Call sites — every Python call expression in a function body gets one,
-    // with id = "{caller_qn}::call@{line}:{col}#{byte_start}-{byte_end}".
-    // We assert by (caller_qn, callee, line) since byte offsets shift if the
-    // file is even one byte different.
-    //
-    // Order matters for stable matching: we'll match by best (caller, callee, line).
-    let _ck_sites_in_extract_keywords: Vec<(&str, u64)> = vec![
-        ("set", 185),
-        ("text.lower", 188),      // Bug #10: dropped today
-        ("_SPLIT_RE.split", 188), // Bug #10: dropped today
-        ("len", 189),
-        ("len", 189),
-    ];
-    let _ck_sites_in_extract_keywords_array: Vec<(&str, u64)> =
-        vec![("list", 195), ("extract_keywords", 195)];
-    // CallSite nodes are recorded for matching but with synthetic placeholder
-    // QNs because the byte-offset suffix is producer-determined. The scorer
-    // matches CallSites by (caller, callee, line) heuristic instead of by QN.
-    for (callee, line) in &[
-        ("set", 185u64),
-        ("text.lower", 188),
-        ("_SPLIT_RE.split", 188),
-        ("len", 189),
-        ("len", 189),
-    ] {
-        nodes.push(ExpectedNode {
-            qn: format!("shared/text.py::extract_keywords::callsite::{callee}::{line}"),
-            label: "CallSite",
-            start_line: *line,
-        });
-    }
-    for (callee, line) in &[("list", 195u64), ("extract_keywords", 195)] {
-        nodes.push(ExpectedNode {
-            qn: format!("shared/text.py::extract_keywords_array::callsite::{callee}::{line}"),
-            label: "CallSite",
-            start_line: *line,
-        });
-    }
+    push_callsite_nodes(
+        &mut nodes,
+        "shared/text.py::extract_keywords",
+        &[
+            ("set", 185u64),
+            ("text.lower", 188),
+            ("_SPLIT_RE.split", 188),
+            ("len", 189),
+            ("len", 189),
+        ],
+    );
+    push_callsite_nodes(
+        &mut nodes,
+        "shared/text.py::extract_keywords_array",
+        &[("list", 195u64), ("extract_keywords", 195)],
+    );
+    nodes
+}
 
-    // Edges — emitted by parser (Defines, HasMethod, Imports) and resolver (Calls).
+/// Edges — emitted by parser (Defines, HasMethod, Imports) and resolver (Calls).
+fn fixture_text_py_edges() -> Vec<ExpectedEdge> {
+    let file = "shared/text.py".to_string();
+    let e = |kind: &'static str, from: &str, to: &str| ExpectedEdge {
+        kind,
+        from_qn: from.to_string(),
+        to_qn: to.to_string(),
+    };
     let mut edges = vec![
         // file → import (parser/python.rs:emit_import calls these "Defines")
         e("Defines", &file, "shared/text.py::__future__::annotations"),
@@ -170,27 +189,22 @@ fn fixture_text_py() -> Fixture {
         e("Defines", &file, "shared/text.py::extract_keywords"),
         e("Defines", &file, "shared/text.py::extract_keywords_array"),
     ];
-    // function → CallSite (Defines) — one per expected call site
-    for (callee, line) in &[
-        ("set", 185u64),
-        ("text.lower", 188),
-        ("_SPLIT_RE.split", 188),
-        ("len", 189),
-        ("len", 189),
-    ] {
-        edges.push(ExpectedEdge {
-            kind: "Defines",
-            from_qn: "shared/text.py::extract_keywords".to_string(),
-            to_qn: format!("shared/text.py::extract_keywords::callsite::{callee}::{line}"),
-        });
-    }
-    for (callee, line) in &[("list", 195u64), ("extract_keywords", 195)] {
-        edges.push(ExpectedEdge {
-            kind: "Defines",
-            from_qn: "shared/text.py::extract_keywords_array".to_string(),
-            to_qn: format!("shared/text.py::extract_keywords_array::callsite::{callee}::{line}"),
-        });
-    }
+    push_callsite_defines_edges(
+        &mut edges,
+        "shared/text.py::extract_keywords",
+        &[
+            ("set", 185u64),
+            ("text.lower", 188),
+            ("_SPLIT_RE.split", 188),
+            ("len", 189),
+            ("len", 189),
+        ],
+    );
+    push_callsite_defines_edges(
+        &mut edges,
+        "shared/text.py::extract_keywords_array",
+        &[("list", 195u64), ("extract_keywords", 195)],
+    );
     // Resolved Calls: extract_keywords_array → extract_keywords (intra-file)
     edges.push(ExpectedEdge {
         kind: "Calls",
@@ -198,13 +212,16 @@ fn fixture_text_py() -> Fixture {
             .to_string(),
         to_qn: "shared/text.py::extract_keywords".to_string(),
     });
+    edges
+}
 
+fn fixture_text_py() -> Fixture {
     Fixture {
         name: "text.py",
         category: "pure-shared",
         rel_path: "shared/text.py",
-        nodes,
-        edges,
+        nodes: fixture_text_py_nodes(),
+        edges: fixture_text_py_edges(),
     }
 }
 
@@ -330,7 +347,12 @@ struct Observed {
     edges_by_kind: BTreeMap<String, BTreeSet<(String, String)>>, // kind -> {(from, to)}
 }
 
-fn index_fixture(fixture_root: &Path, graph_path: &Path) -> Observed {
+/// Runs the real indexer + resolver over `fixture_root` into `graph_path`
+/// and returns the opened store. Stage-3b resolution (Calls / Imports / Uses
+/// / Implements from the call-site and import stubs) runs here because
+/// `index_codebase` only does stage-3a — the graph_accuracy gate needs the
+/// full edge set a real pipeline run produces.
+fn index_and_resolve_fixture(fixture_root: &Path, graph_path: &Path) -> GraphStore {
     indexer::index_codebase_with_language(
         fixture_root,
         graph_path,
@@ -343,12 +365,6 @@ fn index_fixture(fixture_root: &Path, graph_path: &Path) -> Observed {
     .expect("indexer should succeed on a 1-file fixture");
 
     let store = GraphStore::open_or_create(graph_path).expect("open the freshly-built graph");
-
-    // Run stage-3b resolution: produces Calls / Imports / Uses / Implements
-    // edges from the call-sites and import nodes the parser left as stubs.
-    // index_codebase only does stage-3a (parser + node/edge insertion); the
-    // resolver is a separate pass invoked here so the graph_accuracy gate
-    // sees the full set of edges a real pipeline run produces.
     let res = resolver::resolve_graph(&store).expect("resolver should succeed");
     eprintln!(
         "resolver: imports={} calls={} impls={} extends={} uses={} \
@@ -362,8 +378,11 @@ fn index_fixture(fixture_root: &Path, graph_path: &Path) -> Observed {
         res.total_refs,
         res.unresolved.len(),
     );
+    store
+}
 
-    // Pull all nodes by label. We hit the labels the parser/indexer emits.
+/// Pulls all nodes by label. We hit the labels the parser/indexer emits.
+fn collect_observed_nodes(store: &GraphStore) -> BTreeMap<String, String> {
     let mut nodes: BTreeMap<String, String> = BTreeMap::new();
     for label in &[
         "File", "Import", "Constant", "Function", "Method", "Struct", "CallSite",
@@ -379,68 +398,92 @@ fn index_fixture(fixture_root: &Path, graph_path: &Path) -> Observed {
             }
         }
     }
+    nodes
+}
 
-    // Pull all edges per relation table. REL_TABLES is the schema's single
-    // source of truth; table names follow "{Kind}_{From}_{To}". We collapse
-    // by leading Kind segment so the scorer can match against expected kinds.
-    let mut edges_by_kind: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
-    let mut table_counts: BTreeMap<String, usize> = BTreeMap::new();
-    for (name, _from, _to) in REL_TABLES {
-        // Full-AST layer (`Defines_File_AstNode`, `AstChild_AstNode_AstNode`)
-        // is orthogonal to this scorer: it is EVERY tree-sitter node, not the
-        // semantic symbol subset these fixtures encode ground truth for, and
-        // its own completeness is proven separately
-        // (tests/full_ast_completeness.rs, ratio == 1.0 across languages).
-        // Folding it into the `Defines`/(new) `AstChild` buckets here would
-        // compare against ground truth that was never meant to cover it —
-        // observed 2026-08-09: `Defines_File_AstNode` collapsing into the
-        // `Defines` bucket alongside `Defines_File_Function` etc. manufactured
-        // a false positive and failed the REGRESSION floor on a fixture whose
-        // actual Defines extraction was unchanged.
-        if name.contains("AstNode") {
-            continue;
-        }
-        let q = format!("MATCH (a)-[r:{name}]->(b) RETURN a.id, b.id");
-        let res = match store.execute_query(&q) {
-            Ok(r) => r,
-            Err(e) => {
-                // Some tables are empty after a 1-file index; lbug may error
-                // on totally-empty relation queries. Don't pollute output.
-                let msg = e.to_string();
-                if !msg.contains("empty") && !msg.is_empty() {
-                    eprintln!("query {name}: {e}");
-                }
-                continue;
+/// Pulls all edges per relation table. REL_TABLES is the schema's single
+/// source of truth; table names follow "{Kind}_{From}_{To}". We collapse by
+/// leading Kind segment so the scorer can match against expected kinds.
+/// Queries one relation table and folds its rows into `edges_by_kind`
+/// (collapsed "Kind_From_To" → "Kind") and `table_counts` (per-table row
+/// count, for the populated-tables diagnostic). Skips the full-AST layer
+/// (`*AstNode*`): it is orthogonal to this scorer — see
+/// `collect_observed_edges`'s doc comment.
+fn fold_relation_table(
+    store: &GraphStore,
+    name: &str,
+    edges_by_kind: &mut BTreeMap<String, BTreeSet<(String, String)>>,
+    table_counts: &mut BTreeMap<String, usize>,
+) {
+    let q = format!("MATCH (a)-[r:{name}]->(b) RETURN a.id, b.id");
+    let res = match store.execute_query(&q) {
+        Ok(r) => r,
+        Err(e) => {
+            // Some tables are empty after a 1-file index; lbug may error
+            // on totally-empty relation queries. Don't pollute output.
+            let msg = e.to_string();
+            if !msg.contains("empty") && !msg.is_empty() {
+                eprintln!("query {name}: {e}");
             }
-        };
-        if res.rows.is_empty() {
-            continue;
+            return;
         }
-        table_counts.insert(name.to_string(), res.rows.len());
-        // Collapse "Kind_From_To" → "Kind" by taking the first underscore segment.
-        let kind = name.split('_').next().unwrap_or(name).to_string();
-        let bucket = edges_by_kind.entry(kind).or_default();
-        for row in res.rows {
-            if row.len() < 2 {
-                continue;
-            }
-            bucket.insert((row[0].clone(), row[1].clone()));
-        }
+    };
+    if res.rows.is_empty() {
+        return;
     }
-    // Diagnostic: dump per-table populated counts so we can see exactly which
-    // tables the indexer populated.
+    table_counts.insert(name.to_string(), res.rows.len());
+    // Collapse "Kind_From_To" → "Kind" by taking the first underscore segment.
+    let kind = name.split('_').next().unwrap_or(name).to_string();
+    let bucket = edges_by_kind.entry(kind).or_default();
+    for row in res.rows {
+        if row.len() < 2 {
+            continue;
+        }
+        bucket.insert((row[0].clone(), row[1].clone()));
+    }
+}
+
+/// Diagnostic: dump per-table populated counts so we can see exactly which
+/// tables the indexer populated.
+fn print_populated_tables(table_counts: &BTreeMap<String, usize>) {
     if !table_counts.is_empty() {
         eprintln!("populated relation tables:");
-        for (name, count) in &table_counts {
+        for (name, count) in table_counts {
             eprintln!("  {name:<40} {count}");
         }
     } else {
         eprintln!("populated relation tables: (none)");
     }
+}
 
+/// Pulls all edges per relation table. REL_TABLES is the schema's single
+/// source of truth; table names follow "{Kind}_{From}_{To}". The full-AST
+/// layer (`Defines_File_AstNode`, `AstChild_AstNode_AstNode`) is skipped: it
+/// is EVERY tree-sitter node, not the semantic symbol subset these fixtures
+/// encode ground truth for, and its own completeness is proven separately
+/// (tests/full_ast_completeness.rs, ratio == 1.0 across languages). Folding
+/// it into the `Defines`/`AstChild` buckets here would compare against
+/// ground truth that was never meant to cover it — observed 2026-08-09:
+/// `Defines_File_AstNode` collapsing into `Defines` manufactured a false
+/// positive and failed the REGRESSION floor on an unchanged fixture.
+fn collect_observed_edges(store: &GraphStore) -> BTreeMap<String, BTreeSet<(String, String)>> {
+    let mut edges_by_kind: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    let mut table_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for (name, _from, _to) in REL_TABLES {
+        if name.contains("AstNode") {
+            continue;
+        }
+        fold_relation_table(store, name, &mut edges_by_kind, &mut table_counts);
+    }
+    print_populated_tables(&table_counts);
+    edges_by_kind
+}
+
+fn index_fixture(fixture_root: &Path, graph_path: &Path) -> Observed {
+    let store = index_and_resolve_fixture(fixture_root, graph_path);
     Observed {
-        nodes,
-        edges_by_kind,
+        nodes: collect_observed_nodes(&store),
+        edges_by_kind: collect_observed_edges(&store),
     }
 }
 
@@ -613,7 +656,7 @@ fn score_edges_by_kind(
 // Diagnostic printing
 // ---------------------------------------------------------------------------
 
-fn print_diff(fixture: &Fixture, observed: &Observed) {
+fn print_observed_summary(fixture: &Fixture, observed: &Observed) {
     println!(
         "\n===== fixture: {} / {} =====",
         fixture.category, fixture.name
@@ -634,7 +677,9 @@ fn print_diff(fixture: &Fixture, observed: &Observed) {
     for (kind, set) in &observed.edges_by_kind {
         println!("    {kind:<20} {}", set.len());
     }
+}
 
+fn print_missing_nodes(fixture: &Fixture, observed: &Observed) {
     println!("\n  expected NOT in observed (missing):");
     let observed_qns: BTreeSet<&String> = observed.nodes.keys().collect();
     let mut missing = 0;
@@ -653,7 +698,9 @@ fn print_diff(fixture: &Fixture, observed: &Observed) {
     if missing == 0 {
         println!("    (no missing non-CallSite nodes)");
     }
+}
 
+fn print_missing_edges(fixture: &Fixture, observed: &Observed) {
     let mut missing_edges = 0;
     for ee in &fixture.edges {
         if ee.from_qn.contains("::callsite::") || ee.to_qn.contains("::callsite::") {
@@ -676,6 +723,12 @@ fn print_diff(fixture: &Fixture, observed: &Observed) {
     if missing_edges == 0 {
         println!("    (no missing strict-match edges)");
     }
+}
+
+fn print_diff(fixture: &Fixture, observed: &Observed) {
+    print_observed_summary(fixture, observed);
+    print_missing_nodes(fixture, observed);
+    print_missing_edges(fixture, observed);
 }
 
 // ---------------------------------------------------------------------------
@@ -718,22 +771,32 @@ fn fixture_root_for(test_name: &str) -> common::TestTempDir {
 //   subtract           -> _pad_to_same_length (1)
 //   project            -> dot, dot, scale (3)
 // = 9 resolved Calls edges total
-fn fixture_linear_algebra_py() -> Fixture {
-    let file = "shared/linear_algebra.py".to_string();
+/// Functions in declaration order with their (line, body call-count).
+fn linear_algebra_fns() -> &'static [(&'static str, u64, usize)] {
+    &[
+        ("dot", 13, 7),
+        ("norm", 22, 4),
+        ("normalize", 30, 4),
+        ("cosine_similarity", 39, 3),
+        ("_pad_to_same_length", 48, 9),
+        ("add", 60, 4),
+        ("subtract", 67, 4),
+        ("scale", 74, 2),
+        ("project", 80, 5),
+        ("clamp", 90, 3),
+        ("zeros", 96, 0),
+    ]
+}
+
+fn fixture_linear_algebra_py_nodes() -> Vec<ExpectedNode> {
     let n = |qn: &str, label: &'static str, start_line: u64| ExpectedNode {
         qn: qn.to_string(),
         label,
         start_line,
     };
-    let e = |kind: &'static str, from: &str, to: &str| ExpectedEdge {
-        kind,
-        from_qn: from.to_string(),
-        to_qn: to.to_string(),
-    };
-
     // Imports: __future__ + np (aliased) + numpy::typing::NDArray (from-import)
     let mut nodes = vec![
-        n(&file, "File", 0),
+        n("shared/linear_algebra.py", "File", 0),
         n(
             "shared/linear_algebra.py::__future__::annotations",
             "Import",
@@ -746,21 +809,33 @@ fn fixture_linear_algebra_py() -> Fixture {
             10,
         ),
     ];
+    for (fname, line, n_calls) in linear_algebra_fns() {
+        let fqn = format!("shared/linear_algebra.py::{fname}");
+        nodes.push(n(&fqn, "Function", *line));
+        // CallSite nodes: matched by count, not by callee name. Synthetic QNs
+        // (callee="__hand_counted__") satisfy the "::callsite::" relaxed-match
+        // path in the scorer.
+        let sites: Vec<(&str, u64)> = (0..*n_calls)
+            .map(|i| ("__hand_counted__", i as u64))
+            .collect();
+        push_callsite_nodes(&mut nodes, &fqn, &sites);
+    }
+    nodes
+}
 
-    // Functions in declaration order with their (line, body call-count).
-    let fns: &[(&str, u64, usize)] = &[
-        ("dot", 13, 7),
-        ("norm", 22, 4),
-        ("normalize", 30, 4),
-        ("cosine_similarity", 39, 3),
-        ("_pad_to_same_length", 48, 9),
-        ("add", 60, 4),
-        ("subtract", 67, 4),
-        ("scale", 74, 2),
-        ("project", 80, 5),
-        ("clamp", 90, 3),
-        ("zeros", 96, 0),
-    ];
+/// Resolved Calls edges (caller Function → callee Function, both intra-file).
+/// Calls edges deduplicate at insertion (the underlying rel table is a set
+/// keyed on (from, to)), so multiple call sites in the same caller function
+/// pointing at the same callee collapse to ONE Calls edge — e.g.
+/// cosine_similarity calls norm TWICE in source but produces ONE edge,
+/// project calls dot TWICE but produces ONE edge. Count distinct PAIRS.
+fn fixture_linear_algebra_py_edges() -> Vec<ExpectedEdge> {
+    let file = "shared/linear_algebra.py".to_string();
+    let e = |kind: &'static str, from: &str, to: &str| ExpectedEdge {
+        kind,
+        from_qn: from.to_string(),
+        to_qn: to.to_string(),
+    };
     let mut edges = vec![
         e(
             "Defines",
@@ -774,46 +849,19 @@ fn fixture_linear_algebra_py() -> Fixture {
             "shared/linear_algebra.py::numpy::typing::NDArray",
         ),
     ];
-    for (fname, line, n_calls) in fns {
+    for (fname, _line, n_calls) in linear_algebra_fns() {
         let fqn = format!("shared/linear_algebra.py::{fname}");
-        nodes.push(n(&fqn, "Function", *line));
         edges.push(ExpectedEdge {
             kind: "Defines",
             from_qn: file.clone(),
             to_qn: fqn.clone(),
         });
-        // CallSite nodes: matched by count, not by callee name. Synthetic QNs
-        // satisfy the "::callsite::" relaxed-match path in the scorer.
-        for i in 0..*n_calls {
-            nodes.push(ExpectedNode {
-                qn: format!("{fqn}::callsite::__hand_counted__::{i}"),
-                label: "CallSite",
-                start_line: *line,
-            });
-            edges.push(ExpectedEdge {
-                kind: "Defines",
-                from_qn: fqn.clone(),
-                to_qn: format!("{fqn}::callsite::__hand_counted__::{i}"),
-            });
-        }
+        let sites: Vec<(&str, u64)> = (0..*n_calls)
+            .map(|i| ("__hand_counted__", i as u64))
+            .collect();
+        push_callsite_defines_edges(&mut edges, &fqn, &sites);
     }
 
-    // Resolved Calls edges (caller Function → callee Function, both intra-file).
-    // The scorer's relaxed-match path collapses these into a single count
-    // bucket because both endpoints involve a CallSite chain in the actual
-    // graph (call_site → callee). We supply the count via these expected
-    // entries; scorer matches Calls count vs observed.
-    for (caller, _line, _n) in fns {
-        // (no synthetic Calls edges here — the relaxed scorer matches the
-        // observed count, and the resolver will emit ~9 such edges.)
-        let _ = caller;
-    }
-    // Calls edges deduplicate at insertion (the underlying rel table is a
-    // set keyed on (from, to)), so multiple call sites in the same caller
-    // function pointing at the same callee collapse to ONE Calls edge.
-    //
-    // cosine_similarity calls norm TWICE in source but produces ONE edge.
-    // project calls dot TWICE but produces ONE edge. Count distinct PAIRS.
     let resolved_calls: &[(&str, &str)] = &[
         ("normalize", "norm"),
         ("cosine_similarity", "norm"),
@@ -830,13 +878,16 @@ fn fixture_linear_algebra_py() -> Fixture {
             to_qn: format!("shared/linear_algebra.py::{callee}"),
         });
     }
+    edges
+}
 
+fn fixture_linear_algebra_py() -> Fixture {
     Fixture {
         name: "linear_algebra.py",
         category: "pure-shared",
         rel_path: "shared/linear_algebra.py",
-        nodes,
-        edges,
+        nodes: fixture_linear_algebra_py_nodes(),
+        edges: fixture_linear_algebra_py_edges(),
     }
 }
 
@@ -877,21 +928,18 @@ fn fixture_linear_algebra_py() -> Fixture {
 // FrontmatterResult is called 3 times from parse_yaml_frontmatter but
 // dedupes to ONE Uses_Function_Struct edge (caller=Function, callee=Struct).
 // We don't assert on Uses today — the Calls floor stays vacuously 1.0.
-fn fixture_yaml_parser_py() -> Fixture {
-    let file = "shared/yaml_parser.py".to_string();
+fn yaml_parser_hand_counted_sites() -> Vec<(&'static str, u64)> {
+    (0..15).map(|i| ("__hand_counted__", i as u64)).collect()
+}
+
+fn fixture_yaml_parser_py_nodes() -> Vec<ExpectedNode> {
     let n = |qn: &str, label: &'static str, start_line: u64| ExpectedNode {
         qn: qn.to_string(),
         label,
         start_line,
     };
-    let e = |kind: &'static str, from: &str, to: &str| ExpectedEdge {
-        kind,
-        from_qn: from.to_string(),
-        to_qn: to.to_string(),
-    };
-
     let mut nodes = vec![
-        n(&file, "File", 0),
+        n("shared/yaml_parser.py", "File", 0),
         n(
             "shared/yaml_parser.py::__future__::annotations",
             "Import",
@@ -908,16 +956,19 @@ fn fixture_yaml_parser_py() -> Fixture {
             21,
         ),
     ];
+    let fn_qn = "shared/yaml_parser.py::parse_yaml_frontmatter";
+    push_callsite_nodes(&mut nodes, fn_qn, &yaml_parser_hand_counted_sites());
+    nodes
+}
 
+fn fixture_yaml_parser_py_edges() -> Vec<ExpectedEdge> {
+    let file = "shared/yaml_parser.py".to_string();
+    let e = |kind: &'static str, from: &str, to: &str| ExpectedEdge {
+        kind,
+        from_qn: from.to_string(),
+        to_qn: to.to_string(),
+    };
     let fn_qn = "shared/yaml_parser.py::parse_yaml_frontmatter".to_string();
-    for i in 0..15 {
-        nodes.push(ExpectedNode {
-            qn: format!("{fn_qn}::callsite::__hand_counted__::{i}"),
-            label: "CallSite",
-            start_line: 21,
-        });
-    }
-
     let mut edges = vec![
         // File → top-level symbols
         e(
@@ -947,20 +998,17 @@ fn fixture_yaml_parser_py() -> Fixture {
             "shared/yaml_parser.py::FrontmatterResult",
         ),
     ];
-    for i in 0..15 {
-        edges.push(ExpectedEdge {
-            kind: "Defines",
-            from_qn: fn_qn.clone(),
-            to_qn: format!("{fn_qn}::callsite::__hand_counted__::{i}"),
-        });
-    }
+    push_callsite_defines_edges(&mut edges, &fn_qn, &yaml_parser_hand_counted_sites());
+    edges
+}
 
+fn fixture_yaml_parser_py() -> Fixture {
     Fixture {
         name: "yaml_parser.py",
         category: "pure-shared",
         rel_path: "shared/yaml_parser.py",
-        nodes,
-        edges,
+        nodes: fixture_yaml_parser_py_nodes(),
+        edges: fixture_yaml_parser_py_edges(),
     }
 }
 
@@ -994,28 +1042,19 @@ fn fixture_yaml_parser_py() -> Fixture {
 //   compose_personas         -> persona_to_array
 //   compose_personas         -> _clamp
 // = 7 Calls_Function_Function edges
-fn fixture_persona_vector_py() -> Fixture {
-    let file = "core/persona_vector.py".to_string();
-    let n = |qn: &str, label: &'static str, start_line: u64| ExpectedNode {
-        qn: qn.to_string(),
-        label,
-        start_line,
-    };
-    let e = |kind: &'static str, from: &str, to: &str| ExpectedEdge {
-        kind,
-        from_qn: from.to_string(),
-        to_qn: to.to_string(),
-    };
-
-    let imports = &[
+fn persona_vector_imports() -> &'static [(&'static str, u64)] {
+    &[
         ("__future__::annotations", 7u64),
         ("typing::Any", 9),
         ("mcp_server::shared::linear_algebra::add", 11),
         ("mcp_server::shared::linear_algebra::cosine_similarity", 11),
         ("mcp_server::shared::linear_algebra::scale", 11),
         ("mcp_server::shared::linear_algebra::zeros", 11),
-    ];
-    let fns: &[(&str, u64, usize)] = &[
+    ]
+}
+
+fn persona_vector_fns() -> &'static [(&'static str, u64, usize)] {
+    &[
         ("_clamp", 26, 2),
         ("_normalize_signal", 30, 0),
         ("_compute_behavioral_dims", 41, 26),
@@ -1025,44 +1064,70 @@ fn fixture_persona_vector_py() -> Fixture {
         ("persona_drift", 99, 8),
         ("compose_personas", 137, 11),
         ("steer_context", 155, 7),
-    ];
-    let constants = &[("PERSONA_DIMENSIONS", 13u64)];
+    ]
+}
 
-    let mut nodes = vec![n(&file, "File", 0)];
-    let mut edges = vec![];
-    for (path, line) in imports {
-        let qn = format!("core/persona_vector.py::{path}");
-        nodes.push(n(&qn, "Import", *line));
-        edges.push(e("Defines", &file, &qn));
+fn fixture_persona_vector_py_nodes() -> Vec<ExpectedNode> {
+    let n = |qn: &str, label: &'static str, start_line: u64| ExpectedNode {
+        qn: qn.to_string(),
+        label,
+        start_line,
+    };
+    let mut nodes = vec![n("core/persona_vector.py", "File", 0)];
+    for (path, line) in persona_vector_imports() {
+        nodes.push(n(
+            &format!("core/persona_vector.py::{path}"),
+            "Import",
+            *line,
+        ));
     }
-    for (name, line) in constants {
-        let qn = format!("core/persona_vector.py::{name}");
-        nodes.push(n(&qn, "Constant", *line));
-        edges.push(e("Defines", &file, &qn));
-    }
-    for (fname, line, n_calls) in fns {
+    nodes.push(n(
+        "core/persona_vector.py::PERSONA_DIMENSIONS",
+        "Constant",
+        13,
+    ));
+    for (fname, line, n_calls) in persona_vector_fns() {
         let fqn = format!("core/persona_vector.py::{fname}");
         nodes.push(n(&fqn, "Function", *line));
-        edges.push(ExpectedEdge {
-            kind: "Defines",
-            from_qn: file.clone(),
-            to_qn: fqn.clone(),
-        });
-        for i in 0..*n_calls {
-            nodes.push(ExpectedNode {
-                qn: format!("{fqn}::callsite::__hand_counted__::{i}"),
-                label: "CallSite",
-                start_line: *line,
-            });
-            edges.push(ExpectedEdge {
-                kind: "Defines",
-                from_qn: fqn.clone(),
-                to_qn: format!("{fqn}::callsite::__hand_counted__::{i}"),
-            });
-        }
+        let sites: Vec<(&str, u64)> = (0..*n_calls)
+            .map(|i| ("__hand_counted__", i as u64))
+            .collect();
+        push_callsite_nodes(&mut nodes, &fqn, &sites);
+    }
+    nodes
+}
+
+/// Resolved intra-file Calls (deduplicated pairs).
+fn fixture_persona_vector_py_edges() -> Vec<ExpectedEdge> {
+    let file = "core/persona_vector.py".to_string();
+    let e = |kind: &'static str, from: &str, to: &str| ExpectedEdge {
+        kind,
+        from_qn: from.to_string(),
+        to_qn: to.to_string(),
+    };
+    let mut edges = vec![];
+    for (path, line) in persona_vector_imports() {
+        let _ = line;
+        edges.push(e(
+            "Defines",
+            &file,
+            &format!("core/persona_vector.py::{path}"),
+        ));
+    }
+    edges.push(e(
+        "Defines",
+        &file,
+        "core/persona_vector.py::PERSONA_DIMENSIONS",
+    ));
+    for (fname, _line, n_calls) in persona_vector_fns() {
+        let fqn = format!("core/persona_vector.py::{fname}");
+        edges.push(e("Defines", &file, &fqn));
+        let sites: Vec<(&str, u64)> = (0..*n_calls)
+            .map(|i| ("__hand_counted__", i as u64))
+            .collect();
+        push_callsite_defines_edges(&mut edges, &fqn, &sites);
     }
 
-    // Resolved intra-file Calls (deduplicated pairs).
     let resolved_calls: &[(&str, &str)] = &[
         ("_compute_behavioral_dims", "_normalize_signal"),
         ("_compute_behavioral_dims", "_clamp"),
@@ -1079,13 +1144,16 @@ fn fixture_persona_vector_py() -> Fixture {
             to_qn: format!("core/persona_vector.py::{callee}"),
         });
     }
+    edges
+}
 
+fn fixture_persona_vector_py() -> Fixture {
     Fixture {
         name: "persona_vector.py",
         category: "pure-core",
         rel_path: "core/persona_vector.py",
-        nodes,
-        edges,
+        nodes: fixture_persona_vector_py_nodes(),
+        edges: fixture_persona_vector_py_edges(),
     }
 }
 
@@ -1117,71 +1185,92 @@ struct ExpectedClassInput {
     methods: &'static [(&'static str, u64, usize)], // (method_name, line, n_calls)
 }
 
-fn build_core_fixture(inp: &CoreFixtureInputs) -> Fixture {
+fn push_node(nodes: &mut Vec<ExpectedNode>, qn: String, label: &'static str, line: u64) {
+    nodes.push(ExpectedNode {
+        qn,
+        label,
+        start_line: line,
+    });
+}
+
+fn push_edge(edges: &mut Vec<ExpectedEdge>, kind: &'static str, from: String, to: String) {
+    edges.push(ExpectedEdge {
+        kind,
+        from_qn: from,
+        to_qn: to,
+    });
+}
+
+/// File → import/constant nodes + Defines edges.
+fn push_core_imports_and_constants(
+    nodes: &mut Vec<ExpectedNode>,
+    edges: &mut Vec<ExpectedEdge>,
+    inp: &CoreFixtureInputs,
+) {
     let file = inp.file_prefix.to_string();
-    let mut nodes = vec![ExpectedNode {
-        qn: file.clone(),
-        label: "File",
-        start_line: 0,
-    }];
-    let mut edges: Vec<ExpectedEdge> = vec![];
-
-    let push_node = |nodes: &mut Vec<ExpectedNode>, qn: String, label: &'static str, line: u64| {
-        nodes.push(ExpectedNode {
-            qn,
-            label,
-            start_line: line,
-        });
-    };
-    let push_edge =
-        |edges: &mut Vec<ExpectedEdge>, kind: &'static str, from: String, to: String| {
-            edges.push(ExpectedEdge {
-                kind,
-                from_qn: from,
-                to_qn: to,
-            });
-        };
-
     for (path, line) in inp.imports {
         let qn = format!("{}::{}", inp.file_prefix, path);
-        push_node(&mut nodes, qn.clone(), "Import", *line);
-        push_edge(&mut edges, "Defines", file.clone(), qn);
+        push_node(nodes, qn.clone(), "Import", *line);
+        push_edge(edges, "Defines", file.clone(), qn);
     }
     for (name, line) in inp.constants {
         let qn = format!("{}::{}", inp.file_prefix, name);
-        push_node(&mut nodes, qn.clone(), "Constant", *line);
-        push_edge(&mut edges, "Defines", file.clone(), qn);
+        push_node(nodes, qn.clone(), "Constant", *line);
+        push_edge(edges, "Defines", file.clone(), qn);
     }
+}
+
+/// File → Function nodes + Defines edges, and each function's hand-counted
+/// CallSite nodes + Defines edges.
+fn push_core_functions(
+    nodes: &mut Vec<ExpectedNode>,
+    edges: &mut Vec<ExpectedEdge>,
+    inp: &CoreFixtureInputs,
+) {
+    let file = inp.file_prefix.to_string();
     for (fname, line, n_calls) in inp.functions {
         let fqn = format!("{}::{}", inp.file_prefix, fname);
-        push_node(&mut nodes, fqn.clone(), "Function", *line);
-        push_edge(&mut edges, "Defines", file.clone(), fqn.clone());
+        push_node(nodes, fqn.clone(), "Function", *line);
+        push_edge(edges, "Defines", file.clone(), fqn.clone());
         for i in 0..*n_calls {
             let cs_qn = format!("{fqn}::callsite::__hand_counted__::{i}");
-            push_node(&mut nodes, cs_qn.clone(), "CallSite", *line);
-            push_edge(&mut edges, "Defines", fqn.clone(), cs_qn);
+            push_node(nodes, cs_qn.clone(), "CallSite", *line);
+            push_edge(edges, "Defines", fqn.clone(), cs_qn);
         }
     }
+}
+
+/// File → Struct (class) nodes + Defines edges, class → Method HasMethod
+/// edges, and each method's hand-counted CallSite nodes + Defines edges.
+fn push_core_classes(
+    nodes: &mut Vec<ExpectedNode>,
+    edges: &mut Vec<ExpectedEdge>,
+    inp: &CoreFixtureInputs,
+) {
+    let file = inp.file_prefix.to_string();
     for cls in inp.classes {
         let class_qn = format!("{}::{}", inp.file_prefix, cls.name);
-        push_node(&mut nodes, class_qn.clone(), "Struct", cls.line);
-        push_edge(&mut edges, "Defines", file.clone(), class_qn.clone());
+        push_node(nodes, class_qn.clone(), "Struct", cls.line);
+        push_edge(edges, "Defines", file.clone(), class_qn.clone());
         for (mname, mline, n_calls) in cls.methods {
             let mqn = format!("{class_qn}::{mname}");
-            push_node(&mut nodes, mqn.clone(), "Method", *mline);
+            push_node(nodes, mqn.clone(), "Method", *mline);
             // HasMethod: Struct → Method
-            push_edge(&mut edges, "HasMethod", class_qn.clone(), mqn.clone());
+            push_edge(edges, "HasMethod", class_qn.clone(), mqn.clone());
             for i in 0..*n_calls {
                 let cs_qn = format!("{mqn}::callsite::__hand_counted__::{i}");
-                push_node(&mut nodes, cs_qn.clone(), "CallSite", *mline);
+                push_node(nodes, cs_qn.clone(), "CallSite", *mline);
                 // Defines: Method → CallSite (BUG #12 fix added this table)
-                push_edge(&mut edges, "Defines", mqn.clone(), cs_qn);
+                push_edge(edges, "Defines", mqn.clone(), cs_qn);
             }
         }
     }
+}
+
+fn push_core_resolved_calls(edges: &mut Vec<ExpectedEdge>, inp: &CoreFixtureInputs) {
     for (i, (caller, callee)) in inp.resolved_calls.iter().enumerate() {
         push_edge(
-            &mut edges,
+            edges,
             "Calls",
             format!(
                 "{}::{}::callsite::__resolved__::{i}",
@@ -1190,6 +1279,20 @@ fn build_core_fixture(inp: &CoreFixtureInputs) -> Fixture {
             format!("{}::{}", inp.file_prefix, callee),
         );
     }
+}
+
+fn build_core_fixture(inp: &CoreFixtureInputs) -> Fixture {
+    let mut nodes = vec![ExpectedNode {
+        qn: inp.file_prefix.to_string(),
+        label: "File",
+        start_line: 0,
+    }];
+    let mut edges: Vec<ExpectedEdge> = vec![];
+
+    push_core_imports_and_constants(&mut nodes, &mut edges, inp);
+    push_core_functions(&mut nodes, &mut edges, inp);
+    push_core_classes(&mut nodes, &mut edges, inp);
+    push_core_resolved_calls(&mut edges, inp);
 
     Fixture {
         name: inp.name,
@@ -1251,6 +1354,48 @@ fn fixture_profile_builder_py() -> Fixture {
 // 311 lines. Felder-Silverman classifier with many private helpers and the
 // public classify_style entry. Heaviest call graph in pure-core (87 sites,
 // 20 intra-file Function→Function resolutions).
+fn style_classifier_functions() -> &'static [(&'static str, u64, usize)] {
+    &[
+        ("_count_tool", 92, 6),
+        ("_total_tool_calls", 101, 4),
+        ("_count_keywords", 106, 2),
+        ("_non_linearity_score", 113, 11),
+        ("_clamp", 124, 2),
+        ("_score_active_reflective", 128, 13),
+        ("_score_sensing_intuitive", 169, 10),
+        ("_score_sequential_global", 195, 10),
+        ("_classify_problem_decomposition", 229, 9),
+        ("_classify_exploration_style", 254, 4),
+        ("_classify_verification_behavior", 274, 9),
+        ("classify_style", 301, 7),
+    ]
+}
+
+fn style_classifier_resolved_calls() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("_classify_exploration_style", "_total_tool_calls"),
+        ("_classify_problem_decomposition", "_count_keywords"),
+        ("_classify_problem_decomposition", "_count_tool"),
+        ("_classify_verification_behavior", "_count_tool"),
+        ("_score_active_reflective", "_clamp"),
+        ("_score_active_reflective", "_count_keywords"),
+        ("_score_active_reflective", "_count_tool"),
+        ("_score_active_reflective", "_total_tool_calls"),
+        ("_score_sensing_intuitive", "_clamp"),
+        ("_score_sensing_intuitive", "_count_keywords"),
+        ("_score_sequential_global", "_clamp"),
+        ("_score_sequential_global", "_count_keywords"),
+        ("_score_sequential_global", "_non_linearity_score"),
+        ("_score_sequential_global", "_total_tool_calls"),
+        ("classify_style", "_classify_exploration_style"),
+        ("classify_style", "_classify_problem_decomposition"),
+        ("classify_style", "_classify_verification_behavior"),
+        ("classify_style", "_score_active_reflective"),
+        ("classify_style", "_score_sensing_intuitive"),
+        ("classify_style", "_score_sequential_global"),
+    ]
+}
+
 fn fixture_style_classifier_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
         name: "style_classifier.py",
@@ -1269,43 +1414,9 @@ fn fixture_style_classifier_py() -> Fixture {
             ("TRIAL_KEYWORDS", 72),
             ("_TEST_RE", 86),
         ],
-        functions: &[
-            ("_count_tool", 92, 6),
-            ("_total_tool_calls", 101, 4),
-            ("_count_keywords", 106, 2),
-            ("_non_linearity_score", 113, 11),
-            ("_clamp", 124, 2),
-            ("_score_active_reflective", 128, 13),
-            ("_score_sensing_intuitive", 169, 10),
-            ("_score_sequential_global", 195, 10),
-            ("_classify_problem_decomposition", 229, 9),
-            ("_classify_exploration_style", 254, 4),
-            ("_classify_verification_behavior", 274, 9),
-            ("classify_style", 301, 7),
-        ],
+        functions: style_classifier_functions(),
         classes: &[],
-        resolved_calls: &[
-            ("_classify_exploration_style", "_total_tool_calls"),
-            ("_classify_problem_decomposition", "_count_keywords"),
-            ("_classify_problem_decomposition", "_count_tool"),
-            ("_classify_verification_behavior", "_count_tool"),
-            ("_score_active_reflective", "_clamp"),
-            ("_score_active_reflective", "_count_keywords"),
-            ("_score_active_reflective", "_count_tool"),
-            ("_score_active_reflective", "_total_tool_calls"),
-            ("_score_sensing_intuitive", "_clamp"),
-            ("_score_sensing_intuitive", "_count_keywords"),
-            ("_score_sequential_global", "_clamp"),
-            ("_score_sequential_global", "_count_keywords"),
-            ("_score_sequential_global", "_non_linearity_score"),
-            ("_score_sequential_global", "_total_tool_calls"),
-            ("classify_style", "_classify_exploration_style"),
-            ("classify_style", "_classify_problem_decomposition"),
-            ("classify_style", "_classify_verification_behavior"),
-            ("classify_style", "_score_active_reflective"),
-            ("classify_style", "_score_sensing_intuitive"),
-            ("classify_style", "_score_sequential_global"),
-        ],
+        resolved_calls: style_classifier_resolved_calls(),
     })
 }
 
@@ -1409,64 +1520,66 @@ fn fixture_cognitive_map_py() -> Fixture {
 // Stress-tests deep dependency chains and many cross-module imports.
 // ---------------------------------------------------------------------------
 
+const HIERARCHICAL_PREDICTIVE_CODING_IMPORTS: &[(&str, u64)] = &[
+    ("__future__::annotations", 19),
+    ("math", 21),
+    (
+        "mcp_server::core::predictive_coding_flat::compute_embedding_novelty",
+        23,
+    ),
+    (
+        "mcp_server::core::predictive_coding_flat::compute_entity_novelty",
+        23,
+    ),
+    (
+        "mcp_server::core::predictive_coding_flat::compute_structural_novelty",
+        23,
+    ),
+    (
+        "mcp_server::core::predictive_coding_flat::compute_temporal_novelty",
+        23,
+    ),
+    (
+        "mcp_server::core::predictive_coding_gate::PrecisionState",
+        29,
+    ),
+    (
+        "mcp_server::core::predictive_coding_gate::neuromodulate_precisions",
+        29,
+    ),
+    (
+        "mcp_server::core::predictive_coding_signals::HierarchicalPrediction",
+        33,
+    ),
+    (
+        "mcp_server::core::predictive_coding_signals::PredictionLevel",
+        33,
+    ),
+    (
+        "mcp_server::core::predictive_coding_signals::compute_entity_errors",
+        33,
+    ),
+    (
+        "mcp_server::core::predictive_coding_signals::compute_schema_errors",
+        33,
+    ),
+    (
+        "mcp_server::core::predictive_coding_signals::compute_sensory_errors",
+        33,
+    ),
+    (
+        "mcp_server::core::predictive_coding_signals::compute_sensory_prediction",
+        33,
+    ),
+];
+
 fn fixture_hierarchical_predictive_coding_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
         name: "hierarchical_predictive_coding.py",
         category: "core-with-deps",
         rel_path: "core/hierarchical_predictive_coding.py",
         file_prefix: "core/hierarchical_predictive_coding.py",
-        imports: &[
-            ("__future__::annotations", 19),
-            ("math", 21),
-            (
-                "mcp_server::core::predictive_coding_flat::compute_embedding_novelty",
-                23,
-            ),
-            (
-                "mcp_server::core::predictive_coding_flat::compute_entity_novelty",
-                23,
-            ),
-            (
-                "mcp_server::core::predictive_coding_flat::compute_structural_novelty",
-                23,
-            ),
-            (
-                "mcp_server::core::predictive_coding_flat::compute_temporal_novelty",
-                23,
-            ),
-            (
-                "mcp_server::core::predictive_coding_gate::PrecisionState",
-                29,
-            ),
-            (
-                "mcp_server::core::predictive_coding_gate::neuromodulate_precisions",
-                29,
-            ),
-            (
-                "mcp_server::core::predictive_coding_signals::HierarchicalPrediction",
-                33,
-            ),
-            (
-                "mcp_server::core::predictive_coding_signals::PredictionLevel",
-                33,
-            ),
-            (
-                "mcp_server::core::predictive_coding_signals::compute_entity_errors",
-                33,
-            ),
-            (
-                "mcp_server::core::predictive_coding_signals::compute_schema_errors",
-                33,
-            ),
-            (
-                "mcp_server::core::predictive_coding_signals::compute_sensory_errors",
-                33,
-            ),
-            (
-                "mcp_server::core::predictive_coding_signals::compute_sensory_prediction",
-                33,
-            ),
-        ],
+        imports: HIERARCHICAL_PREDICTIVE_CODING_IMPORTS,
         constants: &[("_LEVEL_WEIGHTS", 61)],
         functions: &[
             ("_compute_ach_weights", 67, 0),
@@ -1601,51 +1714,55 @@ fn fixture_consolidation_engine_py() -> Fixture {
     })
 }
 
+fn replay_imports() -> &'static [(&'static str, u64)] {
+    &[
+        ("__future__::annotations", 48),
+        (
+            "mcp_server::core::replay_execution::build_causal_sequence",
+            50,
+        ),
+        (
+            "mcp_server::core::replay_execution::build_temporal_sequence",
+            50,
+        ),
+        (
+            "mcp_server::core::replay_execution::compute_replay_stdp_pairs",
+            50,
+        ),
+        (
+            "mcp_server::core::replay_formatting::format_restoration",
+            55,
+        ),
+        (
+            "mcp_server::core::replay_formatting::should_micro_checkpoint",
+            55,
+        ),
+        (
+            "mcp_server::core::replay_selection::compute_sequence_priority",
+            59,
+        ),
+        (
+            "mcp_server::core::replay_selection::compute_sequence_rpe",
+            59,
+        ),
+        (
+            "mcp_server::core::replay_selection::select_replay_sequences",
+            59,
+        ),
+        ("mcp_server::core::replay_types::ReplayDirection", 64),
+        ("mcp_server::core::replay_types::ReplayEvent", 64),
+        ("mcp_server::core::replay_types::ReplayResult", 64),
+        ("mcp_server::core::replay_types::ReplaySequence", 64),
+    ]
+}
+
 fn fixture_replay_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
         name: "replay.py",
         category: "core-with-deps",
         rel_path: "core/replay.py",
         file_prefix: "core/replay.py",
-        imports: &[
-            ("__future__::annotations", 48),
-            (
-                "mcp_server::core::replay_execution::build_causal_sequence",
-                50,
-            ),
-            (
-                "mcp_server::core::replay_execution::build_temporal_sequence",
-                50,
-            ),
-            (
-                "mcp_server::core::replay_execution::compute_replay_stdp_pairs",
-                50,
-            ),
-            (
-                "mcp_server::core::replay_formatting::format_restoration",
-                55,
-            ),
-            (
-                "mcp_server::core::replay_formatting::should_micro_checkpoint",
-                55,
-            ),
-            (
-                "mcp_server::core::replay_selection::compute_sequence_priority",
-                59,
-            ),
-            (
-                "mcp_server::core::replay_selection::compute_sequence_rpe",
-                59,
-            ),
-            (
-                "mcp_server::core::replay_selection::select_replay_sequences",
-                59,
-            ),
-            ("mcp_server::core::replay_types::ReplayDirection", 64),
-            ("mcp_server::core::replay_types::ReplayEvent", 64),
-            ("mcp_server::core::replay_types::ReplayResult", 64),
-            ("mcp_server::core::replay_types::ReplaySequence", 64),
-        ],
+        imports: replay_imports(),
         constants: &[("_MIN_SEQUENCE_LENGTH", 73), ("_MAX_SEQUENCES_PER_SWR", 74)],
         functions: &[
             ("_select_seeds", 80, 2),
@@ -1797,143 +1914,138 @@ fn fixture_mcp_client_py() -> Fixture {
     })
 }
 
-fn fixture_pg_store_py() -> Fixture {
-    let mut f = build_core_fixture(&CoreFixtureInputs {
-        name: "pg_store.py",
-        category: "infrastructure",
-        rel_path: "infrastructure/pg_store.py",
-        file_prefix: "infrastructure/pg_store.py",
-        imports: &[
-            ("__future__::annotations", 17),
-            ("json", 19),
-            ("logging", 20),
-            ("os", 21),
-            ("contextlib::contextmanager", 22),
-            ("datetime::datetime", 23),
-            ("datetime::timezone", 23),
-            ("typing::Any", 24),
-            ("typing::Iterator", 24),
-            ("np", 26), // aliased: import numpy as np
-            ("psycopg", 27),
-            ("pgvector::psycopg::register_vector", 28),
-            ("psycopg::rows::dict_row", 29),
-            ("psycopg_pool::ConnectionPool", 30),
-            ("mcp_server::infrastructure::pg_schema::get_all_ddl", 32),
-            (
-                "mcp_server::infrastructure::pg_store_auxiliary::PgAuxiliaryMixin",
-                33,
-            ),
-            (
-                "mcp_server::infrastructure::pg_store_entities::PgEntityMixin",
-                34,
-            ),
-            (
-                "mcp_server::infrastructure::pg_store_queries::PgQueryMixin",
-                35,
-            ),
-            (
-                "mcp_server::infrastructure::pg_store_relationships::PgRelationshipMixin",
-                36,
-            ),
-            (
-                "mcp_server::infrastructure::pg_store_rules::PgRuleMixin",
-                37,
-            ),
-            (
-                "mcp_server::infrastructure::pg_store_stats::PgStatsMixin",
-                38,
-            ),
-        ],
-        constants: &[],
-        functions: &[("_get_database_url", 43, 2), ("_now_iso", 96, 2)],
-        classes: &[
-            ExpectedClassInput {
-                name: "_MaterializedCursor",
-                line: 53,
-                bases: &[],
-                methods: &[
-                    ("__init__", 66, 1),
-                    ("fetchone", 75, 1),
-                    ("fetchall", 82, 1),
-                    ("rowcount", 88, 0),
-                    ("__iter__", 91, 1),
-                ],
-            },
-            // Resolver-emitted edges from this fixture (auto-derived per file):
-            //  - Uses_Method_Struct: PgMemoryStore method → _MaterializedCursor
-            //    (line 297: return _MaterializedCursor(cur)). The resolver
-            //    routes Function|Method → Struct calls as Uses_*, not Calls_*.
-            //  - Calls_Method_Function: PgMemoryStore method → top-level _now_iso
-            //    (lines 321/343: _now_iso() bound to the top-level Function
-            //    because `_now_iso` matches the top-level by name; dedupes).
-            // We add these as relaxed-match Calls/Uses expectations so the
-            // scorer counts them correctly.
-            ExpectedClassInput {
-                name: "PgMemoryStore",
-                line: 100,
-                // 6-base multi-inheritance. BUG #9 means these Extends edges
-                // never reach the graph today.
-                bases: &[
-                    "PgEntityMixin",
-                    "PgRelationshipMixin",
-                    "PgQueryMixin",
-                    "PgRuleMixin",
-                    "PgStatsMixin",
-                    "PgAuxiliaryMixin",
-                ],
-                methods: &[
-                    ("__init__", 110, 5),
-                    ("_create_connection", 123, 1),
-                    ("_configure_pool_connection", 129, 1),
-                    ("_open_interactive_pool", 138, 2),
-                    ("_open_batch_pool", 154, 2),
-                    ("interactive_pool", 171, 1),
-                    ("batch_pool", 182, 1),
-                    ("acquire_interactive", 193, 2),
-                    ("acquire_batch", 210, 2),
-                    ("_deallocate_all", 220, 1),
-                    ("_reconnect", 232, 3),
-                    ("_execute", 241, 4),
-                    ("_execute_on_conn", 268, 8),
-                    ("_init_schema", 299, 5),
-                    ("has_vec", 315, 0),
-                    ("_now_iso", 320, 1),
-                    ("_bytes_to_vector", 326, 1),
-                    ("_vector_to_bytes", 333, 2),
-                    ("insert_memory", 341, 35),
-                    ("get_memory", 412, 3),
-                    ("update_memory_heat", 420, 1),
-                    ("bump_heat_raw", 431, 5),
-                    ("get_homeostatic_factor", 454, 3),
-                    ("set_homeostatic_factor", 475, 5),
-                    ("update_memories_heat_batch", 492, 7),
-                    ("update_memory_importance", 517, 2),
-                    ("update_memory_access", 524, 2),
-                    ("update_memory_metamemory", 532, 2),
-                    ("get_user_mood", 555, 3),
-                    ("get_user_mood_state", 574, 4),
-                    ("set_user_mood", 595, 8),
-                    ("delete_memory", 621, 2),
-                    ("set_memory_protected", 626, 2),
-                    ("mark_memory_stale", 633, 2),
-                    ("recall_memories", 641, 9),
-                    ("search_fts", 689, 2),
-                    ("search_vectors", 700, 3),
-                    ("update_memory_compression", 717, 4),
-                    ("_normalize_memory_row", 744, 8),
-                    ("spread_activation_memories", 781, 2),
-                    ("get_hot_embeddings", 802, 3),
-                    ("get_embeddings_for_memories", 821, 6),
-                    ("get_temporal_co_access", 845, 2),
-                    ("close", 863, 3),
-                ],
-            },
-        ],
-        resolved_calls: &[],
-    });
-    // Post-build: resolver also emits cross-class/cross-kind edges that the
-    // builder's resolved_calls doesn't model directly. Add them as relaxed
-    // CallSite-bearing expectations so the scorer counts them as TP.
+fn pg_store_imports() -> &'static [(&'static str, u64)] {
+    &[
+        ("__future__::annotations", 17),
+        ("json", 19),
+        ("logging", 20),
+        ("os", 21),
+        ("contextlib::contextmanager", 22),
+        ("datetime::datetime", 23),
+        ("datetime::timezone", 23),
+        ("typing::Any", 24),
+        ("typing::Iterator", 24),
+        ("np", 26), // aliased: import numpy as np
+        ("psycopg", 27),
+        ("pgvector::psycopg::register_vector", 28),
+        ("psycopg::rows::dict_row", 29),
+        ("psycopg_pool::ConnectionPool", 30),
+        ("mcp_server::infrastructure::pg_schema::get_all_ddl", 32),
+        (
+            "mcp_server::infrastructure::pg_store_auxiliary::PgAuxiliaryMixin",
+            33,
+        ),
+        (
+            "mcp_server::infrastructure::pg_store_entities::PgEntityMixin",
+            34,
+        ),
+        (
+            "mcp_server::infrastructure::pg_store_queries::PgQueryMixin",
+            35,
+        ),
+        (
+            "mcp_server::infrastructure::pg_store_relationships::PgRelationshipMixin",
+            36,
+        ),
+        (
+            "mcp_server::infrastructure::pg_store_rules::PgRuleMixin",
+            37,
+        ),
+        (
+            "mcp_server::infrastructure::pg_store_stats::PgStatsMixin",
+            38,
+        ),
+    ]
+}
+
+const PG_STORE_MATERIALIZED_CURSOR_CLASS: ExpectedClassInput = ExpectedClassInput {
+    name: "_MaterializedCursor",
+    line: 53,
+    bases: &[],
+    methods: &[
+        ("__init__", 66, 1),
+        ("fetchone", 75, 1),
+        ("fetchall", 82, 1),
+        ("rowcount", 88, 0),
+        ("__iter__", 91, 1),
+    ],
+};
+
+/// Resolver-emitted edges from this fixture (auto-derived per file):
+///  - Uses_Method_Struct: PgMemoryStore method → _MaterializedCursor
+///    (line 297: return _MaterializedCursor(cur)). The resolver routes
+///    Function|Method → Struct calls as Uses_*, not Calls_*.
+///  - Calls_Method_Function: PgMemoryStore method → top-level _now_iso
+///    (lines 321/343: _now_iso() bound to the top-level Function because
+///    `_now_iso` matches the top-level by name; dedupes).
+///
+/// We add these as relaxed-match Calls/Uses expectations in
+/// `fixture_pg_store_py` so the scorer counts them correctly.
+const PG_STORE_MEMORY_STORE_CLASS: ExpectedClassInput = ExpectedClassInput {
+    name: "PgMemoryStore",
+    line: 100,
+    // 6-base multi-inheritance. BUG #9 means these Extends edges
+    // never reach the graph today.
+    bases: &[
+        "PgEntityMixin",
+        "PgRelationshipMixin",
+        "PgQueryMixin",
+        "PgRuleMixin",
+        "PgStatsMixin",
+        "PgAuxiliaryMixin",
+    ],
+    methods: &[
+        ("__init__", 110, 5),
+        ("_create_connection", 123, 1),
+        ("_configure_pool_connection", 129, 1),
+        ("_open_interactive_pool", 138, 2),
+        ("_open_batch_pool", 154, 2),
+        ("interactive_pool", 171, 1),
+        ("batch_pool", 182, 1),
+        ("acquire_interactive", 193, 2),
+        ("acquire_batch", 210, 2),
+        ("_deallocate_all", 220, 1),
+        ("_reconnect", 232, 3),
+        ("_execute", 241, 4),
+        ("_execute_on_conn", 268, 8),
+        ("_init_schema", 299, 5),
+        ("has_vec", 315, 0),
+        ("_now_iso", 320, 1),
+        ("_bytes_to_vector", 326, 1),
+        ("_vector_to_bytes", 333, 2),
+        ("insert_memory", 341, 35),
+        ("get_memory", 412, 3),
+        ("update_memory_heat", 420, 1),
+        ("bump_heat_raw", 431, 5),
+        ("get_homeostatic_factor", 454, 3),
+        ("set_homeostatic_factor", 475, 5),
+        ("update_memories_heat_batch", 492, 7),
+        ("update_memory_importance", 517, 2),
+        ("update_memory_access", 524, 2),
+        ("update_memory_metamemory", 532, 2),
+        ("get_user_mood", 555, 3),
+        ("get_user_mood_state", 574, 4),
+        ("set_user_mood", 595, 8),
+        ("delete_memory", 621, 2),
+        ("set_memory_protected", 626, 2),
+        ("mark_memory_stale", 633, 2),
+        ("recall_memories", 641, 9),
+        ("search_fts", 689, 2),
+        ("search_vectors", 700, 3),
+        ("update_memory_compression", 717, 4),
+        ("_normalize_memory_row", 744, 8),
+        ("spread_activation_memories", 781, 2),
+        ("get_hot_embeddings", 802, 3),
+        ("get_embeddings_for_memories", 821, 6),
+        ("get_temporal_co_access", 845, 2),
+        ("close", 863, 3),
+    ],
+};
+
+/// Post-build: resolver also emits cross-class/cross-kind edges that the
+/// builder's resolved_calls doesn't model directly. Adds them as relaxed
+/// CallSite-bearing expectations so the scorer counts them as TP.
+fn push_pg_store_cross_kind_edges(f: &mut Fixture) {
     f.edges.push(ExpectedEdge {
         kind: "Uses",
         from_qn:
@@ -1948,8 +2060,56 @@ fn fixture_pg_store_py() -> Fixture {
                 .to_string(),
         to_qn: "infrastructure/pg_store.py::_now_iso".to_string(),
     });
+}
+
+fn fixture_pg_store_py() -> Fixture {
+    let mut f = build_core_fixture(&CoreFixtureInputs {
+        name: "pg_store.py",
+        category: "infrastructure",
+        rel_path: "infrastructure/pg_store.py",
+        file_prefix: "infrastructure/pg_store.py",
+        imports: pg_store_imports(),
+        constants: &[],
+        functions: &[("_get_database_url", 43, 2), ("_now_iso", 96, 2)],
+        classes: &[
+            PG_STORE_MATERIALIZED_CURSOR_CLASS,
+            PG_STORE_MEMORY_STORE_CLASS,
+        ],
+        resolved_calls: &[],
+    });
+    push_pg_store_cross_kind_edges(&mut f);
     f
 }
+
+const SCANNER_IMPORTS: &[(&str, u64)] = &[
+    ("__future__::annotations", 8),
+    ("json", 10),
+    ("sys", 11),
+    ("datetime::datetime", 12),
+    ("datetime::timezone", 12),
+    ("pathlib::Path", 13),
+    ("typing::Any", 14),
+    ("mcp_server::infrastructure::config::CLAUDE_DIR", 16),
+    ("mcp_server::infrastructure::file_io::list_dir", 17),
+    ("mcp_server::infrastructure::file_io::read_text_file", 17),
+    ("mcp_server::infrastructure::file_io::stat_file", 17),
+    (
+        "mcp_server::infrastructure::scanner_parse::build_conversation_record",
+        18,
+    ),
+    (
+        "mcp_server::infrastructure::scanner_parse::extract_message_stats",
+        18,
+    ),
+    (
+        "mcp_server::infrastructure::scanner_parse::extract_metadata_fields",
+        18,
+    ),
+    (
+        "mcp_server::shared::yaml_parser::parse_yaml_frontmatter",
+        23,
+    ),
+];
 
 fn fixture_scanner_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
@@ -1957,35 +2117,7 @@ fn fixture_scanner_py() -> Fixture {
         category: "infrastructure",
         rel_path: "infrastructure/scanner.py",
         file_prefix: "infrastructure/scanner.py",
-        imports: &[
-            ("__future__::annotations", 8),
-            ("json", 10),
-            ("sys", 11),
-            ("datetime::datetime", 12),
-            ("datetime::timezone", 12),
-            ("pathlib::Path", 13),
-            ("typing::Any", 14),
-            ("mcp_server::infrastructure::config::CLAUDE_DIR", 16),
-            ("mcp_server::infrastructure::file_io::list_dir", 17),
-            ("mcp_server::infrastructure::file_io::read_text_file", 17),
-            ("mcp_server::infrastructure::file_io::stat_file", 17),
-            (
-                "mcp_server::infrastructure::scanner_parse::build_conversation_record",
-                18,
-            ),
-            (
-                "mcp_server::infrastructure::scanner_parse::extract_message_stats",
-                18,
-            ),
-            (
-                "mcp_server::infrastructure::scanner_parse::extract_metadata_fields",
-                18,
-            ),
-            (
-                "mcp_server::shared::yaml_parser::parse_yaml_frontmatter",
-                23,
-            ),
-        ],
+        imports: SCANNER_IMPORTS,
         constants: &[("HEAD_BYTES", 25), ("TAIL_BYTES", 26)],
         functions: &[
             ("_parse_jsonl_lines", 29, 3),
@@ -2062,45 +2194,47 @@ fn fixture_explore_features_py() -> Fixture {
     })
 }
 
+const RECALL_HANDLER_IMPORTS: &[(&str, u64)] = &[
+    ("__future__::annotations", 10),
+    ("typing::Any", 12),
+    ("mcp_server::core::memory_rules", 14),
+    ("mcp_server::handlers::_telemetry_wrap::instrument", 15),
+    ("mcp_server::core::knowledge_graph::extract_entities", 16),
+    // Aliased: `from ... import recall as pg_recall`
+    ("pg_recall", 17),
+    ("mcp_server::core::query_intent::QueryIntent", 18),
+    ("mcp_server::core::query_intent::classify_query_intent", 18),
+    ("mcp_server::handlers::_tool_meta::READ_ONLY", 19),
+    (
+        "mcp_server::handlers::recall_helpers::build_enhancements",
+        20,
+    ),
+    (
+        "mcp_server::handlers::recall_helpers::filter_low_signal",
+        20,
+    ),
+    (
+        "mcp_server::handlers::recall_helpers::inject_triggered_memories",
+        20,
+    ),
+    (
+        "mcp_server::infrastructure::embedding_engine::get_embedding_engine",
+        25,
+    ),
+    (
+        "mcp_server::infrastructure::memory_config::get_memory_settings",
+        26,
+    ),
+    ("mcp_server::infrastructure::memory_store::MemoryStore", 27),
+];
+
 fn fixture_recall_handler_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
         name: "recall.py",
         category: "handlers",
         rel_path: "handlers/recall.py",
         file_prefix: "handlers/recall.py",
-        imports: &[
-            ("__future__::annotations", 10),
-            ("typing::Any", 12),
-            ("mcp_server::core::memory_rules", 14),
-            ("mcp_server::handlers::_telemetry_wrap::instrument", 15),
-            ("mcp_server::core::knowledge_graph::extract_entities", 16),
-            // Aliased: `from ... import recall as pg_recall`
-            ("pg_recall", 17),
-            ("mcp_server::core::query_intent::QueryIntent", 18),
-            ("mcp_server::core::query_intent::classify_query_intent", 18),
-            ("mcp_server::handlers::_tool_meta::READ_ONLY", 19),
-            (
-                "mcp_server::handlers::recall_helpers::build_enhancements",
-                20,
-            ),
-            (
-                "mcp_server::handlers::recall_helpers::filter_low_signal",
-                20,
-            ),
-            (
-                "mcp_server::handlers::recall_helpers::inject_triggered_memories",
-                20,
-            ),
-            (
-                "mcp_server::infrastructure::embedding_engine::get_embedding_engine",
-                25,
-            ),
-            (
-                "mcp_server::infrastructure::memory_config::get_memory_settings",
-                26,
-            ),
-            ("mcp_server::infrastructure::memory_store::MemoryStore", 27),
-        ],
+        imports: RECALL_HANDLER_IMPORTS,
         constants: &[],
         functions: &[
             ("_get_store", 173, 2),
@@ -2121,56 +2255,58 @@ fn fixture_recall_handler_py() -> Fixture {
     })
 }
 
+const REMEMBER_HANDLER_IMPORTS: &[(&str, u64)] = &[
+    ("__future__::annotations", 6),
+    ("typing::Any", 8),
+    // Bare module imports (from X import Y where Y is a module not a symbol)
+    ("mcp_server::core::thermodynamics", 10),
+    ("mcp_server::core::write_gate", 10),
+    ("mcp_server::handlers::_telemetry_wrap::instrument", 11),
+    ("mcp_server::core::domain_detector::detect_domain", 12),
+    ("mcp_server::core::global_detector::detect_global", 13),
+    ("mcp_server::handlers::_tool_meta::IDEMPOTENT_WRITE", 14),
+    (
+        "mcp_server::handlers::remember_helpers::apply_modulations",
+        15,
+    ),
+    ("mcp_server::handlers::remember_helpers::evaluate_gate", 15),
+    (
+        "mcp_server::handlers::remember_helpers::insert_and_post_process",
+        15,
+    ),
+    ("mcp_server::handlers::remember_helpers::try_curation", 15),
+    (
+        "mcp_server::handlers::remember_helpers::update_user_mood_ema",
+        15,
+    ),
+    (
+        "mcp_server::handlers::remember_response::build_merge_response",
+        22,
+    ),
+    ("mcp_server::infrastructure::wiki_store", 23),
+    ("mcp_server::infrastructure::config::WIKI_ROOT", 24),
+    (
+        "mcp_server::infrastructure::embedding_engine::get_embedding_engine",
+        25,
+    ),
+    (
+        "mcp_server::infrastructure::memory_config::get_memory_settings",
+        26,
+    ),
+    ("mcp_server::infrastructure::memory_store::MemoryStore", 27),
+    (
+        "mcp_server::infrastructure::profile_store::load_profiles",
+        28,
+    ),
+];
+
 fn fixture_remember_handler_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
         name: "remember.py",
         category: "handlers",
         rel_path: "handlers/remember.py",
         file_prefix: "handlers/remember.py",
-        imports: &[
-            ("__future__::annotations", 6),
-            ("typing::Any", 8),
-            // Bare module imports (from X import Y where Y is a module not a symbol)
-            ("mcp_server::core::thermodynamics", 10),
-            ("mcp_server::core::write_gate", 10),
-            ("mcp_server::handlers::_telemetry_wrap::instrument", 11),
-            ("mcp_server::core::domain_detector::detect_domain", 12),
-            ("mcp_server::core::global_detector::detect_global", 13),
-            ("mcp_server::handlers::_tool_meta::IDEMPOTENT_WRITE", 14),
-            (
-                "mcp_server::handlers::remember_helpers::apply_modulations",
-                15,
-            ),
-            ("mcp_server::handlers::remember_helpers::evaluate_gate", 15),
-            (
-                "mcp_server::handlers::remember_helpers::insert_and_post_process",
-                15,
-            ),
-            ("mcp_server::handlers::remember_helpers::try_curation", 15),
-            (
-                "mcp_server::handlers::remember_helpers::update_user_mood_ema",
-                15,
-            ),
-            (
-                "mcp_server::handlers::remember_response::build_merge_response",
-                22,
-            ),
-            ("mcp_server::infrastructure::wiki_store", 23),
-            ("mcp_server::infrastructure::config::WIKI_ROOT", 24),
-            (
-                "mcp_server::infrastructure::embedding_engine::get_embedding_engine",
-                25,
-            ),
-            (
-                "mcp_server::infrastructure::memory_config::get_memory_settings",
-                26,
-            ),
-            ("mcp_server::infrastructure::memory_store::MemoryStore", 27),
-            (
-                "mcp_server::infrastructure::profile_store::load_profiles",
-                28,
-            ),
-        ],
+        imports: REMEMBER_HANDLER_IMPORTS,
         constants: &[],
         functions: &[
             ("_get_store", 187, 2),
@@ -2189,77 +2325,79 @@ fn fixture_remember_handler_py() -> Fixture {
     })
 }
 
+const CONSOLIDATE_HANDLER_IMPORTS: &[(&str, u64)] = &[
+    ("__future__::annotations", 7),
+    ("logging", 9),
+    ("time", 10),
+    ("typing::Any", 11),
+    ("mcp_server::core::emergence_metrics", 13),
+    (
+        "mcp_server::handlers::consolidation::cascade::run_cascade_advancement",
+        14,
+    ),
+    (
+        "mcp_server::handlers::consolidation::cls::run_cls_cycle",
+        15,
+    ),
+    (
+        "mcp_server::handlers::consolidation::compression::run_compression_cycle",
+        16,
+    ),
+    (
+        "mcp_server::handlers::consolidation::decay::run_decay_cycle",
+        17,
+    ),
+    (
+        "mcp_server::handlers::consolidation::homeostatic::run_homeostatic_cycle",
+        18,
+    ),
+    (
+        "mcp_server::handlers::consolidation::memify::run_memify_cycle",
+        19,
+    ),
+    (
+        "mcp_server::handlers::consolidation::plasticity::run_plasticity_cycle",
+        20,
+    ),
+    (
+        "mcp_server::handlers::consolidation::pruning::run_pruning_cycle",
+        21,
+    ),
+    (
+        "mcp_server::handlers::consolidation::sleep::run_deep_sleep",
+        22,
+    ),
+    (
+        "mcp_server::handlers::consolidation::transfer::run_two_stage_transfer",
+        23,
+    ),
+    (
+        "mcp_server::handlers::consolidation::wiki_maintenance::run_wiki_maintenance",
+        24,
+    ),
+    (
+        "mcp_server::infrastructure::embedding_engine::EmbeddingEngine",
+        25,
+    ),
+    (
+        "mcp_server::infrastructure::embedding_engine::get_embedding_engine",
+        25,
+    ),
+    (
+        "mcp_server::infrastructure::memory_config::get_memory_settings",
+        29,
+    ),
+    ("mcp_server::infrastructure::memory_store::MemoryStore", 30),
+    ("mcp_server::handlers::_tool_meta::IDEMPOTENT_WRITE", 31),
+];
+
 fn fixture_consolidate_handler_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
         name: "consolidate.py",
         category: "handlers",
         rel_path: "handlers/consolidate.py",
         file_prefix: "handlers/consolidate.py",
-        imports: &[
-            ("__future__::annotations", 7),
-            ("logging", 9),
-            ("time", 10),
-            ("typing::Any", 11),
-            ("mcp_server::core::emergence_metrics", 13),
-            (
-                "mcp_server::handlers::consolidation::cascade::run_cascade_advancement",
-                14,
-            ),
-            (
-                "mcp_server::handlers::consolidation::cls::run_cls_cycle",
-                15,
-            ),
-            (
-                "mcp_server::handlers::consolidation::compression::run_compression_cycle",
-                16,
-            ),
-            (
-                "mcp_server::handlers::consolidation::decay::run_decay_cycle",
-                17,
-            ),
-            (
-                "mcp_server::handlers::consolidation::homeostatic::run_homeostatic_cycle",
-                18,
-            ),
-            (
-                "mcp_server::handlers::consolidation::memify::run_memify_cycle",
-                19,
-            ),
-            (
-                "mcp_server::handlers::consolidation::plasticity::run_plasticity_cycle",
-                20,
-            ),
-            (
-                "mcp_server::handlers::consolidation::pruning::run_pruning_cycle",
-                21,
-            ),
-            (
-                "mcp_server::handlers::consolidation::sleep::run_deep_sleep",
-                22,
-            ),
-            (
-                "mcp_server::handlers::consolidation::transfer::run_two_stage_transfer",
-                23,
-            ),
-            (
-                "mcp_server::handlers::consolidation::wiki_maintenance::run_wiki_maintenance",
-                24,
-            ),
-            (
-                "mcp_server::infrastructure::embedding_engine::EmbeddingEngine",
-                25,
-            ),
-            (
-                "mcp_server::infrastructure::embedding_engine::get_embedding_engine",
-                25,
-            ),
-            (
-                "mcp_server::infrastructure::memory_config::get_memory_settings",
-                29,
-            ),
-            ("mcp_server::infrastructure::memory_store::MemoryStore", 30),
-            ("mcp_server::handlers::_tool_meta::IDEMPOTENT_WRITE", 31),
-        ],
+        imports: CONSOLIDATE_HANDLER_IMPORTS,
         constants: &[],
         functions: &[
             ("_get_store", 160, 2),
@@ -2310,6 +2448,44 @@ fn fixture_get_methodology_graph_py() -> Fixture {
 // has 247 call sites in one body); empty-body class with multi-inheritance.
 // ---------------------------------------------------------------------------
 
+const HTTP_STANDALONE_GRAPH_FUNCTIONS: &[(&str, u64, usize)] = &[
+    ("parse_graph_query", 106, 7),
+    ("parse_discussion_params", 127, 7),
+    ("extract_domain_hub_ids", 148, 4),
+    ("_compute_memory_vitals", 159, 12),
+    ("_session_counts_from_profiles", 183, 3),
+    ("_roster_fingerprint", 191, 6),
+    ("get_build_progress", 209, 3),
+    ("_set_progress", 217, 1),
+    ("_register_phase", 240, 2),
+    ("get_phase_payload", 250, 5),
+    ("_phase_deps_satisfied", 262, 2),
+    ("_mark_phase_ready", 273, 2),
+    ("_kick_background_build", 284, 247), // largest function in corpus
+    ("get_graph_response", 975, 10),
+    ("_get_cached_conversations", 1046, 4),
+    ("build_discussions_response", 1058, 9),
+    ("_find_session_file", 1093, 4),
+    ("build_discussion_detail", 1110, 12),
+];
+
+const HTTP_STANDALONE_GRAPH_RESOLVED_CALLS: &[(&str, &str)] = &[
+    ("_kick_background_build", "_mark_phase_ready"),
+    ("_kick_background_build", "_phase_deps_satisfied"),
+    ("_kick_background_build", "_register_phase"),
+    ("_kick_background_build", "_roster_fingerprint"),
+    ("_kick_background_build", "_set_progress"),
+    ("_kick_background_build", "extract_domain_hub_ids"),
+    ("build_discussion_detail", "_find_session_file"),
+    ("build_discussion_detail", "_get_cached_conversations"),
+    ("build_discussions_response", "_get_cached_conversations"),
+    ("build_discussions_response", "parse_discussion_params"),
+    ("get_graph_response", "_kick_background_build"),
+    ("get_graph_response", "_roster_fingerprint"),
+    ("get_graph_response", "get_build_progress"),
+    ("get_graph_response", "parse_graph_query"),
+];
+
 fn fixture_http_standalone_graph_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
         name: "http_standalone_graph.py",
@@ -2337,45 +2513,91 @@ fn fixture_http_standalone_graph_py() -> Fixture {
             ),
         ],
         constants: &[("PHASES", 78)],
-        functions: &[
-            ("parse_graph_query", 106, 7),
-            ("parse_discussion_params", 127, 7),
-            ("extract_domain_hub_ids", 148, 4),
-            ("_compute_memory_vitals", 159, 12),
-            ("_session_counts_from_profiles", 183, 3),
-            ("_roster_fingerprint", 191, 6),
-            ("get_build_progress", 209, 3),
-            ("_set_progress", 217, 1),
-            ("_register_phase", 240, 2),
-            ("get_phase_payload", 250, 5),
-            ("_phase_deps_satisfied", 262, 2),
-            ("_mark_phase_ready", 273, 2),
-            ("_kick_background_build", 284, 247), // largest function in corpus
-            ("get_graph_response", 975, 10),
-            ("_get_cached_conversations", 1046, 4),
-            ("build_discussions_response", 1058, 9),
-            ("_find_session_file", 1093, 4),
-            ("build_discussion_detail", 1110, 12),
-        ],
+        functions: HTTP_STANDALONE_GRAPH_FUNCTIONS,
         classes: &[],
-        resolved_calls: &[
-            ("_kick_background_build", "_mark_phase_ready"),
-            ("_kick_background_build", "_phase_deps_satisfied"),
-            ("_kick_background_build", "_register_phase"),
-            ("_kick_background_build", "_roster_fingerprint"),
-            ("_kick_background_build", "_set_progress"),
-            ("_kick_background_build", "extract_domain_hub_ids"),
-            ("build_discussion_detail", "_find_session_file"),
-            ("build_discussion_detail", "_get_cached_conversations"),
-            ("build_discussions_response", "_get_cached_conversations"),
-            ("build_discussions_response", "parse_discussion_params"),
-            ("get_graph_response", "_kick_background_build"),
-            ("get_graph_response", "_roster_fingerprint"),
-            ("get_graph_response", "get_build_progress"),
-            ("get_graph_response", "parse_graph_query"),
-        ],
+        resolved_calls: HTTP_STANDALONE_GRAPH_RESOLVED_CALLS,
     })
 }
+
+const HTTP_STANDALONE_IMPORTS: &[(&str, u64)] = &[
+    ("__future__::annotations", 19),
+    ("argparse", 21),
+    ("json", 22),
+    ("os", 23),
+    ("sys", 24),
+    ("threading", 25),
+    ("time", 26),
+    ("http::server::BaseHTTPRequestHandler", 27),
+    ("http::server::HTTPServer", 27),
+    ("pathlib::Path", 28),
+    ("socketserver::ThreadingMixIn", 29),
+    ("mcp_server::server::http_common::_apply_cors_headers", 31),
+    (
+        "mcp_server::server::http_security::enforce_same_origin_write",
+        32,
+    ),
+    (
+        "mcp_server::server::http_security::validate_host_header",
+        32,
+    ),
+    (
+        "mcp_server::server::http_standalone_endpoints::serve_discussion_detail",
+        36,
+    ),
+    (
+        "mcp_server::server::http_standalone_endpoints::serve_discussions",
+        36,
+    ),
+    (
+        "mcp_server::server::http_standalone_endpoints::serve_file_diff",
+        36,
+    ),
+    (
+        "mcp_server::server::http_standalone_endpoints::serve_graph",
+        36,
+    ),
+    (
+        "mcp_server::server::http_standalone_endpoints::serve_sankey",
+        36,
+    ),
+    (
+        "mcp_server::server::http_standalone_endpoints::serve_static",
+        36,
+    ),
+    (
+        "mcp_server::server::http_standalone_state::IDLE_TIMEOUT",
+        44,
+    ),
+    (
+        "mcp_server::server::http_standalone_state::seconds_since_last_request",
+        44,
+    ),
+    ("mcp_server::server::http_standalone_state::touch", 44),
+    (
+        "mcp_server::server::http_standalone_wiki::serve_wiki_db",
+        49,
+    ),
+    (
+        "mcp_server::server::http_standalone_wiki::serve_wiki_export",
+        49,
+    ),
+    (
+        "mcp_server::server::http_standalone_wiki::serve_wiki_list",
+        49,
+    ),
+    (
+        "mcp_server::server::http_standalone_wiki::serve_wiki_page",
+        49,
+    ),
+    (
+        "mcp_server::server::http_standalone_wiki::serve_wiki_projects",
+        49,
+    ),
+    (
+        "mcp_server::server::http_standalone_wiki::serve_wiki_save",
+        49,
+    ),
+];
 
 fn fixture_http_standalone_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
@@ -2383,85 +2605,7 @@ fn fixture_http_standalone_py() -> Fixture {
         category: "server-transport",
         rel_path: "server/http_standalone.py",
         file_prefix: "server/http_standalone.py",
-        imports: &[
-            ("__future__::annotations", 19),
-            ("argparse", 21),
-            ("json", 22),
-            ("os", 23),
-            ("sys", 24),
-            ("threading", 25),
-            ("time", 26),
-            ("http::server::BaseHTTPRequestHandler", 27),
-            ("http::server::HTTPServer", 27),
-            ("pathlib::Path", 28),
-            ("socketserver::ThreadingMixIn", 29),
-            ("mcp_server::server::http_common::_apply_cors_headers", 31),
-            (
-                "mcp_server::server::http_security::enforce_same_origin_write",
-                32,
-            ),
-            (
-                "mcp_server::server::http_security::validate_host_header",
-                32,
-            ),
-            (
-                "mcp_server::server::http_standalone_endpoints::serve_discussion_detail",
-                36,
-            ),
-            (
-                "mcp_server::server::http_standalone_endpoints::serve_discussions",
-                36,
-            ),
-            (
-                "mcp_server::server::http_standalone_endpoints::serve_file_diff",
-                36,
-            ),
-            (
-                "mcp_server::server::http_standalone_endpoints::serve_graph",
-                36,
-            ),
-            (
-                "mcp_server::server::http_standalone_endpoints::serve_sankey",
-                36,
-            ),
-            (
-                "mcp_server::server::http_standalone_endpoints::serve_static",
-                36,
-            ),
-            (
-                "mcp_server::server::http_standalone_state::IDLE_TIMEOUT",
-                44,
-            ),
-            (
-                "mcp_server::server::http_standalone_state::seconds_since_last_request",
-                44,
-            ),
-            ("mcp_server::server::http_standalone_state::touch", 44),
-            (
-                "mcp_server::server::http_standalone_wiki::serve_wiki_db",
-                49,
-            ),
-            (
-                "mcp_server::server::http_standalone_wiki::serve_wiki_export",
-                49,
-            ),
-            (
-                "mcp_server::server::http_standalone_wiki::serve_wiki_list",
-                49,
-            ),
-            (
-                "mcp_server::server::http_standalone_wiki::serve_wiki_page",
-                49,
-            ),
-            (
-                "mcp_server::server::http_standalone_wiki::serve_wiki_projects",
-                49,
-            ),
-            (
-                "mcp_server::server::http_standalone_wiki::serve_wiki_save",
-                49,
-            ),
-        ],
+        imports: HTTP_STANDALONE_IMPORTS,
         constants: &[("_WIKI_DB_OPS", 108)],
         functions: &[
             ("_idle_watchdog", 65, 4),
@@ -2647,6 +2791,66 @@ fn fixture_session_lifecycle_py() -> Fixture {
     })
 }
 
+const SESSION_START_FUNCTIONS: &[(&str, u64, usize)] = &[
+    ("_log", 36, 1),
+    ("_has_sentence_transformers", 40, 0),
+    ("_short", 50, 3),
+    ("_try_setup_db", 58, 11),
+    ("_connect_pg", 85, 2),
+    ("_fetch_anchors", 101, 14),
+    ("_fetch_team_decisions", 139, 7),
+    ("_fetch_hot_memories", 178, 11),
+    ("_count_pending_curations", 206, 16),
+    ("_fetch_checkpoint", 264, 16),
+    ("_count_memories", 299, 2),
+    ("_count_session_files", 308, 7),
+    ("_detect_external_sources", 323, 25),
+    ("_auto_backfill", 373, 6),
+    ("_format_checkpoint_section", 404, 13),
+    ("_build_context", 426, 27),
+    ("_build_cold_start_message", 508, 28),
+    ("_auto_wire_pipeline", 575, 6),
+    ("_maybe_background_consolidate", 604, 26),
+    ("_maybe_background_reanalyze", 694, 22),
+    ("_lookup_cached_graph_path", 756, 9),
+    ("main", 788, 32),
+    ("_print_external_sources", 881, 9),
+];
+
+const SESSION_START_RESOLVED_CALLS: &[(&str, &str)] = &[
+    ("_auto_backfill", "_log"),
+    ("_auto_wire_pipeline", "_log"),
+    ("_build_cold_start_message", "_auto_backfill"),
+    ("_build_cold_start_message", "_log"),
+    ("_build_context", "_format_checkpoint_section"),
+    ("_build_context", "_has_sentence_transformers"),
+    ("_build_context", "_short"),
+    ("_connect_pg", "_log"),
+    ("_lookup_cached_graph_path", "_connect_pg"),
+    ("_maybe_background_consolidate", "_log"),
+    ("_maybe_background_reanalyze", "_log"),
+    ("_maybe_background_reanalyze", "_lookup_cached_graph_path"),
+    ("_print_external_sources", "_detect_external_sources"),
+    ("_print_external_sources", "_log"),
+    ("_try_setup_db", "_log"),
+    ("main", "_auto_wire_pipeline"),
+    ("main", "_build_cold_start_message"),
+    ("main", "_build_context"),
+    ("main", "_connect_pg"),
+    ("main", "_count_memories"),
+    ("main", "_count_pending_curations"),
+    ("main", "_count_session_files"),
+    ("main", "_fetch_anchors"),
+    ("main", "_fetch_checkpoint"),
+    ("main", "_fetch_hot_memories"),
+    ("main", "_fetch_team_decisions"),
+    ("main", "_log"),
+    ("main", "_maybe_background_consolidate"),
+    ("main", "_maybe_background_reanalyze"),
+    ("main", "_print_external_sources"),
+    ("main", "_try_setup_db"),
+];
+
 fn fixture_session_start_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
         name: "session_start.py",
@@ -2669,67 +2873,25 @@ fn fixture_session_start_py() -> Fixture {
             ("_PLUGIN_ROOT", 33),
             ("_CONSOLIDATE_TTL_HOURS", 599),
         ],
-        functions: &[
-            ("_log", 36, 1),
-            ("_has_sentence_transformers", 40, 0),
-            ("_short", 50, 3),
-            ("_try_setup_db", 58, 11),
-            ("_connect_pg", 85, 2),
-            ("_fetch_anchors", 101, 14),
-            ("_fetch_team_decisions", 139, 7),
-            ("_fetch_hot_memories", 178, 11),
-            ("_count_pending_curations", 206, 16),
-            ("_fetch_checkpoint", 264, 16),
-            ("_count_memories", 299, 2),
-            ("_count_session_files", 308, 7),
-            ("_detect_external_sources", 323, 25),
-            ("_auto_backfill", 373, 6),
-            ("_format_checkpoint_section", 404, 13),
-            ("_build_context", 426, 27),
-            ("_build_cold_start_message", 508, 28),
-            ("_auto_wire_pipeline", 575, 6),
-            ("_maybe_background_consolidate", 604, 26),
-            ("_maybe_background_reanalyze", 694, 22),
-            ("_lookup_cached_graph_path", 756, 9),
-            ("main", 788, 32),
-            ("_print_external_sources", 881, 9),
-        ],
+        functions: SESSION_START_FUNCTIONS,
         classes: &[],
-        resolved_calls: &[
-            ("_auto_backfill", "_log"),
-            ("_auto_wire_pipeline", "_log"),
-            ("_build_cold_start_message", "_auto_backfill"),
-            ("_build_cold_start_message", "_log"),
-            ("_build_context", "_format_checkpoint_section"),
-            ("_build_context", "_has_sentence_transformers"),
-            ("_build_context", "_short"),
-            ("_connect_pg", "_log"),
-            ("_lookup_cached_graph_path", "_connect_pg"),
-            ("_maybe_background_consolidate", "_log"),
-            ("_maybe_background_reanalyze", "_log"),
-            ("_maybe_background_reanalyze", "_lookup_cached_graph_path"),
-            ("_print_external_sources", "_detect_external_sources"),
-            ("_print_external_sources", "_log"),
-            ("_try_setup_db", "_log"),
-            ("main", "_auto_wire_pipeline"),
-            ("main", "_build_cold_start_message"),
-            ("main", "_build_context"),
-            ("main", "_connect_pg"),
-            ("main", "_count_memories"),
-            ("main", "_count_pending_curations"),
-            ("main", "_count_session_files"),
-            ("main", "_fetch_anchors"),
-            ("main", "_fetch_checkpoint"),
-            ("main", "_fetch_hot_memories"),
-            ("main", "_fetch_team_decisions"),
-            ("main", "_log"),
-            ("main", "_maybe_background_consolidate"),
-            ("main", "_maybe_background_reanalyze"),
-            ("main", "_print_external_sources"),
-            ("main", "_try_setup_db"),
-        ],
+        resolved_calls: SESSION_START_RESOLVED_CALLS,
     })
 }
+
+const POST_TOOL_CAPTURE_FUNCTIONS: &[(&str, u64, usize)] = &[
+    ("_log", 93, 1),
+    ("_should_capture", 97, 2),
+    ("_reference_line", 124, 10),
+    ("_build_memory_content", 151, 7),
+    ("_build_tags", 188, 6),
+    ("_normalize_output", 214, 28),
+    ("_load_remember", 275, 5),
+    ("_store_memory", 293, 9),
+    ("_maybe_run_cascade", 325, 5),
+    ("process_event", 348, 12),
+    ("main", 372, 8),
+];
 
 fn fixture_post_tool_capture_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
@@ -2752,19 +2914,7 @@ fn fixture_post_tool_capture_py() -> Fixture {
             ("_HIGH_VALUE_PATTERNS", 65),
             ("_CASCADE_INTERVAL", 321),
         ],
-        functions: &[
-            ("_log", 93, 1),
-            ("_should_capture", 97, 2),
-            ("_reference_line", 124, 10),
-            ("_build_memory_content", 151, 7),
-            ("_build_tags", 188, 6),
-            ("_normalize_output", 214, 28),
-            ("_load_remember", 275, 5),
-            ("_store_memory", 293, 9),
-            ("_maybe_run_cascade", 325, 5),
-            ("process_event", 348, 12),
-            ("main", 372, 8),
-        ],
+        functions: POST_TOOL_CAPTURE_FUNCTIONS,
         classes: &[],
         resolved_calls: &[
             ("_build_memory_content", "_reference_line"),
@@ -2812,183 +2962,252 @@ fn fixture_compaction_checkpoint_py() -> Fixture {
 // New stress: many classes, each with many test_* methods (no inheritance).
 // ---------------------------------------------------------------------------
 
+/// Method → top-level Function calls (resolver emits Calls_Method_Function).
+/// Each (class, method, callee) tuple becomes one deduped Calls edge under
+/// the "::callsite::__m2fn__::{i}" relaxed-match path.
+fn push_method_to_fn_calls(
+    edges: &mut Vec<ExpectedEdge>,
+    prefix: &str,
+    method_to_fn: &[(&str, &str, &str)],
+) {
+    for (i, (cls, m, fn_)) in method_to_fn.iter().enumerate() {
+        edges.push(ExpectedEdge {
+            kind: "Calls",
+            from_qn: format!("{prefix}::{cls}::{m}::callsite::__m2fn__::{i}"),
+            to_qn: format!("{prefix}::{fn_}"),
+        });
+    }
+}
+
+const TEST_SPARSE_DICTIONARY_IMPORTS: &[(&str, u64)] = &[
+    (
+        "mcp_server::core::sparse_dictionary::build_seed_dictionary",
+        3,
+    ),
+    ("mcp_server::core::sparse_dictionary::learn_dictionary", 3),
+    ("mcp_server::core::sparse_dictionary::encode_session", 3),
+    ("mcp_server::core::sparse_dictionary::label_feature", 3),
+    (
+        "mcp_server::core::sparse_dictionary_activation::SIGNAL_NAMES",
+        9,
+    ),
+    ("mcp_server::core::sparse_dictionary_activation::D", 9),
+    (
+        "mcp_server::core::sparse_dictionary_activation::extract_session_activation",
+        9,
+    ),
+    ("mcp_server::core::sparse_dictionary_learning::omp", 14),
+    ("mcp_server::shared::linear_algebra::norm", 15),
+    ("mcp_server::shared::linear_algebra::normalize", 15),
+];
+
+const TEST_SPARSE_DICTIONARY_CLASSES: &[ExpectedClassInput] = &[
+    ExpectedClassInput {
+        name: "TestSignalNames",
+        line: 37,
+        bases: &[],
+        methods: &[
+            ("test_has_27_dimensions", 38, 1),
+            ("test_no_duplicates", 42, 3),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestExtractSessionActivation",
+        line: 46,
+        bases: &[],
+        methods: &[
+            ("test_returns_27d_vector", 47, 3),
+            ("test_all_values_finite", 51, 3),
+            ("test_tool_ratios_sum_to_1", 57, 4),
+            ("test_handles_empty_conversation", 64, 2),
+            ("test_burst_indicator_for_short_sessions", 68, 2),
+            ("test_exploration_indicator_for_high_turns", 72, 2),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestBuildSeedDictionary",
+        line: 77,
+        bases: &[],
+        methods: &[
+            ("test_valid_structure", 78, 2),
+            ("test_all_atoms_unit_vectors", 86, 3),
+            ("test_features_have_labels_and_descriptions", 92, 4),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestOmp",
+        line: 100,
+        bases: &[],
+        methods: &[
+            ("test_returns_empty_for_zero_signal", 101, 4),
+            ("test_finds_correct_single_atom", 106, 6),
+            ("test_respects_sparsity_constraint", 113, 6),
+            ("test_reconstructs_signal_with_low_error", 123, 4),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestLearnDictionary",
+        line: 130,
+        bases: &[],
+        methods: &[
+            ("test_returns_seed_for_few_sessions", 131, 2),
+            ("test_returns_seed_for_null", 137, 1),
+            ("test_learns_for_10_plus_sessions", 141, 2),
+            ("test_all_learned_atoms_unit_vectors", 155, 4),
+            ("test_features_have_auto_generated_labels", 162, 4),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestEncodeSession",
+        line: 170,
+        bases: &[],
+        methods: &[
+            ("test_returns_sparse_activation", 171, 5),
+            ("test_respects_sparsity", 178, 4),
+            ("test_weights_are_nonzero", 183, 5),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestLabelFeature",
+        line: 197,
+        bases: &[],
+        methods: &[
+            ("test_generates_meaningful_label", 198, 4),
+            ("test_handles_zero_direction", 206, 1),
+        ],
+    },
+];
+
+const TEST_SPARSE_DICTIONARY_METHOD_TO_FN: &[(&str, &str, &str)] = &[
+    ("TestEncodeSession", "test_respects_sparsity", "_make_conv"),
+    (
+        "TestEncodeSession",
+        "test_returns_sparse_activation",
+        "_make_conv",
+    ),
+    (
+        "TestEncodeSession",
+        "test_weights_are_nonzero",
+        "_make_conv",
+    ),
+    (
+        "TestExtractSessionActivation",
+        "test_all_values_finite",
+        "_make_conv",
+    ),
+    (
+        "TestExtractSessionActivation",
+        "test_burst_indicator_for_short_sessions",
+        "_make_conv",
+    ),
+    (
+        "TestExtractSessionActivation",
+        "test_exploration_indicator_for_high_turns",
+        "_make_conv",
+    ),
+    (
+        "TestExtractSessionActivation",
+        "test_returns_27d_vector",
+        "_make_conv",
+    ),
+    (
+        "TestExtractSessionActivation",
+        "test_tool_ratios_sum_to_1",
+        "_make_conv",
+    ),
+    (
+        "TestLearnDictionary",
+        "test_all_learned_atoms_unit_vectors",
+        "_make_conversations",
+    ),
+    (
+        "TestLearnDictionary",
+        "test_features_have_auto_generated_labels",
+        "_make_conversations",
+    ),
+    (
+        "TestLearnDictionary",
+        "test_learns_for_10_plus_sessions",
+        "_make_conversations",
+    ),
+    (
+        "TestLearnDictionary",
+        "test_returns_seed_for_few_sessions",
+        "_make_conversations",
+    ),
+];
+
 fn fixture_test_sparse_dictionary_py() -> Fixture {
     let mut f = build_core_fixture(&CoreFixtureInputs {
         name: "test_sparse_dictionary.py",
         category: "tests",
         rel_path: "tests_py/core/test_sparse_dictionary.py",
         file_prefix: "tests_py/core/test_sparse_dictionary.py",
-        imports: &[
-            (
-                "mcp_server::core::sparse_dictionary::build_seed_dictionary",
-                3,
-            ),
-            ("mcp_server::core::sparse_dictionary::learn_dictionary", 3),
-            ("mcp_server::core::sparse_dictionary::encode_session", 3),
-            ("mcp_server::core::sparse_dictionary::label_feature", 3),
-            (
-                "mcp_server::core::sparse_dictionary_activation::SIGNAL_NAMES",
-                9,
-            ),
-            ("mcp_server::core::sparse_dictionary_activation::D", 9),
-            (
-                "mcp_server::core::sparse_dictionary_activation::extract_session_activation",
-                9,
-            ),
-            ("mcp_server::core::sparse_dictionary_learning::omp", 14),
-            ("mcp_server::shared::linear_algebra::norm", 15),
-            ("mcp_server::shared::linear_algebra::normalize", 15),
-        ],
+        imports: TEST_SPARSE_DICTIONARY_IMPORTS,
         constants: &[],
         functions: &[("_make_conv", 18, 1), ("_make_conversations", 33, 2)],
-        classes: &[
-            ExpectedClassInput {
-                name: "TestSignalNames",
-                line: 37,
-                bases: &[],
-                methods: &[
-                    ("test_has_27_dimensions", 38, 1),
-                    ("test_no_duplicates", 42, 3),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestExtractSessionActivation",
-                line: 46,
-                bases: &[],
-                methods: &[
-                    ("test_returns_27d_vector", 47, 3),
-                    ("test_all_values_finite", 51, 3),
-                    ("test_tool_ratios_sum_to_1", 57, 4),
-                    ("test_handles_empty_conversation", 64, 2),
-                    ("test_burst_indicator_for_short_sessions", 68, 2),
-                    ("test_exploration_indicator_for_high_turns", 72, 2),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestBuildSeedDictionary",
-                line: 77,
-                bases: &[],
-                methods: &[
-                    ("test_valid_structure", 78, 2),
-                    ("test_all_atoms_unit_vectors", 86, 3),
-                    ("test_features_have_labels_and_descriptions", 92, 4),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestOmp",
-                line: 100,
-                bases: &[],
-                methods: &[
-                    ("test_returns_empty_for_zero_signal", 101, 4),
-                    ("test_finds_correct_single_atom", 106, 6),
-                    ("test_respects_sparsity_constraint", 113, 6),
-                    ("test_reconstructs_signal_with_low_error", 123, 4),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestLearnDictionary",
-                line: 130,
-                bases: &[],
-                methods: &[
-                    ("test_returns_seed_for_few_sessions", 131, 2),
-                    ("test_returns_seed_for_null", 137, 1),
-                    ("test_learns_for_10_plus_sessions", 141, 2),
-                    ("test_all_learned_atoms_unit_vectors", 155, 4),
-                    ("test_features_have_auto_generated_labels", 162, 4),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestEncodeSession",
-                line: 170,
-                bases: &[],
-                methods: &[
-                    ("test_returns_sparse_activation", 171, 5),
-                    ("test_respects_sparsity", 178, 4),
-                    ("test_weights_are_nonzero", 183, 5),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestLabelFeature",
-                line: 197,
-                bases: &[],
-                methods: &[
-                    ("test_generates_meaningful_label", 198, 4),
-                    ("test_handles_zero_direction", 206, 1),
-                ],
-            },
-        ],
+        classes: TEST_SPARSE_DICTIONARY_CLASSES,
         resolved_calls: &[("_make_conversations", "_make_conv")],
     });
-    // Method → top-level Function calls (resolver emits Calls_Method_Function).
-    // Each (class, method, callee) tuple becomes one deduped Calls edge.
-    let method_to_fn: &[(&str, &str, &str)] = &[
-        ("TestEncodeSession", "test_respects_sparsity", "_make_conv"),
-        (
-            "TestEncodeSession",
-            "test_returns_sparse_activation",
-            "_make_conv",
-        ),
-        (
-            "TestEncodeSession",
-            "test_weights_are_nonzero",
-            "_make_conv",
-        ),
-        (
-            "TestExtractSessionActivation",
-            "test_all_values_finite",
-            "_make_conv",
-        ),
-        (
-            "TestExtractSessionActivation",
-            "test_burst_indicator_for_short_sessions",
-            "_make_conv",
-        ),
-        (
-            "TestExtractSessionActivation",
-            "test_exploration_indicator_for_high_turns",
-            "_make_conv",
-        ),
-        (
-            "TestExtractSessionActivation",
-            "test_returns_27d_vector",
-            "_make_conv",
-        ),
-        (
-            "TestExtractSessionActivation",
-            "test_tool_ratios_sum_to_1",
-            "_make_conv",
-        ),
-        (
-            "TestLearnDictionary",
-            "test_all_learned_atoms_unit_vectors",
-            "_make_conversations",
-        ),
-        (
-            "TestLearnDictionary",
-            "test_features_have_auto_generated_labels",
-            "_make_conversations",
-        ),
-        (
-            "TestLearnDictionary",
-            "test_learns_for_10_plus_sessions",
-            "_make_conversations",
-        ),
-        (
-            "TestLearnDictionary",
-            "test_returns_seed_for_few_sessions",
-            "_make_conversations",
-        ),
-    ];
-    let prefix = "tests_py/core/test_sparse_dictionary.py";
-    for (i, (cls, m, fn_)) in method_to_fn.iter().enumerate() {
-        f.edges.push(ExpectedEdge {
-            kind: "Calls",
-            from_qn: format!("{prefix}::{cls}::{m}::callsite::__m2fn__::{i}"),
-            to_qn: format!("{prefix}::{fn_}"),
-        });
-    }
+    push_method_to_fn_calls(
+        &mut f.edges,
+        "tests_py/core/test_sparse_dictionary.py",
+        TEST_SPARSE_DICTIONARY_METHOD_TO_FN,
+    );
     f
 }
+
+const TEST_TEXT_CLASSES: &[ExpectedClassInput] = &[
+    ExpectedClassInput {
+        name: "TestExtractKeywords",
+        line: 11,
+        bases: &[],
+        methods: &[
+            ("test_returns_empty_set_for_empty_string", 12, 3),
+            ("test_returns_empty_set_for_none", 17, 2),
+            ("test_handles_unicode_text_without_crashing", 20, 2),
+            ("test_extracts_technical_abbreviations", 24, 1),
+            ("test_handles_mixed_case_by_lowercasing", 29, 1),
+            ("test_passes_words_longer_than_6_characters", 35, 1),
+            ("test_filters_out_short_non_technical_words", 41, 2),
+            ("test_handles_long_text", 45, 1),
+            ("test_deduplicates_keywords", 53, 2),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestExtractKeywordsArray",
+        line: 60,
+        bases: &[],
+        methods: &[
+            ("test_returns_a_list", 61, 2),
+            ("test_returns_empty_list_for_empty_string", 65, 3),
+            ("test_contains_same_elements_as_extract_keywords", 70, 4),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestStopwordsFiltering",
+        line: 79,
+        bases: &[],
+        methods: &[
+            ("test_excludes_common_stopwords_from_results", 80, 1),
+            ("test_stopwords_set_contains_common_english_words", 86, 0),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestTechnicalShortTerms",
+        line: 94,
+        bases: &[],
+        methods: &[
+            ("test_includes_known_short_technical_terms", 95, 0),
+            (
+                "test_extract_keywords_picks_up_technical_short_terms",
+                99,
+                1,
+            ),
+            ("test_technical_short_terms_is_frozenset", 105, 2),
+        ],
+    },
+];
 
 fn fixture_test_text_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
@@ -3004,60 +3223,46 @@ fn fixture_test_text_py() -> Fixture {
         ],
         constants: &[],
         functions: &[],
-        classes: &[
-            ExpectedClassInput {
-                name: "TestExtractKeywords",
-                line: 11,
-                bases: &[],
-                methods: &[
-                    ("test_returns_empty_set_for_empty_string", 12, 3),
-                    ("test_returns_empty_set_for_none", 17, 2),
-                    ("test_handles_unicode_text_without_crashing", 20, 2),
-                    ("test_extracts_technical_abbreviations", 24, 1),
-                    ("test_handles_mixed_case_by_lowercasing", 29, 1),
-                    ("test_passes_words_longer_than_6_characters", 35, 1),
-                    ("test_filters_out_short_non_technical_words", 41, 2),
-                    ("test_handles_long_text", 45, 1),
-                    ("test_deduplicates_keywords", 53, 2),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestExtractKeywordsArray",
-                line: 60,
-                bases: &[],
-                methods: &[
-                    ("test_returns_a_list", 61, 2),
-                    ("test_returns_empty_list_for_empty_string", 65, 3),
-                    ("test_contains_same_elements_as_extract_keywords", 70, 4),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestStopwordsFiltering",
-                line: 79,
-                bases: &[],
-                methods: &[
-                    ("test_excludes_common_stopwords_from_results", 80, 1),
-                    ("test_stopwords_set_contains_common_english_words", 86, 0),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestTechnicalShortTerms",
-                line: 94,
-                bases: &[],
-                methods: &[
-                    ("test_includes_known_short_technical_terms", 95, 0),
-                    (
-                        "test_extract_keywords_picks_up_technical_short_terms",
-                        99,
-                        1,
-                    ),
-                    ("test_technical_short_terms_is_frozenset", 105, 2),
-                ],
-            },
-        ],
+        classes: TEST_TEXT_CLASSES,
         resolved_calls: &[],
     })
 }
+
+const TEST_RECALL_CLASSES: &[ExpectedClassInput] = &[
+    ExpectedClassInput {
+        name: "TestWRRFFuse",
+        line: 10,
+        bases: &[],
+        methods: &[
+            ("test_single_signal", 11, 2),
+            ("test_multiple_signals_boost_overlap", 21, 1),
+            ("test_zero_weight_ignored", 34, 2),
+            ("test_empty_signals", 43, 1),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestRecallHandler",
+        line: 48,
+        bases: &[],
+        methods: &[
+            ("test_no_query_returns_empty", 49, 2),
+            ("test_empty_query_returns_empty", 54, 2),
+            ("test_recall_stored_memory", 58, 4),
+            ("test_recall_response_shape", 85, 7),
+            ("test_domain_scoped_recall", 101, 6),
+            ("test_global_memory_visible_across_domains", 131, 6),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestRecallReturnsDict",
+        line: 167,
+        bases: &[],
+        methods: &[
+            ("test_handler_direct_returns_dict", 170, 3),
+            ("test_safe_handler_returns_dict", 177, 4),
+        ],
+    },
+];
 
 fn fixture_test_recall_py() -> Fixture {
     build_core_fixture(&CoreFixtureInputs {
@@ -3074,41 +3279,7 @@ fn fixture_test_recall_py() -> Fixture {
         ],
         constants: &[],
         functions: &[],
-        classes: &[
-            ExpectedClassInput {
-                name: "TestWRRFFuse",
-                line: 10,
-                bases: &[],
-                methods: &[
-                    ("test_single_signal", 11, 2),
-                    ("test_multiple_signals_boost_overlap", 21, 1),
-                    ("test_zero_weight_ignored", 34, 2),
-                    ("test_empty_signals", 43, 1),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestRecallHandler",
-                line: 48,
-                bases: &[],
-                methods: &[
-                    ("test_no_query_returns_empty", 49, 2),
-                    ("test_empty_query_returns_empty", 54, 2),
-                    ("test_recall_stored_memory", 58, 4),
-                    ("test_recall_response_shape", 85, 7),
-                    ("test_domain_scoped_recall", 101, 6),
-                    ("test_global_memory_visible_across_domains", 131, 6),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestRecallReturnsDict",
-                line: 167,
-                bases: &[],
-                methods: &[
-                    ("test_handler_direct_returns_dict", 170, 3),
-                    ("test_safe_handler_returns_dict", 177, 4),
-                ],
-            },
-        ],
+        classes: TEST_RECALL_CLASSES,
         resolved_calls: &[],
     })
 }
@@ -3135,6 +3306,103 @@ fn fixture_test_brain_index_store_py() -> Fixture {
     })
 }
 
+const TEST_HTTP_SERVER_CLASSES: &[ExpectedClassInput] = &[
+    ExpectedClassInput {
+        name: "TestResetIdleTimer",
+        line: 23,
+        bases: &[],
+        methods: &[
+            ("setup_method", 24, 1),
+            ("teardown_method", 27, 1),
+            ("test_creates_daemon_timer", 30, 3),
+            ("test_cancels_previous_timer", 38, 5),
+            ("test_timer_duration_is_600", 48, 4),
+            ("test_shutdown_callback_clears_active_server", 56, 7),
+            ("test_shutdown_callback_noop_if_no_server", 75, 5),
+            ("test_shutdown_callback_prints_message", 91, 8),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestStartUiServer",
+        line: 107,
+        bases: &[],
+        methods: &[
+            ("setup_method", 108, 1),
+            ("teardown_method", 111, 1),
+            ("test_reuses_existing_server", 114, 4),
+            ("test_reads_html_from_custom_path", 131, 11),
+            ("test_raises_on_missing_html_file", 162, 2),
+            ("test_starts_server_on_port_3456_first", 169, 8),
+            ("test_falls_back_to_port_0_on_oserror", 190, 9),
+            ("test_raises_if_both_ports_fail", 211, 5),
+            ("test_server_thread_is_daemon", 224, 11),
+            ("test_sets_active_server_state", 245, 9),
+            ("test_prints_startup_message", 265, 10),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestShutdownServer",
+        line: 283,
+        bases: &[],
+        methods: &[
+            ("setup_method", 284, 1),
+            ("teardown_method", 287, 1),
+            ("test_shutdown_active_server", 290, 3),
+            ("test_shutdown_cancels_timer", 297, 4),
+            ("test_shutdown_noop_when_no_server", 305, 1),
+            ("test_shutdown_cancels_timer_even_without_server", 312, 3),
+        ],
+    },
+    ExpectedClassInput {
+        name: "TestHandlerBehavior",
+        line: 321,
+        bases: &[],
+        methods: &[
+            ("setup_method", 324, 1),
+            ("teardown_method", 327, 1),
+            ("_create_handler_class", 330, 8),
+            ("_make_handler", 357, 5),
+            ("test_get_root_returns_html", 373, 6),
+            ("test_get_graph_returns_json", 388, 7),
+            ("test_get_sets_no_cache", 402, 4),
+            ("test_do_options_returns_204", 412, 4),
+            ("test_log_message_suppressed", 423, 3),
+            ("test_send_header_cors_is_noop", 429, 3),
+            ("test_get_resets_idle_timer", 435, 5),
+        ],
+    },
+];
+
+/// Method → top-level Function calls: setup_method/teardown_method on each
+/// of the 4 test classes calls _reset_module_state. Dedupes per (caller,
+/// target), so 8 distinct method→fn pairs = 8 Calls edges.
+const TEST_HTTP_SERVER_METHOD_TO_FN: &[(&str, &str, &str)] = &[
+    ("TestHandlerBehavior", "setup_method", "_reset_module_state"),
+    (
+        "TestHandlerBehavior",
+        "teardown_method",
+        "_reset_module_state",
+    ),
+    ("TestResetIdleTimer", "setup_method", "_reset_module_state"),
+    (
+        "TestResetIdleTimer",
+        "teardown_method",
+        "_reset_module_state",
+    ),
+    ("TestShutdownServer", "setup_method", "_reset_module_state"),
+    (
+        "TestShutdownServer",
+        "teardown_method",
+        "_reset_module_state",
+    ),
+    ("TestStartUiServer", "setup_method", "_reset_module_state"),
+    (
+        "TestStartUiServer",
+        "teardown_method",
+        "_reset_module_state",
+    ),
+];
+
 fn fixture_test_http_server_py() -> Fixture {
     let mut f = build_core_fixture(&CoreFixtureInputs {
         name: "test_http_server.py",
@@ -3154,111 +3422,14 @@ fn fixture_test_http_server_py() -> Fixture {
         ],
         constants: &[],
         functions: &[("_reset_module_state", 15, 1)],
-        classes: &[
-            ExpectedClassInput {
-                name: "TestResetIdleTimer",
-                line: 23,
-                bases: &[],
-                methods: &[
-                    ("setup_method", 24, 1),
-                    ("teardown_method", 27, 1),
-                    ("test_creates_daemon_timer", 30, 3),
-                    ("test_cancels_previous_timer", 38, 5),
-                    ("test_timer_duration_is_600", 48, 4),
-                    ("test_shutdown_callback_clears_active_server", 56, 7),
-                    ("test_shutdown_callback_noop_if_no_server", 75, 5),
-                    ("test_shutdown_callback_prints_message", 91, 8),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestStartUiServer",
-                line: 107,
-                bases: &[],
-                methods: &[
-                    ("setup_method", 108, 1),
-                    ("teardown_method", 111, 1),
-                    ("test_reuses_existing_server", 114, 4),
-                    ("test_reads_html_from_custom_path", 131, 11),
-                    ("test_raises_on_missing_html_file", 162, 2),
-                    ("test_starts_server_on_port_3456_first", 169, 8),
-                    ("test_falls_back_to_port_0_on_oserror", 190, 9),
-                    ("test_raises_if_both_ports_fail", 211, 5),
-                    ("test_server_thread_is_daemon", 224, 11),
-                    ("test_sets_active_server_state", 245, 9),
-                    ("test_prints_startup_message", 265, 10),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestShutdownServer",
-                line: 283,
-                bases: &[],
-                methods: &[
-                    ("setup_method", 284, 1),
-                    ("teardown_method", 287, 1),
-                    ("test_shutdown_active_server", 290, 3),
-                    ("test_shutdown_cancels_timer", 297, 4),
-                    ("test_shutdown_noop_when_no_server", 305, 1),
-                    ("test_shutdown_cancels_timer_even_without_server", 312, 3),
-                ],
-            },
-            ExpectedClassInput {
-                name: "TestHandlerBehavior",
-                line: 321,
-                bases: &[],
-                methods: &[
-                    ("setup_method", 324, 1),
-                    ("teardown_method", 327, 1),
-                    ("_create_handler_class", 330, 8),
-                    ("_make_handler", 357, 5),
-                    ("test_get_root_returns_html", 373, 6),
-                    ("test_get_graph_returns_json", 388, 7),
-                    ("test_get_sets_no_cache", 402, 4),
-                    ("test_do_options_returns_204", 412, 4),
-                    ("test_log_message_suppressed", 423, 3),
-                    ("test_send_header_cors_is_noop", 429, 3),
-                    ("test_get_resets_idle_timer", 435, 5),
-                ],
-            },
-        ],
+        classes: TEST_HTTP_SERVER_CLASSES,
         resolved_calls: &[],
     });
-    // Method → top-level Function calls: setup_method/teardown_method on each
-    // of the 4 test classes calls _reset_module_state. Dedupes per (caller, target),
-    // so 8 distinct method→fn pairs = 8 Calls edges.
-    let method_to_fn: &[(&str, &str, &str)] = &[
-        ("TestHandlerBehavior", "setup_method", "_reset_module_state"),
-        (
-            "TestHandlerBehavior",
-            "teardown_method",
-            "_reset_module_state",
-        ),
-        ("TestResetIdleTimer", "setup_method", "_reset_module_state"),
-        (
-            "TestResetIdleTimer",
-            "teardown_method",
-            "_reset_module_state",
-        ),
-        ("TestShutdownServer", "setup_method", "_reset_module_state"),
-        (
-            "TestShutdownServer",
-            "teardown_method",
-            "_reset_module_state",
-        ),
-        ("TestStartUiServer", "setup_method", "_reset_module_state"),
-        (
-            "TestStartUiServer",
-            "teardown_method",
-            "_reset_module_state",
-        ),
-    ];
-    let prefix = "tests_py/server/test_http_server.py";
-    for (i, (cls, m, fn_)) in method_to_fn.iter().enumerate() {
-        f.edges.push(ExpectedEdge {
-            kind: "Calls",
-            from_qn: format!("{prefix}::{cls}::{m}::callsite::__m2fn__::{i}"),
-            to_qn: format!("{prefix}::{fn_}"),
-        });
-    }
+    push_method_to_fn_calls(
+        &mut f.edges,
+        "tests_py/server/test_http_server.py",
+        TEST_HTTP_SERVER_METHOD_TO_FN,
+    );
     f
 }
 
@@ -3329,13 +3500,14 @@ struct Floors {
     calls: f64,
 }
 
-fn run_fixture(test_id: &str, fixture: Fixture, floors: Floors) {
+/// Mirrors `fixture.rel_path`'s source file under a fresh tempdir (rooted at
+/// `test_id`) so the file_id materialized by the indexer matches our
+/// annotation prefix exactly. Returns (tempdir guard, graph path).
+fn stage_fixture_source(test_id: &str, fixture: &Fixture) -> (common::TestTempDir, PathBuf) {
     let corpus = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/graph_accuracy")
         .join(fixture.category);
     let tmp = fixture_root_for(test_id);
-    // Mirror the rel_path under the tempdir so the file_id materialized by
-    // the indexer matches our annotation prefix exactly.
     let dest = tmp.join(fixture.rel_path);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).expect("mkdir -p inside tempdir");
@@ -3347,15 +3519,11 @@ fn run_fixture(test_id: &str, fixture: Fixture, floors: Floors) {
         .into_owned();
     fs::copy(corpus.join(&source_name), &dest)
         .unwrap_or_else(|e| panic!("copy {source_name} into tempdir: {e}"));
-
     let graph_path = tmp.join("graph.lbug");
-    let observed = index_fixture(&tmp, &graph_path);
+    (tmp, graph_path)
+}
 
-    print_diff(&fixture, &observed);
-
-    let node_score = score_nodes(&fixture.nodes, &observed.nodes);
-    let edge_scores = score_edges_by_kind(&fixture.edges, &observed.edges_by_kind);
-
+fn print_scores(node_score: &Score, edge_scores: &BTreeMap<String, Score>) {
     println!("\n  ===== scores =====");
     println!(
         "  nodes  P={:.3} R={:.3} F1={:.3}  (tp={} fp={} fn={})",
@@ -3366,7 +3534,7 @@ fn run_fixture(test_id: &str, fixture: Fixture, floors: Floors) {
         node_score.fp,
         node_score.fn_,
     );
-    for (kind, s) in &edge_scores {
+    for (kind, s) in edge_scores {
         println!(
             "  edge[{kind}]  P={:.3} R={:.3} F1={:.3}  (tp={} fp={} fn={})",
             s.precision(),
@@ -3377,45 +3545,71 @@ fn run_fixture(test_id: &str, fixture: Fixture, floors: Floors) {
             s.fn_,
         );
     }
+}
 
-    let f1_defines = edge_scores.get("Defines").map(|s| s.f1()).unwrap_or(0.0);
-    let f1_calls = edge_scores.get("Calls").map(|s| s.f1()).unwrap_or_else(|| {
-        // No expectations for Calls (e.g. files with only builtins) means
-        // the gate is vacuously satisfied at 1.0. Don't penalize.
-        1.0
-    });
-    let f1_nodes = node_score.f1();
+/// The three measured F1 scores `run_fixture` checks against `Floors`.
+struct F1Scores {
+    nodes: f64,
+    defines: f64,
+    calls: f64,
+}
 
+/// Asserts each measured F1 sits at or above its Spike B' floor. A missing
+/// Calls expectation (files with only builtins) reports 1.0 vacuously so it
+/// never penalizes the gate.
+fn assert_regression_floors(fixture: &Fixture, measured: &F1Scores, floors: &Floors) {
     println!(
         "\n  Spike B' floors: Nodes≥{}  Defines≥{}  Calls≥{}",
         floors.nodes, floors.defines, floors.calls
     );
     println!(
-        "  Measured       : Nodes={f1_nodes:.3}  Defines={f1_defines:.3}  \
-         Calls={f1_calls:.3}"
+        "  Measured       : Nodes={:.3}  Defines={:.3}  Calls={:.3}",
+        measured.nodes, measured.defines, measured.calls
     );
 
     assert!(
-        f1_nodes >= floors.nodes,
-        "REGRESSION on {}/{}: nodes F1 {f1_nodes:.3} fell below floor {}",
+        measured.nodes >= floors.nodes,
+        "REGRESSION on {}/{}: nodes F1 {:.3} fell below floor {}",
         fixture.category,
         fixture.name,
+        measured.nodes,
         floors.nodes
     );
     assert!(
-        f1_defines >= floors.defines,
-        "REGRESSION on {}/{}: Defines F1 {f1_defines:.3} fell below floor {}",
+        measured.defines >= floors.defines,
+        "REGRESSION on {}/{}: Defines F1 {:.3} fell below floor {}",
         fixture.category,
         fixture.name,
+        measured.defines,
         floors.defines
     );
     assert!(
-        f1_calls >= floors.calls,
-        "REGRESSION on {}/{}: Calls F1 {f1_calls:.3} fell below floor {}",
+        measured.calls >= floors.calls,
+        "REGRESSION on {}/{}: Calls F1 {:.3} fell below floor {}",
         fixture.category,
         fixture.name,
+        measured.calls,
         floors.calls
     );
+}
+
+fn run_fixture(test_id: &str, fixture: Fixture, floors: Floors) {
+    let (tmp, graph_path) = stage_fixture_source(test_id, &fixture);
+    let observed = index_fixture(&tmp, &graph_path);
+
+    print_diff(&fixture, &observed);
+
+    let node_score = score_nodes(&fixture.nodes, &observed.nodes);
+    let edge_scores = score_edges_by_kind(&fixture.edges, &observed.edges_by_kind);
+    print_scores(&node_score, &edge_scores);
+
+    let measured = F1Scores {
+        nodes: node_score.f1(),
+        defines: edge_scores.get("Defines").map(|s| s.f1()).unwrap_or(0.0),
+        calls: edge_scores.get("Calls").map(|s| s.f1()).unwrap_or(1.0),
+    };
+
+    assert_regression_floors(&fixture, &measured, &floors);
 }
 
 // ---------------------------------------------------------------------------
@@ -3949,17 +4143,7 @@ fn synthetic_intra_inheritance_py() {
 /// This test bypasses run_fixture because run_fixture's corpus layout
 /// assumes one file per fixture. Multi-file uses a subdir under the
 /// synthetic/ corpus root.
-#[test]
-fn synthetic_multi_file_imports() {
-    let corpus = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/graph_accuracy/synthetic/multi_file");
-    let tmp = fixture_root_for("multi_file");
-    fs::copy(corpus.join("file_a.py"), tmp.join("file_a.py")).expect("copy file_a.py");
-    fs::copy(corpus.join("file_b.py"), tmp.join("file_b.py")).expect("copy file_b.py");
-
-    let graph_path = tmp.join("graph.lbug");
-    let observed = index_fixture(&tmp, &graph_path);
-
+fn print_multi_file_diagnostic(observed: &Observed) {
     println!("\n===== multi_file_imports diagnostic =====");
     println!("observed nodes by label:");
     let mut by_label: BTreeMap<&String, usize> = BTreeMap::new();
@@ -3978,36 +4162,53 @@ fn synthetic_multi_file_imports() {
             }
         }
     }
+}
+
+/// Counts observed edges of `kind` whose (from, to) pair crosses file_a <->
+/// file_b, matched via `is_cross_file`.
+fn count_cross_file_edges(
+    observed: &Observed,
+    kind: &str,
+    is_cross_file: impl Fn(&str, &str) -> bool,
+) -> usize {
+    observed
+        .edges_by_kind
+        .get(kind)
+        .map(|set| {
+            set.iter()
+                .filter(|(from, to)| is_cross_file(from, to))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+#[test]
+fn synthetic_multi_file_imports() {
+    let corpus = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/graph_accuracy/synthetic/multi_file");
+    let tmp = fixture_root_for("multi_file");
+    fs::copy(corpus.join("file_a.py"), tmp.join("file_a.py")).expect("copy file_a.py");
+    fs::copy(corpus.join("file_b.py"), tmp.join("file_b.py")).expect("copy file_b.py");
+
+    let graph_path = tmp.join("graph.lbug");
+    let observed = index_fixture(&tmp, &graph_path);
+    print_multi_file_diagnostic(&observed);
 
     // BUG #2 floor: at minimum, the resolver must emit ≥1 Imports edge
     // pointing FROM file_a's symbol/file/import-node TO a symbol in file_b
     // (not back to file_a). This is the "cross-file linkage" the audit
     // identified as missing.
-    let imports = observed
-        .edges_by_kind
-        .get("Imports")
-        .cloned()
-        .unwrap_or_default();
-    let cross_file_imports = imports
-        .iter()
-        .filter(|(from, to)| {
-            (from.contains("file_a") && to.contains("file_b"))
-                || (from.contains("file_b") && to.contains("file_a"))
-        })
-        .count();
+    let cross_file_imports = count_cross_file_edges(&observed, "Imports", |from, to| {
+        (from.contains("file_a") && to.contains("file_b"))
+            || (from.contains("file_b") && to.contains("file_a"))
+    });
     println!("\ncross-file Imports edges: {cross_file_imports}");
 
     // Calls — file_a::main calls helper + square, both in file_b. Both
     // should resolve to Calls_Function_Function (or similar) cross-file.
-    let calls = observed
-        .edges_by_kind
-        .get("Calls")
-        .cloned()
-        .unwrap_or_default();
-    let cross_file_calls = calls
-        .iter()
-        .filter(|(from, to)| from.contains("file_a") && to.contains("file_b"))
-        .count();
+    let cross_file_calls = count_cross_file_edges(&observed, "Calls", |from, to| {
+        from.contains("file_a") && to.contains("file_b")
+    });
     println!("cross-file Calls edges    : {cross_file_calls}");
 
     assert!(

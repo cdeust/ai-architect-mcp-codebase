@@ -75,91 +75,93 @@ fn opt_in() -> bool {
     std::env::var("CORTEX_FULL_CORPUS").ok().as_deref() == Some("1")
 }
 
+// Helper: derive file_id from a qualified_name by stripping ::* tail.
+// QN convention (parser/mod.rs::qual): "{file_path}::name[::name...]".
+fn file_id_of(qn: &str) -> &str {
+    match qn.find("::") {
+        Some(idx) => &qn[..idx],
+        None => qn,
+    }
+}
+
+/// Runs `query` (a single-column RETURN of a qualified_name or an id) and
+/// bumps `field` on the `ActualCounts` bucketed by each row's file_id.
+fn bump_counts_by_query(
+    store: &GraphStore,
+    by_file: &mut HashMap<String, ActualCounts>,
+    query: &str,
+    field: fn(&mut ActualCounts),
+) {
+    if let Ok(qr) = store.execute_query(query) {
+        for row in qr.rows {
+            if let Some(qn) = row.first() {
+                let entry = by_file.entry(file_id_of(qn).to_string()).or_default();
+                field(entry);
+            }
+        }
+    }
+}
+
+/// Intra-file Calls_Function_Function pairs — both endpoints share file.
+fn bump_intra_file_call_pairs(store: &GraphStore, by_file: &mut HashMap<String, ActualCounts>) {
+    let Ok(qr) = store.execute_query(
+        "MATCH (a:Function)-[r:Calls_Function_Function]->(b:Function) \
+         RETURN a.qualified_name, b.qualified_name",
+    ) else {
+        return;
+    };
+    for row in qr.rows {
+        if row.len() < 2 {
+            continue;
+        }
+        let fa = file_id_of(&row[0]);
+        let fb = file_id_of(&row[1]);
+        if fa == fb {
+            by_file.entry(fa.to_string()).or_default().intra_pairs += 1;
+        }
+    }
+}
+
 fn fetch_counts(store: &GraphStore) -> HashMap<String, ActualCounts> {
     // One round-trip per (file, label) and (file, edge-kind) would be
     // O(files × kinds) queries — slow at 576 files. Instead we pull
     // per-symbol qualified_names once, prefix-bucket by file_id, and
     // compute everything in memory.
-
     let mut by_file: HashMap<String, ActualCounts> = HashMap::new();
-    let mut bump = |file_id: &str, field: fn(&mut ActualCounts)| {
-        let entry = by_file.entry(file_id.to_string()).or_default();
-        field(entry);
-    };
 
-    // Helper: derive file_id from a qualified_name by stripping ::* tail.
-    // QN convention (parser/mod.rs::qual): "{file_path}::name[::name...]".
-    fn file_id_of(qn: &str) -> &str {
-        match qn.find("::") {
-            Some(idx) => &qn[..idx],
-            None => qn,
-        }
-    }
-
-    // Functions
-    if let Ok(qr) = store.execute_query("MATCH (n:Function) RETURN n.qualified_name") {
-        for row in qr.rows {
-            if let Some(qn) = row.first() {
-                bump(file_id_of(qn), |c| c.functions += 1);
-            }
-        }
-    }
-    // Methods
-    if let Ok(qr) = store.execute_query("MATCH (n:Method) RETURN n.qualified_name") {
-        for row in qr.rows {
-            if let Some(qn) = row.first() {
-                bump(file_id_of(qn), |c| c.methods += 1);
-            }
-        }
-    }
+    bump_counts_by_query(
+        store,
+        &mut by_file,
+        "MATCH (n:Function) RETURN n.qualified_name",
+        |c| c.functions += 1,
+    );
+    bump_counts_by_query(
+        store,
+        &mut by_file,
+        "MATCH (n:Method) RETURN n.qualified_name",
+        |c| c.methods += 1,
+    );
     // Classes (Struct label per Python class)
-    if let Ok(qr) = store.execute_query("MATCH (n:Struct) RETURN n.qualified_name") {
-        for row in qr.rows {
-            if let Some(qn) = row.first() {
-                bump(file_id_of(qn), |c| c.classes += 1);
-            }
-        }
-    }
-    // Constants
-    if let Ok(qr) = store.execute_query("MATCH (n:Constant) RETURN n.qualified_name") {
-        for row in qr.rows {
-            if let Some(qn) = row.first() {
-                bump(file_id_of(qn), |c| c.constants += 1);
-            }
-        }
-    }
+    bump_counts_by_query(
+        store,
+        &mut by_file,
+        "MATCH (n:Struct) RETURN n.qualified_name",
+        |c| c.classes += 1,
+    );
+    bump_counts_by_query(
+        store,
+        &mut by_file,
+        "MATCH (n:Constant) RETURN n.qualified_name",
+        |c| c.constants += 1,
+    );
     // Imports — Import nodes have `id` as their primary key.
-    if let Ok(qr) = store.execute_query("MATCH (n:Import) RETURN n.id") {
-        for row in qr.rows {
-            if let Some(id) = row.first() {
-                bump(file_id_of(id), |c| c.imports += 1);
-            }
-        }
-    }
-    // CallSites
-    if let Ok(qr) = store.execute_query("MATCH (n:CallSite) RETURN n.id") {
-        for row in qr.rows {
-            if let Some(id) = row.first() {
-                bump(file_id_of(id), |c| c.callsites += 1);
-            }
-        }
-    }
-    // Intra-file Calls_Function_Function pairs — both endpoints share file.
-    if let Ok(qr) = store.execute_query(
-        "MATCH (a:Function)-[r:Calls_Function_Function]->(b:Function) \
-         RETURN a.qualified_name, b.qualified_name",
-    ) {
-        for row in qr.rows {
-            if row.len() < 2 {
-                continue;
-            }
-            let fa = file_id_of(&row[0]);
-            let fb = file_id_of(&row[1]);
-            if fa == fb {
-                bump(fa, |c| c.intra_pairs += 1);
-            }
-        }
-    }
+    bump_counts_by_query(store, &mut by_file, "MATCH (n:Import) RETURN n.id", |c| {
+        c.imports += 1
+    });
+    bump_counts_by_query(store, &mut by_file, "MATCH (n:CallSite) RETURN n.id", |c| {
+        c.callsites += 1
+    });
+    bump_intra_file_call_pairs(store, &mut by_file);
 
     by_file
 }
@@ -181,28 +183,29 @@ fn index_target(target_root: &Path, graph_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn run_corpus(corpus_path: &str) {
-    if !opt_in() {
-        eprintln!("[skipped] corpus_full {corpus_path} — set CORTEX_FULL_CORPUS=1 to run");
-        return;
-    }
+fn load_corpus(corpus_path: &str) -> Corpus {
     let corpus_text = fs::read_to_string(corpus_path)
         .unwrap_or_else(|e| panic!("read corpus {corpus_path}: {e}"));
     let corpus: Corpus = serde_json::from_str(&corpus_text)
         .unwrap_or_else(|e| panic!("parse corpus {corpus_path}: {e}"));
-
-    let target_root = PathBuf::from(&corpus.target_root);
+    let target_root = Path::new(&corpus.target_root);
     assert!(
         target_root.is_dir(),
         "corpus target_root {} does not exist (regenerate JSON for this host)",
         target_root.display()
     );
+    corpus
+}
 
+/// Indexes `target_root` into a scratch graph and returns the per-file
+/// actual counts.
+fn index_and_fetch_counts(target_root: &Path) -> HashMap<String, ActualCounts> {
     // issue #25 audit: process::id()-based naming collides across processes
     // under PID reuse (observed under back-to-back soak runs). tempfile's
     // Builder allocates a cryptographically-random suffix instead, which
-    // does not depend on or repeat across OS PIDs; `.keep()` hands the path
-    // to this test's own manual cleanup below instead of auto-deleting it.
+    // does not depend on or repeat across OS PIDs; `.keep_managed()` hands
+    // the path to this test's own manual `remove_dir_all` + `create_dir_all`
+    // reset below, and still cleans up on drop (RAII, see tests/common).
     let target_tag = target_root
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -216,12 +219,18 @@ fn run_corpus(corpus_path: &str) {
     fs::create_dir_all(&tmp).expect("mkdir tempdir");
     let graph_path = tmp.join("graph.lbug");
 
-    index_target(&target_root, &graph_path).expect("index target");
+    index_target(target_root, &graph_path).expect("index target");
     let store = GraphStore::open_or_create(&graph_path).expect("open graph");
-    let actuals = fetch_counts(&store);
+    fetch_counts(&store)
+}
 
-    // Per-file assertions with rich diff. We collect failures rather than
-    // failing on the first to surface the systemic issues at scale.
+/// Per-file assertions with rich diff. Collects failures rather than failing
+/// on the first, to surface systemic issues at scale.
+fn assert_corpus_parity(
+    corpus_path: &str,
+    corpus: &Corpus,
+    actuals: &HashMap<String, ActualCounts>,
+) {
     let mut failures = 0usize;
     let mut checked = 0usize;
     for f in &corpus.files {
@@ -263,6 +272,17 @@ fn run_corpus(corpus_path: &str) {
          The Rust extractor diverged from Python ast on these files.",
         failures, checked, corpus_path
     );
+}
+
+fn run_corpus(corpus_path: &str) {
+    if !opt_in() {
+        eprintln!("[skipped] corpus_full {corpus_path} — set CORTEX_FULL_CORPUS=1 to run");
+        return;
+    }
+    let corpus = load_corpus(corpus_path);
+    let target_root = PathBuf::from(&corpus.target_root);
+    let actuals = index_and_fetch_counts(&target_root);
+    assert_corpus_parity(corpus_path, &corpus, &actuals);
 }
 
 #[allow(dead_code)]

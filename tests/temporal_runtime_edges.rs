@@ -63,51 +63,29 @@ fn index(repo: &Path, out: &Path) -> std::path::PathBuf {
     graph
 }
 
-#[test]
-fn co_change_mining_emits_exact_expected_edges() {
-    let tmp = tempfile::Builder::new()
-        .prefix("cochange_exact_")
-        .tempdir()
-        .expect("temp dir");
-    let repo = tmp.path().join("repo");
-    std::fs::create_dir_all(&repo).expect("mk repo");
-    init_git(&repo);
-
-    // Construct a known co-change history:
-    //   c1..c4: a.py AND b.py change together  → (a,b) co-change = 4
-    //   c5:     a.py alone                     → changes_a = 5, changes_b = 4
-    //   c6:     c.py AND d.py together (once)   → (c,d) co-change = 1 (below the min)
-    write(&repo, "a.py", "def a0():\n    return 0\n");
-    write(&repo, "b.py", "def b0():\n    return 0\n");
-    commit(&repo, "c1 a+b");
+/// Construct a known co-change history in `repo`:
+///   c1..c4: a.py AND b.py change together  → (a,b) co-change = 4
+///   c5:     a.py alone                     → changes_a = 5, changes_b = 4
+///   c6:     c.py AND d.py together (once)   → (c,d) co-change = 1 (below the min)
+fn build_cochange_history(repo: &Path) {
+    write(repo, "a.py", "def a0():\n    return 0\n");
+    write(repo, "b.py", "def b0():\n    return 0\n");
+    commit(repo, "c1 a+b");
     for i in 1..4 {
-        write(&repo, "a.py", &format!("def a0():\n    return {i}\n"));
-        write(&repo, "b.py", &format!("def b0():\n    return {i}\n"));
-        commit(&repo, &format!("c{} a+b", i + 1));
+        write(repo, "a.py", &format!("def a0():\n    return {i}\n"));
+        write(repo, "b.py", &format!("def b0():\n    return {i}\n"));
+        commit(repo, &format!("c{} a+b", i + 1));
     }
-    write(&repo, "a.py", "def a0():\n    return 99\n");
-    commit(&repo, "c5 a only");
-    write(&repo, "c.py", "def c0():\n    return 0\n");
-    write(&repo, "d.py", "def d0():\n    return 0\n");
-    commit(&repo, "c6 c+d");
+    write(repo, "a.py", "def a0():\n    return 99\n");
+    commit(repo, "c5 a only");
+    write(repo, "c.py", "def c0():\n    return 0\n");
+    write(repo, "d.py", "def d0():\n    return 0\n");
+    commit(repo, "c6 c+d");
+}
 
-    let out = tmp.path().join("out");
-    std::fs::create_dir_all(&out).expect("mk out");
-    let graph = index(&repo, &out);
-    let store = GraphStore::open_or_create(&graph).expect("open");
-
-    let result = cochange::mine(&store, &repo, &out, Mode::Full, None)
-        .expect("mine")
-        .expect("git repo");
-    assert_eq!(result.mode, "full");
-
-    // (a,b) cleared the thresholds: 4 co-changes, coupling 4/min(5,4)=1.0.
-    assert_eq!(
-        cochange_count(&store, "a.py", "b.py"),
-        Some(4),
-        "a.py <-> b.py must have exactly 4 co-changes"
-    );
-    // Verify the derived properties.
+/// Assert the derived support/coupling/jaccard properties on the a.py<->b.py
+/// FILE_CHANGES_WITH edge produced by `build_cochange_history`.
+fn assert_ab_cochange_props(store: &GraphStore) {
     let props = store
         .execute_query(
             "MATCH (x:File)-[r:FILE_CHANGES_WITH]-(y:File) \
@@ -127,6 +105,36 @@ fn co_change_mining_emits_exact_expected_edges() {
         "jaccard = 4/(5+4-4) = 0.8, got {}",
         row[2]
     );
+}
+
+#[test]
+fn co_change_mining_emits_exact_expected_edges() {
+    let tmp = tempfile::Builder::new()
+        .prefix("cochange_exact_")
+        .tempdir()
+        .expect("temp dir");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).expect("mk repo");
+    init_git(&repo);
+    build_cochange_history(&repo);
+
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&out).expect("mk out");
+    let graph = index(&repo, &out);
+    let store = GraphStore::open_or_create(&graph).expect("open");
+
+    let result = cochange::mine(&store, &repo, &out, Mode::Full, None)
+        .expect("mine")
+        .expect("git repo");
+    assert_eq!(result.mode, "full");
+
+    // (a,b) cleared the thresholds: 4 co-changes, coupling 4/min(5,4)=1.0.
+    assert_eq!(
+        cochange_count(&store, "a.py", "b.py"),
+        Some(4),
+        "a.py <-> b.py must have exactly 4 co-changes"
+    );
+    assert_ab_cochange_props(&store);
 
     // (c,d) had only 1 co-change → below the min-3 threshold → NO edge.
     assert_eq!(
