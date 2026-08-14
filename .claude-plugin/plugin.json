@@ -1,7 +1,7 @@
 {
   "name": "ai-architect-mcp-codebase",
   "description": "Rust MCP server that indexes ANY codebase into a LadybugDB property graph — source in 11 languages with full AST, plus docs/config/binaries as File nodes (.js→Imports, Markdown→References). Resolves imports and call chains, detects communities via Leiden, traces execution flows from entry points, and exposes 26 MCP tools to agents — index_codebase, query_graph, get_symbol, get_impact, get_context, semantic_diff, and more.",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "author": {
     "name": "Clement Deust",
     "email": "admin@ai-architect.tools"

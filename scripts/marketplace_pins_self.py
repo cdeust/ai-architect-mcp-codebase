@@ -42,7 +42,13 @@ FROZEN_PINS = {
 # mcp-codebase v0.10.0 release branch pre-merge: PIN_VERSION_UNPUBLISHED
 # fired on the self pin with no other change able to satisfy it, since
 # no tag can exist before the PR that creates it merges.
-PENDING_SELF_PINS: dict[str, str] = {}
+PENDING_SELF_PINS: dict[str, str] = {
+    "ai-architect-mcp-codebase": (
+        "https://github.com/cdeust/ai-architect-mcp-codebase/pull/256 "
+        "— v0.11.1 release, tag cut on merge; remove this entry once "
+        "v0.11.1 is tagged"
+    ),
+}
 
 
 def check_self_pin(

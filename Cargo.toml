@@ -18,7 +18,7 @@ exclude = ["fuzz"]
 # crates.io, GitHub, release assets, and the MCP Registry. The old executable
 # remains as a compatibility alias for existing scripts and host configs.
 name = "ai-architect-mcp-codebase"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 description = "Cross-platform codebase-intelligence MCP server: tree-sitter parsing into a LadybugDB graph, cross-file resolution, hybrid search, and impact analysis for AI agents."
 license = "MIT"

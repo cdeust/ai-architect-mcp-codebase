@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.1] — Ingestion must never abort on graph size
+
+Patch: a backwards-compatible bug fix — no API change, no new feature.
+
 ### Fixed
 
 - Ingestion no longer aborts when the graph outgrows 8 GiB: the production
