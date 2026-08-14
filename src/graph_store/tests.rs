@@ -303,8 +303,11 @@ fn prod_default_is_valid_per_lbug_constraints() {
     );
     assert_eq!(
         DEFAULT_PROD_MAX_DB_SIZE_BYTES,
-        8 * 1024 * 1024 * 1024,
-        "prod default must be exactly 8 GiB"
+        1u64 << 43,
+        "prod default must equal lbug's own DEFAULT_VM_REGION_MAX_SIZE \
+         (8 TiB, constants.h non-32-bit/non-Android branch): ingestion must \
+         never abort on graph size (bug report 2026-08-14), so production \
+         runs at the engine's architectural ceiling, not below it"
     );
 }
 

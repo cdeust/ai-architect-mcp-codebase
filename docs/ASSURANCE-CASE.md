@@ -110,10 +110,14 @@ embedded database that reserves address space per instance can exhaust it.
   invented) from the host's own cap of 25,000 tokens × 4 chars/token and
   verified against a rejected 324,429-char payload — `src/response_budget.rs`
   carries the derivation and the measurement date.
-- `max_db_size` is resolved through one choke point, `graph_store::config`,
-  with a measured default (8 GiB, sized from 75 real graphs) instead of lbug's
-  8 TiB-per-instance default; an invalid override is rejected with an
-  actionable error rather than silently falling back.
+- `max_db_size` is resolved through one choke point, `graph_store::config`.
+  The production default equals lbug's own 8 TiB-per-instance VM-region
+  ceiling — deliberately, since 2026-08-14: an 8 GiB cap trialled earlier
+  (issue #25) aborted any ingestion whose graph outgrew it, and completing
+  the index outranks bounding an address-space reservation that allocates
+  nothing. Operators who need a bound set `AP_LBUG_MAX_DB_SIZE`; an invalid
+  override is rejected with an actionable error rather than silently
+  falling back.
 - Tests are bounded independently of production through `.cargo/config.toml`'s
   `[env]` table, so the suite cannot mask a production misconfiguration.
 

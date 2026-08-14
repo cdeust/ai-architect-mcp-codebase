@@ -571,9 +571,9 @@ Every LadybugDB `Database` this crate opens reserves virtual address space up fr
 
 1. **`AP_LBUG_TEST_MAX_DB_SIZE`** — test-only, set for every `cargo test` process via `.cargo/config.toml`'s `[env]` table (512 MiB / `2^29`, issue #21). Always wins when present, so `cargo test` behavior is independent of the production knob below.
 2. **`AP_LBUG_MAX_DB_SIZE`** — production override, unset by default. Bytes, must be a power of two and at least 8 MiB (lbug's own `BufferManager::verifySizeParams` floor). An invalid value is rejected with an actionable error at `GraphStore::open_or_create` time — never a silent fallback.
-3. **Default: 8 GiB (`1 << 33` bytes)** when neither var is set. Derivation: measured every lbug graph-DB file reachable on the machine that produced this fix (75 distinct graphs — see the table below); the largest was 495,849,472 bytes (~473 MiB, a cortex-viz index run including `node_modules`). Sizing rule: next power of two ≥ (largest measured × 16), floor 8 GiB. `473 MiB × 16` ≈ 7.39 GiB is below the floor, so the floor (already a power of two) applies.
+3. **Default: 8 TiB (`1 << 43` bytes)** when neither var is set — lbug's own `DEFAULT_VM_REGION_MAX_SIZE`, the engine's per-database VM-region ceiling on every 64-bit desktop/server platform (`lbug-0.19.1/lbug-src/src/include/common/constants.h`). This is an address-space **reservation**, not an allocation: disk and memory grow only with the data actually written. An earlier release capped the default at 8 GiB (issue #25, sized from the measurement table below); that cap **aborted any ingestion whose graph outgrew it** and was repealed on 2026-08-14 — an index must complete regardless of corpus size, multi-TiB included.
 
-Re-measure and raise `AP_LBUG_MAX_DB_SIZE` (or the compiled-in default) if a materially larger workload is observed in production — e.g. indexing a monorepo with `node_modules` included.
+Set `AP_LBUG_MAX_DB_SIZE` to bound the reservation in address-space-constrained environments (e.g. containers with a low `RLIMIT_AS`); the historical measurement table below documents typical graph sizes.
 
 **Measured graph sizes (2026-07-15, `du -k` on every `graph` file found under `~/.cache/cortex/code-graphs/*/graph`, `~/.cortex/ap_graph/graph`, and `**/.prd-gen/graphs/*/graph`), top 10 of 75:**
 

@@ -54,21 +54,31 @@ pub(crate) const MIN_MAX_DB_SIZE_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB — see 
 
 /// Production default for `max_db_size` when `PROD_MAX_DB_SIZE_ENV` is unset.
 ///
-/// Derivation (issue #25): measured every lbug graph-DB file reachable on
-/// the development machine that produced this fix (75 distinct graphs across
-/// `~/.cache/cortex/code-graphs/*/graph`, `~/.cortex/ap_graph/graph`, and
-/// `**/.prd-gen/graphs/*/graph` under active project checkouts — see the
-/// full measurement table in the issue #25 PR description). The largest
-/// observed file was `repro-cortex-viz-deps/graph` at 495,849,472 bytes
-/// (~473 MiB — a cortex-viz index run that included `node_modules`
-/// dependencies, the heaviest workload measured). Sizing rule: next power of
-/// two ≥ (largest measured × 16), floor 8 GiB. `473 MiB × 16` ≈ 7.39 GiB,
-/// which is below the 8 GiB floor, so the floor applies:
-/// `8 GiB = 1 << 33 = 8_589_934_592` bytes, already a power of two.
-/// source: measured 2026-07-15 on this development machine; see PR body for
-/// the `du -k` table. Re-measure and update this constant if a materially
-/// larger workload is observed in production.
-pub const DEFAULT_PROD_MAX_DB_SIZE_BYTES: u64 = 1 << 33; // 8 GiB — see doc comment above.
+/// This is lbug's own architectural ceiling for one database's VM region —
+/// `DEFAULT_VM_REGION_MAX_SIZE = 1 << 43` (8 TiB) on every non-32-bit,
+/// non-Android platform, i.e. every target this server ships for. source:
+/// `lbug-0.19.1/lbug-src/src/include/common/constants.h:57-64` (the
+/// `#ifdef __32BIT__` / `#elif defined(__ANDROID__)` / `#else` ladder) and
+/// `verifySizeParams` (`buffer_manager.cpp:99-112`), which enforces only the
+/// 8 MiB floor and power-of-two — no upper bound. Setting it explicitly to
+/// this value is byte-identical to what lbug substitutes on its own when
+/// `max_db_size` is left at the "unset" sentinel.
+///
+/// History: issue #25 capped this at 8 GiB (sized from 75 measured graphs)
+/// to bound virtual-address-space reservations. That cap turned out to
+/// ABORT any ingestion whose graph outgrew 8 GiB — a hard product bug: an
+/// index must complete regardless of the codebase's size (bug report
+/// 2026-08-14; multi-TiB corpora are a supported workload). The cap is
+/// therefore repealed for production: `max_db_size` is an mmap RESERVATION
+/// of address space, not an allocation — disk and memory grow only with
+/// real data, and the pre-#25 production behavior (this exact value via
+/// lbug's sentinel, single-process server, up to 8 cached stores = 64 TiB
+/// of reservations) shipped for months without a recorded failure. The
+/// failure #25 actually observed was under DOZENS of concurrent `cargo
+/// test` processes, and the fix that holds it is the test-only bound
+/// (`TEST_MAX_DB_SIZE_ENV`, set in `.cargo/config.toml`), which this repeal
+/// does not touch. Operators who need a bound set `PROD_MAX_DB_SIZE_ENV`.
+pub const DEFAULT_PROD_MAX_DB_SIZE_BYTES: u64 = 1 << 43; // 8 TiB — see doc comment above.
 
 /// Parses and validates a `max_db_size` env var value: must be a valid
 /// non-negative integer, at least `MIN_MAX_DB_SIZE_BYTES`, and a power of
