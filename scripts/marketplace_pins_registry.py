@@ -49,12 +49,6 @@ PENDING_REGISTRY: dict[str, str] = {
         "release.yml::publish-mcp-registry (this PR) resolves it on the next "
         "v* tag push; no CI credential exists to publish it sooner"
     ),
-    "io.github.cdeust/ai-architect-mcp-codebase": (
-        "https://github.com/cdeust/ai-architect-mcp-codebase/pull/252 "
-        "— v0.11.0 release; release.yml's publish_registry job updates the "
-        "registry on the v0.11.0 tag push cut on merge; remove this entry "
-        "once the registry serves 0.11.0"
-    ),
 }
 
 
