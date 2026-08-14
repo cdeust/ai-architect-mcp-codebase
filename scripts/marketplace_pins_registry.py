@@ -45,12 +45,6 @@ REGISTRY_API = "https://registry.modelcontextprotocol.io/v0/servers"
 # credentials, or the next tagged release, closes this. Remove this entry
 # once the registry serves >= the repo's authoritative version.
 PENDING_REGISTRY: dict[str, str] = {
-    "io.github.cdeust/ai-architect-mcp-codebase": (
-        "https://github.com/cdeust/ai-architect-mcp-codebase/pull/256 "
-        "— v0.11.1 release; release.yml's publish_registry job updates the "
-        "registry on the v0.11.1 tag push cut on merge; remove this entry "
-        "once the registry serves 0.11.1"
-    ),
     "io.github.cdeust/hypermnesia-mcp": (
         "release.yml::publish-mcp-registry (this PR) resolves it on the next "
         "v* tag push; no CI credential exists to publish it sooner"
