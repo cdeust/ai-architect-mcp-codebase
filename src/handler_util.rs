@@ -387,3 +387,51 @@ pub(crate) fn io_err<E: std::fmt::Display>(msg: E) -> StageErr {
 pub(crate) fn unsafe_id_err(msg: String) -> StageErr {
     ("unsafe_id".to_string(), msg)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // Negative-path coverage for parse_exclude_dirs — PR #250 review, MAJOR
+    // finding: the function is the security boundary for what a caller may
+    // exclude (spec §5.1.4), so every rejection branch is pinned here.
+
+    fn args_with(v: Value) -> Map<String, Value> {
+        let mut m = Map::new();
+        m.insert("exclude_dirs".to_string(), v);
+        m
+    }
+
+    #[test]
+    fn absent_or_null_exclude_dirs_is_the_empty_set() {
+        assert!(parse_exclude_dirs(&Map::new()).unwrap().is_empty());
+        assert!(parse_exclude_dirs(&args_with(Value::Null))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn absolute_path_entry_is_rejected() {
+        let err = parse_exclude_dirs(&args_with(json!(["/etc/secrets"]))).unwrap_err();
+        assert!(err.contains("absolute"), "{err}");
+    }
+
+    #[test]
+    fn parent_dir_component_is_rejected() {
+        let err = parse_exclude_dirs(&args_with(json!(["config/../secrets"]))).unwrap_err();
+        assert!(err.contains(".."), "{err}");
+    }
+
+    #[test]
+    fn non_array_value_is_rejected() {
+        let err = parse_exclude_dirs(&args_with(json!("secrets"))).unwrap_err();
+        assert!(err.contains("array"), "{err}");
+    }
+
+    #[test]
+    fn non_string_entry_is_rejected() {
+        let err = parse_exclude_dirs(&args_with(json!([42]))).unwrap_err();
+        assert!(err.contains("strings"), "{err}");
+    }
+}

@@ -143,6 +143,59 @@ fn excluded_dirs_are_reported_and_never_reach_is_dependency_path() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+fn equivalent_relative_path_spellings_normalize_to_the_same_set() {
+    // PR #250 review, BLOCK finding: "./config/secrets" passed boundary
+    // validation but never matched dir_rel()'s "config/secrets" — the
+    // exclusion silently did nothing. Every syntactically-equivalent
+    // spelling of one subtree must canonicalize to the same set.
+    let canonical = ExcludeSet::new(&["config/secrets".to_string()]);
+    for spelling in [
+        "./config/secrets",
+        "config//secrets",
+        ".//config/secrets/",
+        "config\\secrets",
+        " config/secrets ",
+    ] {
+        assert_eq!(
+            ExcludeSet::new(&[spelling.to_string()]),
+            canonical,
+            "{spelling:?} must canonicalize to the same subtree entry"
+        );
+    }
+    // A separator-carrying entry that canonicalizes to ONE component is
+    // still a PATH entry pinned to the root-level subtree — not a bare name
+    // matched anywhere in the tree.
+    assert_eq!(
+        ExcludeSet::new(&["./secrets".to_string()]),
+        ExcludeSet::new(&["secrets/".to_string()]),
+    );
+    assert_ne!(
+        ExcludeSet::new(&["./secrets".to_string()]),
+        ExcludeSet::new(&["secrets".to_string()]),
+        "a ./-prefixed entry pins the root subtree; a bare name matches anywhere"
+    );
+}
+
+#[test]
+fn dot_prefixed_relative_path_excludes_exactly_the_subtree() {
+    // End-to-end pin for the same BLOCK finding: the natural "./"-prefixed
+    // spelling must prune the subtree at the walk, like its canonical form.
+    let root = build_exclude_fixture();
+    let opts = WalkOptions {
+        language_filter: None,
+        dependency_scope: DependencyScope::None,
+        exclude_dirs: ExcludeSet::new(&["./config/secrets".to_string()]),
+    };
+    let mut got = names(&root, opts);
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["app.rs", "dep.rs", "key.rs"],
+        "./config/secrets must prune exactly the config/secrets subtree"
+    );
+}
+
 /// Restores 0o755 on drop so the fixture stays removable — including when a
 /// panicking assertion unwinds past the locked directory.
 #[cfg(unix)]

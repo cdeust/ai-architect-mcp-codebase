@@ -70,11 +70,16 @@ pub struct ExcludeSet {
 impl ExcludeSet {
     /// Builds an `ExcludeSet` from the raw `exclude_dirs` argument strings.
     /// An entry containing `/` or `\` is treated as a relative path and
-    /// normalized to forward slashes with no leading/trailing slash, so it
-    /// compares equal to the walk's own rel-path formatting (`dir_rel`,
-    /// matching the `\`->`/` convention already used by
-    /// `light_link::rel_id`). An entry with neither is a bare name. Blank
-    /// entries are ignored.
+    /// canonicalized to the walk's own rel-path formatting (`dir_rel`:
+    /// forward slashes, no leading `./`, no doubled or trailing separators —
+    /// the `\`->`/` convention already used by `light_link::rel_id`), so
+    /// every syntactically-equivalent spelling of the same subtree
+    /// (`config/secrets`, `./config/secrets`, `config//secrets/`) compares
+    /// equal. Without that canonicalization a `./`-prefixed entry passed
+    /// boundary validation but never matched, silently excluding nothing —
+    /// PR #250 review, BLOCK finding. An entry with no separator is a bare
+    /// name. Blank entries are ignored. `..` never reaches this type: it is
+    /// rejected at the MCP boundary (`handler_util::parse_exclude_dirs`).
     pub fn new(entries: &[String]) -> Self {
         let mut names = HashSet::new();
         let mut paths = HashSet::new();
@@ -83,14 +88,24 @@ impl ExcludeSet {
             if trimmed.is_empty() {
                 continue;
             }
-            if trimmed.contains('/') || trimmed.contains('\\') {
-                let normalized = trimmed.replace('\\', "/");
-                let normalized = normalized.trim_matches('/');
-                if !normalized.is_empty() {
-                    paths.insert(normalized.to_string());
-                }
-            } else {
+            if !trimmed.contains('/') && !trimmed.contains('\\') {
                 names.insert(trimmed.to_string());
+                continue;
+            }
+            let normalized = trimmed.replace('\\', "/");
+            let parts: Vec<&str> = Path::new(&normalized)
+                .components()
+                .filter_map(|c| match c {
+                    std::path::Component::Normal(p) => p.to_str(),
+                    _ => None,
+                })
+                .collect();
+            if !parts.is_empty() {
+                // A separator-carrying entry stays a PATH entry even when it
+                // canonicalizes to one component ("./secrets", "secrets/"):
+                // per the contract it pins exactly the root-level subtree,
+                // unlike a bare name which matches anywhere.
+                paths.insert(parts.join("/"));
             }
         }
         ExcludeSet { names, paths }
@@ -230,6 +245,12 @@ fn walk_dir_recursive(
         Err(e) => return Err(format!("read_dir {}: {e}", dir.display())),
     };
     for entry in entries {
+        // Entry-level iteration errors stay fatal DELIBERATELY (narrower than
+        // the read_dir degrade above): a directory that refuses to open is a
+        // permissions *configuration* (issue #249's target); an error midway
+        // through a listing that already opened is unexpected filesystem
+        // state (racing mutation, I/O fault) — degrading silently there
+        // would hide real corruption. PR #250 review, scope decision.
         let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
         visit_entry(entry, ctx, collectors, depth)?;
     }
@@ -391,50 +412,57 @@ fn should_skip(name: &str, dependency_scope: DependencyScope) -> bool {
     if dependency_scope.descends_into_dependencies() {
         return false;
     }
-    name.starts_with('.')
-        // Rust
-        || name == "target"
-        // JS / TS / Node
-        || name == "node_modules"
-        // Python
-        || name == "__pycache__"
-        || name == ".venv"
-        || name == "venv"
-        || name == ".pytest_cache"
-        || name == ".mypy_cache"
-        || name == ".tox"
-        || name == ".eggs"
-        // JVM / Android (Gradle / Maven / Eclipse / IntelliJ)
-        || name == "build"
-        || name == "out"
-        || name == ".gradle"
-        || name == ".idea"
-        // Apple (Xcode / SPM / CocoaPods / Carthage)
-        || name == "Pods"
-        || name == "DerivedData"
-        || name == ".build"
-        || name == "Carthage"
-        || name == ".swiftpm"
-        // Go
-        || name == "vendor"
-        // Elixir / Mix and Erlang / rebar3 — `deps` is the standard fetched-
-        // dependency directory for both build tools, and is also used in the
-        // wild as an ad hoc vendored-packages dir. source: measured
-        // 2026-08-06 — indexing the Cortex repo without this entry walked
-        // into its gitignored deps/ (1.1 GB vendored Python site-packages,
-        // including numpy C headers), flooding the log with duplicate-id
-        // warnings and timing out the Cortex->AP MCP client.
-        || name == "deps"
-        // General build output
-        || name == "dist"
-        || name == "bin"
-        || name == "obj"
-        // Test / coverage
-        || name == "coverage"
-        || name == ".nyc_output"
     // Other VCS dirs are filtered by ``starts_with('.')``; ``.git`` itself is
     // handled explicitly above so it is excluded in full-dependency mode too.
+    name.starts_with('.') || DEPENDENCY_DIR_NAMES.contains(&name)
 }
+
+/// Build-output / fetched-dependency / cache directory names pruned by the
+/// default walk (`DependencyScope::None`); `PublicApi`/`Full` descend into
+/// them instead. Dot-prefixed entries are redundant with `should_skip`'s
+/// ``starts_with('.')`` filter and kept for documentation completeness.
+const DEPENDENCY_DIR_NAMES: &[&str] = &[
+    // Rust
+    "target",
+    // JS / TS / Node
+    "node_modules",
+    // Python
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".tox",
+    ".eggs",
+    // JVM / Android (Gradle / Maven / Eclipse / IntelliJ)
+    "build",
+    "out",
+    ".gradle",
+    ".idea",
+    // Apple (Xcode / SPM / CocoaPods / Carthage)
+    "Pods",
+    "DerivedData",
+    ".build",
+    "Carthage",
+    ".swiftpm",
+    // Go
+    "vendor",
+    // Elixir / Mix and Erlang / rebar3 — `deps` is the standard fetched-
+    // dependency directory for both build tools, and is also used in the
+    // wild as an ad hoc vendored-packages dir. source: measured
+    // 2026-08-06 — indexing the Cortex repo without this entry walked
+    // into its gitignored deps/ (1.1 GB vendored Python site-packages,
+    // including numpy C headers), flooding the log with duplicate-id
+    // warnings and timing out the Cortex->AP MCP client.
+    "deps",
+    // General build output
+    "dist",
+    "bin",
+    "obj",
+    // Test / coverage
+    "coverage",
+    ".nyc_output",
+];
 
 /// True when `file_path` lives under a directory that `should_skip` would
 /// prune in `DependencyScope::None` mode — i.e. it is a vendored/build
