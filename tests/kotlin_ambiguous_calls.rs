@@ -38,7 +38,6 @@ fn index_and_resolve(
         .tempdir()
         .expect("create temp dir")
         .keep_managed();
-    let _ = fs::remove_dir_all(&root);
     let src = root.join("src");
     for (rel, body) in files {
         let p = src.join(rel);
