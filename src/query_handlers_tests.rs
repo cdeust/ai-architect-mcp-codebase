@@ -146,6 +146,69 @@ fn readonly_gate_ignores_keywords_inside_literals_and_properties() {
 }
 
 #[test]
+fn readonly_gate_blocks_filesystem_writing_statements() {
+    // fleet-watch#15 — lbug's `PreparedStatement::is_read_only()` classifies
+    // `COPY (..) TO 'file'` as read-only (it reads the database and writes the
+    // FILESYSTEM; measured 2026-08-24 on lbug 0.19.1), so the engine gate in
+    // `execute_read_only_query` cannot block the attacker-named file write.
+    // The lexical gate is the only reliable barrier for data-movement
+    // statements; this pins each keyword.
+    assert_eq!(
+        forbidden_cypher_keyword("COPY (MATCH (n) RETURN n.id) TO '/tmp/x.csv'"),
+        Some("COPY")
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("EXPORT DATABASE '/tmp/exfil'"),
+        Some("EXPORT")
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("IMPORT DATABASE '/tmp/payload'"),
+        Some("IMPORT")
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("ATTACH '/tmp/other.db' AS other"),
+        Some("ATTACH")
+    );
+    // A COPY chained behind a benign read by `;` is caught the same way — the
+    // scan is position-independent (cortex-16 vigilance #1).
+    assert_eq!(
+        forbidden_cypher_keyword(
+            "MATCH (n) RETURN n.id ; COPY (MATCH (m) RETURN m.id) TO '/tmp/x.csv'"
+        ),
+        Some("COPY")
+    );
+    // Masking still protects legitimate reads: `copy`/`export` as a literal or
+    // a property name must not trip the gate (same contract as issue #200).
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (s) WHERE s.name = 'copy' RETURN s"),
+        None
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) RETURN n.copy, n.export"),
+        None
+    );
+
+    // End-to-end: do_query_graph refuses before `GraphStore::open_or_create`,
+    // so no real DB is needed and nothing can reach the filesystem.
+    for q in [
+        "COPY (MATCH (n) RETURN n.id) TO '/tmp/escape.csv'",
+        "EXPORT DATABASE '/tmp/exfil'",
+        "IMPORT DATABASE '/tmp/payload'",
+        "ATTACH '/tmp/other.db' AS other",
+    ] {
+        let args = json!({
+            "graph_path": "/nonexistent/graph",
+            "query": q
+        });
+        let err = do_query_graph(&args).expect_err("must reject data-movement query");
+        assert!(
+            err.contains("read_only_query_required"),
+            "query `{q}` got: {err}"
+        );
+    }
+}
+
+#[test]
 fn readonly_gate_still_rejects_real_mutations_around_literals() {
     // The masking must not become a bypass: a real clause OUTSIDE a literal is
     // still caught, including when a literal or comment precedes it.

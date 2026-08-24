@@ -522,3 +522,89 @@ fn recovery_does_not_follow_a_symlinked_sidecar() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+// fleet-watch#15 (the two tests below): `query_graph` was advertised
+// read-only but nothing enforced it at the engine boundary, and an unbounded
+// plan could pin the single MCP thread. `execute_read_only_query` asks the
+// engine (`PreparedStatement::is_read_only`) and applies a wall-clock bound.
+//
+// Scope: the engine gate covers DATABASE writes (CREATE/DELETE/DROP — however
+// spelled, since the classification comes from the compiled plan, not a
+// keyword scan) and the timeout. It does NOT cover COPY/EXPORT/IMPORT/ATTACH:
+// lbug classifies `COPY (..) TO 'file'` as read-only (reads the DB, writes
+// the filesystem — measured 2026-08-24 on lbug 0.19.1). Those are blocked
+// upstream by the lexical gate; see
+// `readonly_gate_blocks_filesystem_writing_statements` in
+// `query_handlers_tests.rs`.
+
+fn store_with_one_function() -> (tempfile::TempDir, GraphStore) {
+    let dir = tempfile::Builder::new()
+        .prefix("query_read_only_test")
+        .tempdir()
+        .expect("create temp dir");
+    let store = GraphStore::open_or_create(&dir.path().join("testdb")).expect("open_or_create");
+    store.create_schema().expect("create_schema");
+    store
+        .insert_node(
+            NODE_FUNCTION,
+            &[
+                ("id", "'fn1'"),
+                ("name", "'main'"),
+                ("qualified_name", "'crate::main'"),
+                ("start_line", "1"),
+                ("end_line", "10"),
+                ("visibility", "'pub'"),
+                ("is_async", "false"),
+            ],
+        )
+        .expect("insert_node");
+    (dir, store)
+}
+
+#[test]
+fn execute_read_only_query_refuses_db_writes() {
+    let (_dir, store) = store_with_one_function();
+
+    // A benign read query still returns rows under the read-only path.
+    let ok = store
+        .execute_read_only_query("MATCH (n:Function) RETURN n.id", 30_000)
+        .expect("benign read query must succeed");
+    assert_eq!(ok.rows.len(), 1, "benign read must return the one Function");
+
+    // Valid, unambiguous writes/DDL are refused with the engine reason code
+    // — proving the classification comes from the engine (is_read_only), not
+    // a parse failure. Covers the mutation family the blocklist did list plus
+    // forms it did not (DETACH DELETE, DROP). (cortex-16 vigilance #2.)
+    for write in [
+        "CREATE (:Function {id: 'evil'})",
+        "MATCH (n:Function) DETACH DELETE n",
+        "DROP TABLE Function",
+    ] {
+        let err = store
+            .execute_read_only_query(write, 30_000)
+            .err()
+            .unwrap_or_else(|| panic!("write must be refused: {write}"));
+        assert!(
+            err.contains("read_only_query_required"),
+            "write `{write}` must be refused as read_only_query_required, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn execute_read_only_query_timeout_is_scoped_and_reset() {
+    // The timeout is applied and reset without breaking a fast query: a
+    // trivial read under a 1 ms bound still returns its row. (A true
+    // timeout-abort needs a pathological corpus, out of scope for a unit
+    // test; this pins that the bound is set and cleared, not left leaking
+    // on the shared handle.)
+    let (_dir, store) = store_with_one_function();
+    let fast = store
+        .execute_read_only_query("MATCH (n:Function) RETURN n.id", 1)
+        .expect("a fast read must still succeed under a tiny timeout");
+    assert_eq!(
+        fast.rows.len(),
+        1,
+        "tiny timeout must not drop a fast result"
+    );
+}

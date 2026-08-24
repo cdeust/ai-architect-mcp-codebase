@@ -48,11 +48,36 @@ pub(crate) fn run_query_graph(arguments: &Value) -> Value {
 // whole-word, case-insensitive match. This is a conservative allowlist-by-
 // blocklist: the engine still validates syntax, we just refuse to hand it
 // anything that could mutate state, load external data, or call procedures.
+//
+// COPY/EXPORT/IMPORT/ATTACH (fleet-watch#15): these data-movement statements
+// MUST be blocked here, because the engine gate downstream cannot catch them —
+// lbug's `PreparedStatement::is_read_only()` classifies `COPY (..) TO 'file'`
+// as read-only (it reads the database and writes the FILESYSTEM), measured
+// 2026-08-24 against lbug 0.19.1 in `execute_read_only_query`'s test. The
+// lexical gate is therefore the only reliable barrier against an attacker-
+// named file write; the engine gate remains as defense in depth for DB
+// mutations (CREATE/DELETE/DROP reachable through syntax this scan misses).
 // ---------------------------------------------------------------------------
 
 pub(crate) const FORBIDDEN_CYPHER_KEYWORDS: &[&str] = &[
-    "CREATE", "DELETE", "MERGE", "SET", "REMOVE", "DROP", "ALTER", "CALL", "LOAD",
+    "CREATE", "DELETE", "MERGE", "SET", "REMOVE", "DROP", "ALTER", "CALL", "LOAD", "COPY",
+    "EXPORT", "IMPORT", "ATTACH",
 ];
+
+/// Wall-clock bound (milliseconds) applied to a single `query_graph` execution
+/// and then reset. Bounds a pathological read plan — e.g. an unbounded
+/// variable-length `MATCH (a)-[*]->(b)` whose `LIMIT` caps rows, not traversal
+/// work — so it cannot pin the single-threaded MCP worker. The MCP server is
+/// mono-thread, so one unbounded query freezes every subsequent request; the
+/// row-`LIMIT` and byte-page guards bound the RESULT, not the engine's
+/// traversal effort.
+///
+/// source: provisional heuristic — a legitimate interactive graph query
+/// returns in well under a second on the corpora this server indexes; 30_000 ms
+/// is a generous ceiling only a pathological plan reaches. Operator-tunable if
+/// a real workload is found to need longer (calibration: raise only against a
+/// measured legitimate query that exceeds it).
+pub(crate) const READ_QUERY_TIMEOUT_MS: u64 = 30_000;
 
 /// Returns the first forbidden keyword found in `query`, or None if the query
 /// is safe. Matching is whole-word, ASCII case-insensitive, and considers only
@@ -309,25 +334,7 @@ pub(crate) fn do_query_graph(arguments: &Value) -> Result<Value, String> {
         return Ok(query_missed_response(graph_path));
     }
 
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or("missing required field 'query'")?;
-    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
-
-    // source: H3 fix — query_graph is a read-only tool. Reject any query
-    // containing mutation keywords BEFORE any filesystem check, so a mutation
-    // attempt is refused even for a nonexistent path (security ordering).
-    if let Some(bad) = forbidden_cypher_keyword(query) {
-        return Err(format!(
-            "read_only_query_required: query_graph is read-only; \
-             found forbidden keyword: {bad}"
-        ));
-    }
-
-    if !graph_path.exists() {
-        return Err(format!("graph_path does not exist: {graph_str}"));
-    }
+    let (query, offset) = gated_cypher_request(args, graph_path, graph_str)?;
 
     // Bound caller-supplied Cypher: if it has no LIMIT clause, inject one so an
     // unbounded MATCH cannot return enough rows to blow the host's MCP
@@ -339,40 +346,96 @@ pub(crate) fn do_query_graph(arguments: &Value) -> Result<Value, String> {
     // re-opening the embedded DB per request. Cache revalidates on-disk
     // staleness on every call. source: graph_cache module docs.
     let store = graph_cache::open_cached(graph_path)?;
-    let qr = store.execute_query(&effective_query)?;
-    let elapsed_ms = start.elapsed().as_millis() as u64;
+    // Engine-authoritative read-only + wall-clock guard — second layer behind
+    // the lexical pre-filter above; division of labor documented on
+    // FORBIDDEN_CYPHER_KEYWORDS. source: fleet-watch#15.
+    let qr = store.execute_read_only_query(&effective_query, READ_QUERY_TIMEOUT_MS)?;
 
-    // Cursor stability for query_graph is the caller's responsibility, and we
-    // report whether it holds rather than silently shipping an unsafe cursor.
-    // The row order here is whatever the caller's Cypher produces. Ladybug (like
-    // Cypher generally) does NOT guarantee a stable row order WITHOUT an
-    // `ORDER BY` clause — the scan order is an engine implementation detail. We
-    // cannot inject an `ORDER BY` into arbitrary Cypher safely (RETURN items may
-    // be aggregates/expressions with no addressable sort key) the way we inject
-    // `LIMIT`, so we instead detect whether the caller declared one and surface
-    // `order_stable` so a client knows whether paging over `offset` is safe.
-    // source: Cypher/Kuzu ordering semantics — without ORDER BY, result order is
-    // unspecified; see response_budget::BoundedPage docs for why an unstable
-    // order makes a cursor skip/duplicate rows.
-    let order_stable = has_order_by_clause(query);
+    let mut out = paged_query_response(
+        &qr,
+        QueryPageMeta {
+            offset,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+            // Cursor stability for query_graph is the caller's responsibility,
+            // and we report whether it holds rather than silently shipping an
+            // unsafe cursor — see paged_query_response.
+            order_stable: has_order_by_clause(query),
+            limit_injected,
+        },
+    );
+    shape_token_surface(args, &mut out);
+    Ok(out)
+}
 
-    // Second-stage guard: even with the row LIMIT, wide rows (e.g. `RETURN n`
-    // serializing whole nodes) can exceed the byte budget. Page by serialized
-    // size from `offset` so the caller can pace through a large result set; the
-    // page is cursor-safe only when `order_stable` is true (see above).
+/// Extracts and gates the Cypher request: `query` is required and must pass
+/// the lexical read-only filter BEFORE any filesystem check, so a mutation
+/// attempt is refused even for a nonexistent path (source: H3 fix — security
+/// ordering); the graph must then exist on disk. Returns `(query, offset)`.
+fn gated_cypher_request<'a>(
+    args: &'a serde_json::Map<String, Value>,
+    graph_path: &Path,
+    graph_str: &str,
+) -> Result<(&'a str, u64), String> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or("missing required field 'query'")?;
+    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+    if let Some(bad) = forbidden_cypher_keyword(query) {
+        return Err(format!(
+            "read_only_query_required: query_graph is read-only; \
+             found forbidden keyword: {bad}"
+        ));
+    }
+    if !graph_path.exists() {
+        return Err(format!("graph_path does not exist: {graph_str}"));
+    }
+    Ok((query, offset))
+}
+
+/// Response-envelope metadata for one `query_graph` page, grouped so
+/// `paged_query_response` takes one parameter object (§4.4).
+struct QueryPageMeta {
+    offset: u64,
+    elapsed_ms: u64,
+    order_stable: bool,
+    limit_injected: bool,
+}
+
+/// Builds the paged `query_graph` response envelope.
+///
+/// Row order is whatever the caller's Cypher produces. Ladybug (like Cypher
+/// generally) does NOT guarantee a stable row order WITHOUT an `ORDER BY`
+/// clause — the scan order is an engine implementation detail. We cannot
+/// inject an `ORDER BY` into arbitrary Cypher safely (RETURN items may be
+/// aggregates/expressions with no addressable sort key) the way we inject
+/// `LIMIT`, so the caller detects whether one was declared and passes
+/// `order_stable` so a client knows whether paging over `offset` is safe.
+/// source: Cypher/Kuzu ordering semantics — without ORDER BY, result order is
+/// unspecified; see response_budget::BoundedPage docs for why an unstable
+/// order makes a cursor skip/duplicate rows.
+///
+/// Second-stage guard: even with the row LIMIT, wide rows (e.g. `RETURN n`
+/// serializing whole nodes) can exceed the byte budget. Page by serialized
+/// size from `offset` so the caller can pace through a large result set; the
+/// page is cursor-safe only when `order_stable` is true.
+fn paged_query_response(qr: &crate::graph_store::QueryResult, meta: QueryPageMeta) -> Value {
     let all_rows: Vec<Value> = qr
         .rows
         .iter()
         .map(|row| Value::Array(row.iter().map(|c| json!(c)).collect()))
         .collect();
-    let page =
-        response_budget::bound_values_paged(all_rows, offset, response_budget::MAX_RESPONSE_CHARS);
+    let page = response_budget::bound_values_paged(
+        all_rows,
+        meta.offset,
+        response_budget::MAX_RESPONSE_CHARS,
+    );
     let returned_rows = &page.items;
 
     // Rebuild the human-readable string from only the rows on THIS page (the
     // window [offset, offset + returned_count)) so it stays within budget
     // alongside the structured `rows`.
-    let start = (offset as usize).min(qr.rows.len());
+    let start = (meta.offset as usize).min(qr.rows.len());
     let returned_string_rows: Vec<Vec<String>> = qr
         .rows
         .iter()
@@ -388,33 +451,43 @@ pub(crate) fn do_query_graph(arguments: &Value) -> Result<Value, String> {
         "columns": qr.columns,
         "rows": returned_rows,
         "result": format_query_result(&qr.columns, &returned_string_rows),
-        "elapsed_ms": elapsed_ms,
+        "elapsed_ms": meta.elapsed_ms,
         "total_count": page.total_count,
         "returned_count": returned_rows.len(),
-        "offset": offset,
+        "offset": meta.offset,
         "truncated": page.truncated,
-        "order_stable": order_stable,
-        "limit_injected": limit_injected,
+        "order_stable": meta.order_stable,
+        "limit_injected": meta.limit_injected,
     });
-    // Token-surface shaping (issue #56). query_graph already emits `rows` as
-    // compact arrays with `columns` declared once — the native tabular shape. The
-    // token hog is the human-readable `result` string that duplicates the rows,
-    // so the compact modes drop it:
-    //   * detail:"ids"   → collapse to the FIRST column's values (a bare id list)
-    //                       and drop `result` — the cheap "which nodes match" sweep.
-    //   * format:"tabular" → keep columns+rows, drop `result`.
-    //   * default (full/json) → unchanged (columns + rows + result string).
+    if let Some(next) = page.next_offset {
+        out["next_offset"] = json!(next);
+    }
+    out
+}
+
+/// Token-surface shaping (issue #56). query_graph already emits `rows` as
+/// compact arrays with `columns` declared once — the native tabular shape. The
+/// token hog is the human-readable `result` string that duplicates the rows,
+/// so the compact modes drop it:
+///   * detail:"ids" → collapse to the FIRST column's values (a bare id
+///     list) and drop `result` — the cheap "which nodes match" sweep.
+///   * format:"tabular" → keep columns+rows, drop `result`.
+///   * default (full/json) → unchanged (columns + rows + result string).
+fn shape_token_surface(args: &serde_json::Map<String, Value>, out: &mut Value) {
     match token_surface::parse_detail(args) {
         token_surface::Detail::Ids => {
-            let ids: Vec<Value> = returned_rows
-                .iter()
-                .filter_map(|r| r.as_array().and_then(|cells| cells.first()).cloned())
-                .collect();
-            let first_col: Vec<Value> = qr
-                .columns
-                .first()
+            let ids: Vec<Value> = out["rows"]
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|r| r.as_array().and_then(|cells| cells.first()).cloned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let first_col: Vec<Value> = out["columns"]
+                .as_array()
+                .and_then(|c| c.first())
                 .cloned()
-                .map(|c| json!(c))
                 .into_iter()
                 .collect();
             if let Some(obj) = out.as_object_mut() {
@@ -439,10 +512,6 @@ pub(crate) fn do_query_graph(arguments: &Value) -> Result<Value, String> {
             }
         },
     }
-    if let Some(next) = page.next_offset {
-        out["next_offset"] = json!(next);
-    }
-    Ok(out)
 }
 
 /// Maximum rows injected into a caller's Cypher when it declares no LIMIT.
