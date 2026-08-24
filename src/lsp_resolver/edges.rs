@@ -43,19 +43,9 @@ pub(super) fn try_add_lsp_edge(
         None => return false,
     };
 
-    // Build the edge type. Calls is Function|Method -> Function|Method;
-    // ctor/variant/type-use targets degrade to Uses to preserve the
-    // dependency edge instead of dropping it. source: stages/stage-3b.md §2.
-    let rel_type = match (site.caller_label.as_str(), target.label.as_str()) {
-        ("Function" | "Method", "Function" | "Method") => {
-            format!("Calls_{}_{}", site.caller_label, target.label)
-        }
-        ("Function" | "Method", "Struct" | "Enum" | "Trait" | "TypeAlias") => {
-            format!("Uses_{}_{}", site.caller_label, target.label)
-        }
-        _ => return false,
+    let Some(rel_type) = rel_table_for(&site.caller_label, &target.label) else {
+        return false;
     };
-
     // Schema guard: dynamically formatted rel tables can outrun the
     // schema when a new caller/target label combination appears. Drop
     // rather than abort.
@@ -87,6 +77,24 @@ pub(super) fn try_add_lsp_edge(
             ],
         )
         .is_ok()
+}
+
+/// Which relationship table a caller→definition pair belongs in.
+///
+/// Calls is Function|Method -> Function|Method; ctor/variant/type-use targets
+/// degrade to Uses so the dependency edge survives instead of being dropped.
+/// Any other pair has no table and yields None.
+/// source: stages/stage-3b.md §2.
+fn rel_table_for(caller_label: &str, target_label: &str) -> Option<String> {
+    match (caller_label, target_label) {
+        ("Function" | "Method", "Function" | "Method") => {
+            Some(format!("Calls_{caller_label}_{target_label}"))
+        }
+        ("Function" | "Method", "Struct" | "Enum" | "Trait" | "TypeAlias") => {
+            Some(format!("Uses_{caller_label}_{target_label}"))
+        }
+        _ => None,
+    }
 }
 
 /// Maps a definition URI onto the codebase-root-relative path the indexer

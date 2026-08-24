@@ -184,17 +184,13 @@ fn get_impact_pages_callers_through_everything() {
 /// Here the same symbol is queried by its stored qualified_name and by a
 /// `src/`-prefixed variant the stored form does not carry; both must return the
 /// identical, non-empty caller set.
-#[test]
-fn get_impact_on_a_file_target_is_not_symbol_not_found() {
-    // Review finding 2 (regression), end to end. `get_impact` answers
-    // file-level fan-in for a File target (issue #205), but the resolve gate
-    // added in this branch probed only the eight symbol labels — so every
-    // File target came back `symbol_not_found` and that whole capability was
-    // unreachable through the tool.
-    let (_guard, graph) = build_fixture("impact_file_target");
-    let gp = graph.to_str().unwrap().to_string();
-
-    let store = graph_store::GraphStore::open_or_create(&graph).unwrap();
+///
+/// Adds one `Imports_File_File` edge from `svc.rs` to `helpers.rs` and returns
+/// the latter's `File.id`. File-level fan-in is what a File target is FOR, so
+/// the fixture states it explicitly rather than depending on which import
+/// shape the resolver happens to emit for `use crate::helpers;`.
+fn with_file_level_import_edge(graph: &std::path::Path) -> String {
+    let store = graph_store::GraphStore::open_or_create(graph).unwrap();
     let file_id = |name: &str| -> String {
         let qr = store
             .execute_query(&format!(
@@ -207,9 +203,6 @@ fn get_impact_on_a_file_target_is_not_symbol_not_found() {
     };
     let helpers = file_id("helpers.rs");
     let svc = file_id("svc.rs");
-    // File-level fan-in is what a File target is FOR, so give the fixture one
-    // edge of it explicitly rather than depending on which import shape the
-    // resolver happens to emit for `use crate::helpers;`.
     store
         .insert_edge(
             "Imports_File_File",
@@ -218,7 +211,19 @@ fn get_impact_on_a_file_target_is_not_symbol_not_found() {
             &[("confidence", "1.0")],
         )
         .expect("insert file-level import edge");
-    drop(store);
+    helpers
+}
+
+#[test]
+fn get_impact_on_a_file_target_is_not_symbol_not_found() {
+    // Review finding 2 (regression), end to end. `get_impact` answers
+    // file-level fan-in for a File target (issue #205), but the resolve gate
+    // added in this branch probed only the eight symbol labels — so every
+    // File target came back `symbol_not_found` and that whole capability was
+    // unreachable through the tool.
+    let (_guard, graph) = build_fixture("impact_file_target");
+    let gp = graph.to_str().unwrap().to_string();
+    let helpers = with_file_level_import_edge(&graph);
 
     let out = do_get_impact(&json!({"graph_path": gp, "qualified_name": helpers.clone()})).unwrap();
     assert_eq!(

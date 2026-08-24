@@ -22,28 +22,30 @@ pub(super) struct UnresolvedCallSite {
     pub(super) col: u64,
 }
 
+/// Every call site the static 3b resolver left open.
+///
+/// fleet-watch#18 adjacent defect (b): "unresolved" was previously decided at
+/// CALLER granularity — "does the enclosing function have ANY outgoing Calls
+/// edge" — so a caller with ten sites and one static resolution had its nine
+/// remaining sites skipped. The per-site marker the static resolver actually
+/// maintains is `CallSite.is_resolved` (§10.4, flipped by `resolver::calls`
+/// via `mark_nodes_resolved`); this filters on it directly.
+///
+/// Review finding 4 — two ways a graph indexed by an older build defeats that
+/// filter, both measured 2026-08-24 on lbug 0.19.1:
+///
+///   * the COLUMN may be absent, and referencing a missing property is a hard
+///     binder error, not an empty result — it took the whole tool down.
+///     `ensure_node_column` adds it (with a DEFAULT, which backfills the
+///     existing rows) and is a no-op once present.
+///   * the VALUE may be NULL, from an indexer that predates §10.4's "the
+///     indexer writes false". Under three-valued logic `NULL = false` is NULL,
+///     so those rows were filtered OUT — the pass collected nothing and
+///     reported a successful zero-site run. A never-attempted site is
+///     unresolved, which is exactly what `IS NULL` says here.
 pub(super) fn collect_unresolved_callsites(
     store: &GraphStore,
 ) -> Result<Vec<UnresolvedCallSite>, String> {
-    // fleet-watch#18 adjacent defect (b): "unresolved" was previously decided
-    // at CALLER granularity — "does the enclosing function have ANY outgoing
-    // Calls edge" — so a caller with ten sites and one static resolution had
-    // its nine remaining sites skipped. The per-site marker the static
-    // resolver actually maintains is `CallSite.is_resolved` (§10.4, flipped
-    // by resolver::calls via mark_nodes_resolved); filter on it directly.
-    //
-    // Review finding 4 — two ways a graph indexed by an older build defeats
-    // that filter, both measured 2026-08-24 on lbug 0.19.1:
-    //
-    //   * the COLUMN may be absent, and referencing a missing property is a
-    //     hard binder error, not an empty result — it took the whole tool
-    //     down. `ensure_node_column` adds it (with a DEFAULT, which backfills
-    //     the existing rows) and is a no-op once present.
-    //   * the VALUE may be NULL, from an indexer that predates §10.4's "the
-    //     indexer writes false". Under three-valued logic `NULL = false` is
-    //     NULL, so those rows were filtered OUT — the pass collected nothing
-    //     and reported a successful zero-site run. A never-attempted site is
-    //     unresolved, which is exactly what `IS NULL` says here.
     store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
     let qr = store.execute_query(
         "MATCH (cs:CallSite) WHERE cs.is_resolved IS NULL OR cs.is_resolved = false \

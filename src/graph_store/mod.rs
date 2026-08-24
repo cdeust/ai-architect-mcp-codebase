@@ -410,4 +410,6 @@ impl GraphStore {
 }
 
 #[cfg(test)]
+mod read_only_tests;
+#[cfg(test)]
 mod tests;

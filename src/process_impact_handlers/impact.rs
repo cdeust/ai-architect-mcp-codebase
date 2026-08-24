@@ -262,22 +262,7 @@ fn impact_envelope(
     qn: &str,
     args: &serde_json::Map<String, Value>,
 ) -> Value {
-    let detail = token_surface::parse_detail(args);
-    let format = token_surface::parse_format(args);
-    let render = |items: &[Value]| {
-        token_surface::render_list(items, IMPACT_COLUMNS, "qualified_name", &detail, &format)
-    };
-    let callers_view = render(&sections.callers.items);
-    let importers_view = render(&sections.importers.items);
-    let users_view = render(&sections.users.items);
-    let implementors_view = render(&sections.implementors.items);
-    let references_view = render(&sections.references.items);
-    let any_truncated = sections.callers.truncated
-        || sections.importers.truncated
-        || sections.users.truncated
-        || sections.implementors.truncated
-        || sections.references.truncated;
-
+    let views = SectionViews::render(sections, args);
     let mut out = json!({
         "stage": 3,
         "status": "ok",
@@ -287,31 +272,31 @@ fn impact_envelope(
         "communities_affected": impact.communities.len(),
         "processes": impact.processes,
         "processes_affected": impact.processes.len(),
-        "detail": callers_view.detail,
-        "format": callers_view.format,
-        "callers": callers_view.value,
+        "detail": views.callers.detail,
+        "format": views.callers.format,
+        "callers": views.callers.value,
         "callers_total": sections.callers.total_count,
         "offset": sections.offset,
         "primary_list": "callers",
         "secondary_lists_paged": false,
-        "importers": importers_view.value,
+        "importers": views.importers.value,
         "importers_total": sections.importers.total_count,
-        "users": users_view.value,
+        "users": views.users.value,
         "users_total": sections.users.total_count,
-        "implementors": implementors_view.value,
+        "implementors": views.implementors.value,
         "implementors_total": sections.implementors.total_count,
-        "references": references_view.value,
+        "references": views.references.value,
         "references_total": sections.references.total_count,
         "dependents_total": sections.dependents_total,
         "counts": {
             "code": sections.dependents_total,
             "references": sections.references_total_full,
         },
-        "truncated": any_truncated,
+        "truncated": views.any_truncated(sections),
         "epistemic": impact.epistemic.as_str(),
         "epistemic_reasons": impact.epistemic_reasons,
     });
-    if callers_view.columns.is_some() {
+    if views.callers.columns.is_some() {
         // One header covers all homogeneous sections.
         out["columns"] = json!(IMPACT_COLUMNS);
     }
@@ -319,6 +304,44 @@ fn impact_envelope(
         out["next_offset"] = json!(next);
     }
     out
+}
+
+/// The five reverse-dependency sections rendered under one detail/format
+/// choice. Split out of `impact_envelope` so the envelope reads as the shape
+/// it emits rather than as rendering plus shape (§4.2).
+struct SectionViews {
+    callers: token_surface::ListView,
+    importers: token_surface::ListView,
+    users: token_surface::ListView,
+    implementors: token_surface::ListView,
+    references: token_surface::ListView,
+}
+
+impl SectionViews {
+    fn render(sections: &ImpactSections, args: &serde_json::Map<String, Value>) -> Self {
+        let detail = token_surface::parse_detail(args);
+        let format = token_surface::parse_format(args);
+        let render = |items: &[Value]| {
+            token_surface::render_list(items, IMPACT_COLUMNS, "qualified_name", &detail, &format)
+        };
+        SectionViews {
+            callers: render(&sections.callers.items),
+            importers: render(&sections.importers.items),
+            users: render(&sections.users.items),
+            implementors: render(&sections.implementors.items),
+            references: render(&sections.references.items),
+        }
+    }
+
+    /// True when ANY section was cut, so the envelope's `truncated` flag
+    /// covers the whole response rather than its primary list alone.
+    fn any_truncated(&self, sections: &ImpactSections) -> bool {
+        sections.callers.truncated
+            || sections.importers.truncated
+            || sections.users.truncated
+            || sections.implementors.truncated
+            || sections.references.truncated
+    }
 }
 
 /// Issue #58: the symbol's FILE co-change partners are impact candidates the
