@@ -123,3 +123,82 @@ fn test_no_naive_cypher_replace_escape_outside_allowlist() {
         violations.join("\n")
     );
 }
+
+/// True when `line` interpolates a value directly INTO a single-quoted Cypher
+/// literal — the `= '{var}'` shape. The naive-escape guard above only catches
+/// the `.replace('\'', "\\'")` idiom; fleet-watch#16's live sites
+/// (`search/mod.rs` `lookup_community`/`lookup_processes`) used neither
+/// `.replace` nor `cypher_str` — they concatenated `node_id` (which embeds a
+/// file path) straight inside the quotes: `WHERE n.id = '{node_id}'`. The safe
+/// idiom is `WHERE n.id = {esc}` where `esc = cypher_str(node_id)` already
+/// carries its own quotes, so a correct production Cypher builder never places
+/// a `{...}` interpolation *inside* single quotes.
+fn has_equals_quoted_interpolation(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        // Look for the two-byte opener `'{` (quote immediately before a brace).
+        if bytes[i] == b'\'' && bytes[i + 1] == b'{' {
+            // Walk back over whitespace to the operator that precedes it.
+            let mut j = i;
+            while j > 0 && (bytes[j - 1] == b' ' || bytes[j - 1] == b'\t') {
+                j -= 1;
+            }
+            if j > 0 && bytes[j - 1] == b'=' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// fleet-watch#16 second guard: a production Cypher builder must never
+/// interpolate a value into a single-quoted literal (`= '{var}'`) — that is
+/// exactly the injection the `search/mod.rs` sites shipped, invisible to the
+/// `.replace`-based guard above. Test/fixture files are exempt: they build
+/// ad-hoc queries from test-local, non-attacker-controlled literals.
+#[test]
+fn test_no_raw_value_interpolation_into_cypher_literal() {
+    let root = src_root();
+    let mut files = Vec::new();
+    collect_rs_files(&root, &mut files);
+    assert!(
+        !files.is_empty(),
+        "guard found zero .rs files under {root:?}"
+    );
+
+    let mut violations = Vec::new();
+    for path in &files {
+        let rel = path.strip_prefix(&root).unwrap_or(path);
+        // Exempt test code: `*_tests.rs` and any `tests.rs` module build
+        // queries from controlled literals, not from indexed file paths.
+        let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        if name == "tests.rs" || name.ends_with("_tests.rs") {
+            continue;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        for (line_no, line) in content.lines().enumerate() {
+            if has_equals_quoted_interpolation(line) {
+                violations.push(format!(
+                    "{}:{}: {}",
+                    rel.display(),
+                    line_no + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "raw value interpolated into a single-quoted Cypher literal (`= '{{..}}'`) \
+         reintroduced in production code — wrap the value with graph_store::cypher_str \
+         and drop the surrounding quotes (source: fleet-watch#16, the \
+         `search/mod.rs` lookup_community/lookup_processes sites):\n{}",
+        violations.join("\n")
+    );
+}

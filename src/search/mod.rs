@@ -895,9 +895,14 @@ fn load_process_counts(store: &GraphStore) -> HashMap<String, usize> {
 
 fn lookup_community(store: &GraphStore, label: &str, node_id: &str) -> Option<String> {
     let rel = format!("MemberOf_{label}_Community");
+    // fleet-watch#16: `node_id` is `qualified_name`, which embeds the file path,
+    // so a maliciously-named indexed file would inject Cypher on this hot search
+    // path. Route it through `cypher_str` (the returned value is already
+    // single-quoted) like every other site — never interpolate it raw.
+    let id = cypher_str(node_id);
     let cypher = format!(
         "MATCH (n:{label})-[:{rel}]->(c:Community) \
-         WHERE n.id = '{node_id}' RETURN c.id LIMIT 1"
+         WHERE n.id = {id} RETURN c.id LIMIT 1"
     );
     if let Ok(qr) = store.execute_query(&cypher) {
         if !qr.rows.is_empty() && !qr.rows[0].is_empty() {
@@ -913,9 +918,11 @@ fn lookup_processes(store: &GraphStore, label: &str, node_id: &str) -> Vec<Strin
         return names;
     }
     let rel = format!("ParticipatesIn_{label}_Process");
+    // fleet-watch#16: escape the file-path-bearing `node_id` (see lookup_community).
+    let id = cypher_str(node_id);
     let cypher = format!(
         "MATCH (n:{label})-[:{rel}]->(p:Process) \
-         WHERE n.id = '{node_id}' RETURN p.name"
+         WHERE n.id = {id} RETURN p.name"
     );
     if let Ok(qr) = store.execute_query(&cypher) {
         for row in &qr.rows {
