@@ -8,7 +8,7 @@
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
@@ -111,6 +111,37 @@ pub fn path_to_file_uri(path: &Path) -> String {
         }
     }
     out
+}
+
+/// Inverse of `path_to_file_uri`: strips the `file://` scheme and
+/// percent-decodes every `%XX` escape back to its byte (UTF-8 lossy on
+/// invalid sequences — a server-sent URI for a real file decodes cleanly).
+/// Returns None when `uri` is not a `file://` URI. A malformed escape
+/// (truncated or non-hex `%XX`) is kept verbatim rather than dropped, so the
+/// resulting path simply fails the caller's existence/prefix checks instead
+/// of silently pointing somewhere else.
+pub fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
+    let encoded = uri.strip_prefix("file://")?;
+    let bytes = encoded.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let is_escape = bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit();
+        if is_escape {
+            let hex = &encoded[i + 1..i + 3];
+            // provably in-range: both chars checked is_ascii_hexdigit above
+            let byte = u8::from_str_radix(hex, 16).unwrap_or(b'%');
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Some(PathBuf::from(String::from_utf8_lossy(&out).into_owned()))
 }
 
 pub fn is_command_available(command: &str) -> bool {
@@ -662,6 +693,32 @@ mod tests {
         // `?` and `#` must be encoded (URL-reserved).
         let uri = path_to_file_uri(Path::new("/tmp/a?b#c"));
         assert_eq!(uri, "file:///tmp/a%3Fb%23c");
+    }
+
+    #[test]
+    fn test_file_uri_to_path_round_trips_and_rejects_non_file() {
+        // fleet-watch#18 — the decoder must invert path_to_file_uri exactly,
+        // for every byte class the encoder escapes.
+        for p in [
+            "/tmp/a b/c",
+            "/Users/x/foo-bar_baz.ts",
+            "/tmp/a?b#c",
+            "/tmp/héllo/ä.rs",
+        ] {
+            let uri = path_to_file_uri(Path::new(p));
+            assert_eq!(
+                file_uri_to_path(&uri),
+                Some(PathBuf::from(p)),
+                "round-trip failed for {p}"
+            );
+        }
+        // Non-file schemes are refused.
+        assert_eq!(file_uri_to_path("https://example.com/x"), None);
+        // A malformed escape is kept verbatim, not dropped or misparsed.
+        assert_eq!(
+            file_uri_to_path("file:///tmp/a%zz"),
+            Some(PathBuf::from("/tmp/a%zz"))
+        );
     }
 
     #[test]

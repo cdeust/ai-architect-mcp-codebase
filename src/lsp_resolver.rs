@@ -72,9 +72,21 @@ pub fn resolve_with_lsp(
     // Build a position index of graph nodes for mapping definition results
     let node_index = build_node_position_index(store)?;
 
+    // fleet-watch#18: definition URIs come back absolute (and on macOS the
+    // server may answer under /private/var while the caller passed /var, or
+    // vice versa). Canonicalize the root ONCE so uri_to_relative_path can
+    // strip it from the canonicalized definition path and recover the same
+    // root-relative key the indexer used.
+    let canonical_root =
+        std::fs::canonicalize(codebase_path).unwrap_or_else(|_| codebase_path.to_path_buf());
+
     let mut resolved_count = 0u64;
     let mut failed_count = 0u64;
     let mut skipped_count = 0u64;
+    // §10.4 invariant: is_resolved flips when the callee resolved to a graph
+    // target, whichever pass found it — mirrors resolver::calls. Without this
+    // a rerun re-queries every LSP-resolved site.
+    let mut newly_resolved: Vec<String> = Vec::new();
     let per_request_timeout = Duration::from_secs(5);
 
     for (file_path, sites) in &by_file {
@@ -104,8 +116,9 @@ pub fn resolve_with_lsp(
             let result = client.get_definition(&file_uri, site.line, site.col);
             match result {
                 Ok(Some(def)) => {
-                    if try_add_lsp_edge(store, site, &def, &node_index) {
+                    if try_add_lsp_edge(store, site, &def, &node_index, &canonical_root) {
                         resolved_count += 1;
+                        newly_resolved.push(site.id.clone());
                     } else {
                         failed_count += 1;
                     }
@@ -131,6 +144,9 @@ pub fn resolve_with_lsp(
 
     let _ = client.shutdown();
 
+    let id_refs: Vec<&str> = newly_resolved.iter().map(|s| s.as_str()).collect();
+    store.mark_nodes_resolved("CallSite", &id_refs)?;
+
     Ok(LspResolutionResult {
         resolved_count,
         failed_count,
@@ -144,6 +160,7 @@ pub fn resolve_with_lsp(
 // ---------------------------------------------------------------------------
 
 struct UnresolvedCallSite {
+    id: String,
     caller_qn: String,
     caller_label: String,
     #[allow(dead_code)] // retained for diagnostics and future logging
@@ -154,9 +171,16 @@ struct UnresolvedCallSite {
 }
 
 fn collect_unresolved_callsites(store: &GraphStore) -> Result<Vec<UnresolvedCallSite>, String> {
-    // Get all CallSite nodes
-    let qr =
-        store.execute_query("MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.line, cs.col")?;
+    // fleet-watch#18 adjacent defect (b): "unresolved" was previously decided
+    // at CALLER granularity — "does the enclosing function have ANY outgoing
+    // Calls edge" — so a caller with ten sites and one static resolution had
+    // its nine remaining sites skipped. The per-site marker the static
+    // resolver actually maintains is `CallSite.is_resolved` (§10.4, flipped
+    // by resolver::calls via mark_nodes_resolved); filter on it directly.
+    let qr = store.execute_query(
+        "MATCH (cs:CallSite) WHERE cs.is_resolved = false \
+         RETURN cs.id, cs.callee_name, cs.line, cs.col",
+    )?;
 
     let mut sites = Vec::new();
     for row in &qr.rows {
@@ -168,15 +192,11 @@ fn collect_unresolved_callsites(store: &GraphStore) -> Result<Vec<UnresolvedCall
         let line: u64 = row[2].parse().unwrap_or(0);
         let col: u64 = row[3].parse().unwrap_or(0);
 
-        // Check if this callsite already has a Calls edge
-        if has_calls_edge(store, cs_id) {
-            continue;
-        }
-
         let (file_path, caller_qn) = parse_callsite_id(cs_id);
         let caller_label = determine_caller_label(store, &caller_qn);
 
         sites.push(UnresolvedCallSite {
+            id: cs_id.clone(),
             caller_qn,
             caller_label,
             callee_name: callee.clone(),
@@ -186,38 +206,6 @@ fn collect_unresolved_callsites(store: &GraphStore) -> Result<Vec<UnresolvedCall
         });
     }
     Ok(sites)
-}
-
-fn has_calls_edge(store: &GraphStore, callsite_id: &str) -> bool {
-    let caller_qn = extract_caller_from_callsite_id(callsite_id);
-    // Check all Calls edge types
-    for prefix in &[
-        "Calls_Function_Function",
-        "Calls_Function_Method",
-        "Calls_Method_Function",
-        "Calls_Method_Method",
-    ] {
-        let parts: Vec<&str> = prefix.splitn(3, '_').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let from_label = parts[1];
-        let to_label = parts[2];
-        let esc = cypher_str(&caller_qn);
-        let cypher = format!(
-            "MATCH (a:{from_label})-[r:{prefix}]->(b:{to_label}) \
-             WHERE a.id = {esc} RETURN count(r)"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            if !qr.rows.is_empty() {
-                let count: u64 = qr.rows[0][0].parse().unwrap_or(0);
-                if count > 0 {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 fn extract_caller_from_callsite_id(cs_id: &str) -> String {
@@ -235,12 +223,13 @@ fn parse_callsite_id(cs_id: &str) -> (String, String) {
 }
 
 fn extract_file_from_qn(qn: &str) -> String {
-    for ext in &[".rs::", ".py::", ".ts::", ".tsx::"] {
-        if let Some(idx) = qn.find(ext) {
-            return qn[..idx + ext.len() - 2].to_string();
-        }
-    }
-    qn.to_string()
+    // fleet-watch#18 adjacent defect (a): a hardcoded .rs/.py/.ts/.tsx list
+    // fell through to returning the WHOLE qn for the other seven parsed
+    // languages (java/kt/swift/objc/c/cpp/go/rb), producing index keys that
+    // can never equal a CallSite file_path. Delegate to the shared
+    // all-language helper the static resolver already uses
+    // (language_provider::ALL_EXTENSIONS = parser::Language::from_extension).
+    crate::language_provider::extract_file_prefix(qn).unwrap_or_else(|| qn.to_string())
 }
 
 fn determine_caller_label(store: &GraphStore, caller_qn: &str) -> String {
@@ -317,9 +306,11 @@ fn try_add_lsp_edge(
     site: &UnresolvedCallSite,
     def: &lsp_client::DefinitionResult,
     node_index: &HashMap<(String, u64), NodePosition>,
+    canonical_root: &Path,
 ) -> bool {
-    // Convert LSP URI to relative file path
-    let file_path = match uri_to_relative_path(&def.uri) {
+    // Convert LSP URI to a codebase-root-relative file path — the key space
+    // of `node_index` (fleet-watch#18).
+    let file_path = match uri_to_relative_path(&def.uri, canonical_root) {
         Some(p) => p,
         None => return false,
     };
@@ -374,10 +365,23 @@ fn try_add_lsp_edge(
         .is_ok()
 }
 
-fn uri_to_relative_path(uri: &str) -> Option<String> {
-    let path = uri.strip_prefix("file://")?;
-    // Return as-is; the caller handles prefix matching
-    Some(path.to_string())
+/// Maps a definition URI onto the codebase-root-relative path the indexer
+/// keyed the graph with (`file.strip_prefix(root)` — indexer/mod.rs).
+///
+/// fleet-watch#18 root cause: this used to return the ABSOLUTE path verbatim
+/// ("the caller handles prefix matching" — no caller ever did), so every
+/// node-index lookup missed and the LSP pass never inserted a single edge.
+/// Percent-escapes are decoded (the server echoes the encoding
+/// `path_to_file_uri` produced) and BOTH sides are canonicalized so a
+/// macOS symlink alias (/var vs /private/var) cannot defeat the strip.
+/// A definition outside the codebase root (stdlib, cargo registry,
+/// node_modules) yields None — those targets are not in the graph.
+fn uri_to_relative_path(uri: &str, canonical_root: &Path) -> Option<String> {
+    let abs = lsp_client::file_uri_to_path(uri)?;
+    let abs = std::fs::canonicalize(&abs).unwrap_or(abs);
+    abs.strip_prefix(canonical_root)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 fn find_node_at_position<'a>(
@@ -410,14 +414,179 @@ fn find_node_at_position<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph_store::{NODE_CALL_SITE, NODE_FUNCTION};
 
     #[test]
-    fn test_uri_to_relative_path() {
-        assert_eq!(
-            uri_to_relative_path("file:///Users/foo/project/src/main.rs"),
-            Some("/Users/foo/project/src/main.rs".to_string())
+    fn test_uri_to_relative_path_strips_canonical_root_and_percent_decodes() {
+        // fleet-watch#18 root cause: the pre-fix version returned the
+        // absolute path verbatim, which never matched the root-relative
+        // node-index keys. The tempdir prefix contains a space so the URI
+        // round-trip exercises percent-decoding, and on macOS the tempdir
+        // lives under /var (a symlink to /private/var), exercising the
+        // canonicalize-both-sides requirement.
+        let dir = tempfile::Builder::new()
+            .prefix("lsp uri test")
+            .tempdir()
+            .expect("tempdir");
+        let root = std::fs::canonicalize(dir.path()).expect("canonicalize root");
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        let file = root.join("src/main.rs");
+        std::fs::write(&file, "fn main() {}").expect("write file");
+
+        let uri = lsp_client::path_to_file_uri(&file);
+        assert!(
+            uri.contains("%20"),
+            "encoded URI must contain the escaped space: {uri}"
         );
-        assert_eq!(uri_to_relative_path("https://example.com"), None);
+        assert_eq!(
+            uri_to_relative_path(&uri, &root),
+            Some("src/main.rs".to_string())
+        );
+
+        // A definition outside the root (stdlib, cargo registry) must yield
+        // None rather than an out-of-root key.
+        let outside = lsp_client::path_to_file_uri(Path::new("/usr/lib/foo.rs"));
+        assert_eq!(uri_to_relative_path(&outside, &root), None);
+
+        // Non-file scheme: None.
+        assert_eq!(uri_to_relative_path("https://example.com", &root), None);
+    }
+
+    #[test]
+    fn extract_file_from_qn_covers_every_parsed_language() {
+        // fleet-watch#18 adjacent defect (a): the old hardcoded list only
+        // knew .rs/.py/.ts/.tsx and returned the whole qn for the rest.
+        for (qn, want) in [
+            ("src/main.rs::main", "src/main.rs"),
+            ("app/Main.java::Main::run", "app/Main.java"),
+            ("pkg/server.go::Handle", "pkg/server.go"),
+            ("src/App.kt::App", "src/App.kt"),
+            ("lib/util.cpp::frob", "lib/util.cpp"),
+            ("lib/tool.rb::frob", "lib/tool.rb"),
+            ("ui/View.swift::View::render", "ui/View.swift"),
+        ] {
+            assert_eq!(extract_file_from_qn(qn), want, "qn: {qn}");
+        }
+    }
+
+    #[test]
+    fn collect_skips_resolved_sites_but_keeps_unresolved_siblings() {
+        // fleet-watch#18 adjacent defect (b): "unresolved" was decided at
+        // caller granularity, so one statically resolved site hid every
+        // sibling site of the same caller. The per-site `is_resolved` marker
+        // (§10.4) is the signal the static resolver actually maintains.
+        let dir = tempfile::Builder::new()
+            .prefix("lsp_collect_test")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        store.create_schema().expect("schema");
+        store
+            .insert_node(
+                NODE_CALL_SITE,
+                &[
+                    ("id", "'src/a.rs::caller::call@5:4'"),
+                    ("callee_name", "'x'"),
+                    ("line", "5"),
+                    ("col", "4"),
+                    ("is_resolved", "true"),
+                    ("language", "'rust'"),
+                ],
+            )
+            .expect("insert resolved site");
+        store
+            .insert_node(
+                NODE_CALL_SITE,
+                &[
+                    ("id", "'src/a.rs::caller::call@7:4'"),
+                    ("callee_name", "'y'"),
+                    ("line", "7"),
+                    ("col", "4"),
+                    ("is_resolved", "false"),
+                    ("language", "'rust'"),
+                ],
+            )
+            .expect("insert unresolved sibling");
+
+        let sites = collect_unresolved_callsites(&store).expect("collect");
+        assert_eq!(
+            sites.len(),
+            1,
+            "only the is_resolved=false sibling must be collected"
+        );
+        assert_eq!(sites[0].id, "src/a.rs::caller::call@7:4");
+        assert_eq!(sites[0].caller_qn, "src/a.rs::caller");
+        assert_eq!(sites[0].file_path, "src/a.rs");
+    }
+
+    /// Inserts a Function node whose `name` is the last `::` segment of `id`
+    /// (mirrors the indexer's `<file>::<name>` qualified-name convention).
+    fn insert_function(store: &GraphStore, id: &str, start_line: &str) {
+        let name = id.rsplit("::").next().unwrap_or(id);
+        let end_line = format!("{}", start_line.parse::<u64>().unwrap_or(1) + 2);
+        store
+            .insert_node(
+                NODE_FUNCTION,
+                &[
+                    ("id", &format!("'{id}'")),
+                    ("name", &format!("'{name}'")),
+                    ("qualified_name", &format!("'{id}'")),
+                    ("start_line", start_line),
+                    ("end_line", &end_line),
+                    ("visibility", "'pub'"),
+                    ("is_async", "false"),
+                ],
+            )
+            .unwrap_or_else(|e| panic!("insert Function {id}: {e}"));
+    }
+
+    #[test]
+    fn lsp_definition_inserts_calls_edge_via_relative_key() {
+        // fleet-watch#18 end-to-end regression: pre-fix, the absolute
+        // definition URI missed every node-index key, so the LSP pass had
+        // inserted 0 edges — ever. Drives try_add_lsp_edge with a real store
+        // and a percent-encoded absolute URI and asserts the edge lands on
+        // the right caller/target pair.
+        let dir = tempfile::Builder::new()
+            .prefix("lsp edge test")
+            .tempdir()
+            .expect("tempdir");
+        let root = std::fs::canonicalize(dir.path()).expect("canonicalize root");
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        std::fs::write(root.join("src/b.rs"), "pub fn target() {}").expect("write");
+        let store = GraphStore::open_or_create(&root.join("db")).expect("open");
+        store.create_schema().expect("schema");
+        insert_function(&store, "src/a.rs::caller", "1");
+        insert_function(&store, "src/b.rs::target", "10");
+
+        let node_index = build_node_position_index(&store).expect("index");
+        let site = UnresolvedCallSite {
+            id: "src/a.rs::caller::call@5:4".to_string(),
+            caller_qn: "src/a.rs::caller".to_string(),
+            caller_label: "Function".to_string(),
+            callee_name: "target".to_string(),
+            file_path: "src/a.rs".to_string(),
+            line: 5,
+            col: 4,
+        };
+        let def = lsp_client::DefinitionResult {
+            uri: lsp_client::path_to_file_uri(&root.join("src/b.rs")),
+            start_line: 9, // LSP is 0-based; the graph stores 1-based line 10
+            start_col: 0,
+        };
+        assert!(
+            try_add_lsp_edge(&store, &site, &def, &node_index, &root),
+            "edge must be inserted from an absolute percent-encoded definition URI"
+        );
+        let qr = store
+            .execute_query(
+                "MATCH (a:Function)-[r:Calls_Function_Function]->(b:Function) \
+                 RETURN a.id, b.id",
+            )
+            .expect("query edge");
+        assert_eq!(qr.rows.len(), 1, "exactly one Calls edge must exist");
+        assert_eq!(qr.rows[0][0], "src/a.rs::caller");
+        assert_eq!(qr.rows[0][1], "src/b.rs::target");
     }
 
     #[test]
