@@ -185,6 +185,65 @@ fn get_impact_pages_callers_through_everything() {
 /// `src/`-prefixed variant the stored form does not carry; both must return the
 /// identical, non-empty caller set.
 #[test]
+fn get_impact_on_a_file_target_is_not_symbol_not_found() {
+    // Review finding 2 (regression), end to end. `get_impact` answers
+    // file-level fan-in for a File target (issue #205), but the resolve gate
+    // added in this branch probed only the eight symbol labels — so every
+    // File target came back `symbol_not_found` and that whole capability was
+    // unreachable through the tool.
+    let (_guard, graph) = build_fixture("impact_file_target");
+    let gp = graph.to_str().unwrap().to_string();
+
+    let store = graph_store::GraphStore::open_or_create(&graph).unwrap();
+    let file_id = |name: &str| -> String {
+        let qr = store
+            .execute_query(&format!(
+                "MATCH (f:File) WHERE f.name = {} RETURN f.id",
+                graph_store::cypher_str(name)
+            ))
+            .unwrap();
+        assert!(!qr.rows.is_empty(), "the fixture must index {name}");
+        qr.rows[0][0].clone()
+    };
+    let helpers = file_id("helpers.rs");
+    let svc = file_id("svc.rs");
+    // File-level fan-in is what a File target is FOR, so give the fixture one
+    // edge of it explicitly rather than depending on which import shape the
+    // resolver happens to emit for `use crate::helpers;`.
+    store
+        .insert_edge(
+            "Imports_File_File",
+            &svc,
+            &helpers,
+            &[("confidence", "1.0")],
+        )
+        .expect("insert file-level import edge");
+    drop(store);
+
+    let out = do_get_impact(&json!({"graph_path": gp, "qualified_name": helpers.clone()})).unwrap();
+    assert_eq!(
+        out["status"],
+        json!("ok"),
+        "a File target must be answered, not refused: {out}"
+    );
+    assert_eq!(
+        out["qualified_name"],
+        json!(helpers),
+        "the response must name the File the numbers describe"
+    );
+    assert_eq!(
+        out["importers_total"],
+        json!(1),
+        "the File target's file-level fan-in must be computed: {out}"
+    );
+
+    // An unknown path is still refused — the resolve gate is widened, not removed.
+    let missing =
+        do_get_impact(&json!({"graph_path": gp, "qualified_name": "no/such/file.rs"})).unwrap();
+    assert_eq!(missing["reason"], json!("symbol_not_found"));
+}
+
+#[test]
 fn get_impact_resolves_src_prefixed_qualified_name() {
     let (_guard, graph) = build_fixture("impact_src_prefix");
     let gp = graph.to_str().unwrap().to_string();

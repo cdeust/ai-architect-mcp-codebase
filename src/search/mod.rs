@@ -11,8 +11,11 @@
 // Public API is unchanged: search_graph(store, query, options) → Vec<SearchResult>
 
 pub mod bm25;
+pub mod impact_target;
 pub mod rrf;
 pub mod vector;
+
+pub use impact_target::{resolve_impact_target, ImpactTarget};
 
 use crate::graph_store::{cypher_str, GraphStore};
 use std::collections::HashMap;
