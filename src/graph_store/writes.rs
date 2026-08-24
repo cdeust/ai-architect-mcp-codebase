@@ -123,6 +123,82 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Inserts an edge only when that exact `(rel_type, from_id, to_id)` triple
+    /// is absent, and reports whether the graph now holds it.
+    ///
+    /// Why (review finding 3): `insert_edge` emits `CREATE`, which appends a
+    /// parallel edge every time it runs. That is correct for the static
+    /// resolver, which deduplicates in its `EdgeBuffer` before writing, but the
+    /// LSP pass writes one edge per call site as it goes. It has no in-memory
+    /// set, and it flips `CallSite.is_resolved` only at end of run — so an
+    /// interrupted run leaves edges written and sites still marked unresolved,
+    /// and the next run inserts every one of them a second time, inflating
+    /// `get_impact` counts with no way to tell the duplicates apart or clean
+    /// them up. Two call sites in one caller reaching the same callee produce
+    /// the same duplication inside a single run.
+    ///
+    /// Checking first makes the write idempotent regardless of run boundaries,
+    /// which is the property the caller actually needs. The probe is a
+    /// PK-indexed two-endpoint seek, and it runs once per candidate edge
+    /// against an LSP round trip that is orders of magnitude slower.
+    pub fn insert_edge_if_absent(
+        &self,
+        rel_type: &str,
+        from_id: &str,
+        to_id: &str,
+        properties: &[(&str, &str)],
+    ) -> Result<(), String> {
+        if self.edge_exists(rel_type, from_id, to_id)? {
+            return Ok(());
+        }
+        self.insert_edge(rel_type, from_id, to_id, properties)
+    }
+
+    /// True when `rel_type` already connects `from_id` to `to_id`.
+    pub fn edge_exists(&self, rel_type: &str, from_id: &str, to_id: &str) -> Result<bool, String> {
+        let (from_label, to_label) = parse_rel_endpoints(rel_type)?;
+        let cypher = format!(
+            "MATCH (a:{from_label} {{id: {}}})-[r:{rel_type}]->(b:{to_label} {{id: {}}}) \
+             RETURN r LIMIT 1",
+            cypher_str(from_id),
+            cypher_str(to_id)
+        );
+        Ok(!self.execute_query(&cypher)?.rows.is_empty())
+    }
+
+    /// Adds `column` to node table `label` when the table does not already
+    /// carry it, and reports whether it had to be added.
+    ///
+    /// Why (review finding 4): a graph indexed before a column existed does not
+    /// grow one when the code that reads it ships. Referencing a missing
+    /// property is a hard binder error ("Binder exception: Cannot find property
+    /// .. for n", measured 2026-08-24 on lbug 0.19.1), so a reader added later
+    /// takes the whole tool down on an older graph rather than degrading. The
+    /// column list comes from `table_info`, so this is a no-op on an
+    /// up-to-date graph and never depends on parsing an error string.
+    ///
+    /// `definition` is the DDL fragment after the column name, e.g.
+    /// `"BOOLEAN DEFAULT false"`. A DEFAULT backfills the existing rows.
+    pub fn ensure_node_column(
+        &self,
+        label: &str,
+        column: &str,
+        definition: &str,
+    ) -> Result<bool, String> {
+        let info =
+            self.execute_query(&format!("CALL table_info({}) RETURN *", cypher_str(label)))?;
+        // table_info columns are (property id, name, type, default, primary key).
+        let present = info
+            .rows
+            .iter()
+            .any(|row| row.get(1).is_some_and(|name| name == column));
+        if present {
+            return Ok(false);
+        }
+        self.run(&format!("ALTER TABLE {label} ADD {column} {definition}"))?;
+        Ok(true)
+    }
+
     /// Inserts one `FileContent` row: the file's zstd-compressed source
     /// bytes, keyed by the file's relative path (matches `File.id`).
     ///
