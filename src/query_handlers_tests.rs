@@ -102,6 +102,98 @@ fn test_query_graph_rejects_delete() {
 }
 
 #[test]
+fn chained_statements_get_a_named_reason_instead_of_an_engine_message() {
+    // fleet-watch review finding 9 (regression). `execute_read_only_query`
+    // must `prepare` to obtain the engine's read-only classification, and
+    // `prepare` refuses a chain — so a `;`-chained request that the pre-gate
+    // `Connection::query` path accepted now fails. It failed by leaking the
+    // engine's "We do not support prepare multiple statements", with the
+    // generic `query_failed` reason. Name the contract instead.
+    assert!(!is_multi_statement("MATCH (n:Function) RETURN n.id"));
+    // A trailing terminator is a single statement — `prepare` accepts it
+    // (measured 2026-08-24, lbug 0.19.1), so it must not be refused here.
+    assert!(!is_multi_statement("MATCH (n:Function) RETURN n.id;"));
+    assert!(!is_multi_statement("MATCH (n:Function) RETURN n.id ;  "));
+    // A `;` inside a literal is data, not a separator.
+    assert!(!is_multi_statement(
+        "MATCH (n) WHERE n.name = 'a;b' RETURN n"
+    ));
+    assert!(!is_multi_statement(
+        "MATCH (n) RETURN n // trailing ; comment"
+    ));
+    // Real chains are chains.
+    assert!(is_multi_statement(
+        "MATCH (n) RETURN n.id; MATCH (m) RETURN m.id"
+    ));
+    // Fail closed: an unterminated literal hides whatever follows it.
+    assert!(is_multi_statement("MATCH (n) WHERE n.a = 'unterminated"));
+
+    // End to end: the reason code reaches the caller, and the gate runs
+    // before any filesystem check so a nonexistent path still reports it.
+    let out = run_query_graph(&json!({
+        "graph_path": "/nonexistent/graph",
+        "query": "MATCH (n) RETURN n.id; MATCH (m) RETURN m.id",
+    }));
+    assert_eq!(out["status"], "error");
+    assert_eq!(out["reason"], "multi_statement_not_supported");
+}
+
+#[test]
+fn readonly_gate_refuses_queries_over_the_import_node_table() {
+    // fleet-watch review finding 1 (regression). `IMPORT` is both a
+    // data-movement statement AND this schema's `Import` node table, and the
+    // scan looked only at the byte immediately left of a match (and only for
+    // `.`). Every query over `Import` was therefore refused — including the
+    // exact shape the accuracy corpora are written against, so the whole
+    // unresolved-import surface was unreachable through `query_graph`.
+    for allowed in [
+        "MATCH (i:Import) RETURN i.path",
+        // The shape used verbatim by benches/corpora/*/ground_truth.json.
+        "MATCH (f:File)-[:Defines_File_Import]->(n:Import) \
+         WHERE f.path = 'app.ts' AND n.is_resolved = false RETURN n.path",
+        // Whitespace between the sigil and the label is legal Cypher.
+        "MATCH (i : Import) RETURN i.path",
+        // A property spelled with spaces around the dot is still a property.
+        "MATCH (n) RETURN n . import",
+    ] {
+        assert_eq!(
+            forbidden_cypher_keyword(allowed),
+            None,
+            "must be allowed: {allowed}"
+        );
+    }
+
+    // The exemption is for identifier positions only: the statements the gate
+    // exists to refuse are still refused, in the same query shapes.
+    for refused in [
+        ("IMPORT DATABASE '/tmp/payload'", "IMPORT"),
+        (
+            "MATCH (i:Import) RETURN i.path ; IMPORT DATABASE '/tmp/p'",
+            "IMPORT",
+        ),
+        ("MATCH (i:Import) DETACH DELETE i", "DELETE"),
+        (
+            "MATCH (i:Import) WITH i COPY (MATCH (n) RETURN n.id) TO '/tmp/x'",
+            "COPY",
+        ),
+    ] {
+        assert_eq!(
+            forbidden_cypher_keyword(refused.0),
+            Some(refused.1),
+            "must stay refused: {}",
+            refused.0
+        );
+    }
+
+    // Whole-word matching must not have regressed: a keyword directly after a
+    // non-sigil, non-identifier byte is still a clause.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) WITH 1 AS x CREATE (m:File)"),
+        Some("CREATE")
+    );
+}
+
+#[test]
 fn readonly_gate_ignores_keywords_inside_literals_and_properties() {
     // issue #200 — a client that looks a symbol up BY NAME sends the symbol as
     // a string literal. `load`, `set`, `create`, `delete` and `call` are all

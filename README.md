@@ -625,12 +625,40 @@ Four CRITICAL, four HIGH, three MEDIUM findings were surfaced by a `security-aud
 - Symlink traversal → `fs::symlink_metadata` + `MAX_DEPTH`
 - Resource exhaustion → `MAX_FILES=100_000`, `MAX_FILE_BYTES=10 MB`, `MAX_TOTAL_BYTES=2 GB`, `MAX_DEPTH=64`
 - Tree-sitter pathological input → `set_timeout_micros(5_000_000)` + `MAX_PARSE_BYTES=1 MB`
-- `query_graph` read-only → forbidden-keyword whole-word filter (CREATE/DELETE/MERGE/SET/REMOVE/DROP/ALTER/CALL/LOAD)
+- `query_graph` read-only → two layers over disjoint statement families (see below)
 - `graph_path` filesystem safety → `validate_graph_path_safe()` before any `remove_dir_all`
 - LSP `rootUri` → RFC 3986 percent-encoding
 - Diff line overflow → `DIFF_LINE_MAX = u64::MAX / 2` guard
 
 Each fix has a test that asserts the exploit is now rejected. Run `cargo test` to see 1200+ tests pass including the exploit-regression suite.
+
+### How `query_graph` is kept read-only
+
+Two layers, covering **disjoint** statement families. Neither subsumes the other.
+
+| Layer | Refuses | Mechanism |
+|---|---|---|
+| Engine (`GraphStore::execute_read_only_query`) | every database write and DDL — `CREATE`, `MERGE`, `SET`, `DELETE`/`DETACH DELETE`, `DROP`, `ALTER`, however spelled | `PreparedStatement::is_read_only()`: the verdict comes from the compiled plan, so a mutation written in syntax no keyword scan enumerates is still refused |
+| Lexical (`FORBIDDEN_CYPHER_KEYWORDS`) | filesystem access — `COPY … TO`, `EXPORT`/`IMPORT DATABASE`, `ATTACH`, `LOAD FROM` — plus `CALL` | whole-word, case-insensitive scan of the query with string literals, backticked identifiers and comments masked out first |
+
+The lexical layer is **load-bearing, not defence in depth**. lbug's
+`StatementReadWriteAnalyzer` overrides `visitCopyFrom` but leaves `visitCopyTo`,
+`visitExportDatabase`, `visitImportDatabase` and `visitAttachDatabase` at the base
+visitor's no-op, so all four are classified read-only. Measured 2026-08-24 against
+lbug 0.19.1 on **both** available engine gates — `is_read_only()` and a database
+opened with `SystemConfig::read_only(true)`, which reaches the same predicate via
+`ClientContext::validateTransaction` — `COPY (…) TO 'f.csv'` and
+`EXPORT DATABASE 'd'` execute and write the filesystem, while both correctly refuse
+`CREATE NODE TABLE`. Pinned by `engine_gate_does_not_cover_filesystem_writes`.
+
+A keyword introduced by `:` or `.` is an identifier, not a clause, so queries over
+this schema's own `Import` node table work unchanged:
+`MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE n.is_resolved = false RETURN n.path`.
+
+`query_graph` executes **one statement per call**. A trailing `;` is accepted; a
+`;`-chained request is refused with reason `multi_statement_not_supported`, because
+the read-only classification, `LIMIT` injection, `ORDER BY` detection and the offset
+cursor are all properties of a single statement.
 
 The full security argument — threat model, trust boundaries, what each claim
 rests on, and where it stops — is in

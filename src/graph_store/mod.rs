@@ -220,48 +220,77 @@ impl GraphStore {
     /// two engine-authoritative guards the lexical keyword blocklist in
     /// `query_handlers` cannot provide (fleet-watch#15):
     ///
-    ///   1. Read-only enforcement via lbug's own
-    ///      `PreparedStatement::is_read_only`. `prepare` parses and plans
-    ///      without executing; the engine then knows whether the statement
-    ///      mutates state or moves data. This refuses the data-movement
-    ///      statements the keyword blocklist never enumerated —
-    ///      `COPY (..) TO 'file'` (arbitrary file write), `EXPORT`/`IMPORT
-    ///      DATABASE`, `ATTACH` — plus every write/DDL, closing the gap by
-    ///      construction rather than by an ever-growing keyword list.
+    ///   1. Database-write enforcement via lbug's own
+    ///      `PreparedStatement::is_read_only`. `prepare` parses, binds and
+    ///      plans without executing; the engine then reports whether the
+    ///      statement mutates the database. This catches every write and DDL
+    ///      from the compiled plan rather than from a keyword scan, so a
+    ///      mutation spelled in syntax the lexical layer does not enumerate is
+    ///      still refused.
     ///   2. A wall-clock query timeout, so a pathological plan (e.g. an
     ///      unbounded variable-length `MATCH (a)-[*]->(b)` whose `LIMIT` caps
     ///      rows, not traversal work) cannot pin the single-threaded MCP
-    ///      worker indefinitely.
+    ///      worker indefinitely. It is applied before `prepare` so that
+    ///      binding and planning — not only execution — are bounded.
+    ///
+    /// SCOPE — what this guard does NOT cover. `is_read_only` answers
+    /// "does this mutate the DATABASE", not "does this touch the filesystem".
+    /// lbug's `StatementReadWriteAnalyzer` overrides `visitCopyFrom` but
+    /// leaves `visitCopyTo`, `visitExportDatabase`, `visitImportDatabase` and
+    /// `visitAttachDatabase` at the base visitor's no-op, so all four are
+    /// classified read-only. Measured 2026-08-24 against lbug 0.19.1: both on
+    /// this path and on a `SystemConfig::read_only(true)` handle — which
+    /// reaches the SAME predicate through `ClientContext::validateTransaction`
+    /// — `COPY (..) TO 'f.csv'` and `EXPORT DATABASE 'd'` execute and write
+    /// the filesystem. Those statements are refused upstream by the lexical
+    /// gate (`query_handlers::FORBIDDEN_CYPHER_KEYWORDS`), which is therefore
+    /// load-bearing rather than redundant; the two layers cover disjoint
+    /// families. Pinned by `engine_gate_does_not_cover_filesystem_writes`.
+    ///
+    /// Single statement only: `prepare` refuses a `;`-chained request
+    /// ("We do not support prepare multiple statements"). A trailing `;` is
+    /// accepted. `query_handlers` turns a chain into an explicit reason code.
     ///
     /// The timeout is scoped to this call and reset to the engine default
-    /// (`0` = disabled) on every exit path, so it can never leak onto the
-    /// shared cached handle that write tools (`ingest_traces`) reuse —
-    /// ingestion must never be aborted mid-write.
+    /// (`0` = disabled) on every exit path, so it cannot leak onto the shared
+    /// cached handle that write tools (`ingest_traces`) reuse — an aborted
+    /// mid-write ingestion is the failure this ordering exists to prevent.
     ///
     /// source: lbug 0.19.1 `PreparedStatement::is_read_only` (connection.rs:56),
-    /// `Connection::set_query_timeout` (connection.rs:360).
+    /// `Connection::set_query_timeout` (connection.rs:360),
+    /// `lbug-src/src/include/parser/visitor/statement_read_write_analyzer.h`,
+    /// `lbug-src/src/main/client_context.cpp:520-521`.
     pub fn execute_read_only_query(
         &self,
         cypher: &str,
         timeout_ms: u64,
     ) -> Result<QueryResult, String> {
-        let mut stmt = self
+        // Bound plan+bind+execute, and reset on every exit path below.
+        self.conn.set_query_timeout(timeout_ms);
+        let prepared = self.prepare_read_only(cypher);
+        let collected = match prepared {
+            Ok(mut stmt) => self.collect_prepared(&mut stmt, cypher),
+            Err(e) => Err(e),
+        };
+        self.conn.set_query_timeout(0);
+        collected
+    }
+
+    /// Prepares `cypher` and refuses it unless the engine classifies the
+    /// compiled plan as non-mutating. Split out so the timeout set/reset pair
+    /// around it stays a single straight-line sequence.
+    fn prepare_read_only(&self, cypher: &str) -> Result<PreparedStatement, String> {
+        let stmt = self
             .conn
             .prepare(cypher)
             .map_err(|e| format!("query failed [{cypher}]: {e}"))?;
         if !stmt.is_read_only() {
-            return Err("read_only_query_required: statement mutates state or \
-                        moves data (write, DDL, or COPY/EXPORT/IMPORT/ATTACH) \
-                        and is refused on the read-only query path"
+            return Err("read_only_query_required: statement mutates the \
+                        database (write or DDL) and is refused on the \
+                        read-only query path"
                 .to_string());
         }
-
-        // Bound only this query; reset before returning on every path so the
-        // shared connection is never left with a lingering timeout.
-        self.conn.set_query_timeout(timeout_ms);
-        let collected = self.collect_prepared(&mut stmt, cypher);
-        self.conn.set_query_timeout(0);
-        collected
+        Ok(stmt)
     }
 
     /// Executes an already-prepared, parameterless statement and drains its

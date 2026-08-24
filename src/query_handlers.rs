@@ -22,23 +22,25 @@ use crate::indexing_handlers::*;
 pub(crate) fn run_query_graph(arguments: &Value) -> Value {
     match do_query_graph(arguments) {
         Ok(v) => v,
-        Err(msg) => {
-            // Surface the read-only rejection as its own reason code so callers
-            // can distinguish policy rejections from engine errors.
-            if msg.contains("read_only_query_required") {
-                json!({
-                    "stage": 3,
-                    "status": "error",
-                    "reason": "read_only_query_required",
-                    "message": msg,
-                })
-            } else {
-                json!({
-                    "stage": 3, "status": "error", "reason": "query_failed", "message": msg
-                })
-            }
+        Err(msg) => json!({
+            "stage": 3,
+            "status": "error",
+            "reason": query_failure_reason(&msg),
+            "message": msg,
+        }),
+    }
+}
+
+/// Maps a `do_query_graph` error onto a documented reason code, so a caller
+/// can tell a policy rejection from an engine error without parsing prose.
+/// Anything unrecognised stays `query_failed`.
+fn query_failure_reason(msg: &str) -> &'static str {
+    for reason in ["read_only_query_required", "multi_statement_not_supported"] {
+        if msg.contains(reason) {
+            return reason;
         }
     }
+    "query_failed"
 }
 
 // ---------------------------------------------------------------------------
@@ -49,14 +51,26 @@ pub(crate) fn run_query_graph(arguments: &Value) -> Value {
 // blocklist: the engine still validates syntax, we just refuse to hand it
 // anything that could mutate state, load external data, or call procedures.
 //
-// COPY/EXPORT/IMPORT/ATTACH (fleet-watch#15): these data-movement statements
-// MUST be blocked here, because the engine gate downstream cannot catch them —
-// lbug's `PreparedStatement::is_read_only()` classifies `COPY (..) TO 'file'`
-// as read-only (it reads the database and writes the FILESYSTEM), measured
-// 2026-08-24 against lbug 0.19.1 in `execute_read_only_query`'s test. The
-// lexical gate is therefore the only reliable barrier against an attacker-
-// named file write; the engine gate remains as defense in depth for DB
-// mutations (CREATE/DELETE/DROP reachable through syntax this scan misses).
+// COPY/EXPORT/IMPORT/ATTACH/LOAD (fleet-watch#15): these data-movement
+// statements MUST be blocked here, because no engine-side gate catches them.
+// lbug's `StatementReadWriteAnalyzer` classifies a statement as read-only from
+// the compiled plan, and it overrides `visitCopyFrom` while leaving
+// `visitCopyTo`, `visitExportDatabase`, `visitImportDatabase` and
+// `visitAttachDatabase` at the base visitor's no-op — so all four come back
+// read-only. Measured 2026-08-24 against lbug 0.19.1, on BOTH available engine
+// gates: `PreparedStatement::is_read_only()` and a database opened with
+// `SystemConfig::read_only(true)` (which reaches the same predicate via
+// `ClientContext::validateTransaction`) each EXECUTE
+// `COPY (..) TO 'f.csv'` and `EXPORT DATABASE 'd'`, writing the filesystem,
+// while both refuse `CREATE NODE TABLE`. `LOAD FROM 'f'` likewise reads an
+// arbitrary file. This lexical gate is therefore the only barrier against an
+// attacker-named file write or read; the engine gate covers the disjoint
+// family of database mutations reachable through syntax this scan misses.
+// Pinned by `engine_gate_does_not_cover_filesystem_writes`.
+//
+// Identifier positions are exempt (see `contains_keyword_token`): `IMPORT` is
+// also this schema's `Import` node table, so a keyword introduced by `:` or
+// `.` is a label, relationship type, map key or property, not a clause.
 // ---------------------------------------------------------------------------
 
 pub(crate) const FORBIDDEN_CYPHER_KEYWORDS: &[&str] = &[
@@ -194,9 +208,10 @@ pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// Whole-word match that additionally rejects property access: `n.set` is a
-/// property named `set`, never a SET clause, so a `.` immediately before the
-/// keyword disqualifies it.
+/// Whole-word match that additionally rejects *identifier* positions: a
+/// keyword reached through `.` or `:` names a property, a node label, a
+/// relationship type or a map key — never a clause. `n.set` is a property,
+/// and `(i:Import)` is this schema's own `Import` node table.
 pub(crate) fn contains_keyword_token(haystack: &str, needle: &str) -> bool {
     let bytes = haystack.as_bytes();
     let nbytes = needle.as_bytes();
@@ -206,17 +221,61 @@ pub(crate) fn contains_keyword_token(haystack: &str, needle: &str) -> bool {
     let mut i = 0;
     while i + nbytes.len() <= bytes.len() {
         if &bytes[i..i + nbytes.len()] == nbytes {
-            // `.` disqualifies: `n.set` is a property, never a SET clause.
-            let left_ok = i == 0 || (!is_ident_char(bytes[i - 1]) && bytes[i - 1] != b'.');
+            let left_ok = i == 0 || !is_ident_char(bytes[i - 1]);
             let right = i + nbytes.len();
             let right_ok = right == bytes.len() || !is_ident_char(bytes[right]);
-            if left_ok && right_ok {
+            if left_ok && right_ok && !preceded_by_identifier_sigil(bytes, i) {
                 return true;
             }
         }
         i += 1;
     }
     false
+}
+
+/// True when `query` carries more than one statement, i.e. a `;` with
+/// executable text after it. Semicolons inside string literals, backticked
+/// identifiers and comments do not count — `mask_non_executable` blanks those
+/// first, which is what makes this an exact split rather than a guess.
+///
+/// Why (fleet-watch review finding 9): `execute_read_only_query` must
+/// `prepare` the statement to obtain the engine's read-only classification,
+/// and `prepare` refuses a chain ("We do not support prepare multiple
+/// statements", measured 2026-08-24 on lbug 0.19.1). Before the engine gate
+/// existed the request went to `Connection::query`, which accepted a chain and
+/// returned the LAST statement's rows — while this tool's LIMIT injection
+/// appended to that last statement and its ORDER BY detection scanned the
+/// whole chain. Rather than leak the engine's message, name the contract:
+/// one statement per call. An unterminated literal is reported as a chain
+/// here and refused by the keyword gate upstream, so it cannot slip through.
+pub(crate) fn is_multi_statement(query: &str) -> bool {
+    let Some(executable) = mask_non_executable(query) else {
+        return true;
+    };
+    match executable.split_once(';') {
+        Some((_, rest)) => !rest.trim().is_empty(),
+        None => false,
+    }
+}
+
+/// True when the token starting at `start` is introduced by `.` or `:`,
+/// skipping intervening whitespace (`(i : Import)` is legal Cypher).
+///
+/// Why (fleet-watch review finding 1): the scan previously looked only at the
+/// byte immediately left of the match and only for `.`, so `MATCH (i:Import)`
+/// tripped the `IMPORT` entry and every query over this schema's `Import` node
+/// table was refused — including the `MATCH (f:File)-[:Defines_File_Import]->
+/// (n:Import)` shape the accuracy corpora in `benches/corpora/*/ground_truth
+/// .json` are written against. Neither sigil can introduce a clause: after `:`
+/// Cypher expects a label, a relationship type or a map key, and after `.` a
+/// property name, so treating both as identifier positions loses no coverage
+/// of the statements this gate exists to refuse.
+fn preceded_by_identifier_sigil(bytes: &[u8], start: usize) -> bool {
+    let mut j = start;
+    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
+        j -= 1;
+    }
+    j > 0 && matches!(bytes[j - 1], b'.' | b':')
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +394,15 @@ pub(crate) fn do_query_graph(arguments: &Value) -> Result<Value, String> {
     }
 
     let (query, offset) = gated_cypher_request(args, graph_path, graph_str)?;
+    let mut out = run_gated_cypher(graph_path, query, offset)?;
+    shape_token_surface(args, &mut out);
+    Ok(out)
+}
 
+/// Executes an already-gated single Cypher statement and pages the result.
+/// Split from `do_query_graph` so the request-shaping steps (mode routing,
+/// gating, token-surface shaping) stay separate from execution (§4.2).
+fn run_gated_cypher(graph_path: &Path, query: &str, offset: u64) -> Result<Value, String> {
     // Bound caller-supplied Cypher: if it has no LIMIT clause, inject one so an
     // unbounded MATCH cannot return enough rows to blow the host's MCP
     // tool-result cap. Queries that already declare a LIMIT are left untouched.
@@ -346,12 +413,13 @@ pub(crate) fn do_query_graph(arguments: &Value) -> Result<Value, String> {
     // re-opening the embedded DB per request. Cache revalidates on-disk
     // staleness on every call. source: graph_cache module docs.
     let store = graph_cache::open_cached(graph_path)?;
-    // Engine-authoritative read-only + wall-clock guard — second layer behind
-    // the lexical pre-filter above; division of labor documented on
+    // Engine-authoritative database-write guard + wall-clock bound — the layer
+    // behind the lexical pre-filter above, covering a disjoint family of
+    // statements; the division of labor is documented on
     // FORBIDDEN_CYPHER_KEYWORDS. source: fleet-watch#15.
     let qr = store.execute_read_only_query(&effective_query, READ_QUERY_TIMEOUT_MS)?;
 
-    let mut out = paged_query_response(
+    Ok(paged_query_response(
         &qr,
         QueryPageMeta {
             offset,
@@ -362,9 +430,7 @@ pub(crate) fn do_query_graph(arguments: &Value) -> Result<Value, String> {
             order_stable: has_order_by_clause(query),
             limit_injected,
         },
-    );
-    shape_token_surface(args, &mut out);
-    Ok(out)
+    ))
 }
 
 /// Extracts and gates the Cypher request: `query` is required and must pass
@@ -386,6 +452,17 @@ fn gated_cypher_request<'a>(
             "read_only_query_required: query_graph is read-only; \
              found forbidden keyword: {bad}"
         ));
+    }
+    if is_multi_statement(query) {
+        return Err(
+            "multi_statement_not_supported: query_graph executes exactly one \
+             statement per call. The engine's read-only classification and this \
+             tool's LIMIT injection, ORDER BY detection and offset cursor are \
+             all properties of a single statement, so a `;`-chained request has \
+             no well-defined page. Send one statement per call; a trailing `;` \
+             is accepted."
+                .to_string(),
+        );
     }
     if !graph_path.exists() {
         return Err(format!("graph_path does not exist: {graph_str}"));
