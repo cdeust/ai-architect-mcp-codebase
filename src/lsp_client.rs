@@ -202,10 +202,15 @@ impl LspClient {
                 Err(e) if e.is_skippable() => continue,
                 Err(e) => return Err(classify_probe_err(e.message())),
             };
-            if msg.get("id").and_then(|v| v.as_i64()) == Some(id) {
+            if is_response_to(&msg, id) {
                 return Ok(msg);
             }
-            // notifications / other ids — keep reading within the window.
+            // Notifications, server-initiated requests, other ids — keep
+            // reading within the window. A server request sharing our id (e.g.
+            // `window/showMessageRequest` during the handshake) must NOT be
+            // taken for the init response: doing so returned the wrong message
+            // and left the real one to be discarded by `drain_pending` on the
+            // next send.
         }
     }
 
@@ -448,5 +453,73 @@ mod tests {
         };
 
         client.shutdown().expect("shutdown must return, not hang");
+    }
+
+    /// Round-5 finding 1. `read_initialize_response` matched on bare `id`
+    /// equality while its sibling `read_response_for_id` had already been fixed
+    /// to use `is_response_to` — in the same PR that introduced the helper. A
+    /// server-initiated request during the handshake (`window/showMessageRequest`
+    /// is the common one) sharing id=1 was returned AS the init response, and
+    /// the real one was then discarded by `drain_pending` on the next send.
+    ///
+    /// Driven against a real child process that emits exactly that sequence:
+    /// the colliding server request first, our response second.
+    #[test]
+    fn the_handshake_skips_a_server_request_sharing_our_id() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        fn frame(v: &Value) -> Vec<u8> {
+            let body = serde_json::to_vec(v).expect("serialize");
+            let mut out = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+            out.extend_from_slice(&body);
+            out
+        }
+
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cat");
+        {
+            let mut stdin = child.stdin.take().expect("stdin");
+            // A server REQUEST carrying our id, then our actual response.
+            stdin
+                .write_all(&frame(&json!({
+                    "jsonrpc": "2.0", "id": 1,
+                    "method": "window/showMessageRequest",
+                    "params": {"type": 3, "message": "indexing"}
+                })))
+                .expect("write request");
+            stdin
+                .write_all(&frame(&json!({
+                    "jsonrpc": "2.0", "id": 1,
+                    "result": {"capabilities": {"definitionProvider": true}}
+                })))
+                .expect("write response");
+        } // stdin closed: `cat` flushes and exits.
+
+        let stdout = child.stdout.take().expect("stdout");
+        let mut client = LspClient {
+            process: child,
+            frames: spawn_frame_reader(stdout),
+            request_id: AtomicI64::new(2),
+            timeout: Duration::from_secs(5),
+        };
+
+        let msg = client
+            .read_initialize_response(1, Duration::from_secs(5))
+            .expect("the real response must be found behind the server request");
+        assert!(
+            msg.get("method").is_none(),
+            "a server request must not be returned as our response: {msg}"
+        );
+        assert!(
+            msg.pointer("/result/capabilities/definitionProvider")
+                .and_then(Value::as_bool)
+                == Some(true),
+            "the message returned must be the initialize RESULT: {msg}"
+        );
     }
 }
