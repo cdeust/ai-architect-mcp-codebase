@@ -336,6 +336,11 @@ impl GraphStore {
         cypher: &str,
         params: Vec<(&str, Value)>,
     ) -> Result<QueryResult, String> {
+        // The borrow is held across `execute` + `drain_result` only because the
+        // statement lives in the cache. Scope it to the narrowest block that
+        // still covers the borrow of `stmt`, so a future call reached from
+        // inside the drain cannot meet an outstanding mutable borrow and panic
+        // on this process-wide cached store.
         let mut cache = self.stmt_cache.borrow_mut();
         if !cache.contains_key(cypher) {
             let stmt = self
@@ -344,14 +349,18 @@ impl GraphStore {
                 .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
             cache.insert(cypher.to_string(), stmt);
         }
-        let stmt = cache
-            .get_mut(cypher)
-            .expect("statement just inserted into cache");
-        let mut result = self
-            .conn
-            .execute(stmt, params)
-            .map_err(|e| format!("execute [{cypher}]: {e}"))?;
-        Ok(drain_result(&mut result))
+        let drained = {
+            let stmt = cache
+                .get_mut(cypher)
+                .expect("statement just inserted into cache");
+            let mut result = self
+                .conn
+                .execute(stmt, params)
+                .map_err(|e| format!("execute [{cypher}]: {e}"))?;
+            drain_result(&mut result)
+        };
+        drop(cache);
+        Ok(drained)
     }
 
     /// Returns the total number of nodes across all node tables.
