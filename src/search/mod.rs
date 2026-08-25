@@ -229,42 +229,64 @@ pub fn search_graph(
         vector: dir.join("vector_index.bin").exists(),
     });
 
+    // ONE capability check, ahead of the dispatch, so it covers BOTH branches.
+    // Placing it inside the fallback arm only — as the first revision did —
+    // left it guarding the half that cannot crash while the hybrid half chose
+    // its path on bare directory existence.
+    reject_unservable_file_filter(options, indexes.as_ref())?;
+
     match indexes {
         Some(ref indexes) if indexes.bm25 || indexes.vector => {
             hybrid::search_hybrid(store, query, options, indexes)
         }
         // Fallback: graph-only substring search (v1 behavior).
-        _ => {
-            reject_unservable_file_filter(options)?;
-            substring::search_substring(store, &terms, options)
-        }
+        _ => substring::search_substring(store, &terms, options),
     }
 }
 
-/// Refuses `label_filter: "File"` on the substring fallback, which cannot
-/// serve it.
+/// Refuses `label_filter: "File"` whenever no index on disk can actually serve
+/// doc/prose content — whichever branch the dispatch below would take.
 ///
-/// That path scans [`SEARCHABLE_LABELS`], which does not — and cannot — contain
-/// `File`: a doc file's text exists only in the BM25 index's `body` field, never
-/// in the graph, so there is nothing on this path to match against. Returning an
-/// empty result would be indistinguishable from "no doc matched", leaving the
-/// caller to conclude the repository has no such doc when in fact the query was
-/// never run. `search_codebase` exposes `File` in its `label_filter` enum
-/// (fleet-watch#112), so a caller can reach this combination without doing
-/// anything wrong — it earns an explanation, not silence.
-fn reject_unservable_file_filter(options: &SearchOptions) -> Result<(), String> {
+/// Three distinct situations reach it, and none of them can answer:
+///   * No search index at all. The substring fallback scans
+///     [`SEARCHABLE_LABELS`], which does not — and cannot — contain `File`: a
+///     doc's text lives only in a BM25 `body` field, never in the graph.
+///   * A search index whose BM25 half was never built.
+///   * A BM25 index built before fleet-watch#112, which has no `body` field.
+///     Bare directory existence cannot tell this apart from a current index,
+///     which is why the question is put to the persisted schema via
+///     [`bm25::indexes_doc_bodies`] rather than to the filesystem.
+///
+/// In every one of them an empty result would be indistinguishable from "no doc
+/// matched", leaving the caller to conclude the repository holds no such doc
+/// when the query was in fact never run against any doc. `search_codebase`
+/// exposes `File` in its public `label_filter` enum, so a caller reaches this
+/// without doing anything wrong — it earns an explanation, not silence.
+///
+/// The schema probe runs only when a caller actually asks for `File`, so an
+/// ordinary search pays nothing for it.
+fn reject_unservable_file_filter(
+    options: &SearchOptions,
+    indexes: Option<&HybridIndexes<'_>>,
+) -> Result<(), String> {
     let is_file_filter = options
         .label_filter
         .as_deref()
         .is_some_and(|f| f.eq_ignore_ascii_case(NODE_FILE));
-    if is_file_filter {
-        return Err(format!(
-            "label_filter '{NODE_FILE}' searches doc/prose file content, which lives only in \
-             the search index built by analyze_codebase — this graph has none. Rebuild it \
-             with analyze_codebase, or drop label_filter to search symbols."
-        ));
+    if !is_file_filter {
+        return Ok(());
     }
-    Ok(())
+    let servable =
+        indexes.is_some_and(|ix| ix.bm25 && bm25::indexes_doc_bodies(&ix.dir.join("bm25")));
+    if servable {
+        return Ok(());
+    }
+    Err(format!(
+        "label_filter '{NODE_FILE}' searches doc/prose file content, which lives only in the \
+         BM25 search index built by analyze_codebase — this graph has no such index, or has \
+         one built before doc-content indexing existed. Re-run analyze_codebase to rebuild \
+         it, or drop label_filter to search symbols."
+    ))
 }
 
 #[cfg(test)]
@@ -303,6 +325,55 @@ mod fallback_tests {
         assert!(
             err.contains("analyze_codebase"),
             "the error must say how to get the index, got: {err}"
+        );
+    }
+
+    /// Review round 2, finding 4. The guard used to sit INSIDE the substring
+    /// fallback arm, so it covered only the branch that cannot serve File —
+    /// while the hybrid branch chose its path on `dir.join("bm25").exists()`
+    /// with no capability check at all. A BM25 index built before doc-content
+    /// indexing existed takes the hybrid branch, matches nothing on a field it
+    /// does not have, and answers with the same silent empty result the guard
+    /// was written to abolish.
+    ///
+    /// This test fails on the round-1 code, which returns `Ok(vec![])`.
+    #[test]
+    fn a_file_label_filter_against_a_pre_body_index_is_refused() {
+        let (dir, store) = store_without_an_index();
+        let index_dir = dir.path().join("search_index");
+        bm25::build_legacy_index(&index_dir.join("bm25"));
+
+        let options = SearchOptions {
+            limit: 10,
+            label_filter: Some(NODE_FILE.to_string()),
+            min_score: 0.0,
+        };
+        let Err(err) = search_graph(&store, "playwright browser", &options, Some(&index_dir))
+        else {
+            panic!("an index with no doc bodies must not answer with silence");
+        };
+        assert!(
+            err.contains("analyze_codebase"),
+            "the error must say how to get a current index, got: {err}"
+        );
+    }
+
+    /// The same index still serves an ordinary symbol query — the refusal is
+    /// scoped to doc content, and does not make a legacy index unusable.
+    #[test]
+    fn a_pre_body_index_still_answers_an_unfiltered_query() {
+        let (dir, store) = store_without_an_index();
+        let index_dir = dir.path().join("search_index");
+        bm25::build_legacy_index(&index_dir.join("bm25"));
+
+        let options = SearchOptions {
+            limit: 10,
+            label_filter: None,
+            min_score: 0.0,
+        };
+        assert!(
+            search_graph(&store, "handle_tool_call", &options, Some(&index_dir)).is_ok(),
+            "a legacy index must remain queryable, just without doc content"
         );
     }
 
