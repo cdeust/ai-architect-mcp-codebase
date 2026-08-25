@@ -37,6 +37,36 @@ struct GraphMeta {
     commit_sha: Option<String>,
 }
 
+/// The response key the read tools carry this receipt under.
+///
+/// Deliberately NOT `graph_state`: that key is already taken elsewhere in this
+/// server, where `index_codebase` / `index_history` set it to a plain STRING
+/// (`"fresh"`, `"accepted_stale"`, `"filled_to_working_tree"` — see
+/// `history_handlers`). Publishing a nested OBJECT under the same name would
+/// give one key two incompatible shapes across the server's tools, so any
+/// client that types the field once breaks on whichever tool it typed second
+/// (fleet-watch#112 review). The string field keeps its name and its meaning;
+/// the new object gets its own.
+pub(crate) const RESPONSE_KEY: &str = "graph_freshness";
+
+/// Stamps the freshness receipt onto a response envelope under `RESPONSE_KEY`.
+///
+/// Exists so that EVERY exit of a read tool carries the receipt, not just the
+/// one that succeeds. A caller who receives `symbol_not_found` is precisely the
+/// caller who most needs to know the graph may simply be stale — an agent that
+/// adds a function and queries before re-indexing gets "not found" for a
+/// symbol that exists on disk (fleet-watch#112 review). Attaching at each
+/// `return` rather than once at the end is the only shape that reaches the
+/// early returns.
+///
+/// `response` is a response envelope — a JSON object — at every call site; a
+/// value with no keys has nowhere to carry a receipt and is left untouched.
+pub(crate) fn attach(response: &mut Value, graph_path: &Path) {
+    if let Some(envelope) = response.as_object_mut() {
+        envelope.insert(RESPONSE_KEY.to_string(), check(graph_path));
+    }
+}
+
 /// `graph_path` is `<output_dir>/graph`, already validated to exist by the
 /// caller — `search_codebase`/`get_symbol`/`get_impact` all check this before
 /// opening the store. Reads `meta.json` and `file_manifest.json`, both

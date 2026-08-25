@@ -37,7 +37,7 @@ mod vector_format;
 // name them without this file carrying a blanket `allow(unused_imports)` to
 // silence per-binary "unused re-export" warnings — that allow is what keeps
 // dead public items alive.
-pub use context::{get_context, GetContextError, RelatedSymbol};
+pub use context::{get_context, GetContextError, RelatedSymbol, SymbolContext};
 pub use grouping::group_hits_by_process;
 pub use impact_target::{resolve_impact_target, ImpactTarget};
 pub use name_lookup::{resolve_qualified_name, SymbolNotFound};

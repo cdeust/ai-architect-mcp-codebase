@@ -93,54 +93,46 @@ pub(crate) const SEARCH_COLUMNS: &[&str] = &[
     "community_id",
 ];
 
-pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
-    let args = arguments.as_object().ok_or("arguments must be an object")?;
-    let graph_str = args
-        .get("graph_path")
-        .and_then(|v| v.as_str())
-        .ok_or("missing required field 'graph_path'")?;
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or("missing required field 'query'")?;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
-    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
-    let label_filter = args
-        .get("label_filter")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+/// The caller-supplied half of a `search_codebase` call, validated once.
+///
+/// A parameter object rather than six positional arguments (§4.4): the query
+/// text, its ranking bounds and its cursor travel together through every helper
+/// below, and splitting them would put the cursor's `offset` and the ranking's
+/// `limit` in different places.
+struct SearchRequest<'a> {
+    graph_str: &'a str,
+    query: &'a str,
+    limit: usize,
+    offset: u64,
+    label_filter: Option<String>,
+}
 
-    let graph_path = Path::new(graph_str);
-    if !graph_path.exists() {
-        return Err(format!("graph_path does not exist: {graph_str}"));
+impl<'a> SearchRequest<'a> {
+    /// Defaults: `limit` 20 ranked candidates, `offset` 0 (first page), no
+    /// label filter. source: the tool's own JSON schema in `tool_schemas`.
+    fn parse(args: &'a serde_json::Map<String, Value>) -> Result<Self, String> {
+        Ok(SearchRequest {
+            graph_str: args
+                .get("graph_path")
+                .and_then(|v| v.as_str())
+                .ok_or("missing required field 'graph_path'")?,
+            query: args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or("missing required field 'query'")?,
+            limit: args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize,
+            offset: args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0),
+            label_filter: args
+                .get("label_filter")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        })
     }
+}
 
-    // The search index lives in a sibling ``search_index/`` of the graph dir.
-    // Pass it explicitly to search_graph — no process-global env hand-off
-    // (that channel raced across parallel callers; see search::search_graph).
-    // Shared with Stage 4's prepare_prd_input via search::resolve_search_index_dir
-    // (issue #18) so both stages resolve the same graph to the same index.
-    let search_index_dir = search::resolve_search_index_dir(graph_path);
-
-    let start = std::time::Instant::now();
-    // Read-only tool: reuse cached handle. source: graph_cache module docs.
-    let store = graph_cache::open_cached(graph_path)?;
-    let options = search::SearchOptions {
-        limit,
-        label_filter,
-        min_score: 0.01,
-    };
-    let results = search::search_graph(&store, query, &options, search_index_dir.as_deref())?;
-    let elapsed_ms = start.elapsed().as_millis() as u64;
-
-    // Cursor stability: search_graph returns results in a deterministic total
-    // order — descending score with an ascending-qualified_name tie-break added
-    // at every sort site (search::mod final sort, search::rrf::fuse). That total
-    // order is identical across calls for a fixed graph + query, so paging by
-    // `offset` over it neither skips nor duplicates rows. `limit` bounds the
-    // ranked candidate universe; `offset` + byte budget page within it.
-    // source: cursor-correctness requirement (response_budget::BoundedPage docs).
-    let items: Vec<Value> = results
+/// One JSON row per ranked hit, before paging and before token-surface shaping.
+fn search_hit_rows(results: &[search::SearchResult]) -> Vec<Value> {
+    results
         .iter()
         .map(|r| {
             json!({
@@ -155,22 +147,58 @@ pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
                 "end_line": r.end_line,
             })
         })
-        .collect();
+        .collect()
+}
 
-    // Page the ranked results by serialized size from `offset`. Previously this
-    // tool relied solely on `limit`; a wide result set could still approach the
-    // host cap and offered no way to retrieve rows beyond the cut. Byte-budget
-    // paging makes the full ranked list retrievable in budget-sized pages.
-    let page =
-        response_budget::bound_values_paged(items, offset, response_budget::per_section_chars());
+/// Pages the ranked hits by serialized size, starting at `offset`.
+///
+/// Cursor stability: search_graph returns results in a deterministic total
+/// order — descending score with an ascending-qualified_name tie-break added
+/// at every sort site (search::mod final sort, search::rrf::fuse). That total
+/// order is identical across calls for a fixed graph + query, so paging by
+/// `offset` over it neither skips nor duplicates rows. `limit` bounds the
+/// ranked candidate universe; `offset` + byte budget page within it.
+/// source: cursor-correctness requirement (response_budget::BoundedPage docs).
+///
+/// Previously this tool relied solely on `limit`; a wide result set could still
+/// approach the host cap and offered no way to retrieve rows beyond the cut.
+/// Byte-budget paging makes the full ranked list retrievable in budget-sized
+/// pages.
+fn page_search_results(
+    results: &[search::SearchResult],
+    offset: u64,
+) -> response_budget::BoundedPage {
+    response_budget::bound_values_paged(
+        search_hit_rows(results),
+        offset,
+        response_budget::per_section_chars(),
+    )
+}
 
-    // Process-grouped view: a lightweight secondary index over the returned
-    // page. Built from `page.items` (not the full ranked set) so every
-    // qualified_name it lists is present in `results` — the flat list stays the
-    // single source of truth; `by_process` never duplicates row payload and
-    // never references a row outside the page. source: search::group_hits_by_process.
-    let group_input: Vec<(String, Vec<String>)> = page
-        .items
+/// Token-surface shaping (issue #56): `detail:"ids"` returns bare qualified
+/// names for a cheap wide sweep; `format:"tabular"` streams rows as arrays with
+/// the columns declared once. Applied to the PAGED list, so the cursor contract
+/// is untouched. `by_process` (built from the same objects) is unaffected.
+fn shape_search_page(
+    page_items: &[Value],
+    args: &serde_json::Map<String, Value>,
+) -> token_surface::ListView {
+    token_surface::render_list(
+        page_items,
+        SEARCH_COLUMNS,
+        "qualified_name",
+        &token_surface::parse_detail(args),
+        &token_surface::parse_format(args),
+    )
+}
+
+/// Process-grouped view: a lightweight secondary index over the returned
+/// page. Built from `page_items` (not the full ranked set) so every
+/// qualified_name it lists is present in `results` — the flat list stays the
+/// single source of truth; `by_process` never duplicates row payload and
+/// never references a row outside the page. source: search::group_hits_by_process.
+fn search_process_groups(page_items: &[Value]) -> Vec<Value> {
+    let group_input: Vec<(String, Vec<String>)> = page_items
         .iter()
         .map(|item| {
             let qn = item
@@ -190,7 +218,7 @@ pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
             (qn, processes)
         })
         .collect();
-    let by_process: Vec<Value> = search::group_hits_by_process(&group_input)
+    search::group_hits_by_process(&group_input)
         .into_iter()
         .map(|(process, qualified_names)| {
             json!({
@@ -198,67 +226,40 @@ pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
                 "qualified_names": qualified_names,
             })
         })
-        .collect();
+        .collect()
+}
 
-    // Token-surface shaping (issue #56): `detail:"ids"` returns bare qualified
-    // names for a cheap wide sweep; `format:"tabular"` streams rows as arrays with
-    // the columns declared once. Applied to the PAGED list, so the cursor contract
-    // is untouched. `by_process` (built from the objects above) is unaffected.
-    let detail = token_surface::parse_detail(args);
-    let format = token_surface::parse_format(args);
-    let view = token_surface::render_list(
-        &page.items,
-        SEARCH_COLUMNS,
-        "qualified_name",
-        &detail,
-        &format,
-    );
-
-    let mut out = json!({
-        "stage": 3,
-        "status": "ok",
-        "tool": "search_codebase",
-        "query": query,
-        "result_count": page.items.len(),
-        "total_count": page.total_count,
-        "offset": offset,
-        "truncated": page.truncated,
-        "detail": view.detail,
-        "format": view.format,
-        "results": view.value,
-        "by_process": by_process,
-        "elapsed_ms": elapsed_ms,
-    });
-    if let Some(cols) = view.columns {
-        out["columns"] = cols;
-    }
-    if let Some(next) = page.next_offset {
-        out["next_offset"] = json!(next);
-    }
-
-    // Cross-repo bridge: federate the query across sibling graphs. Foreign hits
-    // are a bounded SECONDARY section (repo-tagged, not merged into the primary
-    // cursored `results`) so the local `offset` contract stays exact. Absent the
-    // arg this is a no-op. source: cross-repo bridge spec.
+/// Cross-repo bridge: federate the query across sibling graphs. Foreign hits
+/// are a bounded SECONDARY section (repo-tagged, not merged into the primary
+/// cursored `results`) so the local `offset` contract stays exact. Absent the
+/// arg this is a no-op. source: cross-repo bridge spec.
+fn attach_foreign_results(
+    out: &mut Value,
+    arguments: &Value,
+    graph_path: &Path,
+    req: &SearchRequest<'_>,
+) {
     let siblings = bridge::SiblingGraphs::from_arg(arguments, graph_path);
-    if !siblings.is_empty() {
-        let hits = bridge::federated_search(&siblings, query, limit);
-        let foreign_items: Vec<Value> = hits.iter().map(|h| h.to_json()).collect();
-        let foreign_page =
-            response_budget::bound_values(foreign_items, response_budget::per_section_chars());
-        out["foreign_results"] = json!(foreign_page.items);
-        out["foreign_results_total"] = json!(hits.len());
-        out["foreign_results_paged"] = json!(false);
-        if !siblings.skipped.is_empty() {
-            out["sibling_graphs_skipped"] = json!(siblings.skipped);
-        }
+    if siblings.is_empty() {
+        return;
     }
+    let hits = bridge::federated_search(&siblings, req.query, req.limit);
+    let foreign_items: Vec<Value> = hits.iter().map(|h| h.to_json()).collect();
+    let foreign_page =
+        response_budget::bound_values(foreign_items, response_budget::per_section_chars());
+    out["foreign_results"] = json!(foreign_page.items);
+    out["foreign_results_total"] = json!(hits.len());
+    out["foreign_results_paged"] = json!(false);
+    if !siblings.skipped.is_empty() {
+        out["sibling_graphs_skipped"] = json!(siblings.skipped);
+    }
+}
 
-    // Suggest how to act on a hit: top-ranked results are the natural next
-    // traversal anchors. Gated on a non-empty page so we never suggest acting
-    // on nothing.
-    if let Some(first) = page
-        .items
+/// Suggest how to act on a hit: top-ranked results are the natural next
+/// traversal anchors. Gated on a non-empty page so we never suggest acting
+/// on nothing.
+fn attach_search_next_steps(out: &mut Value, page_items: &[Value]) {
+    if let Some(first) = page_items
         .first()
         .and_then(|r| r.get("qualified_name"))
         .and_then(|v| v.as_str())
@@ -268,9 +269,77 @@ pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
             "narrow further with `label_filter` (e.g. Function, Struct, Trait)".to_string(),
         ]);
     }
+}
+
+/// The `search_codebase` response envelope, before the optional sections.
+fn search_envelope(
+    req: &SearchRequest<'_>,
+    page: &response_budget::BoundedPage,
+    view: &token_surface::ListView,
+    by_process: Vec<Value>,
+    elapsed_ms: u64,
+) -> Value {
+    let mut out = json!({
+        "stage": 3,
+        "status": "ok",
+        "tool": "search_codebase",
+        "query": req.query,
+        "result_count": page.items.len(),
+        "total_count": page.total_count,
+        "offset": req.offset,
+        "truncated": page.truncated,
+        "detail": view.detail,
+        "format": view.format,
+        "results": view.value,
+        "by_process": by_process,
+        "elapsed_ms": elapsed_ms,
+    });
+    if let Some(cols) = view.columns.clone() {
+        out["columns"] = cols;
+    }
+    if let Some(next) = page.next_offset {
+        out["next_offset"] = json!(next);
+    }
+    out
+}
+
+pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
+    let args = arguments.as_object().ok_or("arguments must be an object")?;
+    let req = SearchRequest::parse(args)?;
+
+    let graph_path = Path::new(req.graph_str);
+    if !graph_path.exists() {
+        return Err(format!("graph_path does not exist: {}", req.graph_str));
+    }
+
+    // The search index lives in a sibling ``search_index/`` of the graph dir.
+    // Pass it explicitly to search_graph — no process-global env hand-off
+    // (that channel raced across parallel callers; see search::search_graph).
+    // Shared with Stage 4's prepare_prd_input via search::resolve_search_index_dir
+    // (issue #18) so both stages resolve the same graph to the same index.
+    let search_index_dir = search::resolve_search_index_dir(graph_path);
+
+    let start = std::time::Instant::now();
+    // Read-only tool: reuse cached handle. source: graph_cache module docs.
+    let store = graph_cache::open_cached(graph_path)?;
+    let options = search::SearchOptions {
+        limit: req.limit,
+        label_filter: req.label_filter.clone(),
+        min_score: 0.01,
+    };
+    let results = search::search_graph(&store, req.query, &options, search_index_dir.as_deref())?;
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    let page = page_search_results(&results, req.offset);
+    let by_process = search_process_groups(&page.items);
+    let view = shape_search_page(&page.items, args);
+
+    let mut out = search_envelope(&req, &page, &view, by_process, elapsed_ms);
+    attach_foreign_results(&mut out, arguments, graph_path, &req);
+    attach_search_next_steps(&mut out, &page.items);
     // fleet-watch#112: cheap graph-vs-working-tree guard, converts silent
     // staleness into a visible, reasoned-about condition on every response.
-    out["graph_state"] = crate::graph_freshness::check(graph_path);
+    crate::graph_freshness::attach(&mut out, graph_path);
     Ok(out)
 }
 
@@ -323,70 +392,64 @@ pub(crate) fn do_get_context(arguments: &Value) -> Result<Value, String> {
         Err(search::GetContextError::Other(m)) => return Err(m),
     };
 
-    let related_to_json = |items: &[search::RelatedSymbol]| -> Vec<Value> {
-        items
-            .iter()
-            .map(|s| {
-                json!({
-                    "name": s.name,
-                    "qualified_name": s.qualified_name,
-                    "kind": s.label,
-                })
-            })
-            .collect()
-    };
+    Ok(context_envelope(&ctx))
+}
 
-    let community_json = ctx.community.as_ref().map(|c| {
-        json!({
-            "id": c.id,
-            "name": c.name,
-            "member_count": c.member_count,
-        })
-    });
-
-    let processes_json: Vec<Value> = ctx
-        .processes
+/// One JSON object per related symbol, in the shape every relationship list of
+/// `get_context` uses.
+fn related_symbols_json(items: &[search::RelatedSymbol]) -> Vec<Value> {
+    items
         .iter()
-        .map(|p| {
+        .map(|s| {
             json!({
-                "name": p.name,
-                "role": p.role,
+                "name": s.name,
+                "qualified_name": s.qualified_name,
+                "kind": s.label,
             })
         })
-        .collect();
+        .collect()
+}
 
-    // Epistemic honesty: when the symbol is a dynamic-dispatch surface (a
-    // trait/interface), its reverse relationships (`called_by`, `used_by`) are a
-    // LOWER BOUND — polymorphic call sites that go through the interface are not
-    // exhaustively attributable to it by static resolution. Concrete symbols are
-    // exact. source: epistemic module.
-    let dynamic_surface = epistemic::is_dynamic_dispatch_surface(&ctx.label);
-    let (epistemic_status, epistemic_reasons) = if dynamic_surface {
-        (
-            epistemic::Boundary::LowerBound.as_str(),
-            vec![format!(
-                "'{}' is a {} (dynamic-dispatch surface): `called_by`/`used_by` \
-                 omit call sites that reach it polymorphically; treat the reverse \
-                 relationships as a lower bound and consult `implemented_by`",
-                ctx.qualified_name, ctx.label
-            )],
-        )
-    } else {
-        (epistemic::Boundary::Exact.as_str(), Vec::new())
-    };
+/// Epistemic honesty: when the symbol is a dynamic-dispatch surface (a
+/// trait/interface), its reverse relationships (`called_by`, `used_by`) are a
+/// LOWER BOUND — polymorphic call sites that go through the interface are not
+/// exhaustively attributable to it by static resolution. Concrete symbols are
+/// exact. source: epistemic module.
+fn context_epistemic(ctx: &search::SymbolContext) -> (&'static str, Vec<String>) {
+    if !epistemic::is_dynamic_dispatch_surface(&ctx.label) {
+        return (epistemic::Boundary::Exact.as_str(), Vec::new());
+    }
+    (
+        epistemic::Boundary::LowerBound.as_str(),
+        vec![format!(
+            "'{}' is a {} (dynamic-dispatch surface): `called_by`/`used_by` \
+             omit call sites that reach it polymorphically; treat the reverse \
+             relationships as a lower bound and consult `implemented_by`",
+            ctx.qualified_name, ctx.label
+        )],
+    )
+}
 
-    let mut next_steps = vec![format!(
+/// Suggested follow-up traversals. The second step is offered only when there
+/// is something concrete to enumerate behind the dispatch surface.
+fn context_next_steps(ctx: &search::SymbolContext) -> Vec<String> {
+    let mut steps = vec![format!(
         "trace blast radius: get_impact on '{}'",
         ctx.qualified_name
     )];
-    if dynamic_surface && !ctx.implemented_by.is_empty() {
-        next_steps.push(
+    if epistemic::is_dynamic_dispatch_surface(&ctx.label) && !ctx.implemented_by.is_empty() {
+        steps.push(
             "enumerate concrete behaviour: get_symbol on an `implemented_by[].qualified_name`"
                 .to_string(),
         );
     }
+    steps
+}
 
-    Ok(json!({
+/// The `get_context` response envelope for a resolved symbol.
+fn context_envelope(ctx: &search::SymbolContext) -> Value {
+    let (epistemic_status, epistemic_reasons) = context_epistemic(ctx);
+    json!({
         "stage": 3,
         "status": "ok",
         "tool": "get_context",
@@ -400,21 +463,28 @@ pub(crate) fn do_get_context(arguments: &Value) -> Result<Value, String> {
             "visibility": ctx.visibility,
         },
         "relationships": {
-            "imports": related_to_json(&ctx.imports),
-            "imported_by": related_to_json(&ctx.imported_by),
-            "calls": related_to_json(&ctx.calls),
-            "called_by": related_to_json(&ctx.called_by),
-            "implements": related_to_json(&ctx.implements),
-            "implemented_by": related_to_json(&ctx.implemented_by),
-            "uses": related_to_json(&ctx.uses),
-            "used_by": related_to_json(&ctx.used_by),
+            "imports": related_symbols_json(&ctx.imports),
+            "imported_by": related_symbols_json(&ctx.imported_by),
+            "calls": related_symbols_json(&ctx.calls),
+            "called_by": related_symbols_json(&ctx.called_by),
+            "implements": related_symbols_json(&ctx.implements),
+            "implemented_by": related_symbols_json(&ctx.implemented_by),
+            "uses": related_symbols_json(&ctx.uses),
+            "used_by": related_symbols_json(&ctx.used_by),
         },
-        "community": community_json,
-        "processes": processes_json,
+        "community": ctx.community.as_ref().map(|c| json!({
+            "id": c.id,
+            "name": c.name,
+            "member_count": c.member_count,
+        })),
+        "processes": ctx.processes.iter().map(|p| json!({
+            "name": p.name,
+            "role": p.role,
+        })).collect::<Vec<_>>(),
         "epistemic": epistemic_status,
         "epistemic_reasons": epistemic_reasons,
-        "next_steps": next_steps,
-    }))
+        "next_steps": context_next_steps(ctx),
+    })
 }
 
 #[cfg(test)]
