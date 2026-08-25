@@ -314,65 +314,90 @@ fn index_codebase_schema() -> Value {
 /// The `index_codebase` input properties, lifted out of `index_codebase_schema`
 /// so that function stays inside the §4.2 50-line cap. Pure data — one JSON
 /// object literal, no logic.
-fn index_codebase_properties() -> Value {
+/// The `index_codebase` input properties naming WHAT gets read: the root,
+/// the parser lane, where the graph lands, and what to leave out.
+fn index_codebase_source_properties() -> Value {
     json!({
-                "path": {
-                    "type": "string",
-                    "description": "Absolute path to the codebase root to index."
-                },
-                "language": {
-                    "type": "string",
-                    "enum": ["auto", "rust", "python", "typescript", "java", "kotlin", "swift", "objc", "c", "cpp", "go"],
-                    "default": "auto",
-                    "description": "Language to parse. 'auto' detects per-file by extension (.rs, .py, .ts/.tsx, .java, .kt/.kts, .swift, .m/.mm, .c/.h, .cc/.cpp/.hpp, .go). Specific values restrict to that language only."
-                },
-                "output_dir": {
-                    "type": "string",
-                    "description": "Absolute directory where the graph will be stored (at <output_dir>/graph/)."
-                },
-                "dependency_scope": {
-                    "type": "string",
-                    "enum": ["none", "public_api", "full"],
-                    "default": "none",
-                    "description": "Tri-tier control over dependency-directory ingestion. 'none': prune build/dependency dirs (node_modules, .venv, vendor, target, dist, …); only .git is always skipped. 'public_api': descend into those dirs but persist only publicly-visible symbols from files under them — project files are still indexed in full. 'full': descend and persist everything (equivalent to the deprecated include_dependencies=true). Supersedes 'include_dependencies'; if both are given, dependency_scope wins."
-                },
-                "include_dependencies": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Deprecated — use 'dependency_scope' instead ('true' maps to 'full', 'false' maps to 'none'). Kept as a compatibility alias for one release; emits a deprecation warning."
-                },
-                "export_artifact": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Issue #55 — after a successful index, write a team-shared compressed graph snapshot to <path>/.ai-architect-mcp-codebase/graph.zst (+ graph.meta.json sidecar with git sha, tool version, node/edge counts) and a .gitattributes 'merge=ours' entry so the committed blob never produces merge conflicts. Uses the best-ratio (zstd-9) tier. Export failure is logged but does not fail the index."
-                },
-                "bootstrap": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Issue #55/#62 — when there is no local graph at <output_dir>/graph but a committed artifact exists at <path>/.ai-architect-mcp-codebase/graph.zst, import (decompress) that snapshot instead of cold-indexing, so a fresh clone skips the full index. Staleness is checked first: a FRESH artifact (sha == HEAD) is imported as-is (response source='artifact_bootstrap', graph_state='fresh'). A STALE artifact is, by DEFAULT, imported AND then incrementally filled up to the working tree — only the artifact→HEAD diff is re-parsed (response source='artifact_bootstrap_fill', graph_state='filled_to_working_tree', with fill_method and {changed,added,deleted,renamed,unchanged} counts). The fill derives its change set from 'git diff <artifact_sha> <working tree>' (renames included), falling back to the bundled manifest's content hashes when the repo is not a git tree. If the import or fill fails, it falls back to a full index explicitly (logged, with a 'bootstrap_skipped' note)."
-                },
-                "accept_stale": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Issue #55/#62 — only meaningful with bootstrap=true. Repurposed by the incremental-fill contract: when the committed artifact is stale, accept_stale=true imports the snapshot AS-IS and SKIPS the incremental fill (a deliberate fast path when HEAD-accuracy is not needed). The response carries graph_state='accepted_stale' and a 'stale_artifact' object {artifact_sha, head_sha, commits_behind} so the caller can never mistake the stale graph for a current one; the skipped delta is filled on the next local index_codebase run (which classifies the working tree against the bundled manifest). Leave false (the default) to bootstrap-then-fill up to the working tree."
-                },
-                "full": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Issue #62 — force a from-scratch full rebuild. By DEFAULT index_codebase is incremental: when a prior graph at <output_dir>/graph and its file_manifest.json exist, only the files that changed since the last index are re-parsed (the response carries mode='incremental' and {changed, added, deleted, renamed, unchanged} counts). Pass full=true to bypass that and rebuild everything — required when you change 'language', 'dependency_scope', or 'exclude_dirs', none of which the manifest captures."
-                },
-                "exclude_dirs": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "default": [],
-                    "description": "Issue #249 — directory paths (relative to 'path', no leading '/' or '..') or bare directory names to prune from the walk, in addition to the built-in build/dependency skip list. An entry WITHOUT a path separator (e.g. \"secrets\") is a bare name matched anywhere in the tree, like the built-in list; an entry WITH one (e.g. \"config/secrets\") matches exactly that one subtree relative to 'path'. No glob support. Exclusion WINS over every 'dependency_scope' tier, including 'full' — this is for directories that must never be read, not a performance prune. Pruned directories are NEVER silently dropped: each is reported in the coverage sidecar as skipped (reason 'user_excluded'), and the response's coverage.skipped.user_excluded_count carries the total. Changing this value on an existing graph requires full=true (the manifest does not capture it, same caveat as 'dependency_scope'). A directory the OS refuses to read (permission denied) is handled independently and automatically — see the coverage 'unreadable' reason — even without listing it here."
-                },
-                "cochange": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Issue #58 — after indexing, mine git temporal coupling into FILE_CHANGES_WITH File→File edges (Tornhill-style: files that change together, thresholded at >=3 co-changes and >=0.30 coupling degree over a 1-year window). Default true; self-skips on a non-git tree. A full index re-mines the window; an incremental index EXTENDS the mined aggregates with only the new commits (append-only). The response carries a 'cochange' block {mode, commits_scanned, edges_written}. Query the edges via query_graph: `MATCH (a:File)-[r:FILE_CHANGES_WITH]-(b:File) WHERE r.coupling > 0.5 RETURN a.id, b.id, r.cochange_count`."
-                }
+        "path": {
+            "type": "string",
+            "description": "Absolute path to the codebase root to index."
+        },
+        "language": {
+            "type": "string",
+            "enum": ["auto", "rust", "python", "typescript", "java", "kotlin", "swift", "objc", "c", "cpp", "go"],
+            "default": "auto",
+            "description": "Language to parse. 'auto' detects per-file by extension (.rs, .py, .ts/.tsx, .java, .kt/.kts, .swift, .m/.mm, .c/.h, .cc/.cpp/.hpp, .go). Specific values restrict to that language only."
+        },
+        "output_dir": {
+            "type": "string",
+            "description": "Absolute directory where the graph will be stored (at <output_dir>/graph/)."
+        },
+        "exclude_dirs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Issue #249 — directory paths (relative to 'path', no leading '/' or '..') or bare directory names to prune from the walk, in addition to the built-in build/dependency skip list. An entry WITHOUT a path separator (e.g. \"secrets\") is a bare name matched anywhere in the tree, like the built-in list; an entry WITH one (e.g. \"config/secrets\") matches exactly that one subtree relative to 'path'. No glob support. Exclusion WINS over every 'dependency_scope' tier, including 'full' — this is for directories that must never be read, not a performance prune. Pruned directories are NEVER silently dropped: each is reported in the coverage sidecar as skipped (reason 'user_excluded'), and the response's coverage.skipped.user_excluded_count carries the total. Changing this value on an existing graph requires full=true (the manifest does not capture it, same caveat as 'dependency_scope'). A directory the OS refuses to read (permission denied) is handled independently and automatically — see the coverage 'unreadable' reason — even without listing it here."
+        }
     })
+}
+
+/// The `index_codebase` input properties naming HOW the index is built:
+/// dependency reach, bootstrap-from-artifact, full-vs-incremental, and the
+/// temporal-coupling pass.
+fn index_codebase_mode_properties() -> Value {
+    json!({
+        "dependency_scope": {
+            "type": "string",
+            "enum": ["none", "public_api", "full"],
+            "default": "none",
+            "description": "Tri-tier control over dependency-directory ingestion. 'none': prune build/dependency dirs (node_modules, .venv, vendor, target, dist, …); only .git is always skipped. 'public_api': descend into those dirs but persist only publicly-visible symbols from files under them — project files are still indexed in full. 'full': descend and persist everything (equivalent to the deprecated include_dependencies=true). Supersedes 'include_dependencies'; if both are given, dependency_scope wins."
+        },
+        "include_dependencies": {
+            "type": "boolean",
+            "default": false,
+            "description": "Deprecated — use 'dependency_scope' instead ('true' maps to 'full', 'false' maps to 'none'). Kept as a compatibility alias for one release; emits a deprecation warning."
+        },
+        "export_artifact": {
+            "type": "boolean",
+            "default": false,
+            "description": "Issue #55 — after a successful index, write a team-shared compressed graph snapshot to <path>/.ai-architect-mcp-codebase/graph.zst (+ graph.meta.json sidecar with git sha, tool version, node/edge counts) and a .gitattributes 'merge=ours' entry so the committed blob never produces merge conflicts. Uses the best-ratio (zstd-9) tier. Export failure is logged but does not fail the index."
+        },
+        "bootstrap": {
+            "type": "boolean",
+            "default": false,
+            "description": "Issue #55/#62 — when there is no local graph at <output_dir>/graph but a committed artifact exists at <path>/.ai-architect-mcp-codebase/graph.zst, import (decompress) that snapshot instead of cold-indexing, so a fresh clone skips the full index. Staleness is checked first: a FRESH artifact (sha == HEAD) is imported as-is (response source='artifact_bootstrap', graph_state='fresh'). A STALE artifact is, by DEFAULT, imported AND then incrementally filled up to the working tree — only the artifact→HEAD diff is re-parsed (response source='artifact_bootstrap_fill', graph_state='filled_to_working_tree', with fill_method and {changed,added,deleted,renamed,unchanged} counts). The fill derives its change set from 'git diff <artifact_sha> <working tree>' (renames included), falling back to the bundled manifest's content hashes when the repo is not a git tree. If the import or fill fails, it falls back to a full index explicitly (logged, with a 'bootstrap_skipped' note)."
+        },
+        "accept_stale": {
+            "type": "boolean",
+            "default": false,
+            "description": "Issue #55/#62 — only meaningful with bootstrap=true. Repurposed by the incremental-fill contract: when the committed artifact is stale, accept_stale=true imports the snapshot AS-IS and SKIPS the incremental fill (a deliberate fast path when HEAD-accuracy is not needed). The response carries graph_state='accepted_stale' and a 'stale_artifact' object {artifact_sha, head_sha, commits_behind} so the caller can never mistake the stale graph for a current one; the skipped delta is filled on the next local index_codebase run (which classifies the working tree against the bundled manifest). Leave false (the default) to bootstrap-then-fill up to the working tree."
+        },
+        "full": {
+            "type": "boolean",
+            "default": false,
+            "description": "Issue #62 — force a from-scratch full rebuild. By DEFAULT index_codebase is incremental: when a prior graph at <output_dir>/graph and its file_manifest.json exist, only the files that changed since the last index are re-parsed (the response carries mode='incremental' and {changed, added, deleted, renamed, unchanged} counts). Pass full=true to bypass that and rebuild everything — required when you change 'language', 'dependency_scope', or 'exclude_dirs', none of which the manifest captures."
+        },
+        "cochange": {
+            "type": "boolean",
+            "default": true,
+            "description": "Issue #58 — after indexing, mine git temporal coupling into FILE_CHANGES_WITH File→File edges (Tornhill-style: files that change together, thresholded at >=3 co-changes and >=0.30 coupling degree over a 1-year window). Default true; self-skips on a non-git tree. A full index re-mines the window; an incremental index EXTENDS the mined aggregates with only the new commits (append-only). The response carries a 'cochange' block {mode, commits_scanned, edges_written}. Query the edges via query_graph: `MATCH (a:File)-[r:FILE_CHANGES_WITH]-(b:File) WHERE r.coupling > 0.5 RETURN a.id, b.id, r.cochange_count`."
+        }
+    })
+}
+
+/// The `index_codebase` input properties, assembled from the two halves
+/// above. Split because the single extracted literal was itself 60 lines,
+/// over the §4.2 cap the extraction existed to satisfy (fleet-watch#112
+/// review). Key order carries no meaning — `serde_json`'s object map is
+/// ordered by key, not by insertion.
+fn index_codebase_properties() -> Value {
+    let mut props = index_codebase_source_properties();
+    if let (Some(target), Value::Object(source)) =
+        (props.as_object_mut(), index_codebase_mode_properties())
+    {
+        target.extend(source);
+    }
+    props
 }
 
 /// The `detail` token-surface parameter (issue #56), shared by list-returning
