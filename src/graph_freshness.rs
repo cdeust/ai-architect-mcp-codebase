@@ -139,6 +139,20 @@ fn read_meta(output_dir: &Path) -> Option<GraphMeta> {
 /// defeating "cheap". That gap makes this signal a floor on staleness, not a
 /// ceiling: a caller who needs the ceiling forces `full=true` on
 /// `index_codebase` rather than trusting this guard alone.
+///
+/// COST — `O(manifested files)` `stat(2)` calls on EVERY call, with no cache
+/// and no sampling. `search_codebase`, `get_symbol` and `get_impact` each pay
+/// it once per invocation, so the price of a read tool grows linearly with the
+/// size of the indexed codebase, not with the size of the answer. Concretely,
+/// a repository with 50k indexed files pays 50k `stat`s per read-tool call; a
+/// warm page cache makes each one cheap (sub-microsecond), but 50k of them are
+/// still tens of milliseconds, and a cold cache or a network filesystem is far
+/// worse. "Cheap" here means cheap RELATIVE to re-hashing or re-walking the
+/// tree — it is not a constant-time check, and a caller driving these tools in
+/// a tight loop over a large codebase should expect the guard to dominate. No
+/// bound is imposed deliberately: a sampled or time-boxed check would report a
+/// freshness verdict it cannot stand behind, which is the exact failure this
+/// module exists to remove.
 fn count_dirty(root: &Path, files: &BTreeMap<String, FileState>) -> usize {
     files
         .iter()
