@@ -14,9 +14,12 @@ adheres to [Semantic Versioning](https://semver.org/).
   `commits_ahead`) so a silently stale graph — the working tree has moved since
   the last index — becomes a visible, reasoned-about condition instead of a
   wrong answer presented with full confidence. It rides on EVERY response these
-  tools return, `symbol_not_found` and `query_failed` included: a caller told
-  the symbol does not exist is exactly the caller who needs to know the graph
-  may simply predate it. The key is deliberately NOT `graph_state`, which
+  tools return — `symbol_not_found`, `query_failed`, and a failure to open the
+  store or run the query alike, the last being exactly what an in-progress
+  re-index looks like from a read tool. That is structural, not a matter of
+  remembering: the receipt is stamped at each tool's single exit, so a future
+  `?` anywhere in a handler body is covered by construction. The key is
+  deliberately NOT `graph_state`, which
   `index_codebase` / `index_history` already use for a plain string
   (`"fresh"` / `"accepted_stale"` / `"filled_to_working_tree"`) — one key with
   two shapes would break any client that types the field once. The commit
@@ -33,6 +36,19 @@ adheres to [Semantic Versioning](https://semver.org/).
   sidecar nor two concurrent indexers of one `output_dir` interleave through a
   shared temp path; a schema-1 sidecar from an older index still parses, just
   without the commit signal.
+
+### Security
+
+- The query-time staleness check no longer resolves `file_manifest.json` keys
+  that escape the indexed root (fleet-watch#112). `Path::join` discards its base
+  when handed an absolute component, so a crafted sidecar key — `/etc/shadow`,
+  or a `../` traversal — was `stat`ed outside the indexed tree, and the reported
+  dirty count then told the caller whether that file's mtime and size matched
+  the value they had planted: an existence-and-attributes oracle over the host
+  filesystem, one guess per read-tool call. Manifest keys must now be relative
+  paths of ordinary components, which is what the indexer has always written;
+  anything else is refused before the `stat` and counted as unverifiable rather
+  than silently treated as evidence of freshness.
 
 ## [0.11.1] — Ingestion must never abort on graph size
 
