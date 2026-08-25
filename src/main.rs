@@ -26,6 +26,7 @@ mod clustering;
 mod cochange;
 mod epistemic;
 mod git_diff;
+mod git_provenance;
 mod graph_cache;
 mod graph_freshness;
 mod graph_store;
@@ -193,77 +194,15 @@ fn handle_tool_call(params: &Value, profile: ToolProfile) -> Value {
     // A tool the active profile does not register must behave exactly like
     // a tool that does not exist — the profile IS the registry.
     if !profile.allows(name) {
-        return json!({
-            "isError": true,
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Unknown tool: {} (not registered under the '{}' profile; \
-                     restart with --profile full to expose every tool)",
-                    name,
-                    profile.name()
-                )
-            }]
-        });
+        return unknown_tool_error(format!(
+            "Unknown tool: {} (not registered under the '{}' profile; \
+             restart with --profile full to expose every tool)",
+            name,
+            profile.name()
+        ));
     }
-
-    let payload = match name {
-        "health_check" => {
-            // source: C-correctness bug 3 — the count was a hardcoded `19`
-            // that silently lied if a new tool was added without bumping it.
-            // Derive from tools_list() so the count can never drift.
-            let tools_count = tools_list(profile)
-                .get("tools")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
-            json!({
-                "stage": 0,
-                "name": "health_check",
-                "status": "ok",
-                "server": SERVER_NAME,
-                "version": SERVER_VERSION,
-                "protocol": PROTOCOL_VERSION,
-                // Kept for back-compat with existing clients that parse
-                // `stages_registered`. Both now reflect the live tool count.
-                "stages_registered": tools_count,
-                "tools_count": tools_count,
-            })
-        }
-        "extract_finding" => run_extract_finding(&arguments),
-        "refine_finding" => run_refine_finding(&arguments),
-        "start_verification" => run_start_verification(&arguments),
-        "append_clarification" => run_append_clarification(&arguments),
-        "finalize_verification" => run_finalize_verification(&arguments),
-        "abort_verification" => run_abort_verification(&arguments),
-        "index_codebase" => run_index_codebase(&arguments),
-        "index_status" => run_index_status(&arguments),
-        "ingest_traces" => run_ingest_traces(&arguments),
-        "query_graph" => run_query_graph(&arguments),
-        "get_symbol" => run_get_symbol(&arguments),
-        "resolve_graph" => run_resolve_graph(&arguments),
-        "cluster_graph" => run_cluster_graph(&arguments),
-        "get_processes" => run_get_processes(&arguments),
-        "get_impact" => run_get_impact(&arguments),
-        "index_history" => run_index_history(&arguments),
-        "search_codebase" => run_search_codebase(&arguments),
-        "get_context" => run_get_context(&arguments),
-        "analyze_codebase" => run_analyze_codebase(&arguments),
-        "detect_changes" => run_detect_changes(&arguments),
-        "lsp_resolve" => run_lsp_resolve(&arguments),
-        "prepare_prd_input" => run_prepare_prd_input(&arguments),
-        "validate_prd_against_graph" => run_validate_prd_against_graph(&arguments),
-        "check_security_gates" => run_check_security_gates(&arguments),
-        "verify_semantic_diff" => run_verify_semantic_diff(&arguments),
-        other => {
-            return json!({
-                "isError": true,
-                "content": [{
-                    "type": "text",
-                    "text": format!("Unknown tool: {}", other)
-                }]
-            });
-        }
+    let Some(payload) = dispatch_tool(name, &arguments, profile) else {
+        return unknown_tool_error(format!("Unknown tool: {name}"));
     };
 
     json!({
@@ -272,6 +211,75 @@ fn handle_tool_call(params: &Value, profile: ToolProfile) -> Value {
             "text": serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
         }]
     })
+}
+
+/// The MCP error envelope for a name this server will not answer — whether it
+/// does not exist at all or the active profile does not register it. One shape
+/// for both, because the caller must not be able to tell them apart.
+fn unknown_tool_error(text: String) -> Value {
+    json!({
+        "isError": true,
+        "content": [{ "type": "text", "text": text }]
+    })
+}
+
+/// The live tool count, derived from `tools_list` rather than stated.
+///
+/// source: C-correctness bug 3 — the count was a hardcoded `19` that silently
+/// lied if a new tool was added without bumping it.
+fn health_check_payload(profile: ToolProfile) -> Value {
+    let tools_count = tools_list(profile)
+        .get("tools")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    json!({
+        "stage": 0,
+        "name": "health_check",
+        "status": "ok",
+        "server": SERVER_NAME,
+        "version": SERVER_VERSION,
+        "protocol": PROTOCOL_VERSION,
+        // Kept for back-compat with existing clients that parse
+        // `stages_registered`. Both now reflect the live tool count.
+        "stages_registered": tools_count,
+        "tools_count": tools_count,
+    })
+}
+
+/// Name → handler. A pure dispatch table, one line per tool (§4.2's stated
+/// exception to the length cap); `None` means no such tool.
+fn dispatch_tool(name: &str, arguments: &Value, profile: ToolProfile) -> Option<Value> {
+    let payload = match name {
+        "health_check" => health_check_payload(profile),
+        "extract_finding" => run_extract_finding(arguments),
+        "refine_finding" => run_refine_finding(arguments),
+        "start_verification" => run_start_verification(arguments),
+        "append_clarification" => run_append_clarification(arguments),
+        "finalize_verification" => run_finalize_verification(arguments),
+        "abort_verification" => run_abort_verification(arguments),
+        "index_codebase" => run_index_codebase(arguments),
+        "index_status" => run_index_status(arguments),
+        "ingest_traces" => run_ingest_traces(arguments),
+        "query_graph" => run_query_graph(arguments),
+        "get_symbol" => run_get_symbol(arguments),
+        "resolve_graph" => run_resolve_graph(arguments),
+        "cluster_graph" => run_cluster_graph(arguments),
+        "get_processes" => run_get_processes(arguments),
+        "get_impact" => run_get_impact(arguments),
+        "index_history" => run_index_history(arguments),
+        "search_codebase" => run_search_codebase(arguments),
+        "get_context" => run_get_context(arguments),
+        "analyze_codebase" => run_analyze_codebase(arguments),
+        "detect_changes" => run_detect_changes(arguments),
+        "lsp_resolve" => run_lsp_resolve(arguments),
+        "prepare_prd_input" => run_prepare_prd_input(arguments),
+        "validate_prd_against_graph" => run_validate_prd_against_graph(arguments),
+        "check_security_gates" => run_check_security_gates(arguments),
+        "verify_semantic_diff" => run_verify_semantic_diff(arguments),
+        _ => return None,
+    };
+    Some(payload)
 }
 
 // ---------------------------------------------------------------------------
