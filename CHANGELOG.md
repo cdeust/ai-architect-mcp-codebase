@@ -10,15 +10,20 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 - Query-time staleness guard (fleet-watch#112): `search_codebase`, `get_symbol`,
   and `get_impact` now report a `graph_state` object (`state: "fresh" |
-  "stale" | "unknown"`, `dirty_files`, `checked_files`, `commits_behind`) so a
-  silently stale graph — the working tree has moved since the last index —
-  becomes a visible, reasoned-about condition instead of a wrong answer
-  presented with full confidence. Cheap by construction: re-stats the
+  "stale" | "unknown"`, `dirty_files`, `checked_files`, `commits_behind`,
+  `commits_ahead`) so a silently stale graph — the working tree has moved since
+  the last index — becomes a visible, reasoned-about condition instead of a
+  wrong answer presented with full confidence. The commit signal is
+  bidirectional: `commits_ahead` counts commits the indexed sha has that HEAD
+  does not, so a checkout BACK to an older revision is reported as stale
+  instead of scoring 0 like an unmoved HEAD. Re-stats the
   `file_manifest.json` sidecar's tracked files (no re-hashing, no directory
-  walk), plus a git commits-behind count when the indexed root is a git
-  working tree. `meta.json` moves to schema 2, adding `commit_sha` — a
-  schema-1 sidecar from an older index still parses, just without the
-  commits-behind signal.
+  walk) — `O(manifested files)` `stat` calls per read-tool call, documented on
+  `count_dirty` — plus one `git rev-list --left-right --count` when the indexed
+  root is a git working tree. `meta.json` moves to schema 2, adding
+  `commit_sha`, and is now written atomically (temp file + rename) so a
+  concurrent re-index cannot hand a reader a torn sidecar; a schema-1 sidecar
+  from an older index still parses, just without the commit signal.
 
 ## [0.11.1] — Ingestion must never abort on graph size
 
