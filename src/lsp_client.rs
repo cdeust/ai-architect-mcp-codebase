@@ -21,7 +21,8 @@ mod uri;
 pub use commands::{
     detect_lsp_command, is_command_available, validate_lsp_command, LSP_COMMAND_ALLOWLIST,
 };
-use frames::{next_frame, spawn_frame_reader};
+use frames::{drain_pending, next_frame, spawn_frame_reader};
+use protocol::FrameError;
 pub(crate) use protocol::{is_lsp_timeout, LSP_TIMEOUT_PREFIX};
 pub use uri::{file_uri_to_path, path_to_file_uri};
 
@@ -35,7 +36,7 @@ use protocol::{
 
 pub struct LspClient {
     process: Child,
-    frames: Receiver<Result<Value, String>>,
+    frames: Receiver<Result<Value, FrameError>>,
     request_id: AtomicI64,
     timeout: Duration,
 }
@@ -192,7 +193,15 @@ impl LspClient {
                     probe_timeout.as_millis()
                 ));
             }
-            let msg = next_frame(&self.frames, remaining).map_err(classify_probe_err)?;
+            let msg = match next_frame(&self.frames, remaining) {
+                Ok(msg) => msg,
+                // The stream survived, so this frame is skipped and the wait
+                // continues inside the SAME deadline. Propagating it would let
+                // one malformed notification fail a probe the server answered
+                // correctly a frame later.
+                Err(e) if e.is_skippable() => continue,
+                Err(e) => return Err(classify_probe_err(e.message())),
+            };
             if msg.get("id").and_then(|v| v.as_i64()) == Some(id) {
                 return Ok(msg);
             }
@@ -255,6 +264,13 @@ impl LspClient {
         }
         let notif = json!({ "jsonrpc": "2.0", "method": "exit", "params": null });
         let _ = self.send_notification(&notif);
+        // BOUNDED. `wait()` alone blocks forever on a server that ignores
+        // `exit` — the same hang B.6 removed from the read path, one call
+        // later. `try_wait` never blocks; if the server has not gone by now it
+        // is killed, and `wait` after `kill` returns promptly.
+        if !matches!(self.process.try_wait(), Ok(Some(_))) {
+            let _ = self.process.kill();
+        }
         let _ = self.process.wait();
         Ok(())
     }
@@ -266,6 +282,14 @@ impl LspClient {
     }
 
     fn send_request(&mut self, msg: &Value) -> Result<(), String> {
+        // Empty the frame queue first. The write below blocks, and it can only
+        // block forever as part of a CYCLE: a full queue stops the reader
+        // thread, which stops draining the server's stdout, which fills the
+        // server's stdout pipe, which stops the server reading our stdin.
+        // Draining removes the one link in that cycle we own. A deadline on the
+        // write itself would need non-blocking pipe IO; preventing the deadlock
+        // is both cheaper and stronger than failing the request once it starts.
+        drain_pending(&self.frames);
         let bytes = serde_json::to_vec(msg).map_err(|e| format!("serialize request: {e}"))?;
         let stdin = self.process.stdin.as_mut().ok_or("LSP stdin unavailable")?;
         write_lsp_message(stdin, &bytes)
@@ -288,16 +312,33 @@ impl LspClient {
                     "{LSP_TIMEOUT_PREFIX} waiting for response id={target_id}"
                 ));
             }
-            let msg = next_frame(&self.frames, remaining)?;
-            // Check if this is our response
-            if let Some(id) = msg.get("id") {
-                if id.as_i64() == Some(target_id) {
-                    return Ok(msg);
-                }
+            let msg = match next_frame(&self.frames, remaining) {
+                Ok(msg) => msg,
+                // A malformed payload costs its own frame only; the stream is
+                // still aligned, so keep waiting inside the same deadline.
+                Err(e) if e.is_skippable() => continue,
+                Err(e) => return Err(e.message()),
+            };
+            if is_response_to(&msg, target_id) {
+                return Ok(msg);
             }
-            // Otherwise it's a notification or different response — skip
+            // Otherwise it is a notification, a server-initiated request, or
+            // another response — skip it and keep reading.
         }
     }
+}
+
+/// True when `msg` is a RESPONSE to `target_id`, as opposed to a server-
+/// initiated REQUEST that happens to carry the same id.
+///
+/// Both directions of JSON-RPC use `id`, and the two id spaces are independent:
+/// a server request (`window/workDoneProgress/create`,
+/// `workspace/configuration`) numbers its own, so matching on `id` alone
+/// returned the server's question to us as if it were our answer. A response
+/// carries no `method`; a request always does. source: JSON-RPC 2.0 §5 and LSP
+/// 3.17 §Base Protocol.
+fn is_response_to(msg: &Value, target_id: i64) -> bool {
+    msg.get("method").is_none() && msg.get("id").and_then(Value::as_i64) == Some(target_id)
 }
 
 impl Drop for LspClient {
@@ -343,5 +384,69 @@ mod tests {
             err.starts_with("lsp_probe_failed"),
             "expected lsp_probe_failed prefix, got: {err}"
         );
+    }
+
+    /// Round-3 finding 5. Both directions of JSON-RPC use `id`, and the two id
+    /// spaces are INDEPENDENT: a server-initiated request
+    /// (`window/workDoneProgress/create`, `workspace/configuration`) numbers its
+    /// own. Matching on `id` alone therefore handed the server's question back
+    /// as if it were our answer, and `parse_definition_response` then read a
+    /// request's `params` as a definition result.
+    ///
+    /// A response carries no `method`; a request always does.
+    #[test]
+    fn a_server_request_is_not_mistaken_for_our_response() {
+        let ours = json!({"jsonrpc": "2.0", "id": 3, "result": null});
+        assert!(is_response_to(&ours, 3));
+
+        for server_request in [
+            json!({"jsonrpc": "2.0", "id": 3, "method": "window/workDoneProgress/create",
+                   "params": {"token": "t"}}),
+            json!({"jsonrpc": "2.0", "id": 3, "method": "workspace/configuration",
+                   "params": {"items": []}}),
+        ] {
+            assert!(
+                !is_response_to(&server_request, 3),
+                "a request carrying our id is still a request: {server_request}"
+            );
+        }
+
+        // A different id is not ours either way.
+        assert!(!is_response_to(
+            &json!({"jsonrpc": "2.0", "id": 4, "result": null}),
+            3
+        ));
+        // A notification has no id at all.
+        assert!(!is_response_to(
+            &json!({"jsonrpc": "2.0", "method": "$/progress"}),
+            3
+        ));
+    }
+
+    /// Finding 3. `shutdown` used to end on an unbounded `wait()`, so a server
+    /// that ignores `exit` held the run forever — the hang B.6 removed from the
+    /// read path, one call later. Driven against a REAL child that never exits
+    /// on its own: `cat` keeps running until its stdin closes or it is killed.
+    #[test]
+    fn shutdown_returns_against_a_server_that_never_exits() {
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cat");
+        let stdout = child.stdout.take().expect("stdout");
+        let client = LspClient {
+            process: child,
+            frames: spawn_frame_reader(stdout),
+            request_id: AtomicI64::new(1),
+            // Short, because the shutdown handshake will never be answered:
+            // the assertion is that the call RETURNS, never on how long it took.
+            timeout: Duration::from_millis(50),
+        };
+
+        client.shutdown().expect("shutdown must return, not hang");
     }
 }

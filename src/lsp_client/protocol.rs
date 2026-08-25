@@ -55,6 +55,7 @@ pub(super) fn write_lsp_message(
 /// A timeout that is only consulted between blocking calls is not a timeout.
 /// Why a frame could not be produced, and — the part that matters — whether the
 /// stream is still usable afterwards.
+#[derive(Debug)]
 pub(super) enum FrameError {
     /// The body was read in full and the stream is still byte-aligned; only the
     /// PAYLOAD was unusable. The next frame can be read normally.
@@ -62,13 +63,22 @@ pub(super) enum FrameError {
     /// Framing or IO failed, so the stream position is unknown and no later
     /// frame can be trusted.
     Fatal(String),
+    /// No frame arrived inside the caller's deadline. The stream is fine; this
+    /// call simply ran out of time.
+    Timeout(String),
 }
 
 impl FrameError {
     pub(super) fn message(self) -> String {
         match self {
-            FrameError::Payload(m) | FrameError::Fatal(m) => m,
+            FrameError::Payload(m) | FrameError::Fatal(m) | FrameError::Timeout(m) => m,
         }
+    }
+
+    /// True when the frame was unusable but the STREAM was not: the caller may
+    /// skip it and keep waiting inside its own deadline.
+    pub(super) fn is_skippable(&self) -> bool {
+        matches!(self, FrameError::Payload(_))
     }
 }
 
