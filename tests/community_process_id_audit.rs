@@ -15,8 +15,22 @@
 // new one fails this test until someone classifies it, which is the only step
 // that has actually been skipped three times.
 //
-// This guards the AUDIT, not the values: it cannot tell a guarded read from an
-// unguarded one. What it makes impossible is a new reader arriving unnoticed.
+// WHAT THIS GUARD CANNOT DO — stated so nobody mistakes a green run for proof
+// that the family is closed:
+//
+//   * It detects an UNLISTED file. It does not detect a WRONG per-site filter.
+//     Five independent implementations of "an empty value means none" exist
+//     across the classified sites; this test does not check that they agree, or
+//     that any one of them is correct. A site could drop its filter entirely
+//     and stay green here.
+//   * It reads TEXT, not behaviour. A reader built through a helper, a
+//     `format!` assembled elsewhere, or a label interpolated from a variable
+//     does not match `:Community)` / `:Process)` at all, so it stays invisible
+//     to this scan.
+//
+// What it makes impossible is exactly one thing: a NEW reader arriving without
+// anyone deciding what it does about empty values. That is the step that was
+// skipped three rounds running, which is why it is the step that is mechanised.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -81,26 +95,67 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// A file is test code when it is a test module or carries `#[cfg(test)]`
-/// around the query. Fixtures build their own degenerate graphs on purpose.
-fn is_test_file(rel: &str, body: &str) -> bool {
-    rel.ends_with("_tests.rs") || rel.ends_with("/tests.rs") || body.contains("#[cfg(test)]\nmod")
+/// Line ranges of the `#[cfg(test)]` regions in `body`.
+///
+/// Scoped by BRACE DEPTH from the item the attribute gates, so the region ends
+/// where that item ends. The previous version asked only whether the attribute
+/// appeared ANYWHERE in the file, which exempted every production file carrying
+/// this repo's normal inline test module — `membership.rs`,
+/// `community_membership.rs`, `context.rs` and `enrichment.rs`, four of the five
+/// non-owner entries, all touched by the PR that added this guard. The guard
+/// commissioned to stop "a sibling survives because the sweep missed it"
+/// reproduced that exact failure inside itself.
+fn cfg_test_line_ranges(body: &str) -> Vec<(usize, usize)> {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if !lines[i].trim_start().starts_with("#[cfg(test)]") {
+            i += 1;
+            continue;
+        }
+        let (mut depth, mut opened, start) = (0i32, false, i);
+        let mut j = i;
+        while j < lines.len() {
+            for byte in lines[j].bytes() {
+                match byte {
+                    b'{' => {
+                        depth += 1;
+                        opened = true;
+                    }
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if opened && depth <= 0 {
+                break;
+            }
+            j += 1;
+        }
+        // `#[cfg(test)] mod name;` has no braces: it gates ANOTHER file, so it
+        // covers nothing in this one.
+        ranges.push(if opened { (start, j) } else { (start, start) });
+        i = j + 1;
+    }
+    ranges
 }
 
-/// True when the file contains a Cypher pattern matching one of these nodes in
-/// EXECUTABLE code.
+/// True when the file matches a Community or Process node in EXECUTABLE,
+/// NON-TEST code.
 ///
 /// Comment lines are excluded, and that is not cosmetic: several modules quote
 /// a query in prose to explain a downstream invariant without reading anything
-/// themselves (`process_impact_handlers` documents `get_processes`' lack of an
-/// ORDER BY while consuming a decoded `ProcessInfo`). Listing those as readers
-/// would put entries in the inventory that describe documentation rather than
-/// code, and an inventory that overstates its scope stops being checkable.
+/// (`process_impact_handlers` documents `get_processes`' lack of an ORDER BY
+/// while consuming a decoded `ProcessInfo`). Listing those as readers would put
+/// entries in the inventory that describe documentation rather than code.
 fn reads_community_or_process(body: &str) -> bool {
-    body.lines()
-        .map(str::trim_start)
-        .filter(|line| !line.starts_with("//"))
-        .any(|line| line.contains(":Community)") || line.contains(":Process)"))
+    let gated = cfg_test_line_ranges(body);
+    body.lines().enumerate().any(|(n, line)| {
+        let code = line.trim_start();
+        !code.starts_with("//")
+            && !gated.iter().any(|(from, to)| n >= *from && n <= *to)
+            && (code.contains(":Community)") || code.contains(":Process)"))
+    })
 }
 
 #[test]
@@ -120,10 +175,10 @@ fn every_community_or_process_reader_is_classified() {
         let Ok(body) = fs::read_to_string(path) else {
             continue;
         };
-        if !reads_community_or_process(&body) {
+        if rel.ends_with("_tests.rs") || rel.ends_with("/tests.rs") {
             continue;
         }
-        if is_test_file(&rel, &body) {
+        if !reads_community_or_process(&body) {
             continue;
         }
         if !CLASSIFIED.iter().any(|(file, _)| *file == rel) {
