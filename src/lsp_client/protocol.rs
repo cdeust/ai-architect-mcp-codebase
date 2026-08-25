@@ -17,6 +17,19 @@ use std::time::{Duration, Instant};
 // source: LSP spec §Base Protocol
 // ---------------------------------------------------------------------------
 
+/// Prefix every timeout this module raises carries, so a caller classifies a
+/// timed-out request by an EXACT match on a value this module owns rather than
+/// by sniffing for the word "timeout" anywhere in an error string. A server
+/// error that merely mentions the word — a symbol named `timeout`, a message
+/// quoting one — is not a timeout, and counting it as one silently moved a
+/// real failure into the `skipped` bucket.
+pub(crate) const LSP_TIMEOUT_PREFIX: &str = "lsp_timeout:";
+
+/// True when `e` is a timeout this module raised.
+pub(crate) fn is_lsp_timeout(e: &str) -> bool {
+    e.starts_with(LSP_TIMEOUT_PREFIX)
+}
+
 pub(super) fn write_lsp_message(
     stdin: &mut std::process::ChildStdin,
     msg: &[u8],
@@ -46,7 +59,7 @@ pub(super) fn read_lsp_message(
     let mut saw_any_byte = false;
     loop {
         if Instant::now() > deadline {
-            return Err("timeout reading LSP header".to_string());
+            return Err(format!("{LSP_TIMEOUT_PREFIX} reading LSP header"));
         }
         let mut line = String::new();
         let n = reader
@@ -96,9 +109,7 @@ pub(super) fn classify_probe_err(e: String) -> String {
         "found on PATH but dropped the connection mid-header (partial LSP framing then EOF)"
     } else if e.contains("missing Content-Length") {
         "found on PATH but sent non-LSP output (no Content-Length header)"
-    } else if e.contains("timeout reading LSP header")
-        || e.contains("no response within probe timeout")
-    {
+    } else if is_lsp_timeout(&e) || e.contains("no response within probe timeout") {
         "found on PATH but didn't respond within the probe window (not an LSP server or hung)"
     } else if e.contains("parse JSON body") {
         "found on PATH but sent non-JSON-RPC bytes as the first frame"

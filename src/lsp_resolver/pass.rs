@@ -62,7 +62,11 @@ impl LspPass {
             Ok(None) => self.failed += 1,
             // A timed-out request produced no answer, so it is neither
             // resolved nor failed and falls into `skipped` by the identity.
-            Err(e) if e.contains("timeout") => {}
+            // Matched on the sentinel `lsp_client` raises, never on the word
+            // "timeout" appearing somewhere in the text: a server error that
+            // merely mentions it is a real failure, and counting it as skipped
+            // hid it from `failed_count`.
+            Err(e) if lsp_client::is_lsp_timeout(&e) => {}
             Err(_) => self.failed += 1,
         }
     }
@@ -128,8 +132,18 @@ mod tests {
         pass.record(&store, &site("s2"), Ok(None), &ctx);
         pass.record(&store, &site("s3"), Err("broken pipe".to_string()), &ctx);
         // A timed-out request produced no answer at all: neither resolved nor
-        // failed, so the identity counts it as skipped.
-        pass.record(&store, &site("s4"), Err("read timeout".to_string()), &ctx);
+        // failed, so the identity counts it as skipped. Uses the sentinel
+        // `lsp_client` actually raises rather than a hand-written string that
+        // merely contains the word.
+        pass.record(
+            &store,
+            &site("s4"),
+            Err(format!(
+                "{} reading LSP header",
+                lsp_client::LSP_TIMEOUT_PREFIX
+            )),
+            &ctx,
+        );
 
         let out = pass.into_result(0);
         assert_eq!(out.resolved_count, 0);
@@ -219,5 +233,52 @@ mod tests {
             1,
             "an unmapped definition is a failure, not a resolution"
         );
+    }
+
+    /// B.6. `skipped` used to be decided by `e.contains("timeout")`, so any
+    /// server error whose text merely mentioned the word — a symbol named
+    /// `timeout`, a message quoting one — was moved out of `failed_count` and
+    /// into `skipped`, hiding a real failure. Classification is now an exact
+    /// match on the sentinel `lsp_client` raises.
+    #[test]
+    fn only_a_real_timeout_counts_as_skipped() {
+        let dir = tempfile::Builder::new()
+            .prefix("lsp_pass_timeout_classification")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        store.create_schema().expect("schema");
+        let index = HashMap::new();
+        let root = dir.path().to_path_buf();
+        let ctx = SiteContext {
+            node_index: &index,
+            canonical_root: &root,
+        };
+
+        let mut pass = LspPass::new(2);
+        // Mentions the word, is NOT a timeout: a genuine failure.
+        pass.record(
+            &store,
+            &site("s1"),
+            Err("no definition for symbol `timeout`".to_string()),
+            &ctx,
+        );
+        // The real thing.
+        pass.record(
+            &store,
+            &site("s2"),
+            Err(format!(
+                "{} reading LSP header",
+                lsp_client::LSP_TIMEOUT_PREFIX
+            )),
+            &ctx,
+        );
+
+        let out = pass.into_result(0);
+        assert_eq!(
+            out.failed_count, 1,
+            "an error that merely mentions the word must stay a failure"
+        );
+        assert_eq!(out.skipped_count, 1, "only the sentinel counts as skipped");
     }
 }

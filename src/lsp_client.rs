@@ -20,6 +20,7 @@ mod uri;
 pub use commands::{
     detect_lsp_command, is_command_available, validate_lsp_command, LSP_COMMAND_ALLOWLIST,
 };
+pub(crate) use protocol::{is_lsp_timeout, LSP_TIMEOUT_PREFIX};
 pub use uri::{file_uri_to_path, path_to_file_uri};
 
 use protocol::{
