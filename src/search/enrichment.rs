@@ -187,7 +187,14 @@ pub(super) fn load_process_counts(store: &GraphStore) -> HashMap<String, usize> 
 /// per candidate on the substring fallback, and that path scans every node of
 /// every searchable label.
 pub(super) fn lookup_community(store: &GraphStore, label: &str, node_id: &str) -> Option<String> {
-    community_of(store, label, SymbolMatch::Id(node_id)).map(|c| c.id)
+    community_of(store, label, SymbolMatch::Id(node_id))
+        .map(|c| c.id)
+        // A degenerate empty id is not an answer here either. The other two
+        // consumers of this traversal already dropped it; forwarding it from
+        // this one put an empty string into a hit's `community_id` annotation
+        // and into the small-community boost lookup, so the codebase carried
+        // two definitions of "no community" at once.
+        .filter(|cid| !cid.is_empty())
 }
 
 /// The processes this node participates in. Empty for every label but
@@ -230,5 +237,64 @@ mod tests {
         let (clause, has_lines) = return_clause("Module");
         assert!(!has_lines);
         assert!(!clause.contains("start_line"), "clause: {clause}");
+    }
+
+    /// Review finding 4. The "an empty `Community.id` is not an answer" rule
+    /// was applied to two of the three consumers of this traversal; this one
+    /// still forwarded `""` into a hit's `community_id` annotation and into the
+    /// small-community boost lookup, so the codebase held two definitions of
+    /// "no community" at once — a caller reading the annotation saw an empty
+    /// string where the other paths reported nothing at all.
+    ///
+    /// Fails with `Some("")` before the filter.
+    #[test]
+    fn an_empty_community_id_reads_as_no_community() {
+        use crate::graph_store::{GraphStore, NODE_COMMUNITY, NODE_FUNCTION};
+
+        let dir = tempfile::Builder::new()
+            .prefix("enrichment_empty_community")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        store.create_schema().expect("schema");
+
+        let qn = "m.rs::f";
+        store
+            .insert_node(
+                NODE_COMMUNITY,
+                &[
+                    ("id", "''"),
+                    ("name", "''"),
+                    ("algorithm", "'louvain+c2'"),
+                    ("resolution_param", "1.0"),
+                    ("member_count", "1"),
+                    ("modularity_contribution", "0.0"),
+                ],
+            )
+            .expect("insert community");
+        store
+            .insert_node(
+                NODE_FUNCTION,
+                &[
+                    ("id", "'m.rs::f'"),
+                    ("name", "'f'"),
+                    ("qualified_name", "'m.rs::f'"),
+                    ("start_line", "1"),
+                    ("end_line", "1"),
+                    ("visibility", "'pub'"),
+                    ("is_async", "false"),
+                ],
+            )
+            .expect("insert fn");
+        store
+            .insert_edge("MemberOf_Function_Community", qn, "", &[])
+            .expect("insert MemberOf");
+
+        assert_eq!(
+            lookup_community(&store, "Function", qn),
+            None,
+            "an empty Community.id must read as no community, as it does on \
+             the other two consumers of this traversal"
+        );
     }
 }
