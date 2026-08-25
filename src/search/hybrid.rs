@@ -96,9 +96,9 @@ pub(super) fn search_hybrid(
     Ok(results)
 }
 
-/// Attaches graph metadata to one fused hit, or drops it: `None` when the
-/// retrieval score falls under `options.min_score`, or when neither a
-/// searchable label nor a `File` holds the key.
+/// Attaches graph metadata to one fused hit, or drops it: `None` when neither
+/// a searchable label nor a `File` holds the key, or when the resulting score
+/// falls under `options.min_score`.
 ///
 /// The two kinds of hit are enriched by the two helpers below; this function
 /// owns only the gate they share and the order they are tried in.
@@ -108,17 +108,6 @@ fn enrich_from_graph(
     boosts: &RankBoosts,
     options: &SearchOptions,
 ) -> Option<SearchResult> {
-    // ONE threshold, ONE scale, applied before any kind-specific enrichment.
-    // `min_score` gates the RETRIEVAL score every hit is ranked by; the
-    // community and process boosts tilt the order, they do not decide
-    // membership. Gating on the BOOSTED score instead made one `min_score`
-    // mean two different things: a symbol cleared the bar after a boost a File
-    // hit can never receive (files are neither clustered nor traced), so two
-    // hits at the identical retrieval score were admitted or dropped by kind.
-    if hit.score < options.min_score {
-        return None;
-    }
-
     // fleet-watch#112: a BM25 hit whose body-only match came from a doc/prose
     // File (see `bm25::index_file_docs`) has a `qualified_name` that is a file
     // path, not a symbol key — no SEARCHABLE_LABELS table can ever bind it
@@ -127,14 +116,37 @@ fn enrich_from_graph(
     // kept OUT of SEARCHABLE_LABELS rather than added to it: that const is
     // shared with community detection and semantic diff, neither of which a
     // File belongs in. So it is a fallback here, not a ninth label.
-    enrich_symbol_hit(store, hit, boosts, options).or_else(|| enrich_file_hit(store, hit, options))
+    let enriched = enrich_symbol_hit(store, hit, boosts, options)
+        .or_else(|| enrich_file_hit(store, hit, boosts, options))?;
+
+    // ONE threshold, ONE scale, and the scale is the score the caller is
+    // actually shown. Both helpers compute it the same way — the retrieval
+    // score plus `boost_for` — so `min_score` means one thing across result
+    // kinds, and the invariant a caller can check holds: every result returned
+    // has `score >= min_score`.
+    //
+    // The two ways to get this wrong were both tried in review. Gating each
+    // helper on ITS OWN score let a symbol clear the bar on a boosted score
+    // while a File was judged on a raw one — one threshold, two scales. Hoisting
+    // the gate onto the raw score ahead of enrichment made it uniform but
+    // strictly narrowed pre-existing results: `boost_for` is non-negative, so
+    // every symbol that used to pass on `score + boost` and now failed on
+    // `score` alone was a silent recall regression (worked example: raw 0.0095
+    // with a 0.002 small-community boost passed the `min_score: 0.01` both
+    // production callers use, and stopped passing). Gating the final score
+    // keeps symbols behaving exactly as they did before fleet-watch#112 and
+    // subjects Files to the identical expression.
+    if enriched.score < options.min_score {
+        return None;
+    }
+    Some(enriched)
 }
 
 /// Binds `hit.key` to the first searchable label that holds it as a
 /// `qualified_name`, and applies the community/process boosts to its score.
 ///
-/// The boosts reach the REPORTED score only — `enrich_from_graph` has already
-/// decided membership on the unboosted retrieval score.
+/// Membership is NOT decided here — `enrich_from_graph` owns the one
+/// `min_score` gate, over the score this function computes.
 fn enrich_symbol_hit(
     store: &GraphStore,
     hit: &rrf::RrfResult,
@@ -197,12 +209,17 @@ fn enrich_symbol_hit(
 /// today, and going through the shared resolver is what stops that agreement
 /// from being load-bearing here.
 ///
-/// `min_score` is NOT re-checked: `enrich_from_graph` has already gated this
-/// hit on the retrieval score, and re-applying the threshold to a differently
-/// scaled score is exactly the kind-dependent recall gap that gate removed.
+/// The score is composed by the SAME expression [`enrich_symbol_hit`] uses —
+/// retrieval score plus `boost_for` — so that the one `min_score` gate in
+/// `enrich_from_graph` compares like with like. A File's boost is structurally
+/// zero today (it belongs to no community, and only Function/Method rows enter
+/// `process_counts`), but writing the expression rather than the zero is what
+/// keeps the two kinds on one rule instead of two that happen to agree.
+/// Membership is NOT decided here.
 fn enrich_file_hit(
     store: &GraphStore,
     hit: &rrf::RrfResult,
+    boosts: &RankBoosts,
     options: &SearchOptions,
 ) -> Option<SearchResult> {
     if let Some(ref filter) = options.label_filter {
@@ -218,12 +235,14 @@ fn enrich_file_hit(
     if row.len() < 2 {
         return None;
     }
+    let path = row[0].clone();
+    let score = hit.score + boosts.boost_for(&path, None, &HYBRID_WEIGHTS);
     Some(SearchResult {
-        qualified_name: row[0].clone(),
+        qualified_name: path.clone(),
         name: row[1].clone(),
         label: NODE_FILE.to_string(),
-        file_path: row[0].clone(),
-        score: hit.score,
+        file_path: path,
+        score,
         community_id: None,
         process_names: Vec::new(),
         start_line: None,

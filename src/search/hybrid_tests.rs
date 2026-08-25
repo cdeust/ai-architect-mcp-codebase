@@ -15,19 +15,7 @@ fn fixture() -> (tempfile::TempDir, GraphStore) {
     store.create_schema().expect("schema");
 
     for id in ["src/main.rs", "docs/guide.md"] {
-        store
-            .insert_node(
-                NODE_FILE,
-                &[
-                    ("id", &format!("'{id}'")),
-                    ("path", &format!("'{id}'")),
-                    ("name", "'x'"),
-                    ("extension", "'md'"),
-                    ("size_bytes", "1"),
-                    ("parse_errors", "0"),
-                ],
-            )
-            .expect("insert File");
+        insert_file(&store, id);
     }
     store
         .insert_node(
@@ -43,7 +31,30 @@ fn fixture() -> (tempfile::TempDir, GraphStore) {
             ],
         )
         .expect("insert Function");
-    // member_count 5 < SMALL_COMMUNITY (20), so `boost_for` pays out.
+    put_in_small_community(&store, "main.rs::alpha");
+    (dir, store)
+}
+
+fn insert_file(store: &GraphStore, id: &str) {
+    store
+        .insert_node(
+            NODE_FILE,
+            &[
+                ("id", &format!("'{id}'")),
+                ("path", &format!("'{id}'")),
+                ("name", "'x'"),
+                ("extension", "'md'"),
+                ("size_bytes", "1"),
+                ("parse_errors", "0"),
+            ],
+        )
+        .expect("insert File");
+}
+
+/// Puts `qn` in a community of 5 — under `SMALL_COMMUNITY` (20), so
+/// `boost_for` actually pays out and the threshold tests have a boost to
+/// straddle.
+fn put_in_small_community(store: &GraphStore, qn: &str) {
     store
         .insert_node(
             NODE_COMMUNITY,
@@ -58,9 +69,8 @@ fn fixture() -> (tempfile::TempDir, GraphStore) {
         )
         .expect("insert Community");
     store
-        .insert_edge("MemberOf_Function_Community", "main.rs::alpha", "c1", &[])
+        .insert_edge("MemberOf_Function_Community", qn, "c1", &[])
         .expect("insert MemberOf edge");
-    (dir, store)
 }
 
 fn hit(key: &str, score: f64) -> rrf::RrfResult {
@@ -78,49 +88,77 @@ fn options(min_score: f64) -> SearchOptions {
     }
 }
 
-/// Review finding 10. `min_score` was applied to two different scales
-/// depending on the kind of hit: the symbol branch compared
-/// `hit.score + boost`, the File branch compared the raw `hit.score`. Since a
-/// File can never receive the community/process boost (files are neither
-/// clustered nor traced), a File hit at the SAME retrieval score as a symbol
-/// was dropped where the symbol cleared the bar — a recall gap for any caller
-/// who sets `min_score` once and expects it to mean one thing.
+/// Review round 2, finding 3 — the regression guard, with the review's own
+/// worked example.
 ///
-/// This test fails on the pre-fix code: with the threshold placed between the
-/// raw score and the boosted score, the symbol is admitted and the File is not.
+/// Round 1 moved `min_score` off the boosted score and onto the raw retrieval
+/// score. `boost_for` is non-negative, so that was strictly more restrictive
+/// for every symbol carrying a community or process boost: a symbol at raw
+/// 0.0095 with a 0.002 small-community boost (final 0.0115) passed the
+/// `min_score: 0.01` that BOTH production callers use, and stopped passing.
+/// Silently narrowing pre-existing, non-File results.
+///
+/// This test fails on the round-1 code, which drops the symbol.
 #[test]
-fn min_score_admits_both_hit_kinds_on_the_same_scale() {
+fn a_boosted_symbol_still_clears_the_production_threshold() {
     let (_dir, store) = fixture();
     let boosts = RankBoosts::load(&store);
 
-    // The Function's boost is HYBRID_WEIGHTS.small_community (0.002); the
-    // threshold sits strictly between the raw score and the boosted one.
-    let raw = 0.010_f64;
-    let opts = options(raw + HYBRID_WEIGHTS.small_community / 2.0);
-
-    let symbol = enrich_from_graph(&store, &hit("main.rs::alpha", raw), &boosts, &opts);
-    let file = enrich_from_graph(&store, &hit("docs/guide.md", raw), &boosts, &opts);
-    assert_eq!(
-        symbol.is_some(),
-        file.is_some(),
-        "one min_score, one scale: two hits at the same retrieval score must be \
-         admitted or dropped together, whatever kind they are"
+    // The review's numbers, verbatim: raw 0.0095, small-community boost 0.002,
+    // production threshold 0.01.
+    let raw = 0.0095_f64;
+    const PRODUCTION_MIN_SCORE: f64 = 0.01;
+    assert!(
+        raw < PRODUCTION_MIN_SCORE,
+        "the raw score must sit BELOW the threshold, or this proves nothing"
+    );
+    assert!(
+        raw + HYBRID_WEIGHTS.small_community > PRODUCTION_MIN_SCORE,
+        "and the boosted score must sit above it"
     );
 
-    // And the gate still gates: below the threshold nothing passes, above it
-    // both kinds do.
-    let strict = options(raw * 2.0);
-    assert!(enrich_from_graph(&store, &hit("main.rs::alpha", raw), &boosts, &strict).is_none());
-    assert!(enrich_from_graph(&store, &hit("docs/guide.md", raw), &boosts, &strict).is_none());
-
-    let loose = options(0.0);
-    assert!(enrich_from_graph(&store, &hit("main.rs::alpha", raw), &boosts, &loose).is_some());
-    assert!(enrich_from_graph(&store, &hit("docs/guide.md", raw), &boosts, &loose).is_some());
+    let enriched = enrich_from_graph(
+        &store,
+        &hit("main.rs::alpha", raw),
+        &boosts,
+        &options(PRODUCTION_MIN_SCORE),
+    )
+    .expect("a symbol whose boosted score clears min_score must still be returned");
+    assert!(enriched.score > PRODUCTION_MIN_SCORE);
 }
 
-/// The community boost still reaches the REPORTED score — the gate moved, the
-/// ranking did not. Without this, "gate on the raw score" could be satisfied by
-/// dropping the boost entirely, which would flatten the hybrid ranking.
+/// The other half of the same rule (round 1, finding 10): whatever the kind of
+/// hit, the ONE threshold is compared against the ONE score the caller is
+/// shown. That is the invariant a caller can actually check, and it must hold
+/// for symbols and Files alike.
+#[test]
+fn every_returned_result_satisfies_the_threshold_it_was_gated_on() {
+    let (_dir, store) = fixture();
+    let boosts = RankBoosts::load(&store);
+    let raw = 0.010_f64;
+
+    for min_score in [0.0, 0.005, 0.0105, 0.02] {
+        for key in ["main.rs::alpha", "docs/guide.md"] {
+            if let Some(r) = enrich_from_graph(&store, &hit(key, raw), &boosts, &options(min_score))
+            {
+                assert!(
+                    r.score >= min_score,
+                    "{key} was returned at score {} under min_score {min_score}",
+                    r.score
+                );
+            }
+        }
+    }
+
+    // And the gate still gates rather than admitting everything.
+    let strict = options(raw * 10.0);
+    assert!(enrich_from_graph(&store, &hit("main.rs::alpha", raw), &boosts, &strict).is_none());
+    assert!(enrich_from_graph(&store, &hit("docs/guide.md", raw), &boosts, &strict).is_none());
+}
+
+/// The community boost still reaches the REPORTED score. Without this, "one
+/// scale" could be satisfied by dropping the boost entirely, which would
+/// flatten the hybrid ranking.
 #[test]
 fn the_community_boost_still_tilts_the_reported_score() {
     let (_dir, store) = fixture();
