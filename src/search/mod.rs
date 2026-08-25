@@ -19,7 +19,7 @@
 // over a page), `qualified_name` (the shape of a stored key).
 
 pub mod bm25;
-mod context;
+pub mod context;
 mod enrichment;
 mod grouping;
 mod hybrid;
@@ -29,20 +29,16 @@ mod qualified_name;
 pub mod rrf;
 mod substring;
 pub mod vector;
+mod vector_format;
 
-// The binary crate (src/main.rs `mod search`) consumes only part of this
-// public surface; the library crate (src/lib.rs `pub mod search`) and the
-// integration tests use the rest. Re-exporting the full original surface keeps
-// every `search::X` path valid across the split; `allow(unused_imports)`
-// suppresses the per-binary "unused re-export" warning that fires when a given
-// binary does not touch every item. source: the same pattern in
-// `clustering/mod.rs`.
-#[allow(unused_imports)]
-pub use context::{
-    get_context, CommunityInfo, GetContextError, ProcessRef, RelatedSymbol, SymbolContext,
-};
-#[allow(unused_imports)]
-pub use grouping::{group_hits_by_process, NO_PROCESS_GROUP};
+// Re-export only what a consumer actually names. `SymbolContext`,
+// `CommunityRow` and `ProcessRef` are reachable as `search::context::X` (the
+// module is public) rather than re-exported, so a public signature can still
+// name them without this file carrying a blanket `allow(unused_imports)` to
+// silence per-binary "unused re-export" warnings — that allow is what keeps
+// dead public items alive.
+pub use context::{get_context, GetContextError, RelatedSymbol};
+pub use grouping::group_hits_by_process;
 pub use impact_target::{resolve_impact_target, ImpactTarget};
 pub use name_lookup::{resolve_qualified_name, SymbolNotFound};
 
@@ -222,5 +218,38 @@ pub fn search_graph(
         }
         // Fallback: graph-only substring search (v1 behavior).
         _ => substring::search_substring(store, &terms, options),
+    }
+}
+
+#[cfg(test)]
+mod label_set_tests {
+    use super::SEARCHABLE_LABELS;
+    use std::collections::BTreeSet;
+
+    fn as_set(labels: &[&str]) -> BTreeSet<String> {
+        labels.iter().map(|l| (*l).to_string()).collect()
+    }
+
+    /// Three modules each keep their own ORDER of the searchable symbol labels,
+    /// because in each the order is behaviour — `SEARCHABLE_LABELS` and
+    /// `SYMBOL_LABELS` drive first-hit-wins probes, and `DIFFABLE_LABELS` fixes
+    /// a diff's section order. What must never differ is the SET: a label added
+    /// to one and missed by the others silently drops that kind out of search,
+    /// out of blast radius, or out of a semantic diff, with nothing failing.
+    /// The orders stay independent views; this pins the set.
+    #[test]
+    fn the_three_label_views_hold_the_same_set() {
+        let searchable = as_set(SEARCHABLE_LABELS);
+        let clustering = as_set(crate::clustering::SYMBOL_LABELS);
+        let diffable = as_set(crate::semantic_diff::DIFFABLE_LABELS);
+
+        assert_eq!(
+            searchable, clustering,
+            "search::SEARCHABLE_LABELS and clustering::SYMBOL_LABELS drifted"
+        );
+        assert_eq!(
+            searchable, diffable,
+            "search::SEARCHABLE_LABELS and semantic_diff::DIFFABLE_LABELS drifted"
+        );
     }
 }

@@ -7,11 +7,17 @@
 // answers.
 
 use super::enrichment::{
-    decode_row, lookup_community, lookup_processes, return_clause, RankBoosts,
+    decode_row, lookup_community, lookup_processes, return_clause, BoostWeights, RankBoosts,
 };
 use super::qualified_name::file_path_of;
 use super::{sort_and_truncate, SearchOptions, SearchResult, SEARCHABLE_LABELS};
 use crate::graph_store::GraphStore;
+
+/// Boost weights for the fallback path, which scores overlap in 0..1.
+const SUBSTRING_WEIGHTS: BoostWeights = BoostWeights {
+    small_community: 0.1,
+    per_process: 0.05,
+};
 
 pub(super) fn search_substring(
     store: &GraphStore,
@@ -110,26 +116,13 @@ fn score_candidate(c: &Candidate, terms: &[&str], boosts: &RankBoosts) -> f64 {
         0.0
     };
 
-    let community_boost = match &c.community_id {
-        Some(cid) => {
-            let size = boosts.community_sizes.get(cid).copied().unwrap_or(100);
-            if size < 20 {
-                0.1
-            } else {
-                0.0
-            }
-        }
-        None => 0.0,
-    };
+    let boost = boosts.boost_for(
+        &c.qualified_name,
+        c.community_id.as_deref(),
+        &SUBSTRING_WEIGHTS,
+    );
 
-    let proc_count = boosts
-        .process_counts
-        .get(&c.qualified_name)
-        .copied()
-        .unwrap_or(0);
-    let process_boost = 0.05 * (proc_count.min(3) as f64);
-
-    (best_term_score + multi_bonus + community_boost + process_boost).min(1.0)
+    (best_term_score + multi_bonus + boost).min(1.0)
 }
 
 fn term_score(term: &str, name_lower: &str, qn_lower: &str) -> f64 {

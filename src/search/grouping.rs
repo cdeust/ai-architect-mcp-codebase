@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// Bucket label for hits that participate in no process. Functions/Methods that
 /// belong to no `Process` — and all non-callable kinds (Struct/Enum/Trait/…),
 /// for which `lookup_processes` returns empty by construction — land here.
-pub const NO_PROCESS_GROUP: &str = "(no process)";
+pub(crate) const NO_PROCESS_GROUP: &str = "(no process)";
 
 /// Record group membership for `qn` under `key`, keeping each group's member
 /// list de-duplicated and recording first-seen key order. Extracted from

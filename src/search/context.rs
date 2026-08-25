@@ -8,7 +8,10 @@
 use super::enrichment::parse_opt_u64;
 use super::qualified_name::file_path_of;
 use super::{resolve_qualified_name, SymbolNotFound, SEARCHABLE_LABELS};
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{
+    community_of, cypher_str, label_declares_column, process_names, CommunityRow, GraphStore,
+    SymbolMatch,
+};
 
 pub struct SymbolContext {
     pub qualified_name: String,
@@ -26,7 +29,7 @@ pub struct SymbolContext {
     pub implemented_by: Vec<RelatedSymbol>,
     pub uses: Vec<RelatedSymbol>,
     pub used_by: Vec<RelatedSymbol>,
-    pub community: Option<CommunityInfo>,
+    pub community: Option<CommunityRow>,
     pub processes: Vec<ProcessRef>,
 }
 
@@ -48,12 +51,6 @@ pub struct RelatedSymbol {
 /// slightly-conservative per-direction cap, and push the same value into the
 /// Cypher `LIMIT` so the engine never materializes more rows than we keep.
 const MAX_RELATED_PER_DIRECTION: usize = 100;
-
-pub struct CommunityInfo {
-    pub id: String,
-    pub name: String,
-    pub member_count: u64,
-}
 
 pub struct ProcessRef {
     pub name: String,
@@ -94,8 +91,8 @@ pub fn get_context(
     let implemented_by = find_related_in(store, &escaped, "Implements_");
     let uses = find_related_out(store, &escaped, "Uses_");
     let used_by = find_related_in(store, &escaped, "Uses_");
-    let community = find_community(store, &escaped);
-    let processes = find_processes(store, &escaped);
+    let community = find_community(store, &resolved);
+    let processes = find_processes(store, &resolved);
 
     Ok(SymbolContext {
         qualified_name: resolved,
@@ -131,47 +128,53 @@ type NodeDetails = (
 );
 
 fn find_node_details(store: &GraphStore, escaped: &str) -> Result<NodeDetails, String> {
-    let labels_with_lines = ["Function", "Method", "Struct", "Enum", "Trait"];
-    for label in labels_with_lines {
+    for &label in SEARCHABLE_LABELS {
+        let has_lines = label_declares_column(label, "start_line");
+        let has_visibility = label_declares_column(label, "visibility");
+        let mut columns = String::from("n.name, n.qualified_name");
+        if has_lines {
+            columns.push_str(", n.start_line, n.end_line");
+        }
+        if has_visibility {
+            columns.push_str(", n.visibility");
+        }
         let cypher = format!(
             "MATCH (n:{label}) WHERE n.qualified_name = {escaped} OR n.id = {escaped} \
-             RETURN n.name, n.qualified_name, n.start_line, n.end_line, n.visibility"
+             RETURN {columns}"
         );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            if let Some(row) = qr.rows.first() {
-                if row.len() >= 5 {
-                    return Ok((
-                        label.to_string(),
-                        row[0].clone(),
-                        file_path_of(&row[1]).to_string(),
-                        parse_opt_u64(&row[2]),
-                        parse_opt_u64(&row[3]),
-                        Some(row[4].clone()),
-                    ));
-                }
-            }
+        let Ok(qr) = store.execute_query(&cypher) else {
+            continue;
+        };
+        let Some(row) = qr.rows.first() else {
+            continue;
+        };
+        if row.len() < 2 {
+            continue;
         }
-    }
-    let labels_no_lines = ["Module", "Constant", "TypeAlias"];
-    for label in labels_no_lines {
-        let cypher = format!(
-            "MATCH (n:{label}) WHERE n.qualified_name = {escaped} OR n.id = {escaped} \
-             RETURN n.name, n.qualified_name"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            if let Some(row) = qr.rows.first() {
-                if row.len() >= 2 {
-                    return Ok((
-                        label.to_string(),
-                        row[0].clone(),
-                        file_path_of(&row[1]).to_string(),
-                        None,
-                        None,
-                        None,
-                    ));
-                }
-            }
-        }
+        let (start_line, end_line) = if has_lines {
+            (
+                row.get(2).and_then(|v| parse_opt_u64(v)),
+                row.get(3).and_then(|v| parse_opt_u64(v)),
+            )
+        } else {
+            (None, None)
+        };
+        // Visibility trails the optional line columns, so its index depends on
+        // whether they were requested.
+        let visibility_at = if has_lines { 4 } else { 2 };
+        let visibility = if has_visibility {
+            row.get(visibility_at).cloned()
+        } else {
+            None
+        };
+        return Ok((
+            label.to_string(),
+            row[0].clone(),
+            file_path_of(&row[1]).to_string(),
+            start_line,
+            end_line,
+            visibility,
+        ));
     }
     Err(format!("symbol not found: {escaped}"))
 }
@@ -256,69 +259,62 @@ fn find_related_in(store: &GraphStore, escaped: &str, prefix: &str) -> Vec<Relat
     related
 }
 
-fn find_community(store: &GraphStore, escaped: &str) -> Option<CommunityInfo> {
-    for &label in SEARCHABLE_LABELS {
-        let rel = format!("MemberOf_{label}_Community");
-        let cypher = format!(
-            "MATCH (n:{label})-[:{rel}]->(c:Community) \
-             WHERE n.qualified_name = {escaped} OR n.id = {escaped} \
-             RETURN c.id, c.name, c.member_count LIMIT 1"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            if let Some(row) = qr.rows.first() {
-                if row.len() >= 3 {
-                    return Some(CommunityInfo {
-                        id: row[0].clone(),
-                        name: row[1].clone(),
-                        member_count: row[2].parse::<u64>().unwrap_or(0),
-                    });
-                }
-            }
-        }
-    }
-    None
+/// The community the target belongs to, through the shared membership
+/// traversal. Takes the RAW target — `membership` owns the escaping.
+fn find_community(store: &GraphStore, target: &str) -> Option<CommunityRow> {
+    SEARCHABLE_LABELS
+        .iter()
+        .find_map(|label| community_of(store, label, SymbolMatch::IdOrQualifiedName(target)))
 }
 
-fn find_processes(store: &GraphStore, escaped: &str) -> Vec<ProcessRef> {
-    let mut procs = Vec::new();
+/// The processes the target takes part in, tagged by role.
+///
+/// The participant half is the shared `ParticipatesIn` traversal; only the
+/// entry-point half is spelled out here, because `EntryPointOf` is this
+/// module's own question and has no second copy to share with. Order is
+/// per label: every entry-point row first, then participant rows that are not
+/// already listed.
+fn find_processes(store: &GraphStore, target: &str) -> Vec<ProcessRef> {
+    let symbol = SymbolMatch::IdOrQualifiedName(target);
+    let escaped = cypher_str(target);
+    let mut procs: Vec<ProcessRef> = Vec::new();
+
     for label in ["Function", "Method"] {
-        let ep_rel = format!("EntryPointOf_{label}_Process");
-        let cypher = format!(
-            "MATCH (n:{label})-[:{ep_rel}]->(p:Process) \
-             WHERE n.qualified_name = {escaped} OR n.id = {escaped} \
-             RETURN p.name"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            for row in &qr.rows {
-                if !row.is_empty() {
-                    procs.push(ProcessRef {
-                        name: row[0].clone(),
-                        role: "entry_point".to_string(),
-                    });
-                }
-            }
+        for name in entry_point_processes(store, label, &escaped) {
+            procs.push(ProcessRef {
+                name,
+                role: "entry_point".to_string(),
+            });
         }
-        let part_rel = format!("ParticipatesIn_{label}_Process");
-        let cypher = format!(
-            "MATCH (n:{label})-[:{part_rel}]->(p:Process) \
-             WHERE n.qualified_name = {escaped} OR n.id = {escaped} \
-             RETURN p.name"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            for row in &qr.rows {
-                if !row.is_empty() {
-                    let pname = &row[0];
-                    if !procs.iter().any(|pr| pr.name == *pname) {
-                        procs.push(ProcessRef {
-                            name: pname.clone(),
-                            role: "participant".to_string(),
-                        });
-                    }
-                }
+        for name in process_names(store, label, symbol) {
+            if !procs.iter().any(|pr| pr.name == name) {
+                procs.push(ProcessRef {
+                    name,
+                    role: "participant".to_string(),
+                });
             }
         }
     }
     procs
+}
+
+/// Process names the target is the declared entry point of, under `label`.
+/// `escaped` is an already-quoted Cypher literal built by the caller.
+fn entry_point_processes(store: &GraphStore, label: &str, escaped: &str) -> Vec<String> {
+    let rel = format!("EntryPointOf_{label}_Process");
+    let cypher = format!(
+        "MATCH (n:{label})-[:{rel}]->(p:Process) \
+         WHERE n.qualified_name = {escaped} OR n.id = {escaped} \
+         RETURN p.name"
+    );
+    match store.execute_query(&cypher) {
+        Ok(qr) => qr
+            .rows
+            .iter()
+            .filter_map(|row| row.first().cloned())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 // path `search_graph` takes whenever an index was built beside the graph; the
 // substring scorer next door is the fallback when one was not.
 
-use super::enrichment::{decode_row, return_clause, RankBoosts, SymbolRow};
+use super::enrichment::{decode_row, return_clause, BoostWeights, RankBoosts};
 use super::enrichment::{lookup_community, lookup_processes};
 use super::qualified_name::file_path_of;
 use super::{bm25, rrf, sort_and_truncate, vector};
@@ -28,6 +28,14 @@ pub(super) struct HybridIndexes<'a> {
 /// poorly by one retriever and well by the other must appear in both lists to
 /// be fused at all.
 const OVERFETCH_FACTOR: usize = 3;
+
+/// Boost weights for the fused path. Three orders of magnitude below the
+/// substring path's: RRF scores cluster tightly around 1/(k+rank), so a nudge
+/// sized for a 0..1 score would dominate the ranking rather than tilt it.
+const HYBRID_WEIGHTS: BoostWeights = BoostWeights {
+    small_community: 0.002,
+    per_process: 0.001,
+};
 
 /// Turns a retriever's ordered qualified names into an RRF input list. Rank is
 /// 1-based: RRF's denominator is `k + rank`, so a 0-based rank would give the
@@ -117,7 +125,12 @@ fn enrich_from_graph(
 
         let community_id = lookup_community(store, label, &node.id);
         let process_names = lookup_processes(store, label, &node.id);
-        let final_score = hit.score + boost(boosts, &node, community_id.as_deref());
+        let final_score = hit.score
+            + boosts.boost_for(
+                &node.qualified_name,
+                community_id.as_deref(),
+                &HYBRID_WEIGHTS,
+            );
 
         if final_score < options.min_score {
             return None;
@@ -136,31 +149,4 @@ fn enrich_from_graph(
         });
     }
     None
-}
-
-/// The community and process nudges the hybrid path adds to a fused RRF score:
-/// a small bonus for sitting in a small community, and one proportional to how
-/// many processes the hit takes part in, saturating after a few.
-///
-/// The substring path applies the same two rules with its own weights — the
-/// two scorers produce scores on different scales, so the weights are stated
-/// at each path rather than shared.
-fn boost(boosts: &RankBoosts, node: &SymbolRow, community_id: Option<&str>) -> f64 {
-    let community_boost = match community_id {
-        Some(cid) => {
-            let size = boosts.community_sizes.get(cid).copied().unwrap_or(100);
-            if size < 20 {
-                0.002
-            } else {
-                0.0
-            }
-        }
-        None => 0.0,
-    };
-    let proc_count = boosts
-        .process_counts
-        .get(&node.qualified_name)
-        .copied()
-        .unwrap_or(0);
-    community_boost + 0.001 * (proc_count.min(3) as f64)
 }
