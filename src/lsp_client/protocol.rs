@@ -95,8 +95,28 @@ pub(super) fn read_lsp_message(
     serde_json::from_slice(&body).map_err(|e| format!("parse JSON body: {e}"))
 }
 
-/// Moves `reader` onto a thread that pushes every frame down a channel, and
-/// returns the receiving end.
+/// How many parsed frames may sit unread before the reader thread blocks.
+///
+/// The bound is the point of it. An UNBOUNDED channel replaces the OS pipe's
+/// backpressure with none at all: a notification-heavy server — rust-analyzer
+/// emits `$/progress` continuously while it indexes — would have its frames
+/// eagerly read AND JSON-parsed into a queue nobody drains between requests,
+/// so memory grows with the server's chatter rather than with our demand. With
+/// a bound, a full queue simply stops the reader in `read_line`, which is
+/// exactly where the kernel used to stop it.
+///
+/// Timeout semantics are untouched: the deadline lives on the receiving end,
+/// and a blocked sender cannot extend it.
+///
+/// source: provisional heuristic. It must exceed the notification burst a
+/// server emits between two of our requests (a handful for the servers this
+/// drives) and stay small enough that the queue is not itself the leak. 64 sits
+/// well above the former and far below the latter; calibrate against a measured
+/// server that stalls on it.
+const FRAME_QUEUE_DEPTH: usize = 64;
+
+/// Moves `reader` onto a thread that pushes every frame down a bounded channel,
+/// and returns the receiving end.
 ///
 /// This is what makes the caller's timeout real. The blocking framing reads
 /// live on a thread whose fate does not matter — when the child is killed on
@@ -106,7 +126,7 @@ pub(super) fn read_lsp_message(
 pub(super) fn spawn_frame_reader(
     stdout: std::process::ChildStdout,
 ) -> Receiver<Result<Value, String>> {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(FRAME_QUEUE_DEPTH);
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
@@ -397,6 +417,30 @@ mod frame_bound_tests {
             "a dead reader is not a timeout: {err}"
         );
         assert!(err.contains("eof_before_header"), "{err}");
+    }
+
+    /// The queue is BOUNDED, so a chatty server cannot grow it without limit —
+    /// a full queue stops the reader thread in its blocking read, which is
+    /// where the OS pipe used to stop it before the thread existed. Filling it
+    /// must not affect what a waiting caller sees.
+    #[test]
+    fn a_full_queue_blocks_the_producer_without_disturbing_the_consumer() {
+        let (tx, rx) = mpsc::sync_channel::<Result<Value, String>>(FRAME_QUEUE_DEPTH);
+        for i in 0..FRAME_QUEUE_DEPTH {
+            tx.try_send(Ok(serde_json::json!({ "id": i })))
+                .expect("the queue accepts up to its depth");
+        }
+        assert!(
+            tx.try_send(Ok(serde_json::json!({"id": "overflow"})))
+                .is_err(),
+            "past its depth the queue must refuse, which is what blocks a \
+             real sender instead of growing memory"
+        );
+        // The consumer still reads in order, and draining makes room again.
+        let first = next_frame(&rx, Duration::from_millis(50)).expect("queued frame");
+        assert_eq!(first.get("id").and_then(|v| v.as_i64()), Some(0));
+        tx.try_send(Ok(serde_json::json!({"id": "now fits"})))
+            .expect("a drained slot is reusable");
     }
 
     /// Frames the thread already pushed are delivered without waiting.
