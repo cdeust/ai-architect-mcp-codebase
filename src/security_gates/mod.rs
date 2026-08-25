@@ -356,4 +356,95 @@ mod tests {
         r.summary.critical_count = 1;
         assert!(r.summary.critical_count > 0);
     }
+
+    /// Inserts a `Community` node with the given id. `id` may be empty — that
+    /// degenerate shape is the subject of the fallthrough test below.
+    fn insert_community(store: &GraphStore, id: &str) {
+        store
+            .insert_node(
+                NODE_COMMUNITY,
+                &[
+                    ("id", &cypher_str(id)),
+                    ("name", &cypher_str(id)),
+                    ("algorithm", &cypher_str("louvain+c2")),
+                    ("resolution_param", "1.0"),
+                    ("member_count", "1"),
+                    ("modularity_contribution", "0.0"),
+                ],
+            )
+            .expect("insert community");
+    }
+
+    /// Inserts one symbol of `label` under `qn` and makes it a member of
+    /// `community_id`. Only the columns every symbol label shares are set.
+    fn insert_member(store: &GraphStore, label: &str, qn: &str, community_id: &str) {
+        let mut props: Vec<(&str, &str)> = Vec::new();
+        let esc = cypher_str(qn);
+        let vis = cypher_str("pub");
+        let lang = cypher_str("rust");
+        props.push(("id", &esc));
+        props.push(("name", &esc));
+        props.push(("qualified_name", &esc));
+        props.push(("start_line", "1"));
+        props.push(("end_line", "1"));
+        props.push(("visibility", &vis));
+        props.push(("language", &lang));
+        if label == NODE_FUNCTION {
+            props.push(("is_async", "false"));
+        }
+        store.insert_node(label, &props).expect("insert symbol");
+        store
+            .insert_edge(
+                &format!("MemberOf_{label}_Community"),
+                qn,
+                community_id,
+                &[],
+            )
+            .expect("insert MemberOf");
+    }
+
+    /// Review #262 follow-up (ii). `community_of` scans
+    /// `clustering::SYMBOL_LABELS` in order and returns the FIRST community it
+    /// finds — but a row carrying an empty `Community.id` is not an answer, and
+    /// the per-label loop this was migrated from kept scanning when it hit one.
+    ///
+    /// The migration expressed that as `.find_map(..).map(|c| c.id).filter(non
+    /// empty)`, which stops at the first label and THEN discards its result,
+    /// losing the community a later label supplies. This fixture puts the
+    /// degenerate community on Function (scanned first) and a real one on
+    /// Struct, for one qualified name.
+    ///
+    /// Fails with `None` on the post-`find_map` filter.
+    #[test]
+    fn community_of_falls_through_a_degenerate_empty_community_id() {
+        use crate::graph_store::{SymbolMatch, NODE_STRUCT};
+
+        let dir = tempfile::Builder::new()
+            .prefix("security_gates_empty_community_id")
+            .tempdir()
+            .expect("create temp dir");
+        let store = GraphStore::open_or_create(&dir.path().join("testdb")).expect("open");
+        store.create_schema().expect("create_schema");
+
+        let qn = "shadowed::thing";
+        insert_community(&store, "");
+        insert_community(&store, "community::real");
+        insert_member(&store, NODE_FUNCTION, qn, "");
+        insert_member(&store, NODE_STRUCT, qn, "community::real");
+
+        // Precondition: the fixture must really produce the degenerate row on
+        // the FIRST-scanned label, or this test proves nothing.
+        let on_function =
+            crate::graph_store::community_of(&store, "Function", SymbolMatch::QualifiedName(qn));
+        assert!(
+            on_function.is_some_and(|c| c.id.is_empty()),
+            "fixture precondition: Function must yield an EMPTY-id community"
+        );
+
+        assert_eq!(
+            community_of(&store, qn),
+            Some("community::real".to_string()),
+            "an empty Community.id on an earlier label must not abort the scan"
+        );
+    }
 }
