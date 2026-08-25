@@ -135,21 +135,12 @@ pub(crate) fn forbidden_cypher_keyword(query: &str) -> Option<&'static str> {
 /// followed by no identifier at all yields the empty name and is refused too.
 fn carries_unlisted_procedure(executable_upper: &str) -> bool {
     let bytes = executable_upper.as_bytes();
-    let mut i = 0;
-    while let Some(pos) = executable_upper[i..].find("CALL") {
-        let start = i + pos;
-        let end = start + "CALL".len();
-        let left_ok = start == 0 || !is_ident_char(bytes[start - 1]);
-        let right_ok = end >= bytes.len() || !is_ident_char(bytes[end]);
-        if left_ok && right_ok && !preceded_by_identifier_sigil(bytes, start) {
-            let name = procedure_name_at(bytes, end);
-            if !READ_ONLY_PROCEDURES.contains(&name.as_str()) {
-                return true;
-            }
-        }
-        i = end;
-    }
-    false
+    keyword_token_positions(executable_upper, "CALL")
+        .into_iter()
+        .any(|start| {
+            let name = procedure_name_at(bytes, start + "CALL".len());
+            !READ_ONLY_PROCEDURES.contains(&name.as_str())
+        })
 }
 
 /// The identifier following a `CALL` token, or an empty string when none does.
@@ -247,29 +238,46 @@ pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// Whole-word match that additionally rejects *identifier* positions: a
-/// keyword reached through `.` or `:` names a property, a node label, a
-/// relationship type or a map key — never a clause. `n.set` is a property,
-/// and `(i:Import)` is this schema's own `Import` node table.
-pub(crate) fn contains_keyword_token(haystack: &str, needle: &str) -> bool {
+/// Byte positions where `needle` occurs in `haystack` as a standalone keyword
+/// token: bounded by non-identifier bytes on both sides, and NOT introduced by
+/// `.` or `:` — those make it a property, a node label, a relationship type or
+/// a map key, never a clause. `n.set` is a property and `(i:Import)` is this
+/// schema's own `Import` node table.
+///
+/// ONE implementation for every keyword-boundary scan in the crate. There were
+/// four, written independently, and two of them — `has_limit_clause` and
+/// `has_order_by_clause` — had the word-boundary half but not the sigil half.
+/// `WHERE n.limit > 0` therefore read as a declared LIMIT and suppressed the
+/// injection that bounds the query, which is the same unbounded row-flood the
+/// masking fix had just closed from the other side. Four copies of one rule is
+/// how half of them come to carry half of it.
+///
+/// `haystack` must already be case-folded to `needle`'s case.
+pub(crate) fn keyword_token_positions(haystack: &str, needle: &str) -> Vec<usize> {
     let bytes = haystack.as_bytes();
     let nbytes = needle.as_bytes();
+    let mut found = Vec::new();
     if nbytes.is_empty() || bytes.len() < nbytes.len() {
-        return false;
+        return found;
     }
     let mut i = 0;
     while i + nbytes.len() <= bytes.len() {
         if &bytes[i..i + nbytes.len()] == nbytes {
-            let left_ok = i == 0 || !is_ident_char(bytes[i - 1]);
             let right = i + nbytes.len();
+            let left_ok = i == 0 || !is_ident_char(bytes[i - 1]);
             let right_ok = right == bytes.len() || !is_ident_char(bytes[right]);
-            if left_ok && right_ok && !preceded_by_identifier_sigil(bytes, i) {
-                return true;
+            if left_ok && right_ok && !in_identifier_position(bytes, i) {
+                found.push(i);
             }
         }
         i += 1;
     }
-    false
+    found
+}
+
+/// True when `needle` stands as a keyword token anywhere in `haystack`.
+pub(crate) fn contains_keyword_token(haystack: &str, needle: &str) -> bool {
+    !keyword_token_positions(haystack, needle).is_empty()
 }
 
 /// True when `query` carries more than one statement, i.e. a `;` with
@@ -297,24 +305,45 @@ pub(crate) fn is_multi_statement(query: &str) -> bool {
     }
 }
 
-/// True when the token starting at `start` is introduced by `.` or `:`,
-/// skipping intervening whitespace (`(i : Import)` is legal Cypher).
+/// True when the token starting at `start` sits where Cypher expects an
+/// IDENTIFIER rather than a clause, so the keyword there names something
+/// instead of doing something.
 ///
-/// Why (fleet-watch review finding 1): the scan previously looked only at the
-/// byte immediately left of the match and only for `.`, so `MATCH (i:Import)`
-/// tripped the `IMPORT` entry and every query over this schema's `Import` node
-/// table was refused — including the `MATCH (f:File)-[:Defines_File_Import]->
-/// (n:Import)` shape the accuracy corpora in `benches/corpora/*/ground_truth
-/// .json` are written against. Neither sigil can introduce a clause: after `:`
-/// Cypher expects a label, a relationship type or a map key, and after `.` a
-/// property name, so treating both as identifier positions loses no coverage
-/// of the statements this gate exists to refuse.
-fn preceded_by_identifier_sigil(bytes: &[u8], start: usize) -> bool {
+/// Two introducers:
+///
+/// * `.` or `:` — after `:` Cypher expects a label, a relationship type or a
+///   map key, and after `.` a property name. Neither can introduce a clause.
+///   Without this, `MATCH (i:Import)` tripped the `IMPORT` entry and every
+///   query over this schema's `Import` node table was refused, including the
+///   `MATCH (f:File)-[:Defines_File_Import]->(n:Import)` shape the accuracy
+///   corpora in `benches/corpora/*/ground_truth.json` are written against
+///   (fleet-watch review finding 1).
+/// * `AS` — the next token is an alias. Measured on lbug 0.19.1:
+///   `RETURN 1 AS limit` PARSES, so a reserved word is accepted as a bare
+///   alias and `AS limit` is a reachable shape, not a hypothetical one
+///   (pinned by `a_reserved_word_is_accepted_as_a_bare_alias`). Treating it as
+///   a clause made `has_limit_clause` report a declared bound and suppress the
+///   injection. Exempting it costs the gate nothing: whatever follows `AS` is
+///   consumed as the alias, so a real clause after it is a separate token that
+///   this scan still sees.
+fn in_identifier_position(bytes: &[u8], start: usize) -> bool {
     let mut j = start;
     while j > 0 && bytes[j - 1].is_ascii_whitespace() {
         j -= 1;
     }
-    j > 0 && matches!(bytes[j - 1], b'.' | b':')
+    if j == 0 {
+        return false;
+    }
+    if matches!(bytes[j - 1], b'.' | b':') {
+        return true;
+    }
+    // `AS` as its own word. The haystack is case-folded by the caller, and the
+    // two folds in this crate disagree (the gate upper-cases, the clause
+    // detectors lower-case), so compare case-insensitively.
+    j >= 2
+        && bytes[j - 2].eq_ignore_ascii_case(&b'a')
+        && bytes[j - 1].eq_ignore_ascii_case(&b's')
+        && (j == 2 || !is_ident_char(bytes[j - 3]))
 }
 
 #[cfg(test)]

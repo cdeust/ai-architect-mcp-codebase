@@ -7,6 +7,7 @@
 //! kind of test with a different cost.
 
 use super::*;
+use crate::query_handlers::{inject_limit_if_absent, QUERY_GRAPH_ROW_LIMIT};
 
 // ---------------------------------------------------------------------------
 // B.2 — differential: the gate's lexer must agree with the engine's
@@ -116,4 +117,116 @@ fn gate_and_engine_agree_on_comment_grammar() {
     // A lone `/` is division, not a comment — both sides must agree there too,
     // and the gate must still see the mutation that follows it.
     assert!(forbidden_cypher_keyword("RETURN 1 / 1 AS x CREATE (n:Function)").is_some());
+}
+
+// ---------------------------------------------------------------------------
+// The injected LIMIT must actually BIND — proved by execution, not by matching
+// ---------------------------------------------------------------------------
+
+/// Review finding 1. `inject_limit_if_absent` appended the clause inline, so a
+/// query ending in a line comment became `... // note LIMIT 500`: the bound sat
+/// INSIDE the comment, the MATCH ran unbounded, and the response still reported
+/// `limit_injected: true`.
+///
+/// String-matching the output would not have caught it — the text contains
+/// "LIMIT 500" either way. Only executing the injected query against the engine
+/// and counting rows distinguishes a bound that binds from one that is
+/// commented out.
+#[test]
+fn the_injected_limit_binds_on_a_comment_terminated_query() {
+    let (_dir, store) = engine_store("inject_limit_effectiveness");
+    // More rows than the bound we are about to prove.
+    let rows: Vec<Vec<(String, String)>> = (0..(QUERY_GRAPH_ROW_LIMIT + 25))
+        .map(|i| {
+            vec![
+                ("id".to_string(), format!("f{i}")),
+                ("name".to_string(), format!("f{i}")),
+                ("qualified_name".to_string(), format!("m.rs::f{i}")),
+                ("start_line".to_string(), "1".to_string()),
+                ("end_line".to_string(), "1".to_string()),
+                ("visibility".to_string(), "pub".to_string()),
+                ("is_async".to_string(), "false".to_string()),
+            ]
+        })
+        .collect();
+    store
+        .bulk_insert_nodes(crate::graph_store::NODE_FUNCTION, &rows)
+        .expect("seed");
+
+    for query in [
+        "MATCH (n:Function) RETURN n.id // note",
+        "MATCH (n:Function) RETURN n.id // note LIMIT 3",
+        "MATCH (n:Function) RETURN n.id ; // trailing terminator then a comment",
+        "MATCH (n:Function) RETURN n.id /* block */",
+    ] {
+        let (injected, was_injected) = inject_limit_if_absent(query);
+        assert!(was_injected, "no LIMIT declared in {query:?}");
+
+        let qr = store
+            .execute_read_only_query(&injected, 30_000)
+            .unwrap_or_else(|e| panic!("injected query must run: {injected:?}: {e}"));
+        assert_eq!(
+            qr.rows.len(),
+            QUERY_GRAPH_ROW_LIMIT,
+            "the injected bound must actually bind for {query:?} (injected: {injected})"
+        );
+    }
+}
+
+/// The other half: a bound the caller declared is honoured and not replaced,
+/// even when a comment trails it.
+#[test]
+fn a_declared_limit_is_left_alone_behind_a_comment() {
+    let (_dir, store) = engine_store("declared_limit_kept");
+    let rows: Vec<Vec<(String, String)>> = (0..10)
+        .map(|i| {
+            vec![
+                ("id".to_string(), format!("g{i}")),
+                ("name".to_string(), format!("g{i}")),
+                ("qualified_name".to_string(), format!("m.rs::g{i}")),
+                ("start_line".to_string(), "1".to_string()),
+                ("end_line".to_string(), "1".to_string()),
+                ("visibility".to_string(), "pub".to_string()),
+                ("is_async".to_string(), "false".to_string()),
+            ]
+        })
+        .collect();
+    store
+        .bulk_insert_nodes(crate::graph_store::NODE_FUNCTION, &rows)
+        .expect("seed");
+
+    let query = "MATCH (n:Function) RETURN n.id LIMIT 4 // keep mine";
+    let (injected, was_injected) = inject_limit_if_absent(query);
+    assert!(!was_injected, "the caller's LIMIT must be detected");
+    let qr = store
+        .execute_read_only_query(&injected, 30_000)
+        .expect("runs");
+    assert_eq!(qr.rows.len(), 4);
+}
+
+/// Evidence for widening the identifier-position rule to cover `AS <word>`.
+///
+/// The sigil rule (`.` / `:`) does not reach an alias, and growing the gate's
+/// exemption set is security-relevant, so the question was settled by asking
+/// the engine rather than by reading the grammar: `RETURN 1 AS limit` PARSES on
+/// lbug 0.19.1. The shape is reachable, so `has_limit_clause` had to stop
+/// reading it as a declared bound. This test fails if a future engine starts
+/// rejecting it, at which point the exemption may be narrowed again.
+#[test]
+fn a_reserved_word_is_accepted_as_a_bare_alias() {
+    let (_dir, store) = engine_store("as_limit_probe");
+    store
+        .execute_read_only_query("RETURN 1 AS limit", 30_000)
+        .expect("`AS limit` parses — that is why the alias exemption exists");
+    assert!(!crate::query_handlers::has_limit_clause(
+        "RETURN 1 AS limit"
+    ));
+    // Backticked, it is an ordinary alias — and backticks are masked, so the
+    // clause detector never sees it.
+    store
+        .execute_read_only_query("RETURN 1 AS `limit`", 30_000)
+        .expect("a backticked reserved word is a legal alias");
+    assert!(!crate::query_handlers::has_limit_clause(
+        "RETURN 1 AS `limit`"
+    ));
 }
