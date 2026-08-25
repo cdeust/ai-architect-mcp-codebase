@@ -155,6 +155,13 @@ fn the_injected_limit_binds_on_a_comment_terminated_query() {
 
     for query in [
         "MATCH (n:Function) RETURN n.id // note",
+        // Re-review finding 1: the fixture family ended in an identifier, a
+        // comment or `;` — never in a LITERAL or a BACKTICKED identifier,
+        // which is exactly where trimming the masked view amputated the query.
+        "MATCH (n:Function) RETURN n.id, 'tag'",
+        "MATCH (n:Function) RETURN n.id AS `total`",
+        "MATCH (n:Function) WHERE n.name <> 'x' RETURN n.id",
+        "MATCH (n:Function) RETURN n.id, 'tag' // and a comment",
         "MATCH (n:Function) RETURN n.id // note LIMIT 3",
         "MATCH (n:Function) RETURN n.id ; // trailing terminator then a comment",
         "MATCH (n:Function) RETURN n.id /* block */",
@@ -229,4 +236,48 @@ fn a_reserved_word_is_accepted_as_a_bare_alias() {
     assert!(!crate::query_handlers::has_limit_clause(
         "RETURN 1 AS `limit`"
     ));
+}
+
+/// Re-review finding 4, the opposite direction of the same root cause: a REAL
+/// `LIMIT` after a backticked alias was read as part of the alias, so a second
+/// LIMIT was injected and the engine rejected the doubled clause — a valid,
+/// bounded query made to fail.
+#[test]
+fn a_real_limit_after_a_backticked_alias_is_honoured() {
+    let (_dir, store) = engine_store("limit_after_backticked_alias");
+    let rows: Vec<Vec<(String, String)>> = (0..12)
+        .map(|i| {
+            vec![
+                ("id".to_string(), format!("h{i}")),
+                ("name".to_string(), format!("h{i}")),
+                ("qualified_name".to_string(), format!("m.rs::h{i}")),
+                ("start_line".to_string(), "1".to_string()),
+                ("end_line".to_string(), "1".to_string()),
+                ("visibility".to_string(), "pub".to_string()),
+                ("is_async".to_string(), "false".to_string()),
+            ]
+        })
+        .collect();
+    store
+        .bulk_insert_nodes(crate::graph_store::NODE_FUNCTION, &rows)
+        .expect("seed");
+
+    for (query, want) in [
+        ("MATCH (n:Function) RETURN n.id AS `total` LIMIT 5", 5),
+        ("MATCH (n:Function) RETURN n.id AS `limit` LIMIT 3", 3),
+        (
+            "MATCH (n:Function) WHERE n.name <> 'q' RETURN n.id LIMIT 2",
+            2,
+        ),
+    ] {
+        let (injected, was_injected) = inject_limit_if_absent(query);
+        assert!(
+            !was_injected,
+            "the caller's LIMIT must be seen through the masked alias: {query}"
+        );
+        let qr = store
+            .execute_read_only_query(&injected, 30_000)
+            .unwrap_or_else(|e| panic!("a valid bounded query must run: {query}: {e}"));
+        assert_eq!(qr.rows.len(), want, "{query}");
+    }
 }

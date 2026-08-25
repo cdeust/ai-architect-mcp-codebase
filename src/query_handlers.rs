@@ -21,8 +21,8 @@ pub(crate) use graph_paths::{
     remove_stale_graph_artifact, validate_graph_path_safe, write_graph_meta,
 };
 use read_only_gate::{
-    forbidden_cypher_keyword, is_multi_statement, keyword_token_positions, mask_non_executable,
-    READ_QUERY_TIMEOUT_MS,
+    forbidden_cypher_keyword, is_multi_statement, is_separator, keyword_token_positions,
+    mask_non_executable, IdentifierExemption, READ_QUERY_TIMEOUT_MS,
 };
 
 // ---------------------------------------------------------------------------
@@ -322,8 +322,15 @@ fn executable_prefix(query: &str) -> &str {
         // back to the whole query rather than guessing where it ends.
         return query;
     };
-    let mut end = masked.trim_end().len();
-    if end > 0 && masked.as_bytes()[end - 1] == b';' {
+    // Trim only SEPARATORS. A masked token (a trailing string literal or
+    // backticked identifier) is content: trimming it amputated the query —
+    // `RETURN n.name, 'tag'` became `RETURN n.name,`.
+    let bytes = masked.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && is_separator(bytes[end - 1]) {
+        end -= 1;
+    }
+    if end > 0 && bytes[end - 1] == b';' {
         end -= 1;
     }
     // `end` indexes the raw query, whose kept bytes are byte-identical to the
@@ -350,7 +357,12 @@ fn executable_prefix(query: &str) -> &str {
 /// still gets one; it is refused upstream by the keyword gate anyway.
 pub(crate) fn has_limit_clause(query: &str) -> bool {
     let executable = mask_non_executable(query).unwrap_or_default();
-    !keyword_token_positions(&executable.to_ascii_lowercase(), "limit").is_empty()
+    !keyword_token_positions(
+        &executable.to_ascii_lowercase(),
+        "limit",
+        IdentifierExemption::SigilOrAlias,
+    )
+    .is_empty()
 }
 
 pub(crate) fn is_ident_char(b: u8) -> bool {
@@ -376,7 +388,7 @@ pub(crate) fn has_order_by_clause(query: &str) -> bool {
     let executable = mask_non_executable(query).unwrap_or_default();
     let lower = executable.to_ascii_lowercase();
     let bytes = lower.as_bytes();
-    keyword_token_positions(&lower, "order")
+    keyword_token_positions(&lower, "order", IdentifierExemption::SigilOrAlias)
         .into_iter()
         .any(|start| {
             // `by` must follow as its own word, separated by whitespace.

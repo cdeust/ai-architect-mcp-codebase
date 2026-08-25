@@ -135,7 +135,7 @@ pub(crate) fn forbidden_cypher_keyword(query: &str) -> Option<&'static str> {
 /// followed by no identifier at all yields the empty name and is refused too.
 fn carries_unlisted_procedure(executable_upper: &str) -> bool {
     let bytes = executable_upper.as_bytes();
-    keyword_token_positions(executable_upper, "CALL")
+    keyword_token_positions(executable_upper, "CALL", IdentifierExemption::SigilOnly)
         .into_iter()
         .any(|start| {
             let name = procedure_name_at(bytes, start + "CALL".len());
@@ -181,6 +181,35 @@ fn procedure_name_at(bytes: &[u8], mut j: usize) -> String {
 ///
 /// The 10 timeouts stop the index advancing so the loop never terminates; a
 /// hang is detection, not an escape.
+/// Stand-in byte for a masked TOKEN — a string literal or a backtick-quoted
+/// identifier.
+///
+/// Comments are blanked to spaces because a comment IS a separator: `ORDER
+/// /*c*/ BY` declares an ordering, and `AS /*c*/ limit` aliases. A literal is
+/// NOT a separator, it is a value occupying a token position, and blanking it
+/// to whitespace is what let three defects through at once:
+///
+///   * a look-back for `AS` walked across a backticked alias as if it were
+///     spaces, so `WITH n AS \`m\` DELETE m` passed the read-only gate and
+///     `WITH 1 AS \`x\` CALL storage_info()` shielded CALL from the procedure
+///     allowlist — the only barrier that exists for a standalone CALL;
+///   * the same walk hid a REAL `LIMIT` after a backticked alias, so a valid
+///     bounded query got a second LIMIT injected and the engine rejected it;
+///   * `trim_end` over the masked view ate a trailing literal, so
+///     `RETURN n.name, 'tag'` was truncated to `RETURN n.name,`.
+///
+/// One byte that is neither whitespace nor an identifier character keeps token
+/// boundaries intact while making "there was something here" visible. A raw
+/// `\x01` arriving in executable position can only make a scan MORE strict
+/// (it blocks an exemption walk), so the substitution fails closed.
+pub(crate) const MASKED_TOKEN: u8 = 0x01;
+
+/// True for a byte that separates tokens: real whitespace, or a masked comment
+/// (which this module blanks to a space precisely so it reads as one).
+pub(crate) fn is_separator(b: u8) -> bool {
+    b.is_ascii_whitespace()
+}
+
 pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
     let b = query.as_bytes();
     let mut out = vec![b' '; b.len()];
@@ -188,6 +217,7 @@ pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
     while i < b.len() {
         match b[i] {
             q @ (b'\'' | b'"' | b'`') => {
+                let token_start = i;
                 i += 1; // opening quote already blanked
                 let mut closed = false;
                 while i < b.len() {
@@ -205,6 +235,10 @@ pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
                 }
                 if !closed {
                     return None;
+                }
+                // A literal or backticked identifier is a TOKEN, not a gap.
+                for slot in out.iter_mut().take(i).skip(token_start) {
+                    *slot = MASKED_TOKEN;
                 }
             }
             b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
@@ -253,7 +287,30 @@ pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
 /// how half of them come to carry half of it.
 ///
 /// `haystack` must already be case-folded to `needle`'s case.
-pub(crate) fn keyword_token_positions(haystack: &str, needle: &str) -> Vec<usize> {
+/// Which identifier positions a scan treats as exempt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdentifierExemption {
+    /// `.` and `:` only — the READ-ONLY GATE's setting.
+    ///
+    /// The gate deliberately does NOT exempt an alias. An exemption can only
+    /// ever let a keyword through, so on this scan a false refusal costs an
+    /// exotic query a rename while a false exemption costs the gate itself:
+    /// `WITH 1 AS x CALL storage_info()` would shield CALL from the procedure
+    /// allowlist, and the lexical layer is the only barrier that exists for a
+    /// standalone CALL.
+    SigilOnly,
+    /// `.`, `:` and `AS` — the CLAUSE DETECTORS' setting, where the expensive
+    /// direction is reversed: reading `AS limit` as a declared clause
+    /// suppresses the LIMIT injection, and reading `AS order` as one
+    /// advertises a cursor-safe page that is not.
+    SigilOrAlias,
+}
+
+pub(crate) fn keyword_token_positions(
+    haystack: &str,
+    needle: &str,
+    exemption: IdentifierExemption,
+) -> Vec<usize> {
     let bytes = haystack.as_bytes();
     let nbytes = needle.as_bytes();
     let mut found = Vec::new();
@@ -266,7 +323,7 @@ pub(crate) fn keyword_token_positions(haystack: &str, needle: &str) -> Vec<usize
             let right = i + nbytes.len();
             let left_ok = i == 0 || !is_ident_char(bytes[i - 1]);
             let right_ok = right == bytes.len() || !is_ident_char(bytes[right]);
-            if left_ok && right_ok && !in_identifier_position(bytes, i) {
+            if left_ok && right_ok && !in_identifier_position(bytes, i, exemption) {
                 found.push(i);
             }
         }
@@ -277,7 +334,7 @@ pub(crate) fn keyword_token_positions(haystack: &str, needle: &str) -> Vec<usize
 
 /// True when `needle` stands as a keyword token anywhere in `haystack`.
 pub(crate) fn contains_keyword_token(haystack: &str, needle: &str) -> bool {
-    !keyword_token_positions(haystack, needle).is_empty()
+    !keyword_token_positions(haystack, needle, IdentifierExemption::SigilOnly).is_empty()
 }
 
 /// True when `query` carries more than one statement, i.e. a `;` with
@@ -326,9 +383,12 @@ pub(crate) fn is_multi_statement(query: &str) -> bool {
 ///   injection. Exempting it costs the gate nothing: whatever follows `AS` is
 ///   consumed as the alias, so a real clause after it is a separate token that
 ///   this scan still sees.
-fn in_identifier_position(bytes: &[u8], start: usize) -> bool {
+fn in_identifier_position(bytes: &[u8], start: usize, exemption: IdentifierExemption) -> bool {
     let mut j = start;
-    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
+    // Only separators may be skipped. A MASKED_TOKEN is a value sitting in a
+    // token position, so the walk STOPS on it — crossing it is what turned a
+    // backticked alias into an invisible gap.
+    while j > 0 && is_separator(bytes[j - 1]) {
         j -= 1;
     }
     if j == 0 {
@@ -336,6 +396,9 @@ fn in_identifier_position(bytes: &[u8], start: usize) -> bool {
     }
     if matches!(bytes[j - 1], b'.' | b':') {
         return true;
+    }
+    if exemption == IdentifierExemption::SigilOnly {
+        return false;
     }
     // `AS` as its own word. The haystack is case-folded by the caller, and the
     // two folds in this crate disagree (the gate upper-cases, the clause
