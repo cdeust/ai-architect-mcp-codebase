@@ -10,7 +10,8 @@
 use super::DefinitionResult;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Content-Length framing — LSP wire protocol
@@ -45,12 +46,18 @@ pub(super) fn write_lsp_message(
     Ok(())
 }
 
+/// Reads ONE framed message, blocking until it has one or the stream ends.
+///
+/// This is deliberately unbounded: it runs on the reader thread
+/// [`spawn_frame_reader`] owns, and the caller's deadline is enforced on the
+/// channel instead. It used to carry an `Instant`-based deadline checked at the
+/// top of the header loop, which could not bound anything — `read_line` and
+/// `read_exact` block in the kernel, so a server that sent a partial header and
+/// then stopped never reached the check again and the whole indexer hung on it.
+/// A timeout that is only consulted between blocking calls is not a timeout.
 pub(super) fn read_lsp_message(
     reader: &mut BufReader<std::process::ChildStdout>,
-    timeout: Duration,
 ) -> Result<Value, String> {
-    let deadline = Instant::now() + timeout;
-
     // Read headers until empty line. If the server closes stdout (EOF)
     // before we see a Content-Length header, callers must be able to tell
     // that apart from a real protocol message — we surface it via
@@ -58,9 +65,6 @@ pub(super) fn read_lsp_message(
     let mut content_length: Option<usize> = None;
     let mut saw_any_byte = false;
     loop {
-        if Instant::now() > deadline {
-            return Err(format!("{LSP_TIMEOUT_PREFIX} reading LSP header"));
-        }
         let mut line = String::new();
         let n = reader
             .read_line(&mut line)
@@ -89,6 +93,53 @@ pub(super) fn read_lsp_message(
         .map_err(|e| format!("read body ({len} bytes): {e}"))?;
 
     serde_json::from_slice(&body).map_err(|e| format!("parse JSON body: {e}"))
+}
+
+/// Moves `reader` onto a thread that pushes every frame down a channel, and
+/// returns the receiving end.
+///
+/// This is what makes the caller's timeout real. The blocking framing reads
+/// live on a thread whose fate does not matter — when the child is killed on
+/// `LspClient::drop`, its stdout closes, `read_lsp_message` returns the EOF
+/// error, the loop ends and the thread exits. The caller waits on the channel
+/// with a deadline it can actually enforce.
+pub(super) fn spawn_frame_reader(
+    stdout: std::process::ChildStdout,
+) -> Receiver<Result<Value, String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let frame = read_lsp_message(&mut reader);
+            let failed = frame.is_err();
+            // A closed receiver means the client was dropped; stop.
+            if tx.send(frame).is_err() || failed {
+                return;
+            }
+        }
+    });
+    rx
+}
+
+/// Waits up to `timeout` for the next frame.
+///
+/// A `RecvTimeoutError::Timeout` becomes the module's timeout sentinel, so it
+/// classifies identically to one raised anywhere else here. `Disconnected`
+/// means the reader thread ended — it has already sent whatever error ended it,
+/// so anything after that is EOF.
+pub(super) fn next_frame(
+    frames: &Receiver<Result<Value, String>>,
+    timeout: Duration,
+) -> Result<Value, String> {
+    match frames.recv_timeout(timeout) {
+        Ok(frame) => frame,
+        Err(RecvTimeoutError::Timeout) => {
+            Err(format!("{LSP_TIMEOUT_PREFIX} no frame within {timeout:?}"))
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            Err("eof_before_header: child stdout closed without LSP framing".to_string())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -297,5 +348,63 @@ mod tests {
         assert!(validate_probe_response(&bad2).is_err());
         let good = json!({ "jsonrpc": "2.0", "id": 1, "result": {} });
         assert!(validate_probe_response(&good).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod frame_bound_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    /// B.6. The bound has to hold when the server sends a partial header and
+    /// then simply stops — the shape a hung language server presents.
+    ///
+    /// Before this change the deadline was an `Instant` compared at the top of
+    /// the header loop, and `read_line` blocks in the kernel, so control never
+    /// returned to the check: `read_lsp_message` sat there for as long as the
+    /// child lived and took the indexer with it. A timeout consulted only
+    /// between blocking calls is not a timeout.
+    ///
+    /// The assertion is on the RETURNED VALUE, never on elapsed time: this must
+    /// not become a test whose verdict depends on machine load. A channel that
+    /// never receives is what the pre-change code produced, and this test would
+    /// hang there rather than fail — which is why the fix moves the blocking
+    /// read off the caller's thread instead of tightening the check.
+    #[test]
+    fn next_frame_times_out_when_no_frame_ever_arrives() {
+        // A sender held open with nothing sent models a server that wrote a
+        // partial header and stopped: the reader thread is still blocked, so
+        // no frame is ever pushed.
+        let (_tx, rx) = mpsc::channel::<Result<Value, String>>();
+        let err = next_frame(&rx, Duration::from_millis(50))
+            .expect_err("a frame that never arrives must not block forever");
+        assert!(
+            is_lsp_timeout(&err),
+            "must classify as this module's timeout: {err}"
+        );
+    }
+
+    /// A reader thread that has ended (child gone) reports EOF, not a timeout —
+    /// the two are different answers and the probe classifier maps them to
+    /// different reason codes.
+    #[test]
+    fn next_frame_reports_eof_when_the_reader_thread_is_gone() {
+        let (tx, rx) = mpsc::channel::<Result<Value, String>>();
+        drop(tx);
+        let err = next_frame(&rx, Duration::from_millis(50)).expect_err("no frame");
+        assert!(
+            !is_lsp_timeout(&err),
+            "a dead reader is not a timeout: {err}"
+        );
+        assert!(err.contains("eof_before_header"), "{err}");
+    }
+
+    /// Frames the thread already pushed are delivered without waiting.
+    #[test]
+    fn next_frame_delivers_a_queued_frame() {
+        let (tx, rx) = mpsc::channel::<Result<Value, String>>();
+        tx.send(Ok(serde_json::json!({"id": 1}))).expect("send");
+        let msg = next_frame(&rx, Duration::from_millis(50)).expect("queued frame");
+        assert_eq!(msg.get("id").and_then(|v| v.as_i64()), Some(1));
     }
 }

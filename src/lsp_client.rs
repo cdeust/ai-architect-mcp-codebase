@@ -7,10 +7,10 @@
 // source: LSP Specification 3.17 — https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/
 
 use serde_json::{json, Value};
-use std::io::BufReader;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 mod commands;
@@ -24,8 +24,8 @@ pub(crate) use protocol::{is_lsp_timeout, LSP_TIMEOUT_PREFIX};
 pub use uri::{file_uri_to_path, path_to_file_uri};
 
 use protocol::{
-    classify_probe_err, parse_definition_response, read_lsp_message, validate_probe_response,
-    write_lsp_message,
+    classify_probe_err, next_frame, parse_definition_response, spawn_frame_reader,
+    validate_probe_response, write_lsp_message,
 };
 
 // ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ use protocol::{
 
 pub struct LspClient {
     process: Child,
-    reader: BufReader<std::process::ChildStdout>,
+    frames: Receiver<Result<Value, String>>,
     request_id: AtomicI64,
     timeout: Duration,
 }
@@ -98,11 +98,11 @@ impl LspClient {
             .map_err(|e| format!("spawn {command}: {e}"))?;
 
         let stdout = child.stdout.take().ok_or("failed to capture LSP stdout")?;
-        let reader = BufReader::new(stdout);
+        let frames = spawn_frame_reader(stdout);
 
         Ok(LspClient {
             process: child,
-            reader,
+            frames,
             request_id: AtomicI64::new(1),
             timeout,
         })
@@ -191,7 +191,7 @@ impl LspClient {
                     probe_timeout.as_millis()
                 ));
             }
-            let msg = read_lsp_message(&mut self.reader, remaining).map_err(classify_probe_err)?;
+            let msg = next_frame(&self.frames, remaining).map_err(classify_probe_err)?;
             if msg.get("id").and_then(|v| v.as_i64()) == Some(id) {
                 return Ok(msg);
             }
@@ -283,9 +283,11 @@ impl LspClient {
                 .checked_duration_since(Instant::now())
                 .unwrap_or(Duration::ZERO);
             if remaining.is_zero() {
-                return Err(format!("timeout waiting for response id={target_id}"));
+                return Err(format!(
+                    "{LSP_TIMEOUT_PREFIX} waiting for response id={target_id}"
+                ));
             }
-            let msg = read_lsp_message(&mut self.reader, remaining)?;
+            let msg = next_frame(&self.frames, remaining)?;
             // Check if this is our response
             if let Some(id) = msg.get("id") {
                 if id.as_i64() == Some(target_id) {
