@@ -79,7 +79,8 @@ fn setup_with_search_index(test_name: &str) -> (common::TestTempDir, GraphStore,
     let _cl = clustering::cluster_graph(&store, 1.0).expect("cluster_graph");
 
     // Build search indexes
-    let si = search::build_search_index(&store, &tmp_root).expect("build_search_index");
+    let si =
+        search::build_search_index(&store, &tmp_root, &fixture_dir).expect("build_search_index");
     assert!(si.bm25_doc_count > 0, "should index BM25 docs");
     assert!(si.vector_doc_count > 0, "should index vector docs");
 
@@ -166,6 +167,69 @@ fn test_rrf_fusion_combines_rankings() {
         "RRF scores should be positive, got {}",
         top.score
     );
+
+    let _ = fs::remove_dir_all(&tmp_root);
+}
+
+/// fleet-watch#112: a query whose only evidence lives in doc prose — never
+/// in a symbol name, qualified_name, or any tree-sitter-extracted token —
+/// must still surface via BM25's `body` field, and the hit must come back
+/// enriched (not silently dropped by `enrich_from_graph`'s File fallback).
+#[test]
+fn test_search_graph_finds_markdown_prose_via_file_content() {
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let tmp_root = tempfile::Builder::new()
+        .prefix(&format!("stage3d_hybrid_docs_{n}_"))
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let _ = fs::remove_dir_all(&tmp_root);
+
+    let fixture_dir = tmp_root.join("fixture/src");
+    fs::create_dir_all(&fixture_dir).expect("create fixture");
+    fs::write(fixture_dir.join("main.rs"), FIXTURE_MAIN).unwrap();
+    // Prose that shares NO tokens with any symbol name in FIXTURE_MAIN/
+    // FIXTURE_SERVICE — a hit here can only have come from the doc's body.
+    fs::write(
+        fixture_dir.join("coding-standards.md"),
+        "# Coding Standards\n\n\
+         Every contributor must run the playwright browser automation suite \
+         before merging a pull request.\n",
+    )
+    .unwrap();
+
+    let graph_dir = tmp_root.join("graph");
+    indexer::index_codebase(&fixture_dir, &graph_dir).expect("index_codebase");
+    let store = GraphStore::open_or_create(&graph_dir).unwrap();
+    resolver::resolve_graph(&store).expect("resolve_graph");
+    clustering::cluster_graph(&store, 1.0).expect("cluster_graph");
+    search::build_search_index(&store, &tmp_root, &fixture_dir).expect("build_search_index");
+
+    let idx_dir = tmp_root.join("search_index");
+    let opts = search::SearchOptions {
+        limit: 10,
+        label_filter: None,
+        min_score: 0.0,
+    };
+    let results = search::search_graph(
+        &store,
+        "playwright browser automation",
+        &opts,
+        Some(&idx_dir),
+    )
+    .unwrap();
+    assert!(
+        !results.is_empty(),
+        "must find the doc by content no symbol name contains"
+    );
+    let hit = results
+        .iter()
+        .find(|r| r.label == "File")
+        .expect("the doc-content hit must be enriched, not dropped");
+    assert_eq!(hit.qualified_name, "coding-standards.md");
+    assert_eq!(hit.file_path, "coding-standards.md");
+    assert_eq!(hit.community_id, None, "files aren't clustered");
+    assert!(hit.process_names.is_empty(), "files aren't traced");
 
     let _ = fs::remove_dir_all(&tmp_root);
 }

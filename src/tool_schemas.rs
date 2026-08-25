@@ -607,7 +607,7 @@ fn index_history_schema() -> Value {
 fn search_codebase_schema() -> Value {
     json!({
         "name": "search_codebase",
-        "description": "Stage 3d — Ranked keyword search over the code graph. USE THIS INSTEAD OF grep/ripgrep when you know a name or concept but not the exact qualified name: it ranks symbols by hybrid lexical+structural relevance and returns structural context grep cannot — kind, file path, community, process participation, score. Response: 'results' (ranked, cursor-paged), 'total_count', 'by_process' (results grouped by execution flow), and 'next_offset' when more remain — page by re-calling with offset=next_offset until it is absent (stable order: score desc, then qualified_name). TOKEN SURFACE (issue #56): detail='ids' returns only qualified names for a cheap wide sweep before drilling in; format='tabular' streams rows as arrays under a one-line 'columns' header. Narrow with label_filter (Function/Method/Struct/…). COVERAGE CAVEAT (issue #57): a symbol absent from results may simply be UNINDEXED — the graph can be parse-incomplete; if a negative result matters, check index_status / query_graph(graph=\"missed\") and grep the flagged files. Prereqs: index_codebase + resolve_graph + cluster_graph (or analyze_codebase for all-in-one).",
+        "description": "Stage 3d — Ranked keyword search over the code graph. USE THIS INSTEAD OF grep/ripgrep when you know a name or concept but not the exact qualified name: it ranks symbols by hybrid lexical+structural relevance and returns structural context grep cannot — kind, file path, community, process participation, score. Response: 'results' (ranked, cursor-paged), 'total_count', 'by_process' (results grouped by execution flow), and 'next_offset' when more remain — page by re-calling with offset=next_offset until it is absent (stable order: score desc, then qualified_name). TOKEN SURFACE (issue #56): detail='ids' returns only qualified names for a cheap wide sweep before drilling in; format='tabular' streams rows as arrays under a one-line 'columns' header. Narrow with label_filter (Function/Method/Struct/…). COVERAGE CAVEAT (issue #57): a symbol absent from results may simply be UNINDEXED — the graph can be parse-incomplete; if a negative result matters, check index_status / query_graph(graph=\"missed\") and grep the flagged files. DOC CONTENT (fleet-watch#112): also searches the full text of markdown/plain-text/similar doc files (label 'File' in results, kind of hit rather than a symbol) — so a query whose only evidence lives in README/skill/doc prose still returns something, not just code symbols. Built by analyze_codebase's search-index phase; a graph built without it (bare index_codebase/resolve_graph/cluster_graph) falls back to substring search over symbols only. Prereqs: index_codebase + resolve_graph + cluster_graph (or analyze_codebase for all-in-one).",
         "annotations": { "readOnlyHint": true },
         "inputSchema": {
             "type": "object",
@@ -635,8 +635,8 @@ fn search_codebase_schema() -> Value {
                 },
                 "label_filter": {
                     "type": "string",
-                    "enum": ["Function", "Method", "Struct", "Enum", "Trait", "Module", "Constant", "TypeAlias"],
-                    "description": "Optional: only return symbols of this kind."
+                    "enum": ["Function", "Method", "Struct", "Enum", "Trait", "Module", "Constant", "TypeAlias", "File"],
+                    "description": "Optional: only return symbols of this kind. 'File' (fleet-watch#112) restricts to doc/prose content hits — markdown, plain text, and similar files the parser does not turn into symbols — rather than code."
                 },
                 "detail": detail_param(),
                 "format": format_param(),

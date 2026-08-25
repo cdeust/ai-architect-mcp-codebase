@@ -161,15 +161,21 @@ pub struct SearchIndexResult {
 /// Builds both BM25 (Tantivy) and vector (TF-IDF) indexes.
 /// Call after the graph is fully built (post-clustering).
 /// Index is stored at `<output_dir>/search_index/`.
+///
+/// `codebase_root` is the absolute path the graph was indexed from — BM25
+/// needs it to read doc/prose files' content directly (fleet-watch#112; see
+/// `bm25::index_file_docs`), since only tree-sitter-parsed files get their
+/// bytes persisted in the graph itself.
 pub fn build_search_index(
     store: &GraphStore,
     output_dir: &Path,
+    codebase_root: &Path,
 ) -> Result<SearchIndexResult, String> {
     let start = Instant::now();
     let index_dir = output_dir.join("search_index");
 
     let bm25_dir = index_dir.join("bm25");
-    let bm25_count = bm25::build_index(store, &bm25_dir)?;
+    let bm25_count = bm25::build_index(store, &bm25_dir, codebase_root)?;
 
     let vector_count = vector::build_index(store, &index_dir)?;
 

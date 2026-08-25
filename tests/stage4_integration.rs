@@ -70,7 +70,7 @@ fn build_fixture_graph_inner(
     let _ = clustering::cluster_graph(&store, 1.0);
     if build_index {
         let output_dir = graph_dir.parent().unwrap();
-        let _ = search::build_search_index(&store, output_dir);
+        let _ = search::build_search_index(&store, output_dir, &fixture_dir.join("src"));
     }
 }
 

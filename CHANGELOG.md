@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- BM25 doc/prose content search (fleet-watch#112): `search_codebase` now also
+  finds matches in the full text of markdown/plain-text/similar doc files —
+  previously BM25 covered symbol nodes only, so a query whose only evidence
+  lived in README/skill/doc prose returned nothing a code-symbol match could
+  ever satisfy. Doc files (extension in a small allowlist: md, mdx, txt, rst,
+  adoc; capped at 256 KiB) get a `File`-labeled hit carrying their content in
+  a new, unstored `body` field, read directly from the indexed root at
+  search-index build time (the parser never turns them into symbols, so the
+  graph itself never stores their bytes). `label_filter: "File"` restricts a
+  query to doc-content hits specifically. `search::build_search_index` and
+  `bm25::build_index` now take the indexed codebase root as a parameter.
+
 ## [0.11.1] — Ingestion must never abort on graph size
 
 Patch: a backwards-compatible bug fix — no API change, no new feature.

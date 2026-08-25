@@ -296,7 +296,7 @@ fn test_issue18_hybrid_index_reduces_spurious_candidates() {
     let _ = crate::resolver::resolve_graph(&store);
     let _ = crate::clustering::cluster_graph(&store, 1.0);
     let output_dir = graph_dir.parent().unwrap();
-    crate::search::build_search_index(&store, output_dir).expect("build search index");
+    crate::search::build_search_index(&store, output_dir, &src_dir).expect("build search index");
     let index_dir = crate::search::resolve_search_index_dir(&graph_dir);
     assert!(
         index_dir.is_some(),

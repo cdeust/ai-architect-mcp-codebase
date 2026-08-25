@@ -148,5 +148,53 @@ fn enrich_from_graph(
             end_line: node.end_line,
         });
     }
-    None
+
+    // fleet-watch#112: a BM25 hit whose body-only match came from a doc/prose
+    // File (see `bm25::index_file_docs`) has a `qualified_name` that is a
+    // file path, not a symbol key — no SEARCHABLE_LABELS table above will
+    // ever bind it (File carries no `qualified_name` column at all; see
+    // `graph_store::schema::label_has_qualified_name`). Deliberately kept
+    // out of SEARCHABLE_LABELS itself rather than added there: that const is
+    // shared with community detection and semantic diff, neither of which a
+    // File belongs in.
+    enrich_file_hit(store, hit, options)
+}
+
+/// The File-specific counterpart to the SEARCHABLE_LABELS loop above: no
+/// community/process participation (files aren't clustered or traced), no
+/// line range, `qualified_name`/`file_path` are both the File's `id` (its
+/// repo-relative path — confirmed by `write_graph_meta`'s own `File.id ==
+/// File.path` convention, which `pass_doclinks`-style reference edges also
+/// rely on).
+fn enrich_file_hit(
+    store: &GraphStore,
+    hit: &rrf::RrfResult,
+    options: &SearchOptions,
+) -> Option<SearchResult> {
+    if let Some(ref filter) = options.label_filter {
+        if !filter.eq_ignore_ascii_case("File") {
+            return None;
+        }
+    }
+    if hit.score < options.min_score {
+        return None;
+    }
+    let escaped = cypher_str(&hit.key);
+    let cypher = format!("MATCH (n:File) WHERE n.id = {escaped} RETURN n.id, n.path, n.name");
+    let qr = store.execute_query(&cypher).ok()?;
+    let row = qr.rows.first()?;
+    if row.len() < 3 {
+        return None;
+    }
+    Some(SearchResult {
+        qualified_name: row[1].clone(),
+        name: row[2].clone(),
+        label: "File".to_string(),
+        file_path: row[1].clone(),
+        score: hit.score,
+        community_id: None,
+        process_names: Vec::new(),
+        start_line: None,
+        end_line: None,
+    })
 }

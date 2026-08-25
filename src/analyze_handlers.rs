@@ -104,7 +104,7 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let cluster_result = clustering::cluster_graph(&store, gamma)?;
 
     // Phase 4: build search index (BM25 + TF-IDF vectors)
-    let search_index_result = search::build_search_index(&store, &output_dir)?;
+    let search_index_result = search::build_search_index(&store, &output_dir, &codebase)?;
 
     let total_ms = total_start.elapsed().as_millis() as u64;
 
