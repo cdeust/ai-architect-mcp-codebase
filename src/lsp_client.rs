@@ -34,8 +34,18 @@ use protocol::{
 // Public types
 // ---------------------------------------------------------------------------
 
-/// How many times `shutdown` re-checks before killing, and how long it waits
-/// between checks: a 200 ms ceiling in total.
+/// How many times `shutdown` re-checks whether the server exited on its own
+/// before killing it, and how long it waits between checks — 200 ms in total.
+///
+/// The budget only has to exceed a COOPERATIVE server's flush-and-exit after it
+/// receives `exit`; a server still running past it is not going to stop, and
+/// waiting longer only delays the kill. It is deliberately orders of magnitude
+/// below the request timeout, because this is a teardown path.
+///
+/// source: provisional heuristic. Calibrate against a measured server that
+/// exits cleanly but takes longer than this ceiling — its flush time is the
+/// number to raise this to; a torn cache after shutdown is the symptom that
+/// would show it is too low.
 const SHUTDOWN_GRACE_POLLS: u32 = 20;
 const SHUTDOWN_GRACE_STEP: Duration = Duration::from_millis(10);
 
@@ -281,13 +291,19 @@ impl LspClient {
     }
 
     fn send_request(&mut self, msg: &Value) -> Result<(), String> {
-        // Empty the frame queue first. The write below blocks, and it can only
-        // block forever as part of a CYCLE: a full queue stops the reader
-        // thread, which stops draining the server's stdout, which fills the
-        // server's stdout pipe, which stops the server reading our stdin.
-        // Draining removes the one link in that cycle we own. A deadline on the
-        // write itself would need non-blocking pipe IO; preventing the deadlock
-        // is both cheaper and stronger than failing the request once it starts.
+        // Emptying the queue here NARROWS the deadlock window; it does not
+        // close it. The cycle is: a full queue stops the reader thread, which
+        // stops draining the server's stdout, which fills the server's stdout
+        // pipe, which stops the server reading our stdin, which hangs the write
+        // below. This drain runs ONCE, and `write_lsp_message` then makes two
+        // separate blocking `write_all` calls with nothing draining between
+        // them — so a payload large enough for a chatty server to refill the
+        // channel mid-write can still hang. `did_open` carries a whole file,
+        // which is where that is reachable.
+        //
+        // TRACKED, NOT CLOSED. Closing it needs the drain to run DURING the
+        // write (chunked writes, or non-blocking pipe IO) — a change of shape
+        // rather than of wording, and deliberately out of scope here.
         drain_pending(&self.frames);
         let bytes = serde_json::to_vec(msg).map_err(|e| format!("serialize request: {e}"))?;
         let stdin = self.process.stdin.as_mut().ok_or("LSP stdin unavailable")?;
