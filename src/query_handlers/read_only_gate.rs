@@ -33,15 +33,41 @@ use super::is_ident_char;
 // family of database mutations reachable through syntax this scan misses.
 // Pinned by `engine_gate_does_not_cover_filesystem_writes`.
 //
+// DETACH/USE (2026-08-25 mechanical re-audit): the same base visitor also
+// no-ops `visitDetachDatabase` and `visitUseDatabase`
+// (parsed_statement_visitor.h:60-61 on lbug 0.19.1), so `DETACH DATABASE x` and
+// `USE DATABASE x` are engine-read-only too. The list stopped at ATTACH and
+// those two passed BOTH gates. Re-derived from the headers rather than from
+// this comment's own prose, which is how the gap was found; pinned by
+// `readonly_gate_blocks_detach_and_use_database` and by
+// `engine_classifies_every_filesystem_statement_as_read_only`.
+//
 // Identifier positions are exempt (see `contains_keyword_token`): `IMPORT` is
 // also this schema's `Import` node table, so a keyword introduced by `:` or
 // `.` is a label, relationship type, map key or property, not a clause.
 // ---------------------------------------------------------------------------
 
 pub(crate) const FORBIDDEN_CYPHER_KEYWORDS: &[&str] = &[
-    "CREATE", "DELETE", "MERGE", "SET", "REMOVE", "DROP", "ALTER", "CALL", "LOAD", "COPY",
-    "EXPORT", "IMPORT", "ATTACH",
+    "CREATE", "DELETE", "MERGE", "SET", "REMOVE", "DROP", "ALTER", "LOAD", "COPY", "EXPORT",
+    "IMPORT", "ATTACH", "DETACH", "USE",
 ];
+
+/// Procedures `query_graph` admits, so an agent can read a graph's SCHEMA
+/// without a second tool. Classification is PER PROCEDURE — never by the `CALL`
+/// keyword.
+///
+/// Why per procedure. lbug's `StatementReadWriteAnalyzer` returns
+/// `readOnly = true` from `visitStandaloneCall`, so `CALL threads = 8` — a
+/// configuration write — is engine-read-only. Relaxing `CALL` wholesale would
+/// leave NO barrier anywhere against it. Naming the callable procedures instead
+/// keeps the default refusal and admits exactly the two catalog readers.
+///
+/// source: lbug 0.19.1 `src/include/function/table/simple_table_function.h` —
+/// `TABLE_INFO` (line 102) and `SHOW_TABLES` (line 78). The same file declares
+/// 24 further procedures (`STORAGE_INFO`, `FSM_INFO`, `SHOW_CONNECTION`, …);
+/// none is admitted, because none is needed to answer "what does this graph's
+/// schema look like?" and each would need its own read-only argument.
+pub(crate) const READ_ONLY_PROCEDURES: &[&str] = &["TABLE_INFO", "SHOW_TABLES"];
 
 /// Wall-clock bound (milliseconds) applied to a single `query_graph` execution
 /// and then reset. Bounds a pathological read plan — e.g. an unbounded
@@ -84,10 +110,58 @@ pub(crate) fn forbidden_cypher_keyword(query: &str) -> Option<&'static str> {
         return Some("UNTERMINATED_LITERAL");
     };
     let upper = executable.to_ascii_uppercase();
-    FORBIDDEN_CYPHER_KEYWORDS
+    if let Some(kw) = FORBIDDEN_CYPHER_KEYWORDS
         .iter()
         .find(|&&kw| contains_keyword_token(&upper, kw))
         .copied()
+    {
+        return Some(kw);
+    }
+    // `CALL` is classified per procedure rather than refused outright, so
+    // schema introspection is reachable while every other procedure — and the
+    // `CALL <setting> = <value>` configuration form, which the engine calls
+    // read-only — stays refused.
+    if carries_unlisted_procedure(&upper) {
+        return Some("CALL");
+    }
+    None
+}
+
+/// True when `executable_upper` carries a `CALL` naming anything outside
+/// [`READ_ONLY_PROCEDURES`].
+///
+/// The `CALL <setting> = <value>` form yields its left-hand side, which is
+/// never allowlisted, so it is refused like any unknown procedure. A `CALL`
+/// followed by no identifier at all yields the empty name and is refused too.
+fn carries_unlisted_procedure(executable_upper: &str) -> bool {
+    let bytes = executable_upper.as_bytes();
+    let mut i = 0;
+    while let Some(pos) = executable_upper[i..].find("CALL") {
+        let start = i + pos;
+        let end = start + "CALL".len();
+        let left_ok = start == 0 || !is_ident_char(bytes[start - 1]);
+        let right_ok = end >= bytes.len() || !is_ident_char(bytes[end]);
+        if left_ok && right_ok && !preceded_by_identifier_sigil(bytes, start) {
+            let name = procedure_name_at(bytes, end);
+            if !READ_ONLY_PROCEDURES.contains(&name.as_str()) {
+                return true;
+            }
+        }
+        i = end;
+    }
+    false
+}
+
+/// The identifier following a `CALL` token, or an empty string when none does.
+fn procedure_name_at(bytes: &[u8], mut j: usize) -> String {
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    let start = j;
+    while j < bytes.len() && is_ident_char(bytes[j]) {
+        j += 1;
+    }
+    String::from_utf8_lossy(&bytes[start..j]).into_owned()
 }
 
 /// Replaces every non-executable region of `query` with spaces, preserving byte

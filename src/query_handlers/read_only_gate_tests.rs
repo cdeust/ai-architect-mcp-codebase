@@ -350,3 +350,80 @@ fn readonly_gate_fails_closed_on_unterminated_literal() {
     let err = do_query_graph(&args).expect_err("must reject unterminated literal");
     assert!(err.contains("read_only_query_required"), "got: {err}");
 }
+
+// ---------------------------------------------------------------------------
+// B.2 re-audit / B.3 allowlist / B.5 mask-awareness
+// ---------------------------------------------------------------------------
+
+/// 2026-08-25 mechanical re-audit of the filesystem denylist against lbug
+/// 0.19.1's own headers. `visitDetachDatabase` and `visitUseDatabase` are base
+/// no-ops (parsed_statement_visitor.h:60-61) exactly like the four already
+/// listed, so the engine classifies both as read-only — and the lexical list
+/// stopped at ATTACH, letting them through BOTH gates.
+#[test]
+fn readonly_gate_blocks_detach_and_use_database() {
+    for query in [
+        "DETACH DATABASE other",
+        "USE DATABASE other",
+        "detach database other",
+    ] {
+        assert!(
+            forbidden_cypher_keyword(query).is_some(),
+            "must be refused: {query}"
+        );
+    }
+    // `DETACH DELETE` was already caught through DELETE; it stays caught.
+    assert!(forbidden_cypher_keyword("MATCH (n) DETACH DELETE n").is_some());
+}
+
+/// Schema introspection is reachable through `query_graph`: the two catalog
+/// readers are admitted by NAME.
+#[test]
+fn readonly_gate_admits_allowlisted_introspection_procedures() {
+    for query in [
+        "CALL table_info('Function') RETURN *",
+        "CALL TABLE_INFO('Function') RETURN *",
+        "CALL show_tables() RETURN *",
+    ] {
+        assert_eq!(
+            forbidden_cypher_keyword(query),
+            None,
+            "must be admitted: {query}"
+        );
+    }
+}
+
+/// Everything else a `CALL` can reach stays refused — including the
+/// configuration form, which lbug's own analyzer reports as read-only
+/// (`visitStandaloneCall` -> readOnly = true), so this lexical layer is the
+/// only barrier that exists against it.
+#[test]
+fn readonly_gate_refuses_unlisted_procedures_and_config_calls() {
+    for query in [
+        "CALL threads = 8",
+        "CALL storage_info('Function') RETURN *",
+        "CALL show_connection('x') RETURN *",
+        "CALL",
+        "MATCH (n) CALL something_else() RETURN n",
+    ] {
+        assert!(
+            forbidden_cypher_keyword(query).is_some(),
+            "must be refused: {query}"
+        );
+    }
+}
+
+/// A procedure name reached through `.` or `:` is an identifier, not a call —
+/// the same exemption every other keyword gets.
+#[test]
+fn readonly_gate_allows_call_shaped_identifiers() {
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n:Function) RETURN n.call_count"),
+        None
+    );
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (n) WHERE n.name = 'CALL threads = 8' RETURN n"),
+        None,
+        "a procedure name inside a literal is data, not a call"
+    );
+}
