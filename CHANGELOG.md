@@ -9,11 +9,18 @@ adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Query-time staleness guard (fleet-watch#112): `search_codebase`, `get_symbol`,
-  and `get_impact` now report a `graph_state` object (`state: "fresh" |
+  and `get_impact` now report a `graph_freshness` object (`state: "fresh" |
   "stale" | "unknown"`, `dirty_files`, `checked_files`, `commits_behind`,
   `commits_ahead`) so a silently stale graph — the working tree has moved since
   the last index — becomes a visible, reasoned-about condition instead of a
-  wrong answer presented with full confidence. The commit signal is
+  wrong answer presented with full confidence. It rides on EVERY response these
+  tools return, `symbol_not_found` and `query_failed` included: a caller told
+  the symbol does not exist is exactly the caller who needs to know the graph
+  may simply predate it. The key is deliberately NOT `graph_state`, which
+  `index_codebase` / `index_history` already use for a plain string
+  (`"fresh"` / `"accepted_stale"` / `"filled_to_working_tree"`) — one key with
+  two shapes would break any client that types the field once. The commit
+  signal is
   bidirectional: `commits_ahead` counts commits the indexed sha has that HEAD
   does not, so a checkout BACK to an older revision is reported as stale
   instead of scoring 0 like an unmoved HEAD. Re-stats the
@@ -21,9 +28,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   walk) — `O(manifested files)` `stat` calls per read-tool call, documented on
   `count_dirty` — plus one `git rev-list --left-right --count` when the indexed
   root is a git working tree. `meta.json` moves to schema 2, adding
-  `commit_sha`, and is now written atomically (temp file + rename) so a
-  concurrent re-index cannot hand a reader a torn sidecar; a schema-1 sidecar
-  from an older index still parses, just without the commit signal.
+  `commit_sha`, and is now written atomically (temp file + rename, the temp
+  file named per writer) so neither a concurrent reader can be handed a torn
+  sidecar nor two concurrent indexers of one `output_dir` interleave through a
+  shared temp path; a schema-1 sidecar from an older index still parses, just
+  without the commit signal.
 
 ## [0.11.1] — Ingestion must never abort on graph size
 
