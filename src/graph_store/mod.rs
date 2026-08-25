@@ -336,31 +336,30 @@ impl GraphStore {
         cypher: &str,
         params: Vec<(&str, Value)>,
     ) -> Result<QueryResult, String> {
-        // The borrow is held across `execute` + `drain_result` only because the
-        // statement lives in the cache. Scope it to the narrowest block that
-        // still covers the borrow of `stmt`, so a future call reached from
-        // inside the drain cannot meet an outstanding mutable borrow and panic
-        // on this process-wide cached store.
-        let mut cache = self.stmt_cache.borrow_mut();
-        if !cache.contains_key(cypher) {
-            let stmt = self
+        // The statement is TAKEN OUT of the cache so the `RefMut` ends before
+        // `execute` runs, then returned afterwards. Scoping the borrow with a
+        // block did not do this — `stmt` borrows from the map, so the guard
+        // stayed alive across `execute` + `drain_result` no matter where the
+        // braces went, and the comment claiming otherwise asserted a protection
+        // the code did not provide. This store is cached process-wide, so any
+        // future call reaching the cache from inside the drain would panic on a
+        // double borrow.
+        let mut stmt = match self.stmt_cache.borrow_mut().remove(cypher) {
+            Some(cached) => cached,
+            None => self
                 .conn
                 .prepare(cypher)
-                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
-            cache.insert(cypher.to_string(), stmt);
-        }
-        let drained = {
-            let stmt = cache
-                .get_mut(cypher)
-                .expect("statement just inserted into cache");
-            let mut result = self
-                .conn
-                .execute(stmt, params)
-                .map_err(|e| format!("execute [{cypher}]: {e}"))?;
-            drain_result(&mut result)
+                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?,
         };
-        drop(cache);
-        Ok(drained)
+        let outcome = match self.conn.execute(&mut stmt, params) {
+            Ok(mut result) => Ok(drain_result(&mut result)),
+            Err(e) => Err(format!("execute [{cypher}]: {e}")),
+        };
+        // Returned on both paths: a failed execute does not invalidate the plan.
+        self.stmt_cache
+            .borrow_mut()
+            .insert(cypher.to_string(), stmt);
+        outcome
     }
 
     /// Returns the total number of nodes across all node tables.
