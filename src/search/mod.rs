@@ -47,7 +47,7 @@ pub use name_lookup::{resolve_qualified_name, SymbolNotFound};
 // before concluding a claimed file is outside the indexed graph.
 pub(crate) use name_lookup::strip_leading_path_component;
 
-use crate::graph_store::GraphStore;
+use crate::graph_store::{GraphStore, NODE_FILE};
 use hybrid::HybridIndexes;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -166,6 +166,17 @@ pub struct SearchIndexResult {
 /// needs it to read doc/prose files' content directly (fleet-watch#112; see
 /// `bm25::index_file_docs`), since only tree-sitter-parsed files get their
 /// bytes persisted in the graph itself.
+///
+/// SCOPE — doc/prose content reaches the LEXICAL half of hybrid retrieval only.
+/// `bm25::build_index` indexes doc file bodies; `vector::build_index` below is
+/// unchanged and still covers symbol nodes exclusively. So a `File` hit can
+/// enter RRF fusion through the BM25 ranking and never through the vector one,
+/// where a symbol hit can be reinforced by appearing in both. What a caller
+/// feels: a query that overlaps a doc semantically but shares no term with it
+/// lexically will not surface that doc, even though the same query would find a
+/// symbol that way. This is a stated v1 boundary rather than an oversight —
+/// extending TF-IDF over full doc bodies changes the vocabulary and index-size
+/// characteristics of `vector`'s sparse format and belongs in its own change.
 pub fn build_search_index(
     store: &GraphStore,
     output_dir: &Path,
@@ -223,7 +234,94 @@ pub fn search_graph(
             hybrid::search_hybrid(store, query, options, indexes)
         }
         // Fallback: graph-only substring search (v1 behavior).
-        _ => substring::search_substring(store, &terms, options),
+        _ => {
+            reject_unservable_file_filter(options)?;
+            substring::search_substring(store, &terms, options)
+        }
+    }
+}
+
+/// Refuses `label_filter: "File"` on the substring fallback, which cannot
+/// serve it.
+///
+/// That path scans [`SEARCHABLE_LABELS`], which does not — and cannot — contain
+/// `File`: a doc file's text exists only in the BM25 index's `body` field, never
+/// in the graph, so there is nothing on this path to match against. Returning an
+/// empty result would be indistinguishable from "no doc matched", leaving the
+/// caller to conclude the repository has no such doc when in fact the query was
+/// never run. `search_codebase` exposes `File` in its `label_filter` enum
+/// (fleet-watch#112), so a caller can reach this combination without doing
+/// anything wrong — it earns an explanation, not silence.
+fn reject_unservable_file_filter(options: &SearchOptions) -> Result<(), String> {
+    let is_file_filter = options
+        .label_filter
+        .as_deref()
+        .is_some_and(|f| f.eq_ignore_ascii_case(NODE_FILE));
+    if is_file_filter {
+        return Err(format!(
+            "label_filter '{NODE_FILE}' searches doc/prose file content, which lives only in \
+             the search index built by analyze_codebase — this graph has none. Rebuild it \
+             with analyze_codebase, or drop label_filter to search symbols."
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+
+    fn store_without_an_index() -> (tempfile::TempDir, GraphStore) {
+        let dir = tempfile::Builder::new()
+            .prefix("search_no_index")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open store");
+        store.create_schema().expect("schema");
+        (dir, store)
+    }
+
+    /// Review finding 2. `search_codebase` exposes `File` in its `label_filter`
+    /// enum, but the substring fallback scans `SEARCHABLE_LABELS`, which cannot
+    /// contain `File` — a doc's text lives only in the BM25 index. The
+    /// combination therefore returned an empty result with no signal, which a
+    /// caller cannot tell apart from "no doc matched".
+    ///
+    /// This test fails on the pre-fix code, which returns `Ok(vec![])`.
+    #[test]
+    fn a_file_label_filter_without_a_search_index_is_refused() {
+        let (_dir, store) = store_without_an_index();
+        let options = SearchOptions {
+            limit: 10,
+            label_filter: Some(NODE_FILE.to_string()),
+            min_score: 0.0,
+        };
+        // `SearchResult` is not `Debug`, so unwrap the Result by hand.
+        let Err(err) = search_graph(&store, "playwright browser", &options, None) else {
+            panic!("an unservable filter must not answer with silence");
+        };
+        assert!(
+            err.contains("analyze_codebase"),
+            "the error must say how to get the index, got: {err}"
+        );
+    }
+
+    /// The refusal is specific to the unservable combination: every other
+    /// filter, and no filter at all, still falls back to substring search.
+    #[test]
+    fn the_substring_fallback_still_serves_symbol_filters() {
+        let (_dir, store) = store_without_an_index();
+        for filter in [None, Some("Function".to_string())] {
+            let options = SearchOptions {
+                limit: 10,
+                label_filter: filter.clone(),
+                min_score: 0.0,
+            };
+            assert!(
+                search_graph(&store, "alpha", &options, None).is_ok(),
+                "filter {filter:?} must still take the fallback path"
+            );
+        }
     }
 }
 

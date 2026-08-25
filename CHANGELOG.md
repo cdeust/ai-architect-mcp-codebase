@@ -17,8 +17,18 @@ adheres to [Semantic Versioning](https://semver.org/).
   a new, unstored `body` field, read directly from the indexed root at
   search-index build time (the parser never turns them into symbols, so the
   graph itself never stores their bytes). `label_filter: "File"` restricts a
-  query to doc-content hits specifically. `search::build_search_index` and
-  `bm25::build_index` now take the indexed codebase root as a parameter.
+  query to doc-content hits specifically — and requires that index, so on a
+  graph built without one the filter is refused with an explanation instead of
+  returning an empty result indistinguishable from "no doc matched".
+  `search::build_search_index` and `bm25::build_index` now take the indexed
+  codebase root as a parameter.
+
+  Scope, stated rather than implied: doc content reaches the **lexical** half of
+  hybrid retrieval only. BM25 indexes doc bodies; the TF-IDF vector index still
+  covers symbol nodes exclusively, so a doc hit is fused into RRF from one
+  ranking rather than two. A query that matches a doc semantically but shares no
+  term with it lexically will not surface it. Extending vector indexing over doc
+  bodies is deliberately left to its own change.
 
 ## [0.11.1] — Ingestion must never abort on graph size
 
