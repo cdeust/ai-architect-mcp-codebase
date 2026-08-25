@@ -121,7 +121,12 @@ fn resolve_file(store: &GraphStore, candidates: &[&str]) -> Option<String> {
 ///
 /// Resolving instead through the symbol's `Defines_File_<Label>` edge was
 /// evaluated and rejected — see this module's header.
-fn query_file_id(store: &GraphStore, path: &str) -> Option<String> {
+///
+/// `pub(super)` rather than private: `hybrid::enrich_file_hit` resolves a
+/// doc/prose BM25 hit's key to its `File` through this same lookup
+/// (fleet-watch#112). Two File resolvers that tolerate different key shapes is
+/// how one of them silently stops finding files the other still finds.
+pub(super) fn query_file_id(store: &GraphStore, path: &str) -> Option<String> {
     // Both forms are BOUND, not interpolated: `path` is a caller-supplied
     // qualified-name fragment, and the query text is constant so the prepared
     // statement caches across every lookup.

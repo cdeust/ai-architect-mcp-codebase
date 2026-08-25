@@ -7,9 +7,9 @@
 use super::enrichment::{decode_row, return_clause, BoostWeights, RankBoosts};
 use super::enrichment::{lookup_community, lookup_processes};
 use super::qualified_name::file_path_of;
-use super::{bm25, rrf, sort_and_truncate, vector};
+use super::{bm25, impact_target, rrf, sort_and_truncate, vector};
 use super::{SearchOptions, SearchResult, SEARCHABLE_LABELS};
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{cypher_str, GraphStore, NODE_FILE};
 use std::path::Path;
 
 /// Which hybrid indexes exist beside the graph, and where they live.
@@ -96,10 +96,46 @@ pub(super) fn search_hybrid(
     Ok(results)
 }
 
-/// Attaches graph metadata and the community/process boosts to one fused hit,
-/// or drops it: `None` when no searchable label holds the key, or when the
-/// boosted score falls under `options.min_score`.
+/// Attaches graph metadata to one fused hit, or drops it: `None` when the
+/// retrieval score falls under `options.min_score`, or when neither a
+/// searchable label nor a `File` holds the key.
+///
+/// The two kinds of hit are enriched by the two helpers below; this function
+/// owns only the gate they share and the order they are tried in.
 fn enrich_from_graph(
+    store: &GraphStore,
+    hit: &rrf::RrfResult,
+    boosts: &RankBoosts,
+    options: &SearchOptions,
+) -> Option<SearchResult> {
+    // ONE threshold, ONE scale, applied before any kind-specific enrichment.
+    // `min_score` gates the RETRIEVAL score every hit is ranked by; the
+    // community and process boosts tilt the order, they do not decide
+    // membership. Gating on the BOOSTED score instead made one `min_score`
+    // mean two different things: a symbol cleared the bar after a boost a File
+    // hit can never receive (files are neither clustered nor traced), so two
+    // hits at the identical retrieval score were admitted or dropped by kind.
+    if hit.score < options.min_score {
+        return None;
+    }
+
+    // fleet-watch#112: a BM25 hit whose body-only match came from a doc/prose
+    // File (see `bm25::index_file_docs`) has a `qualified_name` that is a file
+    // path, not a symbol key — no SEARCHABLE_LABELS table can ever bind it
+    // (File carries no `qualified_name` column at all; see
+    // `graph_store::schema::label_has_qualified_name`). File is deliberately
+    // kept OUT of SEARCHABLE_LABELS rather than added to it: that const is
+    // shared with community detection and semantic diff, neither of which a
+    // File belongs in. So it is a fallback here, not a ninth label.
+    enrich_symbol_hit(store, hit, boosts, options).or_else(|| enrich_file_hit(store, hit, options))
+}
+
+/// Binds `hit.key` to the first searchable label that holds it as a
+/// `qualified_name`, and applies the community/process boosts to its score.
+///
+/// The boosts reach the REPORTED score only — `enrich_from_graph` has already
+/// decided membership on the unboosted retrieval score.
+fn enrich_symbol_hit(
     store: &GraphStore,
     hit: &rrf::RrfResult,
     boosts: &RankBoosts,
@@ -132,10 +168,6 @@ fn enrich_from_graph(
                 &HYBRID_WEIGHTS,
             );
 
-        if final_score < options.min_score {
-            return None;
-        }
-
         return Some(SearchResult {
             file_path: file_path_of(&node.qualified_name).to_string(),
             qualified_name: node.qualified_name,
@@ -148,49 +180,49 @@ fn enrich_from_graph(
             end_line: node.end_line,
         });
     }
-
-    // fleet-watch#112: a BM25 hit whose body-only match came from a doc/prose
-    // File (see `bm25::index_file_docs`) has a `qualified_name` that is a
-    // file path, not a symbol key — no SEARCHABLE_LABELS table above will
-    // ever bind it (File carries no `qualified_name` column at all; see
-    // `graph_store::schema::label_has_qualified_name`). Deliberately kept
-    // out of SEARCHABLE_LABELS itself rather than added there: that const is
-    // shared with community detection and semantic diff, neither of which a
-    // File belongs in.
-    enrich_file_hit(store, hit, options)
+    None
 }
 
-/// The File-specific counterpart to the SEARCHABLE_LABELS loop above: no
+/// The File-specific counterpart to [`enrich_symbol_hit`]: no
 /// community/process participation (files aren't clustered or traced), no
-/// line range, `qualified_name`/`file_path` are both the File's `id` (its
-/// repo-relative path — confirmed by `write_graph_meta`'s own `File.id ==
-/// File.path` convention, which `pass_doclinks`-style reference edges also
-/// rely on).
+/// line range, and `qualified_name`/`file_path` both the File's repo-relative
+/// path.
+///
+/// The key is resolved through [`impact_target::query_file_id`] — the same
+/// lookup `get_impact`'s File-target path uses — so ONE rule answers "which
+/// File is this key?" across the codebase: exact `File.id` first, then the one
+/// leading path component the parser strips when it builds qualified names.
+/// The BM25 document is written from `File.path` while this binds `File.id`;
+/// `insert_file_node` writes both from the same relative path, so they agree
+/// today, and going through the shared resolver is what stops that agreement
+/// from being load-bearing here.
+///
+/// `min_score` is NOT re-checked: `enrich_from_graph` has already gated this
+/// hit on the retrieval score, and re-applying the threshold to a differently
+/// scaled score is exactly the kind-dependent recall gap that gate removed.
 fn enrich_file_hit(
     store: &GraphStore,
     hit: &rrf::RrfResult,
     options: &SearchOptions,
 ) -> Option<SearchResult> {
     if let Some(ref filter) = options.label_filter {
-        if !filter.eq_ignore_ascii_case("File") {
+        if !filter.eq_ignore_ascii_case(NODE_FILE) {
             return None;
         }
     }
-    if hit.score < options.min_score {
-        return None;
-    }
-    let escaped = cypher_str(&hit.key);
-    let cypher = format!("MATCH (n:File) WHERE n.id = {escaped} RETURN n.id, n.path, n.name");
+    let id = impact_target::query_file_id(store, &hit.key)?;
+    let escaped = cypher_str(&id);
+    let cypher = format!("MATCH (n:{NODE_FILE}) WHERE n.id = {escaped} RETURN n.path, n.name");
     let qr = store.execute_query(&cypher).ok()?;
     let row = qr.rows.first()?;
-    if row.len() < 3 {
+    if row.len() < 2 {
         return None;
     }
     Some(SearchResult {
-        qualified_name: row[1].clone(),
-        name: row[2].clone(),
-        label: "File".to_string(),
-        file_path: row[1].clone(),
+        qualified_name: row[0].clone(),
+        name: row[1].clone(),
+        label: NODE_FILE.to_string(),
+        file_path: row[0].clone(),
         score: hit.score,
         community_id: None,
         process_names: Vec::new(),
@@ -198,3 +230,7 @@ fn enrich_file_hit(
         end_line: None,
     })
 }
+
+#[cfg(test)]
+#[path = "hybrid_tests.rs"]
+mod tests;
