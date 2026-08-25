@@ -6,9 +6,9 @@
 // besides: `search` enriching every ranked hit, `search::context` answering
 // get_context, `clustering::impact` collecting a blast radius,
 // `security_gates` classifying an auth community, and `prd_validator`'s two
-// axes. Five copies of one traversal is how the escaping of a file-path-bearing
-// key comes to be fixed on one and missed on the others — fleet-watch#16 was
-// exactly that, on the search copy.
+// axes. Five copies of one traversal is how a fix to one is missed on the
+// others — fleet-watch#16 was exactly that, on the search copy, when the
+// defence was still escaping rather than binding.
 //
 // They live here, beside the schema that declares the tables, because every
 // caller already depends on `graph_store` and none depends on the others.
@@ -34,7 +34,9 @@ use lbug::Value;
 
 /// How a membership traversal identifies the symbol it starts from.
 ///
-/// Every arm carries a RAW value; this module escapes it.
+/// Every arm carries a RAW value. Nothing here escapes it: `predicate()` names
+/// the bound parameter `$v` and `params()` hands the value to the engine, so it
+/// never reaches the query text. See the module header.
 #[derive(Clone, Copy)]
 pub enum SymbolMatch<'a> {
     /// Match on `n.id` alone.
@@ -87,14 +89,16 @@ pub struct CommunityRow {
 /// A row whose `Community.id` is empty is reported as `None`: it identifies no
 /// community, and every consumer wants that same answer.
 ///
-/// `ORDER BY c.id` makes the one row a DETERMINISTIC choice. Clustering writes
-/// one `MemberOf` edge per node per run, but a graph carrying a stale edge
-/// beside a fresh one has two — and `LIMIT 1` without an order would then let
-/// the engine's scan order decide, so the same symbol could read as its real
-/// community on one call and as no-community on the next. Ordering costs
-/// nothing on a single row and removes the coin flip. An empty id sorts first,
-/// which is the safe direction: it reports no-community consistently rather
-/// than intermittently.
+/// `ORDER BY c.id` makes the one row a DETERMINISTIC choice whenever more than
+/// one exists. It is a guard, not a fix for an observed bug, and the write path
+/// is where that distinction lives: `community_persist` emits one `MemberOf`
+/// edge per node per run with a non-empty prefixed id, and `cluster_graph`
+/// purges before writing, so a well-formed graph has exactly one row and this
+/// clause changes nothing. It earns its place against a graph this code did not
+/// write — a partially-restored dump, a hand-edited store — where `LIMIT 1`
+/// without an order would let scan order decide and the same symbol could read
+/// differently call to call. Do NOT read this as evidence that the writers
+/// leave stale or empty ids; they do not.
 ///
 /// `LIMIT 1` is load-bearing rather than cosmetic: this runs once per candidate
 /// on the substring fallback, which scans every node of every searchable label,
