@@ -249,8 +249,12 @@ fn a_prepared_statement_is_returned_to_the_cache_after_use() {
         .query_prepared_params(ok_cypher, Vec::new())
         .expect("first call prepares");
     assert!(
-        store.stmt_cache.borrow().contains_key(ok_cypher),
-        "a successful call must leave its plan behind"
+        store
+            .stmt_cache
+            .borrow()
+            .get(ok_cypher)
+            .is_some_and(Option::is_some),
+        "a successful call must leave its plan behind, IN the slot"
     );
 
     // A statement that PREPARES but fails at execute: the parameter it binds is
@@ -261,8 +265,52 @@ fn a_prepared_statement_is_returned_to_the_cache_after_use() {
         "fixture precondition: this must fail at execute, not at prepare"
     );
     assert!(
-        store.stmt_cache.borrow().contains_key(failing),
-        "the FAILING statement's own entry must be returned to the cache — a \
-         failed execute does not invalidate the compiled plan"
+        store
+            .stmt_cache
+            .borrow()
+            .get(failing)
+            .is_some_and(Option::is_some),
+        "the FAILING statement's own plan must be back IN its slot — a failed \
+         execute does not invalidate the compiled plan"
+    );
+}
+
+/// Round-6 finding 5. Returning the statement used to re-insert the KEY as
+/// well, allocating a fresh `String` on every call and regressing the
+/// bulk-insert loop this cache exists for — `run_prepared_params`' own contract
+/// is "one plan, many executes" — from zero allocations after the first chunk
+/// to one alloc/dealloc pair per chunk.
+///
+/// The entry is now left in place and only its VALUE moves, so the observable
+/// invariant is: repeated calls never change the cache's key set, and the slot
+/// is refilled each time.
+#[test]
+fn repeated_calls_reuse_the_cache_entry_without_replacing_the_key() {
+    let (_dir, store) = store_with_one_function();
+    let cypher = "MATCH (n:Function) RETURN n.id";
+
+    store
+        .query_prepared_params(cypher, Vec::new())
+        .expect("1st");
+    let keys_after_first: Vec<String> = store.stmt_cache.borrow().keys().cloned().collect();
+
+    for _ in 0..5 {
+        store
+            .query_prepared_params(cypher, Vec::new())
+            .expect("nth");
+        assert!(
+            store
+                .stmt_cache
+                .borrow()
+                .get(cypher)
+                .is_some_and(Option::is_some),
+            "the plan must be back in its slot after every call"
+        );
+    }
+
+    let keys_after_many: Vec<String> = store.stmt_cache.borrow().keys().cloned().collect();
+    assert_eq!(
+        keys_after_first, keys_after_many,
+        "the key set must not change — a re-inserted key is a fresh allocation"
     );
 }

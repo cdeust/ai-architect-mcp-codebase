@@ -133,7 +133,12 @@ pub struct GraphStore {
     // UNWIND statements (File rows without size_bytes, etc.).
     // source: scalability_bench regression observed April 2026 when
     // prepare-per-call was introduced; caching restores linear scaling.
-    stmt_cache: RefCell<HashMap<String, PreparedStatement>>,
+    // `Option` so a statement can be TAKEN OUT for the duration of an
+    // execute without removing its entry: the key stays, so returning it costs
+    // no allocation. Removing the entry re-allocated the key on every call,
+    // which regressed the bulk-insert loop this cache exists for from zero
+    // allocations after the first chunk to one alloc/dealloc pair per chunk.
+    stmt_cache: RefCell<HashMap<String, Option<PreparedStatement>>>,
     // Safety: `_db` is heap-allocated via lbug's C++ bridge (UniquePtr).
     // `Connection` borrows `Database` through a raw pointer on the C++ side,
     // not through Rust's borrow checker. Moving the Rust struct does not
@@ -433,8 +438,12 @@ impl GraphStore {
     /// statement does, wherever the braces go. The borrow must END, which means
     /// the statement must leave.
     fn take_cached_stmt(&self, cypher: &str) -> Result<PreparedStatement, String> {
-        if let Some(cached) = self.stmt_cache.borrow_mut().remove(cypher) {
-            return Ok(cached);
+        // Takes the VALUE out and leaves the entry, so `return_cached_stmt`
+        // reuses the existing key instead of allocating a new one.
+        if let Some(slot) = self.stmt_cache.borrow_mut().get_mut(cypher) {
+            if let Some(cached) = slot.take() {
+                return Ok(cached);
+            }
         }
         self.conn
             .prepare(cypher)
@@ -446,9 +455,15 @@ impl GraphStore {
     /// compiled plan, and dropping it would silently turn the cache off for
     /// that statement.
     fn return_cached_stmt(&self, cypher: &str, stmt: PreparedStatement) {
-        self.stmt_cache
-            .borrow_mut()
-            .insert(cypher.to_string(), stmt);
+        let mut cache = self.stmt_cache.borrow_mut();
+        match cache.get_mut(cypher) {
+            // The common path after the first call: the key is already there,
+            // so this is a move into an existing slot and allocates nothing.
+            Some(slot) => *slot = Some(stmt),
+            None => {
+                cache.insert(cypher.to_string(), Some(stmt));
+            }
+        }
     }
 }
 
