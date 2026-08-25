@@ -172,3 +172,83 @@ fn the_handshake_skips_a_server_request_sharing_our_id() {
         "the message returned must be the initialize RESULT: {msg}"
     );
 }
+
+/// Round-6 finding 4. The previous round gave the probe the request/response
+/// path's tolerance for an unparseable payload, trading away its own fail-fast
+/// contract: a binary on PATH that emits framed-but-unparseable bytes is
+/// exactly what the probe exists to reject, and skipping those frames burned
+/// the entire probe window on a binary already known to be wrong.
+///
+/// The two loops now share one implementation and differ ONLY in this policy,
+/// which is what this pins.
+#[test]
+fn the_probe_fails_fast_where_the_request_path_skips() {
+    assert_eq!(
+        UnparseableFrame::FailFast == UnparseableFrame::Skip,
+        false,
+        "the two callers must not share a policy"
+    );
+
+    // The probe stops on the first unparseable frame…
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Value, protocol::FrameError>>(4);
+    tx.send(Err(protocol::FrameError::Payload(
+        "parse JSON body: x".into(),
+    )))
+    .expect("queue");
+    tx.send(Ok(json!({"jsonrpc": "2.0", "id": 1, "result": {}})))
+        .expect("queue");
+    let probe = read_from(
+        &rx,
+        1,
+        UnparseableFrame::FailFast,
+        Duration::from_millis(50),
+    );
+    assert!(
+        matches!(probe, Err(ReadFailure::Frame(_))),
+        "the probe must not wait past a frame it can already judge"
+    );
+
+    // …while the request path reads past it to the answer behind.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Value, protocol::FrameError>>(4);
+    tx.send(Err(protocol::FrameError::Payload(
+        "parse JSON body: x".into(),
+    )))
+    .expect("queue");
+    tx.send(Ok(
+        json!({"jsonrpc": "2.0", "id": 1, "result": {"ok": true}}),
+    ))
+    .expect("queue");
+    let answered = read_from(&rx, 1, UnparseableFrame::Skip, Duration::from_millis(50))
+        .expect("the answer behind the bad frame");
+    assert_eq!(
+        answered.pointer("/result/ok").and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+/// `read_response`'s loop over an arbitrary channel, so the policy can be
+/// exercised without spawning a server.
+fn read_from(
+    frames: &std::sync::mpsc::Receiver<Result<Value, protocol::FrameError>>,
+    target_id: i64,
+    policy: UnparseableFrame,
+    budget: Duration,
+) -> Result<Value, ReadFailure> {
+    let deadline = Instant::now() + budget;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or(Duration::ZERO);
+        if remaining.is_zero() {
+            return Err(ReadFailure::Expired);
+        }
+        let msg = match frames::next_frame(frames, remaining) {
+            Ok(msg) => msg,
+            Err(e) if e.is_skippable() && policy == UnparseableFrame::Skip => continue,
+            Err(e) => return Err(ReadFailure::Frame(e.message())),
+        };
+        if is_response_to(&msg, target_id) {
+            return Ok(msg);
+        }
+    }
+}

@@ -34,6 +34,11 @@ use protocol::{
 // Public types
 // ---------------------------------------------------------------------------
 
+/// How many times `shutdown` re-checks before killing, and how long it waits
+/// between checks: a 200 ms ceiling in total.
+const SHUTDOWN_GRACE_POLLS: u32 = 20;
+const SHUTDOWN_GRACE_STEP: Duration = Duration::from_millis(10);
+
 pub struct LspClient {
     process: Child,
     frames: Receiver<Result<Value, FrameError>>,
@@ -182,36 +187,14 @@ impl LspClient {
         id: i64,
         probe_timeout: Duration,
     ) -> Result<Value, String> {
-        let deadline = Instant::now() + probe_timeout;
-        loop {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                return Err(format!(
+        self.read_response(id, probe_timeout, UnparseableFrame::FailFast)
+            .map_err(|e| match e {
+                ReadFailure::Expired => format!(
                     "lsp_probe_failed: no response within probe timeout ({}ms)",
                     probe_timeout.as_millis()
-                ));
-            }
-            let msg = match next_frame(&self.frames, remaining) {
-                Ok(msg) => msg,
-                // The stream survived, so this frame is skipped and the wait
-                // continues inside the SAME deadline. Propagating it would let
-                // one malformed notification fail a probe the server answered
-                // correctly a frame later.
-                Err(e) if e.is_skippable() => continue,
-                Err(e) => return Err(classify_probe_err(e.message())),
-            };
-            if is_response_to(&msg, id) {
-                return Ok(msg);
-            }
-            // Notifications, server-initiated requests, other ids — keep
-            // reading within the window. A server request sharing our id (e.g.
-            // `window/showMessageRequest` during the handshake) must NOT be
-            // taken for the init response: doing so returned the wrong message
-            // and left the real one to be discarded by `drain_pending` on the
-            // next send.
-        }
+                ),
+                ReadFailure::Frame(message) => classify_probe_err(message),
+            })
     }
 
     /// Notify the server about an open document.
@@ -269,13 +252,24 @@ impl LspClient {
         }
         let notif = json!({ "jsonrpc": "2.0", "method": "exit", "params": null });
         let _ = self.send_notification(&notif);
-        // BOUNDED. `wait()` alone blocks forever on a server that ignores
-        // `exit` — the same hang B.6 removed from the read path, one call
-        // later. `try_wait` never blocks; if the server has not gone by now it
-        // is killed, and `wait` after `kill` returns promptly.
-        if !matches!(self.process.try_wait(), Ok(Some(_))) {
-            let _ = self.process.kill();
+        // BOUNDED, with a grace period. `wait()` alone blocks forever on a
+        // server that ignores `exit` — the same hang B.6 removed from the read
+        // path, one call later — but a single `try_wait` fired immediately
+        // after the write SIGKILLs a well-behaved server that merely needs a
+        // few milliseconds to flush, risking a torn cache. Poll briefly, then
+        // fall back to kill; `wait` after `kill` returns promptly.
+        //
+        // source: provisional heuristic. The budget only needs to exceed a
+        // cooperative server's flush-and-exit, which is milliseconds for the
+        // servers this drives; it is deliberately far below the request
+        // timeout, because a server that has not exited by then is not going to.
+        for _ in 0..SHUTDOWN_GRACE_POLLS {
+            if matches!(self.process.try_wait(), Ok(Some(_))) {
+                return Ok(());
+            }
+            std::thread::sleep(SHUTDOWN_GRACE_STEP);
         }
+        let _ = self.process.kill();
         let _ = self.process.wait();
         Ok(())
     }
@@ -304,33 +298,83 @@ impl LspClient {
         self.send_request(msg)
     }
 
-    /// Read messages until we find one with the matching id.
-    /// Discards notifications and other responses along the way.
+    /// Read messages until one is a response to `target_id`.
+    ///
+    /// Discards notifications, server-initiated requests and other responses
+    /// along the way. `LSP_TIMEOUT_PREFIX` on expiry, so a timed-out request
+    /// classifies as one everywhere.
     fn read_response_for_id(&mut self, target_id: i64) -> Result<Value, String> {
-        let deadline = Instant::now() + self.timeout;
+        self.read_response(target_id, self.timeout, UnparseableFrame::Skip)
+            .map_err(|e| match e {
+                ReadFailure::Expired => {
+                    format!("{LSP_TIMEOUT_PREFIX} waiting for response id={target_id}")
+                }
+                ReadFailure::Frame(message) => message,
+            })
+    }
+
+    /// The ONE deadline/skip/match loop, shared by the probe and the
+    /// request/response path.
+    ///
+    /// These were two independently-maintained copies, and that is precisely
+    /// why the bare-`id` match survived two review rounds after `is_response_to`
+    /// was added to only one of them. They differ in exactly two things — the
+    /// error wording, which the callers apply, and what an unparseable frame
+    /// means, which `policy` names — so those are the only two parameters.
+    fn read_response(
+        &self,
+        target_id: i64,
+        budget: Duration,
+        policy: UnparseableFrame,
+    ) -> Result<Value, ReadFailure> {
+        let deadline = Instant::now() + budget;
         loop {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .unwrap_or(Duration::ZERO);
             if remaining.is_zero() {
-                return Err(format!(
-                    "{LSP_TIMEOUT_PREFIX} waiting for response id={target_id}"
-                ));
+                return Err(ReadFailure::Expired);
             }
             let msg = match next_frame(&self.frames, remaining) {
                 Ok(msg) => msg,
-                // A malformed payload costs its own frame only; the stream is
-                // still aligned, so keep waiting inside the same deadline.
-                Err(e) if e.is_skippable() => continue,
-                Err(e) => return Err(e.message()),
+                Err(e) if e.is_skippable() && policy == UnparseableFrame::Skip => continue,
+                Err(e) => return Err(ReadFailure::Frame(e.message())),
             };
             if is_response_to(&msg, target_id) {
                 return Ok(msg);
             }
-            // Otherwise it is a notification, a server-initiated request, or
-            // another response — skip it and keep reading.
+            // A notification, a server-initiated request, or another response.
+            // A server request sharing our id (`window/showMessageRequest`
+            // during the handshake) must NOT be taken for our answer.
         }
     }
+}
+
+/// What a read loop does with a frame whose payload would not parse but whose
+/// stream is still aligned.
+///
+/// The two callers need OPPOSITE behaviour, so unifying them on one policy is
+/// what the previous round got wrong:
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnparseableFrame {
+    /// Skip it and keep waiting. A request/response exchange must survive one
+    /// malformed notification from a server that is otherwise answering.
+    Skip,
+    /// Fail immediately. The PROBE is deciding whether this binary speaks LSP
+    /// at all, and a framed-but-unparseable first frame IS that answer — so
+    /// tolerating it burns the whole probe window on a binary already known to
+    /// be wrong, against the probe's own fail-fast contract.
+    FailFast,
+}
+
+/// Why `read_response` stopped, kept separate from its wording because the two
+/// callers report the same cause differently.
+#[derive(Debug)]
+enum ReadFailure {
+    /// The budget ran out.
+    Expired,
+    /// A frame error the policy did not absorb.
+    Frame(String),
 }
 
 /// True when `msg` is a RESPONSE to `target_id`, as opposed to a server-
