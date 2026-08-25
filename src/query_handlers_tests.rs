@@ -236,7 +236,9 @@ fn limit_detection_ignores_the_word_inside_a_literal() {
     let (injected, was_injected) =
         inject_limit_if_absent("MATCH (n:Function) WHERE n.name = 'limit' RETURN n");
     assert!(was_injected, "an unbounded query must still get a LIMIT");
-    assert!(injected.trim_end().ends_with(&QUERY_GRAPH_ROW_LIMIT.to_string()));
+    assert!(injected
+        .trim_end()
+        .ends_with(&QUERY_GRAPH_ROW_LIMIT.to_string()));
 
     // A real, executable LIMIT is still detected and left alone.
     assert!(has_limit_clause(
