@@ -78,6 +78,15 @@ pub struct CommunityRow {
 /// A row whose `Community.id` is empty is reported as `None`: it identifies no
 /// community, and every consumer wants that same answer.
 ///
+/// `ORDER BY c.id` makes the one row a DETERMINISTIC choice. Clustering writes
+/// one `MemberOf` edge per node per run, but a graph carrying a stale edge
+/// beside a fresh one has two — and `LIMIT 1` without an order would then let
+/// the engine's scan order decide, so the same symbol could read as its real
+/// community on one call and as no-community on the next. Ordering costs
+/// nothing on a single row and removes the coin flip. An empty id sorts first,
+/// which is the safe direction: it reports no-community consistently rather
+/// than intermittently.
+///
 /// `LIMIT 1` is load-bearing rather than cosmetic: this runs once per candidate
 /// on the substring fallback, which scans every node of every searchable label,
 /// so an uncapped probe materializes each node's whole `MemberOf` row set on
@@ -93,7 +102,7 @@ pub fn community_of(
     let rel = format!("MemberOf_{label}_Community");
     let cypher = format!(
         "MATCH (n:{label})-[:{rel}]->(c:Community) WHERE {} \
-         RETURN c.id, c.name, c.member_count LIMIT 1",
+         RETURN c.id, c.name, c.member_count ORDER BY c.id LIMIT 1",
         symbol.predicate()
     );
     let qr = store.query_prepared_params(&cypher, symbol.params()).ok()?;
@@ -153,12 +162,29 @@ pub fn process_names(store: &GraphStore, label: &str, symbol: SymbolMatch<'_>) -
 /// First column of every row, mapping a failed query to an empty list — a
 /// membership traversal against a label whose table an older graph never
 /// created is a miss, not an error the caller can act on.
+///
+/// EMPTY VALUES ARE DROPPED, for the same reason `community_of` drops an empty
+/// `Community.id`: an identifier that is empty identifies nothing. Putting the
+/// rule here rather than at a call site is deliberate — the previous round put
+/// it in `community_of` alone, which left `community_ids` (feeding
+/// `get_impact`) and `process_names` (four callers) still forwarding `""`, so
+/// `get_impact` and `get_context` could disagree about the same symbol. This is
+/// the ONE drain both list-returning traversals share; the call-site inventory
+/// below is exhaustive as of 2026-08-25:
+///
+///   community_ids  -> clustering::impact::collect_communities
+///   process_names  -> clustering::impact::collect_processes,
+///                     prd_validator::axis_process::processes_of,
+///                     search::enrichment::lookup_processes,
+///                     search::context::find_processes
 fn first_column(store: &GraphStore, cypher: &str, symbol: SymbolMatch<'_>) -> Vec<String> {
     match store.query_prepared_params(cypher, symbol.params()) {
         Ok(qr) => qr
             .rows
             .iter()
-            .filter_map(|row| row.first().cloned())
+            .filter_map(|row| row.first())
+            .filter(|value| !value.is_empty())
+            .cloned()
             .collect(),
         Err(_) => Vec::new(),
     }
@@ -260,6 +286,71 @@ mod tests {
         assert!(
             community_of(&store, "Function", SymbolMatch::QualifiedName(qn)).is_none(),
             "and on every match arm"
+        );
+    }
+
+    /// Round-3 finding 6. The empty-value rule lived in `community_of`, which
+    /// left the two LIST-returning traversals — `community_ids` (feeding
+    /// `get_impact`) and `process_names` (four callers) — still forwarding
+    /// `""`. `get_impact` and `get_context` could then disagree about the same
+    /// symbol's community. Both drain through `first_column`, so the rule
+    /// belongs there.
+    #[test]
+    fn the_list_traversals_drop_empty_values_too() {
+        use super::super::{GraphStore, NODE_COMMUNITY, NODE_FUNCTION, NODE_PROCESS};
+
+        let dir = tempfile::Builder::new()
+            .prefix("membership_list_empty_values")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        store.create_schema().expect("schema");
+
+        let qn = "m.rs::f";
+        store
+            .insert_node(
+                NODE_COMMUNITY,
+                &[
+                    ("id", "''"),
+                    ("name", "''"),
+                    ("algorithm", "'louvain+c2'"),
+                    ("resolution_param", "1.0"),
+                    ("member_count", "1"),
+                    ("modularity_contribution", "0.0"),
+                ],
+            )
+            .expect("insert community");
+        store
+            .insert_node(NODE_PROCESS, &[("id", "'p0'"), ("name", "''")])
+            .expect("insert process");
+        store
+            .insert_node(
+                NODE_FUNCTION,
+                &[
+                    ("id", "'m.rs::f'"),
+                    ("name", "'f'"),
+                    ("qualified_name", "'m.rs::f'"),
+                    ("start_line", "1"),
+                    ("end_line", "1"),
+                    ("visibility", "'pub'"),
+                    ("is_async", "false"),
+                ],
+            )
+            .expect("insert fn");
+        store
+            .insert_edge("MemberOf_Function_Community", qn, "", &[])
+            .expect("MemberOf");
+        store
+            .insert_edge("ParticipatesIn_Function_Process", qn, "p0", &[])
+            .expect("ParticipatesIn");
+
+        assert!(
+            community_ids(&store, "Function", SymbolMatch::Id(qn)).is_empty(),
+            "an empty Community.id is not a community for get_impact either"
+        );
+        assert!(
+            process_names(&store, "Function", SymbolMatch::Id(qn)).is_empty(),
+            "an empty Process.name names no process"
         );
     }
 }
