@@ -8,6 +8,7 @@
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
 // Graph-path safety — source: H4 fix.
@@ -73,6 +74,29 @@ pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
     outcome.map_err(|e| format!("remove stale graph artifact: {e}"))
 }
 
+/// A temp filename no other in-flight `write_graph_meta` can be using.
+///
+/// The atomic write below is `write(tmp)` then `rename(tmp, meta.json)`. A
+/// FIXED tmp name makes that safe against a concurrent READER and unsafe
+/// against a concurrent WRITER: two `index_codebase` calls aimed at the same
+/// `output_dir` would write the same tmp path, so one can overwrite the
+/// other's bytes between its write and its rename, and the rename then
+/// publishes the wrong indexer's content (fleet-watch#112 review). Naming the
+/// tmp file per writer removes the shared path entirely — each writer renames
+/// its own bytes, and last-rename-wins is a legitimate outcome for two
+/// indexers of the same directory.
+///
+/// Process id separates processes; the counter separates threads and repeat
+/// calls within one process, which a pid alone cannot (this project has
+/// already been bitten by treating `process::id()` as unique — issue #25).
+/// A leftover from a crashed process that happened to hold the same pid is
+/// harmless: it is truncated by the `write` before it is renamed.
+fn unique_tmp_name() -> String {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("meta.json.{}.{n}.tmp", std::process::id())
+}
+
 /// Write a ``meta.json`` sidecar in ``output_dir`` recording the ABSOLUTE
 /// source root this graph was indexed from.
 ///
@@ -102,7 +126,9 @@ pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
 /// hand that reader an empty or half-written sidecar, which parses as "no
 /// provenance" and silently downgrades the staleness verdict. `rename(2)`
 /// within a directory is atomic, so a reader sees the whole previous sidecar
-/// or the whole new one, never a torn one.
+/// or the whole new one, never a torn one. The temp file is named per writer
+/// (`unique_tmp_name`) so that concurrent WRITERS into one `output_dir` cannot
+/// interleave through a shared temp path either.
 ///
 /// Best-effort: a failed write is logged and ignored. The graph is the
 /// product; the sidecar is a convenience for consumers, and its absence just
@@ -116,7 +142,7 @@ pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
         "commit_sha": crate::artifact::git_head(root),
     });
     let meta_path = output_dir.join("meta.json");
-    let tmp_path = meta_path.with_extension("json.tmp");
+    let tmp_path = output_dir.join(unique_tmp_name());
     if let Err(e) = fs::write(&tmp_path, meta.to_string()) {
         eprintln!("[ap] write graph meta {}: {e}", tmp_path.display());
         return;
@@ -278,9 +304,42 @@ mod tests {
             Some(second_root.to_string_lossy().as_ref()),
         );
         assert!(
-            !base.join("meta.json.tmp").exists(),
+            !leftover_tmp_files(&base),
             "no temp file may survive a successful write",
         );
         let _ = fs::remove_dir_all(&base);
+    }
+
+    /// True when any `*.tmp` entry remains directly under `dir`.
+    fn leftover_tmp_files(dir: &Path) -> bool {
+        fs::read_dir(dir)
+            .expect("read output dir")
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+    }
+
+    #[test]
+    fn each_meta_writer_gets_its_own_temp_path() {
+        // fleet-watch#112 review: the temp name used to be a fixed
+        // `meta.json.tmp` per output_dir. Two `index_codebase` calls aimed at
+        // one output_dir therefore shared a temp path, and one could overwrite
+        // the other's bytes between its write and its rename — publishing the
+        // wrong indexer's content through an operation whose whole purpose is
+        // to publish atomically. Distinct names per writer is what removes the
+        // shared path; asserted directly, with no scheduling in the verdict.
+        let first = unique_tmp_name();
+        let second = unique_tmp_name();
+        assert_ne!(
+            first, second,
+            "two writers in one process must not share a temp path",
+        );
+        let prefix = format!("meta.json.{}.", std::process::id());
+        for name in [&first, &second] {
+            assert!(
+                name.starts_with(&prefix),
+                "the temp name must be scoped to this process: {name}",
+            );
+            assert!(name.ends_with(".tmp"), "must remain a temp file: {name}");
+        }
     }
 }
