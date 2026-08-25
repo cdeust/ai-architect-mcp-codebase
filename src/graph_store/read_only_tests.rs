@@ -155,3 +155,51 @@ fn engine_gate_does_not_cover_filesystem_writes() {
     // lives in the binary crate, where the gate does:
     // `query_handlers_tests::readonly_gate_blocks_filesystem_writing_statements`.
 }
+
+/// Mechanical re-audit of the filesystem/database-movement family, 2026-08-25.
+///
+/// `engine_gate_does_not_cover_filesystem_writes` above proves the gap for one
+/// statement by executing it. This proves it for the whole family without
+/// needing each to succeed: it asserts the engine never refuses any of them ON
+/// READ-ONLY GROUNDS. A statement may still fail for its own reasons (a missing
+/// file, an absent database) — what must not appear is
+/// `read_only_query_required`, because that would mean the engine had started
+/// classifying it as a write and the lexical entry could be reconsidered.
+///
+/// The list is derived from lbug 0.19.1's own headers rather than from prose:
+/// `StatementReadWriteAnalyzer` overrides `visitCopyFrom` -> readOnly = false
+/// and leaves `visitCopyTo`, `visitExportDatabase`, `visitImportDatabase`,
+/// `visitAttachDatabase`, `visitDetachDatabase` and `visitUseDatabase` at the
+/// base visitor's no-op (parsed_statement_visitor.h:51, 57-61). Six, not the
+/// four this project's comment listed — DETACH and USE were in neither gate
+/// until this pass added them.
+///
+/// This test fails the day lbug closes any of these gaps, which is when the
+/// corresponding lexical entry may be revisited WITH EVIDENCE.
+#[test]
+fn engine_classifies_every_filesystem_statement_as_read_only() {
+    let (dir, store) = store_with_one_function();
+    let scratch = dir.path().join("scratch");
+    let probes = [
+        format!(
+            "COPY (MATCH (n:Function) RETURN n.id) TO '{}'",
+            dir.path().join("probe.csv").display()
+        ),
+        format!("EXPORT DATABASE '{}'", scratch.display()),
+        format!("IMPORT DATABASE '{}'", scratch.display()),
+        format!("ATTACH '{}' AS probe_db (dbtype lbug)", scratch.display()),
+        "DETACH probe_db".to_string(),
+        "USE probe_db".to_string(),
+    ];
+
+    for cypher in &probes {
+        if let Err(e) = store.execute_read_only_query(cypher, 30_000) {
+            assert!(
+                !e.contains("read_only_query_required"),
+                "lbug now REFUSES `{cypher}` as a write. The gap this project's \
+                 lexical gate exists to cover has closed for that statement; \
+                 re-derive the denylist entry with this as evidence. Error: {e}"
+            );
+        }
+    }
+}
