@@ -16,6 +16,7 @@ mod calls;
 mod extends;
 mod implements;
 mod imports;
+mod phases;
 mod uses;
 #[cfg(test)]
 use extends::{resolve_one_extends_base, ExtendsCandidate, ExtendsContext};
@@ -226,72 +227,9 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     let existing = load_existing_edges(store)?;
     let mut buf = EdgeBuffer::new(existing);
 
-    let (imp_resolved, imp_total, imp_unresolved) =
-        imports::resolve_imports(store, &idx, &mut buf)?;
-    let (call_resolved, call_total, call_unresolved) =
-        calls::resolve_calls(store, &idx, &file_imports, &mut buf)?;
-    let (impl_resolved, impl_total, impl_unresolved) =
-        implements::resolve_implements(store, &idx, &file_imports, &mut buf)?;
-    let (ext_resolved, ext_total, ext_unresolved) =
-        extends::resolve_extends(store, &idx, &file_imports, &mut buf)?;
-    let (uses_resolved, uses_total, uses_unresolved) =
-        uses::resolve_uses(store, &idx, &file_imports, &mut buf)?;
-
-    // 3b-v2 Layer 4/5 — macro + stdlib expansion. Lives in resolver_layers
-    // so resolver.rs's function surface stays stable for Q8 ground truth.
-    // source: stages/stage-3b-v2.md §5.
-    //
-    // source: issue #28 — macro refs used to contribute only to the
-    // numerator (`macro_resolved` folded into `calls_resolved` with no
-    // matching denominator), which let `resolution_rate` exceed 1.0.
-    // `run_macro_expansion` now returns the same (resolved, total,
-    // unresolved) shape as every other phase; its total is folded into
-    // `total_refs` below.
-    let idx_ref = &idx;
-    let (macro_resolved, macro_total, macro_unresolved) =
-        crate::resolver_layers::run_macro_expansion(store, &mut buf, &|qn: &str| {
-            determine_caller_label(idx_ref, qn)
-        })?;
-
+    let tallies = phases::run_phases(store, &idx, &file_imports, &mut buf)?;
     buf.flush(store)?;
-    let call_resolved = call_resolved + macro_resolved;
-    let call_total = call_total + macro_total;
-
-    let total_edges = imp_resolved + call_resolved + impl_resolved + ext_resolved + uses_resolved;
-    let total_refs = imp_total + call_total + impl_total + ext_total + uses_total;
-
-    let mut unresolved = Vec::new();
-    unresolved.extend(imp_unresolved);
-    unresolved.extend(call_unresolved);
-    unresolved.extend(macro_unresolved);
-    unresolved.extend(impl_unresolved);
-    unresolved.extend(ext_unresolved);
-    unresolved.extend(uses_unresolved);
-
-    // invariant: every reference enters `total_refs` exactly once and
-    // produces exactly one resolved-or-unresolved outcome. Each phase
-    // upholds this locally (see the per-phase postconditions above); this
-    // asserts it holds in aggregate. source: issue #28 §"resolved +
-    // unresolved == total_refs must hold exactly".
-    debug_assert_eq!(
-        total_edges + unresolved.len() as u64,
-        total_refs,
-        "resolution accounting invariant violated: total_edges ({total_edges}) + \
-         unresolved ({}) != total_refs ({total_refs})",
-        unresolved.len()
-    );
-
-    Ok(ResolutionResult {
-        imports_resolved: imp_resolved,
-        calls_resolved: call_resolved,
-        impls_resolved: impl_resolved,
-        extends_resolved: ext_resolved,
-        uses_resolved,
-        total_edges,
-        total_refs,
-        unresolved,
-        elapsed_ms: start.elapsed().as_millis() as u64,
-    })
+    Ok(tallies.into_result(start))
 }
 
 // ---------------------------------------------------------------------------
