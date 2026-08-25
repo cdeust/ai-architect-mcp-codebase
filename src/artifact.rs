@@ -392,10 +392,7 @@ pub fn artifact_staleness(repo_path: &Path, artifact_sha: &str) -> Option<StaleI
 
 /// `git rev-list --count <from>..<to>`. `None` if the command fails (e.g. the
 /// `from` sha is unknown to the repo) or the output does not parse.
-///
-/// `pub(crate)`: also the query-time "commits behind" signal in
-/// `graph_freshness` (fleet-watch#112), same command shape as here.
-pub(crate) fn git_commits_between(repo_path: &Path, from: &str, to: &str) -> Option<u64> {
+fn git_commits_between(repo_path: &Path, from: &str, to: &str) -> Option<u64> {
     let range = format!("{from}..{to}");
     let out = Command::new("git")
         .arg("-C")
@@ -416,7 +413,9 @@ pub(crate) fn git_commits_between(repo_path: &Path, from: &str, to: &str) -> Opt
 /// True for a plausible git object sha (non-empty, all ASCII hex). Guards the
 /// sidecar's `commit` field — an attacker-crafted sidecar could otherwise smuggle
 /// a `--flag` value into `git rev-list` (arg injection, not shell injection).
-fn is_hex_sha(s: &str) -> bool {
+/// `pub(crate)` so `graph_freshness` guards its own sidecar sha against this one
+/// definition rather than a third copy (fleet-watch#112 review).
+pub(crate) fn is_hex_sha(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
