@@ -797,23 +797,26 @@ ai-architect-mcp-codebase/
 │   ├── history_handlers.rs · prd_handlers.rs
 │   ├── verification_core.rs · verification_ops.rs
 │   ├── graph_store/               ← LadybugDB port (UNWIND + prepared + cached)
-│   │   ├── mod.rs · config.rs · ddl.rs · schema.rs · serialize.rs
+│   │   ├── mod.rs · config.rs · ddl.rs · schema.rs · serialize.rs · membership.rs
 │   ├── parser/
 │   │   ├── mod.rs                 ← language dispatch
 │   │   ├── language.rs            ← the Language enum — 11 variants
 │   │   └── spec/                  ← per-language specs + shared walkers/
 │   ├── indexer/                   ← walk + parse + persist (+ iac/, persist/)
 │   ├── resolver/                  ← cross-file resolution
-│   │   ├── imports.rs · calls.rs · extends.rs · implements.rs · uses.rs
+│   │   ├── imports.rs · calls.rs · extends.rs · implements.rs · uses.rs · phases.rs
 │   ├── resolver_layers.rs · lsp_client.rs · lsp_resolver.rs
 │   ├── clustering/                ← Louvain + C2 repair + BFS process tracing
 │   │   ├── community.rs · process.rs · impact.rs
 │   ├── search/
-│   │   ├── mod.rs                 ← orchestration, get_context, 3-layer qn lookup
-│   │   ├── bm25.rs · vector.rs · rrf.rs
+│   │   ├── mod.rs                 ← public types, index path, search_graph
+│   │   ├── hybrid.rs · substring.rs   ← the two ranking paths
+│   │   ├── context.rs · name_lookup.rs · enrichment.rs · grouping.rs
+│   │   ├── bm25.rs · vector.rs · vector_format.rs · rrf.rs
+│   │   ├── qualified_name.rs · impact_target.rs
 │   ├── prd_input/                 ← stage 4
 │   ├── prd_validator/             ← stage 6
-│   ├── security_gates.rs          ← stage 8
+│   ├── security_gates/            ← stage 8
 │   ├── semantic_diff.rs           ← stage 9
 │   ├── history/ · cochange.rs     ← stage 3e
 │   ├── macro_expansion/ · stdlib_index/ · language_provider/
