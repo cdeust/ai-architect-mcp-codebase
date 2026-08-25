@@ -4,9 +4,15 @@
 // (fleet-watch#112) the raw text of doc/prose files the parser does not turn
 // into symbols at all (markdown, plain text, …) — those get a File-labeled
 // document instead, carrying their content in `body`.
-// Documents: qualified_name (stored+indexed), name (indexed, boosted),
-// label (stored+faceted), file_path (stored), body (indexed, not stored —
-// doc/File hits only).
+// Documents: qualified_name (stored+indexed — the KEY, stored verbatim),
+// name (indexed, boosted 2x), label (stored), file_path (stored), body
+// (indexed, never stored — a doc file's prose, or a symbol's tokenized
+// qualified name).
+//
+// Field handles are resolved BY NAME from whichever schema is actually on
+// disk, never by the ordinals `build_schema` assigns today — see
+// `OpenedFields`. Ordinals are not stable across versions, and tantivy
+// resolves them unchecked.
 //
 // Source: Tantivy 0.26 (quickwit-oss, MIT). BM25 scoring is Tantivy's
 // default ranking model.
@@ -15,47 +21,22 @@ use std::io::Read;
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{Field, Schema, Value as _, STORED, TEXT};
+use tantivy::schema::{Field, Value as _};
 use tantivy::{doc, Index, IndexWriter, TantivyDocument};
 
 use super::qualified_name::file_path_of;
 use crate::graph_store::{GraphStore, NODE_FILE};
 
+#[path = "bm25_schema.rs"]
+mod schema;
+#[cfg(test)]
+pub(super) use schema::build_legacy_index;
+pub use schema::indexes_doc_bodies;
+use schema::{build_schema, Bm25Fields, OpenedFields};
+
 // ---------------------------------------------------------------------------
 // Schema fields
 // ---------------------------------------------------------------------------
-
-pub struct Bm25Fields {
-    pub qualified_name: Field,
-    pub name: Field,
-    pub label: Field,
-    pub file_path: Field,
-    pub body: Field,
-}
-
-pub fn build_schema() -> (Schema, Bm25Fields) {
-    let mut builder = Schema::builder();
-    let qualified_name = builder.add_text_field("qualified_name", TEXT | STORED);
-    let name = builder.add_text_field("name", TEXT | STORED);
-    let label = builder.add_text_field("label", STORED);
-    let file_path = builder.add_text_field("file_path", STORED);
-    // Indexed only, never stored: a doc's full text has no business round-
-    // tripping out of a search hit (the caller already has file_path to go
-    // read it), and NOT storing it keeps the index itself from duplicating
-    // the size of every prose file in the repo.
-    let body = builder.add_text_field("body", TEXT);
-    let schema = builder.build();
-    (
-        schema,
-        Bm25Fields {
-            qualified_name,
-            name,
-            label,
-            file_path,
-            body,
-        },
-    )
-}
 
 // ---------------------------------------------------------------------------
 // Index building
@@ -107,12 +88,30 @@ pub fn build_index(
     Ok(doc_count)
 }
 
-/// Indexes one document per symbol node, keyed by its tokenized
-/// `qualified_name`. Returns how many were added.
+/// Indexes one document per symbol node, keyed by its `qualified_name` exactly
+/// as the graph stores it. Returns how many were added.
 ///
 /// Split out of [`build_index`] when fleet-watch#112's doc/prose pass made that
 /// function two phases rather than one: symbol indexing reads the graph alone,
 /// doc indexing reads the working tree, and they fail for different reasons.
+///
+/// `qualified_name` is STORED VERBATIM, and that is load-bearing rather than
+/// cosmetic (review round 2, finding 2). What this field stores is the key
+/// `query_index` returns, which `hybrid` uses as the RRF fusion key and
+/// `enrich_symbol_hit` binds with `WHERE n.qualified_name = <key>`. Storing
+/// `tokenize_symbol(qn)` here — as this file did — meant the key came back as
+/// `"main rs handle tool call"`, which matches no row in the graph and equals
+/// no key the vector retriever emits: BM25-only symbol hits silently failed to
+/// enrich, and RRF could not fuse the two retrievers' lists because they were
+/// keyed differently. Proven by execution, not inferred.
+///
+/// Recall does not pay for it. What the field INDEXES is still split: tantivy's
+/// default tokenizer breaks on every non-alphanumeric character, so
+/// `src/main.rs::handle_tool_call` yields the same terms `tokenize_symbol`
+/// produced for it. The one thing that tokenizer cannot split is a camelCase
+/// run, and that is covered twice over — `name` still carries the tokenized
+/// symbol name on the 2x-boosted field, and `body` carries the tokenized
+/// qualified name.
 fn index_symbol_docs(
     store: &GraphStore,
     writer: &mut IndexWriter,
@@ -133,17 +132,13 @@ fn index_symbol_docs(
             let name_val = &row[1];
             let file_path = file_path_of(qn).to_string();
 
-            // Tokenize name by splitting on _ and :: for better BM25 matching.
-            // "handle_tool_call" → "handle tool call" so BM25 finds "handle tool".
-            let name_tokenized = tokenize_symbol(name_val);
-            let qn_tokenized = tokenize_symbol(qn);
-
             writer
                 .add_document(doc!(
-                    fields.qualified_name => qn_tokenized,
-                    fields.name => name_tokenized,
+                    fields.qualified_name => qn.clone(),
+                    fields.name => tokenize_symbol(name_val),
                     fields.label => label.to_string(),
                     fields.file_path => file_path,
+                    fields.body => tokenize_symbol(qn),
                 ))
                 .map_err(|e| format!("tantivy add doc: {e}"))?;
             doc_count += 1;
@@ -215,14 +210,14 @@ const MAX_DOC_BYTES: u64 = 262_144;
 ///     unreported skip would be indistinguishable from a doc that simply did
 ///     not match the query.
 ///
-/// Field convention, which differs from a symbol document's on purpose:
-/// `qualified_name` keeps the RAW path where a symbol stores a tokenized key.
-/// That field is STORED, and what is stored IS the key `hybrid::enrich_file_hit`
-/// binds back to `File.id` — tokenizing it would make every doc hit
-/// unresolvable. The query-side splitting a tokenized key buys is provided by
-/// the two INDEXED fields instead: `name` carries the tokenized file name, and
-/// `body` is prefixed with the tokenized full path, so `docs/MyDesignDoc.md`
-/// still answers a "my design doc" query on both the boosted field and the body.
+/// Fields follow the SAME convention as a symbol document, not a different one:
+/// `qualified_name` stores the key verbatim — here the repo-relative path,
+/// which is what `hybrid::enrich_file_hit` binds back to `File.id`. An earlier
+/// revision of this comment described the raw-vs-tokenized split as a
+/// deliberate File-only convention; it was not. Storing a tokenized key was a
+/// defect on the symbol side (see [`index_symbol_docs`]), and describing it as
+/// a convention documented that defect as intended. Both sides now store the
+/// key verbatim and put the tokenized form in `body`.
 fn index_file_docs(
     store: &GraphStore,
     writer: &mut IndexWriter,
@@ -320,11 +315,13 @@ pub struct Bm25Result {
 /// `_ : / .` and camelCase boundaries, none of which a space-separated query
 /// contains — so it does not distort doc-content queries either.
 ///
-/// Three fields are searched: `name`, `qualified_name` and (fleet-watch#112)
-/// `body`. `name` is boosted 2x over the other two, so an exact symbol-name
-/// match still outranks an incidental mention of the same words in a long
-/// doc's prose; `body` carries no boost of its own and so ranks level with
-/// `qualified_name`.
+/// Up to three fields are searched: `name`, `qualified_name` and
+/// (fleet-watch#112) `body`. `name` is boosted 2x over the other two, so an
+/// exact symbol-name match still outranks an incidental mention of the same
+/// words in a long doc's prose; `body` carries no boost of its own and so ranks
+/// level with `qualified_name`. Every `Field` handed to the parser is resolved
+/// from the OPENED index's own schema — see [`OpenedFields`] for why minting
+/// them from `build_schema` instead is a panic against any older index.
 pub fn query_index(
     index_dir: &Path,
     query_str: &str,
@@ -334,17 +331,15 @@ pub fn query_index(
         return Ok(Vec::new());
     }
 
-    let (schema, fields) = build_schema();
     let index = Index::open_in_dir(index_dir).map_err(|e| format!("tantivy open index: {e}"))?;
+    let schema = index.schema();
+    let fields = OpenedFields::resolve(&schema)?;
     let reader = index.reader().map_err(|e| format!("tantivy reader: {e}"))?;
     let searcher = reader.searcher();
 
     let tokenized_query = tokenize_symbol(query_str);
 
-    let mut parser = QueryParser::for_index(
-        &index,
-        vec![fields.name, fields.qualified_name, fields.body],
-    );
+    let mut parser = QueryParser::for_index(&index, fields.default_query_fields());
     parser.set_field_boost(fields.name, 2.0);
 
     let query = parser
@@ -359,7 +354,7 @@ pub fn query_index(
         .search(&query, &TopDocs::with_limit(limit).order_by_score())
         .map_err(|e| format!("tantivy search: {e}"))?;
 
-    decode_hits(&searcher, &schema, &fields, top_docs)
+    decode_hits(&searcher, &fields, top_docs)
 }
 
 /// Reads the stored fields of each scored hit back into a [`Bm25Result`].
@@ -368,8 +363,7 @@ pub fn query_index(
 /// the query (§4.2); this one is only about decoding what came back.
 fn decode_hits(
     searcher: &tantivy::Searcher,
-    schema: &Schema,
-    fields: &Bm25Fields,
+    fields: &OpenedFields,
     top_docs: Vec<(f32, tantivy::DocAddress)>,
 ) -> Result<Vec<Bm25Result>, String> {
     let mut results = Vec::with_capacity(top_docs.len());
@@ -378,10 +372,10 @@ fn decode_hits(
             .doc(doc_addr)
             .map_err(|e| format!("tantivy doc retrieve: {e}"))?;
         results.push(Bm25Result {
-            qualified_name: field_text(&doc, schema, fields.qualified_name),
-            name: field_text(&doc, schema, fields.name),
-            label: field_text(&doc, schema, fields.label),
-            file_path: field_text(&doc, schema, fields.file_path),
+            qualified_name: field_text(&doc, fields.qualified_name),
+            name: field_text(&doc, fields.name),
+            label: field_text(&doc, fields.label),
+            file_path: field_text(&doc, fields.file_path),
             score,
         });
     }
@@ -392,7 +386,7 @@ fn decode_hits(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn field_text(doc: &TantivyDocument, _schema: &Schema, field: Field) -> String {
+fn field_text(doc: &TantivyDocument, field: Field) -> String {
     doc.get_first(field)
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -434,3 +428,7 @@ pub fn tokenize_symbol(s: &str) -> String {
 #[cfg(test)]
 #[path = "bm25_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bm25_compat_tests.rs"]
+mod compat_tests;
