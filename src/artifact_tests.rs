@@ -134,14 +134,6 @@ fn staleness_is_none_outside_a_git_repo() {
     assert!(artifact_staleness(tmp.path(), "deadbeef").is_none());
 }
 
-#[test]
-fn is_hex_sha_guards_arg_injection() {
-    assert!(is_hex_sha("0a1b2c3d4e5f"));
-    assert!(!is_hex_sha("")); // absent provenance
-    assert!(!is_hex_sha("--all")); // git flag smuggling attempt
-    assert!(!is_hex_sha("HEAD~1")); // non-hex revision expression
-}
-
 // -- issue #195: legacy artifact-dir migration ------------------------------
 
 #[test]

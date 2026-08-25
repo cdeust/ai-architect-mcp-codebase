@@ -33,6 +33,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::git_provenance::{commits_between, git_head, is_hex_sha};
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -379,7 +381,7 @@ pub fn artifact_staleness(repo_path: &Path, artifact_sha: &str) -> Option<StaleI
         return None;
     }
     let commits_behind = if is_hex_sha(artifact_sha) {
-        git_commits_between(repo_path, artifact_sha, &head)
+        commits_between(repo_path, artifact_sha, &head)
     } else {
         None // empty or non-sha provenance → count is unknowable
     };
@@ -388,35 +390,6 @@ pub fn artifact_staleness(repo_path: &Path, artifact_sha: &str) -> Option<StaleI
         head_sha: head,
         commits_behind,
     })
-}
-
-/// `git rev-list --count <from>..<to>`. `None` if the command fails (e.g. the
-/// `from` sha is unknown to the repo) or the output does not parse.
-fn git_commits_between(repo_path: &Path, from: &str, to: &str) -> Option<u64> {
-    let range = format!("{from}..{to}");
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(["rev-list", "--count"])
-        .arg(&range)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse::<u64>()
-        .ok()
-}
-
-/// True for a plausible git object sha (non-empty, all ASCII hex). Guards the
-/// sidecar's `commit` field — an attacker-crafted sidecar could otherwise smuggle
-/// a `--flag` value into `git rev-list` (arg injection, not shell injection).
-/// `pub(crate)` so `graph_freshness` guards its own sidecar sha against this one
-/// definition rather than a third copy (fleet-watch#112 review).
-pub(crate) fn is_hex_sha(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// True when a committed, schema-compatible artifact is present in `repo_path`.
@@ -492,35 +465,6 @@ fn ensure_gitattributes(repo_path: &Path) {
         .arg(repo_path)
         .args(["config", "merge.ours.driver", "true"])
         .output();
-}
-
-// ---------------------------------------------------------------------------
-// git HEAD sha
-// ---------------------------------------------------------------------------
-
-/// Returns the git HEAD sha for `repo_path`, or `None` if it is not a git
-/// working tree. Uses `Command` args (no shell) — injection-safe, matching the
-/// pattern in `history/mod.rs`.
-///
-/// `pub(crate)`: also the index-time provenance stamp `write_graph_meta`
-/// records and the query-time current-HEAD read in `graph_freshness`
-/// (fleet-watch#112).
-pub(crate) fn git_head(repo_path: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if sha.is_empty() {
-        None
-    } else {
-        Some(sha)
-    }
 }
 
 // ---------------------------------------------------------------------------

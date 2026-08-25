@@ -12,6 +12,7 @@ pub mod clustering;
 pub mod cochange;
 pub mod epistemic;
 pub mod git_diff;
+pub mod git_provenance;
 pub mod graph_store;
 pub mod history;
 pub mod hook_augment;
