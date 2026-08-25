@@ -20,7 +20,9 @@ mod read_only_gate;
 pub(crate) use graph_paths::{
     remove_stale_graph_artifact, validate_graph_path_safe, write_graph_meta,
 };
-use read_only_gate::{forbidden_cypher_keyword, is_multi_statement, READ_QUERY_TIMEOUT_MS};
+use read_only_gate::{
+    forbidden_cypher_keyword, is_multi_statement, mask_non_executable, READ_QUERY_TIMEOUT_MS,
+};
 
 // ---------------------------------------------------------------------------
 // Stage 3a — query_graph
@@ -303,10 +305,22 @@ pub(crate) fn inject_limit_if_absent(query: &str) -> (String, bool) {
 /// Detects whether a Cypher query already declares a `LIMIT` clause.
 ///
 /// Matches the keyword `LIMIT` (case-insensitive) only when it stands as a word
-/// — not as a substring of an identifier like `node_limit`. This is a syntactic
-/// guard, not a full parser: the graph engine itself rejects malformed Cypher.
+/// — not as a substring of an identifier like `node_limit` — and only in
+/// EXECUTABLE text: string literals, backticked identifiers and comments are
+/// masked out first, exactly as the read-only keyword gate does.
+///
+/// The masking is load-bearing, not cosmetic. This decides whether
+/// `inject_limit_if_absent` bounds the query, so a caller searching for a
+/// symbol BY NAME — `WHERE n.name = 'limit'`, the same shape that broke the
+/// keyword gate in issue #200 — used to look like a query that had already
+/// declared its own LIMIT. No LIMIT was injected and the MATCH ran unbounded,
+/// which is the row-flood the injection exists to prevent.
+///
+/// An unterminated literal is treated as "no LIMIT declared", so the query
+/// still gets one; it is refused upstream by the keyword gate anyway.
 pub(crate) fn has_limit_clause(query: &str) -> bool {
-    let lower = query.to_ascii_lowercase();
+    let executable = mask_non_executable(query).unwrap_or_default();
+    let lower = executable.to_ascii_lowercase();
     let bytes = lower.as_bytes();
     let mut idx = 0;
     while let Some(pos) = lower[idx..].find("limit") {
@@ -332,11 +346,18 @@ pub(crate) fn is_ident_char(b: u8) -> bool {
 /// over the rows is only safe when the caller pinned a deterministic order with
 /// `ORDER BY` (without it, the engine's row order is unspecified). Matches the
 /// two keywords `order` and `by` as whole words separated only by whitespace,
-/// case-insensitively. This is a syntactic guard, not a full parser — it can be
-/// fooled by `ORDER BY` inside a string literal, which is acceptable for an
-/// advisory flag (the engine remains the source of truth for the query plan).
+/// case-insensitively, and only in EXECUTABLE text — string literals,
+/// backticked identifiers and comments are masked out first.
+///
+/// The masking matters here for a different reason than in `has_limit_clause`:
+/// this flag tells the caller its offset cursor is safe to page with. A query
+/// carrying the words in a literal (`WHERE n.doc = 'order by date'`) used to
+/// report `order_stable: true` while declaring no ordering at all, so the
+/// caller paged an unspecified row order and its cursor could skip or
+/// duplicate rows. Over-reporting stability is worse than under-reporting it.
 pub(crate) fn has_order_by_clause(query: &str) -> bool {
-    let lower = query.to_ascii_lowercase();
+    let executable = mask_non_executable(query).unwrap_or_default();
+    let lower = executable.to_ascii_lowercase();
     let bytes = lower.as_bytes();
     let mut idx = 0;
     while let Some(pos) = lower[idx..].find("order") {
