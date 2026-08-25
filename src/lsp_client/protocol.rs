@@ -55,9 +55,28 @@ pub(super) fn write_lsp_message(
 /// `read_exact` block in the kernel, so a server that sent a partial header and
 /// then stopped never reached the check again and the whole indexer hung on it.
 /// A timeout that is only consulted between blocking calls is not a timeout.
+/// Why a frame could not be produced, and — the part that matters — whether the
+/// stream is still usable afterwards.
+pub(super) enum FrameError {
+    /// The body was read in full and the stream is still byte-aligned; only the
+    /// PAYLOAD was unusable. The next frame can be read normally.
+    Payload(String),
+    /// Framing or IO failed, so the stream position is unknown and no later
+    /// frame can be trusted.
+    Fatal(String),
+}
+
+impl FrameError {
+    pub(super) fn message(self) -> String {
+        match self {
+            FrameError::Payload(m) | FrameError::Fatal(m) => m,
+        }
+    }
+}
+
 pub(super) fn read_lsp_message(
     reader: &mut BufReader<std::process::ChildStdout>,
-) -> Result<Value, String> {
+) -> Result<Value, FrameError> {
     // Read headers until empty line. If the server closes stdout (EOF)
     // before we see a Content-Length header, callers must be able to tell
     // that apart from a real protocol message — we surface it via
@@ -68,13 +87,17 @@ pub(super) fn read_lsp_message(
         let mut line = String::new();
         let n = reader
             .read_line(&mut line)
-            .map_err(|e| format!("read header line: {e}"))?;
+            .map_err(|e| FrameError::Fatal(format!("read header line: {e}")))?;
         if n == 0 {
             // EOF — child closed stdout.
             if saw_any_byte {
-                return Err("eof_before_body: partial header then EOF".to_string());
+                return Err(FrameError::Fatal(
+                    "eof_before_body: partial header then EOF".to_string(),
+                ));
             }
-            return Err("eof_before_header: child stdout closed without LSP framing".to_string());
+            return Err(FrameError::Fatal(
+                "eof_before_header: child stdout closed without LSP framing".to_string(),
+            ));
         }
         saw_any_byte = true;
         let trimmed = line.trim();
@@ -86,13 +109,16 @@ pub(super) fn read_lsp_message(
         }
     }
 
-    let len = content_length.ok_or("missing Content-Length header")?;
+    let len = content_length
+        .ok_or_else(|| FrameError::Fatal("missing Content-Length header".to_string()))?;
     let mut body = vec![0u8; len];
     reader
         .read_exact(&mut body)
-        .map_err(|e| format!("read body ({len} bytes): {e}"))?;
+        .map_err(|e| FrameError::Fatal(format!("read body ({len} bytes): {e}")))?;
 
-    serde_json::from_slice(&body).map_err(|e| format!("parse JSON body: {e}"))
+    // The body was consumed in full, so the stream is still aligned: a
+    // malformed PAYLOAD costs this one frame, not the connection.
+    serde_json::from_slice(&body).map_err(|e| FrameError::Payload(format!("parse JSON body: {e}")))
 }
 
 /// How many parsed frames may sit unread before the reader thread blocks.
@@ -130,10 +156,16 @@ pub(super) fn spawn_frame_reader(
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
+            // Only a FRAMING or IO failure ends the run. A malformed payload
+            // leaves the stream byte-aligned, and one bad notification must not
+            // kill LSP resolution for every request that follows it — which is
+            // what exiting on any error did, mislabelling every later request
+            // `eof_before_header`.
             let frame = read_lsp_message(&mut reader);
-            let failed = frame.is_err();
+            let stop = matches!(frame, Err(FrameError::Fatal(_)));
+            let sent = tx.send(frame.map_err(FrameError::message));
             // A closed receiver means the client was dropped; stop.
-            if tx.send(frame).is_err() || failed {
+            if sent.is_err() || stop {
                 return;
             }
         }
@@ -450,5 +482,58 @@ mod frame_bound_tests {
         tx.send(Ok(serde_json::json!({"id": 1}))).expect("send");
         let msg = next_frame(&rx, Duration::from_millis(50)).expect("queued frame");
         assert_eq!(msg.get("id").and_then(|v| v.as_i64()), Some(1));
+    }
+
+    /// Re-review finding 3. The reader thread exited on ANY error, including a
+    /// JSON-parse failure on a body that had been read IN FULL — the stream is
+    /// still byte-aligned there, and the next frame is perfectly readable. One
+    /// malformed notification therefore killed LSP resolution for the rest of
+    /// the run, with every later request mislabelled `eof_before_header`.
+    ///
+    /// The classification is what the thread's loop keys on, so it is the
+    /// classification this pins.
+    #[test]
+    fn a_malformed_payload_is_recoverable_but_broken_framing_is_not() {
+        let payload = read_frame_error(b"Content-Length: 3\r\n\r\nnot");
+        assert!(
+            matches!(payload, Some(FrameError::Payload(_))),
+            "a fully-consumed body that will not parse costs one frame only"
+        );
+
+        let no_header = read_frame_error(b"garbage without framing\r\n\r\n");
+        assert!(
+            matches!(no_header, Some(FrameError::Fatal(_))),
+            "missing Content-Length leaves the stream position unknown"
+        );
+
+        let truncated = read_frame_error(b"Content-Length: 99\r\n\r\nshort");
+        assert!(
+            matches!(truncated, Some(FrameError::Fatal(_))),
+            "a body shorter than its declared length desynchronises the stream"
+        );
+    }
+
+    /// Drives `read_lsp_message`'s framing over a byte slice by way of a real
+    /// child process, since its parameter is a `ChildStdout` reader.
+    fn read_frame_error(bytes: &[u8]) -> Option<FrameError> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn cat");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(bytes)
+            .expect("write");
+        let stdout = child.stdout.take().expect("stdout");
+        let mut reader = BufReader::new(stdout);
+        let out = read_lsp_message(&mut reader).err();
+        let _ = child.wait();
+        out
     }
 }
