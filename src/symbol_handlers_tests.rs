@@ -207,6 +207,77 @@ fn a_symbol_absent_everywhere_yields_no_sibling_claim() {
     assert!(out.get("foreign_definitions").is_none(), "response: {out}");
 }
 
+/// Indexes a one-file codebase defining `only_in_the_sibling`, a symbol the
+/// main `build_fixture` graph does not contain. Returns the graph dir, which
+/// the caller passes as a `sibling_graphs` entry.
+fn build_sibling_only_graph(tag: &str) -> (crate::test_support::TestTempDir, std::path::PathBuf) {
+    use crate::test_support::TempDirExt;
+    let tmp_root = tempfile::Builder::new()
+        .prefix(&format!("symbol_sibling_{tag}_"))
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let _ = fs::remove_dir_all(&tmp_root);
+    let src = tmp_root.join("fixture/src");
+    fs::create_dir_all(&src).expect("create sibling src");
+    fs::write(src.join("only.rs"), "pub fn only_in_the_sibling() {}\n").unwrap();
+    let graph_dir = tmp_root.join("graph");
+    indexer::index_codebase(&src, &graph_dir).expect("index sibling");
+    (tmp_root, graph_dir)
+}
+
+#[test]
+fn every_get_symbol_exit_carries_the_freshness_receipt() {
+    // fleet-watch#112 review finding 1: the receipt was attached only to the
+    // final success return, so the two early exits — `symbol_not_found` and the
+    // cross-repo `resolved_in: "sibling"` answer — shipped without it. Those
+    // are the responses that need it most: an agent that adds a function and
+    // queries before re-indexing is told the symbol does not exist, with
+    // nothing in the response to suggest the graph is simply older than the
+    // symbol.
+    let (_guard, graph) = build_fixture("freshness_exits");
+    let (_sib_guard, sibling) = build_sibling_only_graph("freshness_exits");
+    let gp = graph.to_str().unwrap().to_string();
+
+    let receipt = |out: &Value, which: &str| {
+        let got = out
+            .get(crate::graph_freshness::RESPONSE_KEY)
+            .unwrap_or_else(|| panic!("{which} exit carries no freshness receipt: {out}"));
+        assert!(
+            got.get("state").and_then(|s| s.as_str()).is_some(),
+            "{which} receipt must name a state: {got}",
+        );
+        // The new key must not collide with index_codebase's string-valued one.
+        assert!(
+            out.get("graph_state").is_none(),
+            "{which} must not publish the nested object under the string key: {out}",
+        );
+    };
+
+    let found = run_get_symbol(&json!({
+        "graph_path": gp, "qualified_name": "helpers.rs::sanitize",
+    }));
+    assert_eq!(found["status"], "ok");
+    receipt(&found, "success");
+
+    let missing = run_get_symbol(&json!({
+        "graph_path": gp, "qualified_name": "helpers.rs::saniti",
+    }));
+    assert_eq!(missing["reason"], "symbol_not_found");
+    receipt(&missing, "symbol_not_found");
+
+    let foreign = run_get_symbol(&json!({
+        "graph_path": gp,
+        "qualified_name": "only.rs::only_in_the_sibling",
+        "sibling_graphs": [sibling.to_str().unwrap()],
+    }));
+    assert_eq!(
+        foreign["resolved_in"], "sibling",
+        "the sibling bridge must answer, or this exit is untested: {foreign}",
+    );
+    receipt(&foreign, "resolved_in:sibling");
+}
+
 // ---------------------------------------------------------------------------
 // resolve_graph
 // ---------------------------------------------------------------------------

@@ -380,3 +380,40 @@ fn query_graph_pages_through_ordered_query() {
         "no ORDER BY → order_stable must be false"
     );
 }
+
+#[test]
+fn get_impact_reports_freshness_on_the_not_found_exit_too() {
+    // fleet-watch#112 review finding 2: the receipt was assigned once, at the
+    // end of `impact_response`, so both earlier exits — `symbol_not_found` from
+    // the resolve gate and `query_failed` from the impact query — returned
+    // without it. A blast radius that comes back empty or refused is precisely
+    // when a caller must be able to tell "no such symbol" from "this graph
+    // predates the symbol".
+    let (_guard, graph) = build_fixture("impact_freshness");
+    let gp = graph.to_str().unwrap().to_string();
+
+    let found = do_get_impact(&json!({"graph_path": gp, "qualified_name": "helpers.rs::sanitize"}))
+        .unwrap();
+    let missing =
+        do_get_impact(&json!({"graph_path": gp, "qualified_name": "helpers.rs::saniti"})).unwrap();
+    assert_eq!(
+        missing["reason"],
+        json!("symbol_not_found"),
+        "the not-found exit must be the one under test: {missing}"
+    );
+
+    for (which, out) in [("success", &found), ("symbol_not_found", &missing)] {
+        let receipt = out
+            .get(crate::graph_freshness::RESPONSE_KEY)
+            .unwrap_or_else(|| panic!("{which} exit carries no freshness receipt: {out}"));
+        assert!(
+            receipt.get("state").and_then(|s| s.as_str()).is_some(),
+            "{which} receipt must name a state: {receipt}"
+        );
+        assert!(
+            out.get("graph_state").is_none(),
+            "{which} must not publish the nested object under index_codebase's \
+             string-valued key: {out}"
+        );
+    }
+}

@@ -103,19 +103,29 @@ pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
     // answers File-target fan-in (issue #205) — see that module.
     let target = match search::resolve_impact_target(&store, qn) {
         Ok(t) => t,
-        Err(nf) => {
-            return Ok(json!({
-                "stage": 3,
-                "status": "error",
-                "reason": "symbol_not_found",
-                "message": format!("not found: {}", nf.input),
-                "did_you_mean": nf.did_you_mean,
-            }));
-        }
+        Err(nf) => return Ok(target_not_found_response(graph_path, nf)),
     };
     Ok(impact_response(
         &store, arguments, args, graph_path, &target, offset,
     ))
+}
+
+/// The answer when neither a symbol nor a file in this graph matches the
+/// caller's target.
+///
+/// Carries the freshness receipt: "not found" is exactly where a caller needs
+/// to know the graph may simply predate the symbol rather than the symbol not
+/// existing (fleet-watch#112 review).
+fn target_not_found_response(graph_path: &Path, nf: search::SymbolNotFound) -> Value {
+    let mut out = json!({
+        "stage": 3,
+        "status": "error",
+        "reason": "symbol_not_found",
+        "message": format!("not found: {}", nf.input),
+        "did_you_mean": nf.did_you_mean,
+    });
+    crate::graph_freshness::attach(&mut out, graph_path);
+    out
 }
 
 /// Assembles the `get_impact` response for an already-resolved target.
@@ -136,9 +146,13 @@ fn impact_response(
     let mut impact = match clustering::get_impact(store, &target.key) {
         Ok(i) => i,
         Err(e) => {
-            return json!({
+            let mut out = json!({
                 "stage": 3, "status": "error", "reason": "query_failed", "message": e
-            })
+            });
+            // fleet-watch#112 review: a failed query says nothing about whether
+            // the graph still describes the tree — the receipt still does.
+            crate::graph_freshness::attach(&mut out, graph_path);
+            return out;
         }
     };
     sort_impact_lists(&mut impact);
@@ -153,7 +167,7 @@ fn impact_response(
     attach_foreign_callers(&mut out, arguments, graph_path, &target.key);
     // fleet-watch#112: cheap graph-vs-working-tree guard, converts silent
     // staleness into a visible, reasoned-about condition.
-    out["graph_state"] = crate::graph_freshness::check(graph_path);
+    crate::graph_freshness::attach(&mut out, graph_path);
     out
 }
 
