@@ -20,7 +20,8 @@
 // where nothing checks it and the compiler cannot tell the two apart. A raw
 // `&str` that must already be quoted is not an API, it is a trap.
 
-use super::{cypher_str, GraphStore};
+use super::GraphStore;
+use lbug::Value;
 
 /// How a membership traversal identifies the symbol it starts from.
 ///
@@ -37,19 +38,30 @@ pub enum SymbolMatch<'a> {
 }
 
 impl SymbolMatch<'_> {
-    /// The `WHERE` predicate this match contributes, with `n` bound. The value
-    /// is escaped here, on every arm.
-    fn predicate(&self) -> String {
+    /// The `WHERE` predicate this match contributes, with `n` bound and the
+    /// value referenced as the parameter `$v` — never interpolated. The
+    /// predicate text is therefore a constant per arm, which is also what lets
+    /// the prepared-statement cache hit across every call.
+    fn predicate(&self) -> &'static str {
         match *self {
-            SymbolMatch::Id(raw) => format!("n.id = {}", cypher_str(raw)),
-            SymbolMatch::QualifiedName(raw) => {
-                format!("n.qualified_name = {}", cypher_str(raw))
-            }
-            SymbolMatch::IdOrQualifiedName(raw) => {
-                let escaped = cypher_str(raw);
-                format!("n.id = {escaped} OR n.qualified_name = {escaped}")
-            }
+            SymbolMatch::Id(_) => "n.id = $v",
+            SymbolMatch::QualifiedName(_) => "n.qualified_name = $v",
+            SymbolMatch::IdOrQualifiedName(_) => "n.id = $v OR n.qualified_name = $v",
         }
+    }
+
+    /// The raw value this match binds to `$v`.
+    fn value(&self) -> &str {
+        match *self {
+            SymbolMatch::Id(raw)
+            | SymbolMatch::QualifiedName(raw)
+            | SymbolMatch::IdOrQualifiedName(raw) => raw,
+        }
+    }
+
+    /// The single `$v` binding, ready for `query_prepared_params`.
+    fn params(&self) -> Vec<(&'static str, Value)> {
+        vec![("v", Value::String(self.value().to_string()))]
     }
 }
 
@@ -81,7 +93,7 @@ pub fn community_of(
          RETURN c.id, c.name, c.member_count LIMIT 1",
         symbol.predicate()
     );
-    let qr = store.execute_query(&cypher).ok()?;
+    let qr = store.query_prepared_params(&cypher, symbol.params()).ok()?;
     let row = qr.rows.first()?;
     if row.len() < 3 {
         return None;
@@ -103,6 +115,7 @@ pub fn community_ids(store: &GraphStore, label: &str, symbol: SymbolMatch<'_>) -
             "MATCH (n:{label})-[:{rel}]->(c:Community) WHERE {} RETURN c.id",
             symbol.predicate()
         ),
+        symbol,
     )
 }
 
@@ -123,14 +136,15 @@ pub fn process_names(store: &GraphStore, label: &str, symbol: SymbolMatch<'_>) -
             "MATCH (n:{label})-[:{rel}]->(p:Process) WHERE {} RETURN p.name",
             symbol.predicate()
         ),
+        symbol,
     )
 }
 
 /// First column of every row, mapping a failed query to an empty list — a
 /// membership traversal against a label whose table an older graph never
 /// created is a miss, not an error the caller can act on.
-fn first_column(store: &GraphStore, cypher: &str) -> Vec<String> {
-    match store.execute_query(cypher) {
+fn first_column(store: &GraphStore, cypher: &str, symbol: SymbolMatch<'_>) -> Vec<String> {
+    match store.query_prepared_params(cypher, symbol.params()) {
         Ok(qr) => qr
             .rows
             .iter()
@@ -144,12 +158,12 @@ fn first_column(store: &GraphStore, cypher: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// fleet-watch#16 regression guard, at the layer that now owns escaping.
-    /// A qualified name embeds a file path, so an adversarially-named indexed
-    /// file reaches this predicate; every arm must quote and escape it rather
-    /// than interpolate it raw.
+    /// fleet-watch#16 regression guard, strengthened: the value is no longer
+    /// escaped INTO the query, it is bound beside it. A qualified name embeds a
+    /// file path, so an adversarially-named indexed file reaches this
+    /// predicate; no arm may place it in the query text at all.
     #[test]
-    fn every_symbol_match_arm_escapes_its_raw_value() {
+    fn no_symbol_match_arm_puts_its_value_in_the_query_text() {
         let hostile = "a.rs::x' OR 1=1 --";
         for symbol in [
             SymbolMatch::Id(hostile),
@@ -158,13 +172,26 @@ mod tests {
         ] {
             let predicate = symbol.predicate();
             assert!(
-                predicate.contains("\\'"),
-                "the embedded quote must be backslash-escaped: {predicate}"
+                !predicate.contains("a.rs"),
+                "the value must not appear in the text at all: {predicate}"
             );
             assert!(
-                !predicate.contains("= a.rs"),
-                "the value must be quoted, not bare: {predicate}"
+                predicate.contains("$v"),
+                "the value must be referenced as a bound parameter: {predicate}"
             );
+            let params = symbol.params();
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "v");
         }
+    }
+
+    /// The predicate text is constant per arm, which is what lets one prepared
+    /// statement serve every call instead of one plan per distinct value.
+    #[test]
+    fn the_predicate_text_does_not_vary_with_the_value() {
+        assert_eq!(
+            SymbolMatch::Id("a").predicate(),
+            SymbolMatch::Id("b' OR 1=1").predicate()
+        );
     }
 }

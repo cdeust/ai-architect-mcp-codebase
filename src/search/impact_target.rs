@@ -30,7 +30,8 @@
 
 use super::qualified_name::file_path_of;
 use super::{resolve_qualified_name, SymbolNotFound};
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::GraphStore;
+use lbug::Value;
 
 /// A resolved `get_impact` target.
 pub struct ImpactTarget {
@@ -121,20 +122,23 @@ fn resolve_file(store: &GraphStore, candidates: &[&str]) -> Option<String> {
 /// Resolving instead through the symbol's `Defines_File_<Label>` edge was
 /// evaluated and rejected — see this module's header.
 fn query_file_id(store: &GraphStore, path: &str) -> Option<String> {
-    let exact = cypher_str(path);
-    let suffix = cypher_str(&format!("/{path}"));
-    let cypher = format!(
-        "MATCH (f:File) WHERE f.id = {exact} OR f.id ENDS WITH {suffix} \
-         RETURN f.id ORDER BY f.id LIMIT 1"
-    );
-    let qr = store.execute_query(&cypher).ok()?;
+    // Both forms are BOUND, not interpolated: `path` is a caller-supplied
+    // qualified-name fragment, and the query text is constant so the prepared
+    // statement caches across every lookup.
+    let cypher = "MATCH (f:File) WHERE f.id = $exact OR f.id ENDS WITH $suffix \
+                  RETURN f.id ORDER BY f.id LIMIT 1";
+    let params = vec![
+        ("exact", Value::String(path.to_string())),
+        ("suffix", Value::String(format!("/{path}"))),
+    ];
+    let qr = store.query_prepared_params(cypher, params).ok()?;
     qr.rows.first()?.first().cloned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_store::{NODE_FILE, NODE_FUNCTION};
+    use crate::graph_store::{cypher_str, NODE_FILE, NODE_FUNCTION};
 
     /// A graph shaped like a real index: the root is the repo, so `File.id`
     /// keeps the `src/` component that the parser strips when it builds

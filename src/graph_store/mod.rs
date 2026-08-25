@@ -51,10 +51,24 @@ pub type PropEdgeList = Vec<PropEdge>;
 // ---------------------------------------------------------------------------
 // Cypher string escaping — security-critical.
 //
-// LadybugDB's Cypher dialect (lbug 0.15) exposes no parameterized-query API in
-// the Rust crate, so every user-controlled value is interpolated as a string
-// literal. An unescaped single quote (or backslash-escape of one) closes the
-// literal and allows arbitrary Cypher injection (including `DETACH DELETE`).
+// Escaping is the FALLBACK, not the primary defence. The Rust crate does expose
+// parameter binding — `Connection::prepare` + `execute(stmt, params)`, reached
+// here through `run_prepared_params` (writes) and `query_prepared_params`
+// (reads) — and a bound value never enters the query text, so no escaping rule
+// stands between it and the parser. Prefer binding for any caller-influenced
+// value on a hot lookup path.
+//
+// This comment used to assert that "lbug 0.15 exposes no parameterized-query
+// API in the Rust crate". That was false by the time it was read:
+// `insert_file_content` has been binding `$id`/`$content` through that very API.
+// A wrong claim about what the engine offers is how a whole codebase settles
+// for the weaker defence.
+//
+// Interpolation with `cypher_str` remains correct and remains necessary where
+// the value is a SCHEMA identifier — a label or a relationship-table name
+// cannot be a parameter in Cypher — and for the bulk UNWIND builders. An
+// unescaped single quote (or backslash-escape of one) closes the literal and
+// allows arbitrary Cypher injection (including `DETACH DELETE`).
 //
 // Rules (order matters):
 //   1. `\\` → `\\\\` (escape backslashes FIRST to avoid double-processing),
@@ -302,6 +316,41 @@ impl GraphStore {
             .conn
             .execute(stmt, Vec::<(&str, Value)>::new())
             .map_err(|e| format!("query failed [{cypher}]: {e}"))?;
+        Ok(drain_result(&mut result))
+    }
+
+    /// Executes a parameterized READ against the cached prepared statement for
+    /// `cypher` and returns its rows.
+    ///
+    /// The read-side sibling of `run_prepared_params`: same statement cache,
+    /// same binding, but it drains the result instead of discarding it. A bound
+    /// value never becomes query text, so the escaping rules in `cypher_str`
+    /// are not in the path at all — which is the point on a lookup whose input
+    /// embeds a file path an attacker may have named.
+    ///
+    /// Schema identifiers (labels, relationship tables) still have to be
+    /// formatted into the text: Cypher has no parameter form for them. Those
+    /// come from this crate's own constants, never from a caller.
+    pub fn query_prepared_params(
+        &self,
+        cypher: &str,
+        params: Vec<(&str, Value)>,
+    ) -> Result<QueryResult, String> {
+        let mut cache = self.stmt_cache.borrow_mut();
+        if !cache.contains_key(cypher) {
+            let stmt = self
+                .conn
+                .prepare(cypher)
+                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
+            cache.insert(cypher.to_string(), stmt);
+        }
+        let stmt = cache
+            .get_mut(cypher)
+            .expect("statement just inserted into cache");
+        let mut result = self
+            .conn
+            .execute(stmt, params)
+            .map_err(|e| format!("execute [{cypher}]: {e}"))?;
         Ok(drain_result(&mut result))
     }
 

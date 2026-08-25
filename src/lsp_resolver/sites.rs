@@ -6,8 +6,9 @@
 // "what node lives at this (file, line)". It performs no LSP I/O and inserts
 // nothing.
 
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::GraphStore;
 use crate::language_provider::extract_file_prefix_or_self;
+use lbug::Value;
 use std::collections::HashMap;
 
 /// One call site the static 3b resolver left unresolved, together with
@@ -94,10 +95,13 @@ fn parse_callsite_id(cs_id: &str) -> (String, String) {
 }
 
 fn determine_caller_label(store: &GraphStore, caller_qn: &str) -> String {
-    let esc = cypher_str(caller_qn);
     for label in &["Function", "Method"] {
-        let cypher = format!("MATCH (n:{label}) WHERE n.qualified_name = {esc} RETURN n.id");
-        if let Ok(qr) = store.execute_query(&cypher) {
+        // Bound, not interpolated: `caller_qn` is derived from an indexed file
+        // path. The text is constant per label, so the prepared statement is
+        // cached across every call site in the run.
+        let cypher = format!("MATCH (n:{label}) WHERE n.qualified_name = $v RETURN n.id");
+        let params = vec![("v", Value::String(caller_qn.to_string()))];
+        if let Ok(qr) = store.query_prepared_params(&cypher, params) {
             if !qr.rows.is_empty() {
                 return label.to_string();
             }

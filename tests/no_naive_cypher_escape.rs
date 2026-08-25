@@ -138,26 +138,66 @@ fn has_equals_quoted_interpolation(line: &str) -> bool {
     let mut i = 0;
     while i + 1 < bytes.len() {
         // Look for the two-byte opener `'{` (quote immediately before a brace).
-        if bytes[i] == b'\'' && bytes[i + 1] == b'{' {
-            // Walk back over whitespace to the operator that precedes it.
-            let mut j = i;
-            while j > 0 && (bytes[j - 1] == b' ' || bytes[j - 1] == b'\t') {
-                j -= 1;
-            }
-            if j > 0 && bytes[j - 1] == b'=' {
-                return true;
-            }
+        if bytes[i] == b'\'' && bytes[i + 1] == b'{' && preceded_by_cypher_operator(bytes, i) {
+            return true;
         }
         i += 1;
     }
     false
 }
 
+/// Cypher operators that take a string literal on their right-hand side.
+///
+/// `=` was the only shape the original guard knew, because it was written
+/// against the two `search/mod.rs` sites that shipped the fleet-watch#16
+/// injection. Every operator here accepts the same literal and is exploited
+/// the same way — a value carrying `\'` closes the literal early and the rest
+/// executes — so a guard that watches only `=` would wave through
+/// `WHERE f.id ENDS WITH '{path}'`, which is the exact shape `impact_target`
+/// uses for its File lookup. List membership (`IN ['{a}', '{b}']`) is included
+/// for the same reason: the opener there is `[` or `,`, not an operator.
+const LITERAL_TAKING_OPERATORS: &[&str] = &["CONTAINS", "STARTS WITH", "ENDS WITH", "IN"];
+
+/// True when the `'{` at `quote_at` sits on the right-hand side of an operator
+/// that takes a string literal, or opens/continues a literal list.
+fn preceded_by_cypher_operator(bytes: &[u8], quote_at: usize) -> bool {
+    let mut j = quote_at;
+    while j > 0 && (bytes[j - 1] == b' ' || bytes[j - 1] == b'\t') {
+        j -= 1;
+    }
+    if j == 0 {
+        return false;
+    }
+    // `= '{v}'`, and the list shapes `IN ['{v}']` / `['{a}', '{b}']`.
+    if matches!(bytes[j - 1], b'=' | b'[' | b',') {
+        return true;
+    }
+    // `CONTAINS '{v}'`, `STARTS WITH '{v}'`, `ENDS WITH '{v}'`, `IN '{v}'`.
+    let left = String::from_utf8_lossy(&bytes[..j]).to_ascii_uppercase();
+    LITERAL_TAKING_OPERATORS
+        .iter()
+        .any(|op| left.ends_with(op) && is_word_boundary_before(&left, op))
+}
+
+/// True when the operator `op` that `left` ends with stands as its own word,
+/// so `MY_IN` or `xCONTAINS` do not count.
+fn is_word_boundary_before(left: &str, op: &str) -> bool {
+    let head = &left[..left.len() - op.len()];
+    match head.as_bytes().last() {
+        None => true,
+        Some(b) => !(b.is_ascii_alphanumeric() || *b == b'_'),
+    }
+}
+
 /// fleet-watch#16 second guard: a production Cypher builder must never
-/// interpolate a value into a single-quoted literal (`= '{var}'`) — that is
-/// exactly the injection the `search/mod.rs` sites shipped, invisible to the
-/// `.replace`-based guard above. Test/fixture files are exempt: they build
-/// ad-hoc queries from test-local, non-attacker-controlled literals.
+/// interpolate a value into a single-quoted literal — that is exactly the
+/// injection the `search/mod.rs` sites shipped, invisible to the
+/// `.replace`-based guard above. Watches `= '{v}'` and, since the 2026-08-25
+/// hardening pass, every other operator that takes a string literal
+/// (`CONTAINS`, `STARTS WITH`, `ENDS WITH`, `IN`) plus the list shapes — the
+/// original guard knew only `=` and would have waved through the `ENDS WITH`
+/// form `impact_target` uses. Test/fixture files are exempt: they build ad-hoc
+/// queries from test-local, non-attacker-controlled literals.
 #[test]
 fn test_no_raw_value_interpolation_into_cypher_literal() {
     let root = src_root();
@@ -195,7 +235,8 @@ fn test_no_raw_value_interpolation_into_cypher_literal() {
 
     assert!(
         violations.is_empty(),
-        "raw value interpolated into a single-quoted Cypher literal (`= '{{..}}'`) \
+        "raw value interpolated into a single-quoted Cypher literal (`= '{{..}}'`, \
+         `ENDS WITH '{{..}}'`, `IN ['{{..}}']`, ...) \
          reintroduced in production code — wrap the value with graph_store::cypher_str \
          and drop the surrounding quotes (source: fleet-watch#16, the \
          `search/mod.rs` lookup_community/lookup_processes sites):\n{}",
