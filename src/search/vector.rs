@@ -84,16 +84,11 @@ pub struct VectorResult {
 // Index building
 // ---------------------------------------------------------------------------
 
-const SEARCHABLE_LABELS: &[&str] = &[
-    "Function",
-    "Method",
-    "Struct",
-    "Enum",
-    "Trait",
-    "Module",
-    "Constant",
-    "TypeAlias",
-];
+// The label set + probe ORDER both come from `search::SEARCHABLE_LABELS`. This
+// file used to keep a verbatim copy, which the drift guard could not see: a
+// label added to the shared const would silently stop being indexed here while
+// every set-equality assertion still passed.
+use super::SEARCHABLE_LABELS;
 
 /// Binary file magic and version for the sparse TF-IDF on-disk format.
 /// source: Fermi audit April 2026 — replaces the old text CSV format.

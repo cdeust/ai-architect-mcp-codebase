@@ -49,16 +49,11 @@ pub fn build_schema() -> (Schema, Bm25Fields) {
 // Index building
 // ---------------------------------------------------------------------------
 
-const SEARCHABLE_LABELS: &[&str] = &[
-    "Function",
-    "Method",
-    "Struct",
-    "Enum",
-    "Trait",
-    "Module",
-    "Constant",
-    "TypeAlias",
-];
+// The label set + probe ORDER both come from `search::SEARCHABLE_LABELS`. This
+// file used to keep a verbatim copy, which the drift guard could not see: a
+// label added to the shared const would silently stop being indexed here while
+// every set-equality assertion still passed.
+use super::SEARCHABLE_LABELS;
 
 /// Builds a Tantivy BM25 index from all symbol nodes in the graph.
 /// Writes the index to `index_dir`.
