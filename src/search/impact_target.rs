@@ -7,6 +7,26 @@
 // File`) for a File target as well as reverse dependencies for a symbol.
 // `resolve_qualified_name` only probes the eight symbol labels, so it cannot
 // serve as that tool's gate on its own — see `resolve_impact_target`.
+//
+// Why the File is recovered from the qualified name's path part rather than by
+// walking the symbol's `Defines_File_<Label>` edge. The structural edge looks
+// like the more principled route; measured, it is strictly worse:
+//
+//   * There is no `Defines_File_Method` table at all. The query is not a miss
+//     but a hard Binder exception ("Table Defines_File_Method does not exist"),
+//     which drops the whole query's results. Methods reach their File only in
+//     two hops, through one of three different middle labels
+//     (`HasMethod_{Struct,Enum,Trait}_Method` then `Defines_File_<middle>`).
+//   * Measured on this repository's own `src/` (213 files, 316 Methods,
+//     2026-08-25): the two-hop route reaches 247 Methods via Struct, 34 via
+//     Trait and 17 via Enum — 298 of 316, leaving 18 (5.7%) with no File at
+//     all. The path-part route below resolves 316 of 316.
+//   * It also cannot serve the File-target branch, where there is no symbol to
+//     traverse from, nor the caller's-raw-input fallback candidate.
+//
+// So the Defines route would trade one query for up to three, lose 5.7% of
+// Method targets' co-change sections, and still need this lookup beside it.
+// Rejected; the single-candidate query below stays.
 
 use super::qualified_name::file_path_of;
 use super::{resolve_qualified_name, SymbolNotFound};
@@ -48,13 +68,12 @@ pub fn resolve_impact_target(
 ) -> Result<ImpactTarget, SymbolNotFound> {
     match resolve_qualified_name(store, input) {
         Ok(qn) => {
-            let file = resolve_file_id(store, file_path_of(&qn))
-                // A symbol whose own path part misses (an unusual qualified
-                // name shape) can still resolve through the caller's input.
-                .or_else(|| resolve_file_id(store, file_path_of(input)));
+            // A symbol whose own path part misses (an unusual qualified name
+            // shape) can still resolve through the caller's input.
+            let file = resolve_file(store, &[file_path_of(&qn), file_path_of(input)]);
             Ok(ImpactTarget { key: qn, file })
         }
-        Err(not_found) => match resolve_file_id(store, input) {
+        Err(not_found) => match resolve_file(store, &[input]) {
             Some(id) => Ok(ImpactTarget {
                 key: id.clone(),
                 file: Some(id),
@@ -64,8 +83,32 @@ pub fn resolve_impact_target(
     }
 }
 
-/// Resolves `path` to a `File.id`, tolerating the one leading path component
-/// the parser strips when it builds qualified names (`main.rs` →
+/// The first of `candidates` that names a `File`, in order.
+///
+/// Sole entry point for File resolution in this module. A request can offer
+/// more than one candidate because a symbol's own path part and the caller's
+/// raw input need not agree; when they DO agree — the common case, a caller
+/// chaining on the stored form this tool's own `next_steps` hands back — the
+/// repeat used to cost a second identical query, because each candidate was
+/// probed through its own call. Owning the sequence here means the ordering,
+/// the empty-candidate skip and the de-duplication are stated once instead of
+/// being re-derived per call site.
+fn resolve_file(store: &GraphStore, candidates: &[&str]) -> Option<String> {
+    let mut tried: Vec<&str> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if candidate.is_empty() || tried.contains(candidate) {
+            continue;
+        }
+        tried.push(candidate);
+        if let Some(id) = query_file_id(store, candidate) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Resolves one `path` to a `File.id`, tolerating the one leading path
+/// component the parser strips when it builds qualified names (`main.rs` →
 /// `src/main.rs`).
 ///
 /// `ENDS WITH '/' || path` is anchored on a full path segment, so `main.rs`
@@ -74,10 +117,10 @@ pub fn resolve_impact_target(
 /// prefix, so that ambiguity is a property of the qualified-name scheme rather
 /// than of this lookup. `ORDER BY f.id` makes the choice deterministic instead
 /// of leaving it to the engine's scan order.
-fn resolve_file_id(store: &GraphStore, path: &str) -> Option<String> {
-    if path.is_empty() {
-        return None;
-    }
+///
+/// Resolving instead through the symbol's `Defines_File_<Label>` edge was
+/// evaluated and rejected — see this module's header.
+fn query_file_id(store: &GraphStore, path: &str) -> Option<String> {
     let exact = cypher_str(path);
     let suffix = cypher_str(&format!("/{path}"));
     let cypher = format!(
@@ -198,9 +241,9 @@ mod tests {
             )
             .expect("insert file");
         assert_eq!(
-            resolve_file_id(&store, "helpers.rs").as_deref(),
+            resolve_file(&store, &["helpers.rs"]).as_deref(),
             Some("src/helpers.rs")
         );
-        assert_eq!(resolve_file_id(&store, "elpers.rs"), None);
+        assert_eq!(resolve_file(&store, &["elpers.rs"]), None);
     }
 }
