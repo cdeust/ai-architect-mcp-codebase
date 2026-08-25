@@ -306,7 +306,16 @@ fn index_codebase_schema() -> Value {
             "type": "object",
             "required": ["path", "output_dir"],
             "additionalProperties": false,
-            "properties": {
+            "properties": index_codebase_properties()
+        }
+    })
+}
+
+/// The `index_codebase` input properties, lifted out of `index_codebase_schema`
+/// so that function stays inside the §4.2 50-line cap. Pure data — one JSON
+/// object literal, no logic.
+fn index_codebase_properties() -> Value {
+    json!({
                 "path": {
                     "type": "string",
                     "description": "Absolute path to the codebase root to index."
@@ -363,8 +372,6 @@ fn index_codebase_schema() -> Value {
                     "default": true,
                     "description": "Issue #58 — after indexing, mine git temporal coupling into FILE_CHANGES_WITH File→File edges (Tornhill-style: files that change together, thresholded at >=3 co-changes and >=0.30 coupling degree over a 1-year window). Default true; self-skips on a non-git tree. A full index re-mines the window; an incremental index EXTENDS the mined aggregates with only the new commits (append-only). The response carries a 'cochange' block {mode, commits_scanned, edges_written}. Query the edges via query_graph: `MATCH (a:File)-[r:FILE_CHANGES_WITH]-(b:File) WHERE r.coupling > 0.5 RETURN a.id, b.id, r.cochange_count`."
                 }
-            }
-        }
     })
 }
 
