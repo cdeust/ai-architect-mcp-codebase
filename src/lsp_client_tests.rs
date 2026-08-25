@@ -116,15 +116,44 @@ fn shutdown_returns_against_a_server_that_never_exits() {
 /// the colliding server request first, our response second.
 #[test]
 fn the_handshake_skips_a_server_request_sharing_our_id() {
+    let mut client = client_replaying(&[
+        // A server REQUEST carrying our id…
+        json!({
+            "jsonrpc": "2.0", "id": 1,
+            "method": "window/showMessageRequest",
+            "params": {"type": 3, "message": "indexing"}
+        }),
+        // …then our actual response.
+        json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {"capabilities": {"definitionProvider": true}}
+        }),
+    ]);
+
+    let msg = client
+        .read_initialize_response(1, Duration::from_secs(5))
+        .expect("the real response must be found behind the server request");
+    assert!(
+        msg.get("method").is_none(),
+        "a server request must not be returned as our response: {msg}"
+    );
+    assert_eq!(
+        msg.pointer("/result/capabilities/definitionProvider")
+            .and_then(Value::as_bool),
+        Some(true),
+        "the message returned must be the initialize RESULT: {msg}"
+    );
+}
+
+/// An `LspClient` whose "server" replays `frames` and then closes its stdout.
+///
+/// Uses a real child process rather than a mock: these tests pin how the client
+/// behaves against the WIRE — Content-Length framing, a stream that ends — and
+/// a hand-built channel would assume away the part under test. `cat` echoes its
+/// stdin and exits when that stdin closes.
+fn client_replaying(frames: &[Value]) -> LspClient {
     use std::io::Write;
     use std::process::{Command, Stdio};
-
-    fn frame(v: &Value) -> Vec<u8> {
-        let body = serde_json::to_vec(v).expect("serialize");
-        let mut out = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
-        out.extend_from_slice(&body);
-        out
-    }
 
     let mut child = Command::new("cat")
         .stdin(Stdio::piped())
@@ -134,43 +163,21 @@ fn the_handshake_skips_a_server_request_sharing_our_id() {
         .expect("spawn cat");
     {
         let mut stdin = child.stdin.take().expect("stdin");
-        // A server REQUEST carrying our id, then our actual response.
-        stdin
-            .write_all(&frame(&json!({
-                "jsonrpc": "2.0", "id": 1,
-                "method": "window/showMessageRequest",
-                "params": {"type": 3, "message": "indexing"}
-            })))
-            .expect("write request");
-        stdin
-            .write_all(&frame(&json!({
-                "jsonrpc": "2.0", "id": 1,
-                "result": {"capabilities": {"definitionProvider": true}}
-            })))
-            .expect("write response");
+        for frame in frames {
+            let body = serde_json::to_vec(frame).expect("serialize");
+            let mut framed = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+            framed.extend_from_slice(&body);
+            stdin.write_all(&framed).expect("write frame");
+        }
     } // stdin closed: `cat` flushes and exits.
 
     let stdout = child.stdout.take().expect("stdout");
-    let mut client = LspClient {
+    LspClient {
         process: child,
         frames: spawn_frame_reader(stdout),
         request_id: AtomicI64::new(2),
         timeout: Duration::from_secs(5),
-    };
-
-    let msg = client
-        .read_initialize_response(1, Duration::from_secs(5))
-        .expect("the real response must be found behind the server request");
-    assert!(
-        msg.get("method").is_none(),
-        "a server request must not be returned as our response: {msg}"
-    );
-    assert!(
-        msg.pointer("/result/capabilities/definitionProvider")
-            .and_then(Value::as_bool)
-            == Some(true),
-        "the message returned must be the initialize RESULT: {msg}"
-    );
+    }
 }
 
 /// Round-6 finding 4. The previous round gave the probe the request/response
