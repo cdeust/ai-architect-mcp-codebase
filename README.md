@@ -639,21 +639,43 @@ Two layers, covering **disjoint** statement families. Neither subsumes the other
 | Layer | Refuses | Mechanism |
 |---|---|---|
 | Engine (`GraphStore::execute_read_only_query`) | every database write and DDL — `CREATE`, `MERGE`, `SET`, `DELETE`/`DETACH DELETE`, `DROP`, `ALTER`, however spelled | `PreparedStatement::is_read_only()`: the verdict comes from the compiled plan, so a mutation written in syntax no keyword scan enumerates is still refused |
-| Lexical (`FORBIDDEN_CYPHER_KEYWORDS`) | filesystem access — `COPY … TO`, `EXPORT`/`IMPORT DATABASE`, `ATTACH`, `LOAD FROM` — plus `CALL` | whole-word, case-insensitive scan of the query with string literals, backticked identifiers and comments masked out first |
+| Lexical (`FORBIDDEN_CYPHER_KEYWORDS`) | filesystem and database movement — `COPY … TO`, `EXPORT`/`IMPORT DATABASE`, `ATTACH`, `DETACH`, `USE`, `LOAD FROM` | whole-word, case-insensitive scan of the query with string literals, backticked identifiers and comments masked out first |
+| Lexical (`READ_ONLY_PROCEDURES`) | every `CALL` naming anything but `TABLE_INFO` / `SHOW_TABLES` — including the `CALL <setting> = <value>` configuration form | per-PROCEDURE classification of the identifier after each `CALL` token |
 
 The lexical layer is **load-bearing, not defence in depth**. lbug's
-`StatementReadWriteAnalyzer` overrides `visitCopyFrom` but leaves `visitCopyTo`,
-`visitExportDatabase`, `visitImportDatabase` and `visitAttachDatabase` at the base
-visitor's no-op, so all four are classified read-only. Measured 2026-08-24 against
+`StatementReadWriteAnalyzer` overrides `visitCopyFrom` but leaves **six**
+statements at the base visitor's no-op — `visitCopyTo`, `visitExportDatabase`,
+`visitImportDatabase`, `visitAttachDatabase`, `visitDetachDatabase` and
+`visitUseDatabase` (`parsed_statement_visitor.h`:51, 57-61 on lbug 0.19.1) — so all
+six are classified read-only. `DETACH`/`USE` were added to the denylist on
+2026-08-25 after a mechanical re-audit against those headers; before it, both
+passed the lexical filter AND the engine filter. Measured 2026-08-24 against
 lbug 0.19.1 on **both** available engine gates — `is_read_only()` and a database
 opened with `SystemConfig::read_only(true)`, which reaches the same predicate via
 `ClientContext::validateTransaction` — `COPY (…) TO 'f.csv'` and
 `EXPORT DATABASE 'd'` execute and write the filesystem, while both correctly refuse
-`CREATE NODE TABLE`. Pinned by `engine_gate_does_not_cover_filesystem_writes`.
+`CREATE NODE TABLE`. Pinned by `engine_gate_does_not_cover_filesystem_writes` and,
+for the whole family, `engine_classifies_every_filesystem_statement_as_read_only`.
+
+`CALL` is classified **per procedure** rather than refused wholesale, so schema
+introspection (`CALL table_info('Function') RETURN *`) is reachable. That
+distinction is load-bearing too: the same analyzer returns `readOnly = true` from
+`visitStandaloneCall`, so `CALL threads = 8` — a configuration write — is
+engine-read-only, and this lexical layer is the only barrier that exists against
+it. Relaxing the KEYWORD rather than allowlisting the PROCEDURE would remove that
+barrier entirely.
 
 A keyword introduced by `:` or `.` is an identifier, not a clause, so queries over
 this schema's own `Import` node table work unchanged:
 `MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE n.is_resolved = false RETURN n.path`.
+
+The gate does **not** extend that exemption to an alias (`AS <keyword>`), where the
+clause detectors do. The asymmetry is deliberate: on the gate an exemption can only
+ever let a keyword through, so it fails closed and a bare `use`/`create` pattern
+variable is refused (backtick it); on the clause detectors the expensive direction
+is reversed, because reading `AS limit` as a clause would suppress the `LIMIT`
+injection. A masked literal or backticked identifier is treated as a TOKEN, never
+as whitespace, so no look-back can walk across one.
 
 `query_graph` executes **one statement per call**. A trailing `;` is accepted; a
 `;`-chained request is refused with reason `multi_statement_not_supported`, because
