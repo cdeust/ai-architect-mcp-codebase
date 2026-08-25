@@ -117,8 +117,7 @@ fn unique_tmp_name() -> String {
 /// sidecar (no `commit_sha` key) simply parses with the field absent, so an
 /// old sidecar degrades to the dirty-file signal alone rather than failing.
 ///
-/// Atomic (temp file + rename), matching the sibling `indexer::manifest::save`
-/// that writes the other sidecar in this same directory. Required as of
+/// Atomic (temp file + rename). Required as of
 /// fleet-watch#112: a plain `fs::write` truncates the file in place, so until
 /// this PR made `graph_freshness::check` the FIRST query-time reader of
 /// `meta.json`, the window between truncate and write had no reader to expose
@@ -130,6 +129,15 @@ fn unique_tmp_name() -> String {
 /// (`unique_tmp_name`) so that concurrent WRITERS into one `output_dir` cannot
 /// interleave through a shared temp path either.
 ///
+/// The sibling `indexer::manifest::save` writes the other sidecar into this
+/// same directory with the same temp-file-plus-rename shape, but NOT the same
+/// naming: its temp path is a fixed `file_manifest.json.tmp`, so it still has
+/// the concurrent-writer exposure the per-writer name removes here. Stated
+/// rather than glossed as parity, because an earlier revision of this comment
+/// claimed the two matched and they do not (fleet-watch#112 review round 3).
+/// Extending `unique_tmp_name` to `manifest::save` is agreed follow-up work,
+/// deliberately not done in this change.
+///
 /// Best-effort: a failed write is logged and ignored. The graph is the
 /// product; the sidecar is a convenience for consumers, and its absence just
 /// degrades a consumer's path reconstruction, never the index. On failure the
@@ -139,7 +147,7 @@ pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
         "schema_version": 2,
         "root": root.to_string_lossy(),
         "tool": "ai-architect-mcp-codebase",
-        "commit_sha": crate::artifact::git_head(root),
+        "commit_sha": crate::git_provenance::git_head(root),
     });
     let meta_path = output_dir.join("meta.json");
     let tmp_path = output_dir.join(unique_tmp_name());
