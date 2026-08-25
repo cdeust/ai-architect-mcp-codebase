@@ -414,5 +414,9 @@ fn in_identifier_position(bytes: &[u8], start: usize, exemption: IdentifierExemp
 mod tests;
 
 #[cfg(test)]
+#[path = "read_only_gate_masking_tests.rs"]
+mod masking_tests;
+
+#[cfg(test)]
 #[path = "read_only_gate_differential_tests.rs"]
 mod differential_tests;
