@@ -187,14 +187,7 @@ pub(super) fn load_process_counts(store: &GraphStore) -> HashMap<String, usize> 
 /// per candidate on the substring fallback, and that path scans every node of
 /// every searchable label.
 pub(super) fn lookup_community(store: &GraphStore, label: &str, node_id: &str) -> Option<String> {
-    community_of(store, label, SymbolMatch::Id(node_id))
-        .map(|c| c.id)
-        // A degenerate empty id is not an answer here either. The other two
-        // consumers of this traversal already dropped it; forwarding it from
-        // this one put an empty string into a hit's `community_id` annotation
-        // and into the small-community boost lookup, so the codebase carried
-        // two definitions of "no community" at once.
-        .filter(|cid| !cid.is_empty())
+    community_of(store, label, SymbolMatch::Id(node_id)).map(|c| c.id)
 }
 
 /// The processes this node participates in. Empty for every label but

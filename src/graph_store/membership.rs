@@ -75,6 +75,9 @@ pub struct CommunityRow {
 /// The community `symbol` belongs to under `label`, via
 /// `MemberOf_<label>_Community`.
 ///
+/// A row whose `Community.id` is empty is reported as `None`: it identifies no
+/// community, and every consumer wants that same answer.
+///
 /// `LIMIT 1` is load-bearing rather than cosmetic: this runs once per candidate
 /// on the substring fallback, which scans every node of every searchable label,
 /// so an uncapped probe materializes each node's whole `MemberOf` row set on
@@ -96,6 +99,13 @@ pub fn community_of(
     let qr = store.query_prepared_params(&cypher, symbol.params()).ok()?;
     let row = qr.rows.first()?;
     if row.len() < 3 {
+        return None;
+    }
+    // A degenerate empty id is NOT an answer, and that belongs HERE rather than
+    // at each caller. It was copy-pasted to three of the four consumers and
+    // missed on the fourth (`search::context::find_community`), so the codebase
+    // held two definitions of "no community" at once. One traversal, one rule.
+    if row[0].is_empty() {
         return None;
     }
     Some(CommunityRow {
@@ -192,6 +202,64 @@ mod tests {
         assert_eq!(
             SymbolMatch::Id("a").predicate(),
             SymbolMatch::Id("b' OR 1=1").predicate()
+        );
+    }
+
+    /// Re-review finding 5. The empty-id rule lived at the CALL SITES: copied
+    /// into three of them and missed on the fourth
+    /// (`search::context::find_community`), which forwarded `""` into a
+    /// `get_context` answer. Owning it here is what makes the fourth consumer —
+    /// and any fifth — correct without being told.
+    #[test]
+    fn an_empty_community_id_is_reported_as_no_community() {
+        use super::super::{GraphStore, NODE_COMMUNITY, NODE_FUNCTION};
+
+        let dir = tempfile::Builder::new()
+            .prefix("membership_empty_community_id")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        store.create_schema().expect("schema");
+
+        let qn = "m.rs::f";
+        store
+            .insert_node(
+                NODE_COMMUNITY,
+                &[
+                    ("id", "''"),
+                    ("name", "''"),
+                    ("algorithm", "'louvain+c2'"),
+                    ("resolution_param", "1.0"),
+                    ("member_count", "1"),
+                    ("modularity_contribution", "0.0"),
+                ],
+            )
+            .expect("insert community");
+        store
+            .insert_node(
+                NODE_FUNCTION,
+                &[
+                    ("id", "'m.rs::f'"),
+                    ("name", "'f'"),
+                    ("qualified_name", "'m.rs::f'"),
+                    ("start_line", "1"),
+                    ("end_line", "1"),
+                    ("visibility", "'pub'"),
+                    ("is_async", "false"),
+                ],
+            )
+            .expect("insert fn");
+        store
+            .insert_edge("MemberOf_Function_Community", qn, "", &[])
+            .expect("insert MemberOf");
+
+        assert!(
+            community_of(&store, "Function", SymbolMatch::Id(qn)).is_none(),
+            "an empty Community.id identifies no community, for EVERY consumer"
+        );
+        assert!(
+            community_of(&store, "Function", SymbolMatch::QualifiedName(qn)).is_none(),
+            "and on every match arm"
         );
     }
 }

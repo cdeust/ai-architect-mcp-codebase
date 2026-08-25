@@ -93,14 +93,10 @@ pub(super) fn run_s1(
 /// and it is behaviour: this returns the first hit.
 pub(super) fn community_of(store: &GraphStore, qualified_name: &str) -> Option<String> {
     crate::clustering::SYMBOL_LABELS.iter().find_map(|label| {
+        // `community_of` reports an empty id as no community, so a degenerate
+        // row does not stop the scan — the next label still gets its turn.
         membership_community_of(store, label, SymbolMatch::QualifiedName(qualified_name))
             .map(|c| c.id)
-            // A degenerate empty id is NOT an answer: keep scanning the
-            // remaining labels, which is what the per-label loop this
-            // replaced did. Filtering AFTER `find_map` instead would stop
-            // at the first label and then discard its result, losing the
-            // community a later label supplies.
-            .filter(|cid| !cid.is_empty())
     })
 }
 

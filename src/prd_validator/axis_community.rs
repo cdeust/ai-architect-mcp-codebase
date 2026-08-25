@@ -32,14 +32,9 @@ pub(super) fn communities_for_resolved(
 /// because this returns the first hit.
 fn community_of(store: &GraphStore, qualified_name: &str) -> Option<String> {
     crate::clustering::SYMBOL_LABELS.iter().find_map(|label| {
-        graph_community_of(store, label, SymbolMatch::QualifiedName(qualified_name))
-            .map(|c| c.id)
-            // A degenerate empty id is NOT an answer: keep scanning the
-            // remaining labels, which is what the per-label loop this
-            // replaced did. Filtering AFTER `find_map` instead would stop
-            // at the first label and then discard its result, losing the
-            // community a later label supplies.
-            .filter(|cid| !cid.is_empty())
+        // `community_of` reports an empty id as no community, so a degenerate
+        // row does not stop the scan — the next label still gets its turn.
+        graph_community_of(store, label, SymbolMatch::QualifiedName(qualified_name)).map(|c| c.id)
     })
 }
 
