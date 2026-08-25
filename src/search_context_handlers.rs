@@ -268,6 +268,9 @@ pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
             "narrow further with `label_filter` (e.g. Function, Struct, Trait)".to_string(),
         ]);
     }
+    // fleet-watch#112: cheap graph-vs-working-tree guard, converts silent
+    // staleness into a visible, reasoned-about condition on every response.
+    out["graph_state"] = crate::graph_freshness::check(graph_path);
     Ok(out)
 }
 

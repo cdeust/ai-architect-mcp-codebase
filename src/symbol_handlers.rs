@@ -107,6 +107,9 @@ pub(crate) fn do_get_symbol(arguments: &Value) -> Result<Value, String> {
             format!("see relationship context: get_context on '{resolved_qn}'"),
             format!("trace blast radius before changing it: get_impact on '{resolved_qn}'"),
         ],
+        // fleet-watch#112: cheap graph-vs-working-tree guard, converts silent
+        // staleness into a visible, reasoned-about condition.
+        "graph_state": crate::graph_freshness::check(graph_path),
     }))
 }
 

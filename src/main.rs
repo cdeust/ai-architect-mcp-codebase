@@ -27,6 +27,7 @@ mod cochange;
 mod epistemic;
 mod git_diff;
 mod graph_cache;
+mod graph_freshness;
 mod graph_store;
 mod history;
 mod hook_augment;

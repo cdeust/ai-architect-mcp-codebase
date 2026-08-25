@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Query-time staleness guard (fleet-watch#112): `search_codebase`, `get_symbol`,
+  and `get_impact` now report a `graph_state` object (`state: "fresh" |
+  "stale" | "unknown"`, `dirty_files`, `checked_files`, `commits_behind`) so a
+  silently stale graph — the working tree has moved since the last index —
+  becomes a visible, reasoned-about condition instead of a wrong answer
+  presented with full confidence. Cheap by construction: re-stats the
+  `file_manifest.json` sidecar's tracked files (no re-hashing, no directory
+  walk), plus a git commits-behind count when the indexed root is a git
+  working tree. `meta.json` moves to schema 2, adding `commit_sha` — a
+  schema-1 sidecar from an older index still parses, just without the
+  commits-behind signal.
+
 ## [0.11.1] — Ingestion must never abort on graph size
 
 Patch: a backwards-compatible bug fix — no API change, no new feature.

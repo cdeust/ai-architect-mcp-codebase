@@ -151,6 +151,9 @@ fn impact_response(
     out["next_steps"] = impact_next_steps(&impact, &target.key);
 
     attach_foreign_callers(&mut out, arguments, graph_path, &target.key);
+    // fleet-watch#112: cheap graph-vs-working-tree guard, converts silent
+    // staleness into a visible, reasoned-about condition.
+    out["graph_state"] = crate::graph_freshness::check(graph_path);
     out
 }
 

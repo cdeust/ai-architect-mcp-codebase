@@ -85,14 +85,22 @@ pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
 /// paths: the structure stays portable, and the machine-specific root lives in
 /// a file that is naturally regenerated on the next re-index.
 ///
+/// Schema 2 (fleet-watch#112) adds `commit_sha`: the indexed root's git HEAD
+/// at write time, `None` outside a git working tree. `graph_freshness` reads
+/// it back to compute a query-time commits-behind count against the root's
+/// CURRENT HEAD, the same `git_head` used to compute it here — a schema-1
+/// sidecar (no `commit_sha` key) simply parses with the field absent, so an
+/// old sidecar degrades to the dirty-file signal alone rather than failing.
+///
 /// Best-effort: a failed write is logged and ignored. The graph is the
 /// product; the sidecar is a convenience for consumers, and its absence just
 /// degrades a consumer's path reconstruction, never the index.
 pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
     let meta = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "root": root.to_string_lossy(),
         "tool": "ai-architect-mcp-codebase",
+        "commit_sha": crate::artifact::git_head(root),
     });
     let meta_path = output_dir.join("meta.json");
     if let Err(e) = fs::write(&meta_path, meta.to_string()) {
@@ -198,8 +206,11 @@ mod tests {
         );
         assert_eq!(
             parsed.get("schema_version").and_then(|v| v.as_u64()),
-            Some(1),
+            Some(2),
         );
+        // `root` is not a git working tree → commit_sha is present but null,
+        // not simply absent (the field is always written, per schema 2).
+        assert!(parsed.get("commit_sha").is_some_and(|v| v.is_null()));
         let _ = fs::remove_dir_all(&base);
     }
 }

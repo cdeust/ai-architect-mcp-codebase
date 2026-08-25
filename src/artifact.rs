@@ -392,7 +392,10 @@ pub fn artifact_staleness(repo_path: &Path, artifact_sha: &str) -> Option<StaleI
 
 /// `git rev-list --count <from>..<to>`. `None` if the command fails (e.g. the
 /// `from` sha is unknown to the repo) or the output does not parse.
-fn git_commits_between(repo_path: &Path, from: &str, to: &str) -> Option<u64> {
+///
+/// `pub(crate)`: also the query-time "commits behind" signal in
+/// `graph_freshness` (fleet-watch#112), same command shape as here.
+pub(crate) fn git_commits_between(repo_path: &Path, from: &str, to: &str) -> Option<u64> {
     let range = format!("{from}..{to}");
     let out = Command::new("git")
         .arg("-C")
@@ -499,7 +502,11 @@ fn ensure_gitattributes(repo_path: &Path) {
 /// Returns the git HEAD sha for `repo_path`, or `None` if it is not a git
 /// working tree. Uses `Command` args (no shell) — injection-safe, matching the
 /// pattern in `history/mod.rs`.
-fn git_head(repo_path: &Path) -> Option<String> {
+///
+/// `pub(crate)`: also the index-time provenance stamp `write_graph_meta`
+/// records and the query-time current-HEAD read in `graph_freshness`
+/// (fleet-watch#112).
+pub(crate) fn git_head(repo_path: &Path) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(repo_path)
