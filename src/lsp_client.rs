@@ -14,18 +14,19 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 mod commands;
+mod frames;
 mod protocol;
 mod uri;
 
 pub use commands::{
     detect_lsp_command, is_command_available, validate_lsp_command, LSP_COMMAND_ALLOWLIST,
 };
+use frames::{next_frame, spawn_frame_reader};
 pub(crate) use protocol::{is_lsp_timeout, LSP_TIMEOUT_PREFIX};
 pub use uri::{file_uri_to_path, path_to_file_uri};
 
 use protocol::{
-    classify_probe_err, next_frame, parse_definition_response, spawn_frame_reader,
-    validate_probe_response, write_lsp_message,
+    classify_probe_err, parse_definition_response, validate_probe_response, write_lsp_message,
 };
 
 // ---------------------------------------------------------------------------
