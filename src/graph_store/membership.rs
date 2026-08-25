@@ -13,12 +13,21 @@
 // They live here, beside the schema that declares the tables, because every
 // caller already depends on `graph_store` and none depends on the others.
 //
-// ESCAPING IS THIS MODULE'S JOB, NOT THE CALLER'S. Every `SymbolMatch` arm
-// takes a RAW value and escapes it here. An earlier revision of this module
-// took an already-escaped literal on one arm, guarded only by a doc comment;
-// that hands the fleet-watch#16 injection class straight back to a call site
-// where nothing checks it and the compiler cannot tell the two apart. A raw
-// `&str` that must already be quoted is not an API, it is a trap.
+// THE VALUE NEVER ENTERS THE QUERY TEXT. Every `SymbolMatch` arm carries a RAW
+// value, `predicate()` returns a CONSTANT `&'static str` referencing the bound
+// parameter `$v`, and `params()` hands the value to the engine beside the
+// statement. Nothing in this module escapes anything, because there is nothing
+// here to escape.
+//
+// Two earlier revisions each stopped one step short. The first took an
+// already-escaped literal on one arm, guarded only by a doc comment — a raw
+// `&str` that must already be quoted is not an API, it is a trap, and it handed
+// the fleet-watch#16 injection class back to a call site where nothing checked
+// it. The second escaped inside the module, which was correct but still built
+// the value into the text. Binding removes the question: no escaping rule
+// stands between an adversarially-named indexed file and the parser, and
+// because the text no longer varies with the value, one cached plan serves
+// every call instead of one plan per distinct qualified name.
 
 use super::GraphStore;
 use lbug::Value;
