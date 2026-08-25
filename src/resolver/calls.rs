@@ -79,7 +79,7 @@ fn resolve_one_call_site(
 ) -> bool {
     let provider = crate::language_provider::provider_for(language);
     let caller_qn = extract_caller_from_callsite_id(cs_id);
-    let file_id = extract_file_from_qn(&caller_qn);
+    let file_id = extract_file_prefix_or_self(&caller_qn);
     let caller_label = determine_caller_label(idx, &caller_qn);
 
     let site = CallSite {
@@ -262,7 +262,7 @@ fn resolve_single_call(
     crate::call_evidence::resolve_two_pass(
         candidates,
         |e: &SymbolEntry| e.qualified_name.clone(),
-        |e: &SymbolEntry| extract_file_from_qn(&e.qualified_name),
+        |e: &SymbolEntry| extract_file_prefix_or_self(&e.qualified_name),
         provider,
         &ev,
     )

@@ -7,6 +7,7 @@
 // nothing.
 
 use crate::graph_store::{cypher_str, GraphStore};
+use crate::language_provider::extract_file_prefix_or_self;
 use std::collections::HashMap;
 
 /// One call site the static 3b resolver left unresolved, together with
@@ -88,18 +89,8 @@ fn extract_caller_from_callsite_id(cs_id: &str) -> String {
 
 fn parse_callsite_id(cs_id: &str) -> (String, String) {
     let caller_qn = extract_caller_from_callsite_id(cs_id);
-    let file_path = extract_file_from_qn(&caller_qn);
+    let file_path = extract_file_prefix_or_self(&caller_qn);
     (file_path, caller_qn)
-}
-
-pub(super) fn extract_file_from_qn(qn: &str) -> String {
-    // fleet-watch#18 adjacent defect (a): a hardcoded .rs/.py/.ts/.tsx list
-    // fell through to returning the WHOLE qn for the other seven parsed
-    // languages (java/kt/swift/objc/c/cpp/go/rb), producing index keys that
-    // can never equal a CallSite file_path. Delegate to the shared
-    // all-language helper the static resolver already uses
-    // (language_provider::ALL_EXTENSIONS = parser::Language::from_extension).
-    crate::language_provider::extract_file_prefix(qn).unwrap_or_else(|| qn.to_string())
 }
 
 fn determine_caller_label(store: &GraphStore, caller_qn: &str) -> String {
@@ -152,7 +143,7 @@ pub(super) fn build_node_position_index(
             if row.len() < 3 {
                 continue;
             }
-            let file = extract_file_from_qn(&row[1]);
+            let file = extract_file_prefix_or_self(&row[1]);
             let line: u64 = row[2].parse().unwrap_or(0);
             index.insert(
                 (file, line),
@@ -211,7 +202,7 @@ mod tests {
             ("lib/tool.rb::frob", "lib/tool.rb"),
             ("ui/View.swift::View::render", "ui/View.swift"),
         ] {
-            assert_eq!(extract_file_from_qn(qn), want, "qn: {qn}");
+            assert_eq!(extract_file_prefix_or_self(qn), want, "qn: {qn}");
         }
     }
 

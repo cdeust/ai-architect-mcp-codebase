@@ -8,6 +8,7 @@
 // `resolve_qualified_name` only probes the eight symbol labels, so it cannot
 // serve as that tool's gate on its own — see `resolve_impact_target`.
 
+use super::qualified_name::file_path_of;
 use super::{resolve_qualified_name, SymbolNotFound};
 use crate::graph_store::{cypher_str, GraphStore};
 
@@ -47,10 +48,10 @@ pub fn resolve_impact_target(
 ) -> Result<ImpactTarget, SymbolNotFound> {
     match resolve_qualified_name(store, input) {
         Ok(qn) => {
-            let file = resolve_file_id(store, path_part(&qn))
+            let file = resolve_file_id(store, file_path_of(&qn))
                 // A symbol whose own path part misses (an unusual qualified
                 // name shape) can still resolve through the caller's input.
-                .or_else(|| resolve_file_id(store, path_part(input)));
+                .or_else(|| resolve_file_id(store, file_path_of(input)));
             Ok(ImpactTarget { key: qn, file })
         }
         Err(not_found) => match resolve_file_id(store, input) {
@@ -61,11 +62,6 @@ pub fn resolve_impact_target(
             None => Err(not_found),
         },
     }
-}
-
-/// The path portion of a qualified name — everything before the first `::`.
-fn path_part(qn: &str) -> &str {
-    qn.split("::").next().unwrap_or(qn)
 }
 
 /// Resolves `path` to a `File.id`, tolerating the one leading path component

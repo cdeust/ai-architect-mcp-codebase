@@ -42,6 +42,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 use super::bm25::tokenize_symbol;
+use super::qualified_name::file_path_of;
 use crate::graph_store::GraphStore;
 
 // ---------------------------------------------------------------------------
@@ -144,7 +145,7 @@ fn collect_raw_docs(store: &GraphStore) -> Vec<(String, String, String, String, 
             }
             let qn = &row[0];
             let name_val = &row[1];
-            let file_path = extract_file_path(qn);
+            let file_path = file_path_of(qn).to_string();
             let combined = format!("{} {} {}", name_val, label, qn);
             let tokens = tokenize_to_terms(&combined);
             raw_docs.push((
@@ -282,13 +283,18 @@ fn compute_sparse_tf_idf(
     out
 }
 
-fn sparse_norm(v: &[(u32, f32)]) -> f32 {
+/// A sparse term vector: `(term_id, weight)` pairs kept sorted by term id, so
+/// two of them can be merged in one linear pass. Named because the bare tuple
+/// shape recurs across this module's signatures and stored documents.
+type SparseTerms = [(u32, f32)];
+
+fn sparse_norm(v: &SparseTerms) -> f32 {
     v.iter().map(|(_, w)| w * w).sum::<f32>().sqrt()
 }
 
 /// Cosine similarity of a sparse query against a sparse doc. Merges the
 /// two sorted (term_id, weight) lists in a single linear pass.
-fn sparse_cosine(query: &[(u32, f32)], query_norm: f32, doc: &[(u32, f32)]) -> f32 {
+fn sparse_cosine(query: &SparseTerms, query_norm: f32, doc: &SparseTerms) -> f32 {
     if query.is_empty() || doc.is_empty() {
         return 0.0;
     }
@@ -460,14 +466,6 @@ fn read_string<R: Read>(r: &mut R) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn extract_file_path(qualified_name: &str) -> String {
-    if let Some(idx) = qualified_name.find("::") {
-        qualified_name[..idx].to_string()
-    } else {
-        qualified_name.to_string()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests

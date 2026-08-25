@@ -13,6 +13,7 @@ use tantivy::query::QueryParser;
 use tantivy::schema::{Field, Schema, Value as _, STORED, TEXT};
 use tantivy::{doc, Index, IndexWriter, TantivyDocument};
 
+use super::qualified_name::file_path_of;
 use crate::graph_store::GraphStore;
 
 // ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ pub fn build_index(store: &GraphStore, index_dir: &Path) -> Result<usize, String
             }
             let qn = &row[0];
             let name_val = &row[1];
-            let file_path = extract_file_path(qn);
+            let file_path = file_path_of(qn).to_string();
 
             // Tokenize name by splitting on _ and :: for better BM25 matching.
             // "handle_tool_call" → "handle tool call" so BM25 finds "handle tool".
@@ -200,14 +201,6 @@ fn field_text(doc: &TantivyDocument, _schema: &Schema, field: Field) -> String {
         .to_string()
 }
 
-fn extract_file_path(qualified_name: &str) -> String {
-    if let Some(idx) = qualified_name.find("::") {
-        qualified_name[..idx].to_string()
-    } else {
-        qualified_name.to_string()
-    }
-}
-
 /// Tokenizes a symbol name for BM25 indexing/querying.
 /// Splits on `_`, `::`, `/`, `.`, and camelCase boundaries.
 /// "handle_tool_call" → "handle tool call"
@@ -256,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_extract_file_path() {
-        assert_eq!(extract_file_path("src/main.rs::main"), "src/main.rs");
-        assert_eq!(extract_file_path("src/lib.rs"), "src/lib.rs");
+        assert_eq!(file_path_of("src/main.rs::main"), "src/main.rs");
+        assert_eq!(file_path_of("src/lib.rs"), "src/lib.rs");
     }
 }

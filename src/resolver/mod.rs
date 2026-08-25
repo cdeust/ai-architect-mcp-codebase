@@ -8,6 +8,7 @@
 
 use crate::ambiguity_policy::{self, Context as PolicyContext, Resolution as PolicyResolution};
 use crate::graph_store::{is_known_rel_table, GraphStore, PropEdgeList};
+use crate::language_provider::extract_file_prefix_or_self;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -94,7 +95,7 @@ fn unresolved_base_reason(
     child_qn: &str,
     lookup: &str,
 ) -> String {
-    let file_id = extract_file_from_qn(child_qn);
+    let file_id = extract_file_prefix_or_self(child_qn);
     let is_external = file_imports
         .get(&file_id)
         .into_iter()
@@ -402,7 +403,7 @@ fn build_file_import_map(store: &GraphStore) -> Result<HashMap<String, Vec<Strin
         if row.len() < 2 {
             continue;
         }
-        let file_id = extract_file_from_import_id(&row[0]);
+        let file_id = extract_file_prefix_or_self(&row[0]);
         map.entry(file_id).or_default().push(row[1].clone());
     }
     Ok(map)
@@ -411,19 +412,6 @@ fn build_file_import_map(store: &GraphStore) -> Result<HashMap<String, Vec<Strin
 // ---------------------------------------------------------------------------
 // Path normalization helpers
 // ---------------------------------------------------------------------------
-
-fn extract_file_from_import_id(import_id: &str) -> String {
-    // Import IDs have format: "file_path::import_display_name". The file path
-    // is recognized by its extension across ALL supported languages (the
-    // extension set is disjoint enough that no per-node language is needed).
-    // source: language_provider::ALL_EXTENSIONS (= parser::Language::from_extension).
-    crate::language_provider::extract_file_prefix(import_id)
-        .unwrap_or_else(|| import_id.to_string())
-}
-
-fn extract_file_from_qn(qn: &str) -> String {
-    crate::language_provider::extract_file_prefix(qn).unwrap_or_else(|| qn.to_string())
-}
 
 pub(crate) fn extract_caller_from_callsite_id(cs_id: &str) -> String {
     // CallSite IDs: "caller_qn::call@line:col"

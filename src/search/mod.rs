@@ -12,12 +12,14 @@
 
 pub mod bm25;
 pub mod impact_target;
+mod qualified_name;
 pub mod rrf;
 pub mod vector;
 
 pub use impact_target::{resolve_impact_target, ImpactTarget};
 
 use crate::graph_store::{cypher_str, GraphStore};
+use qualified_name::file_path_of;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -431,7 +433,7 @@ fn enrich_from_graph(
                 let qn = &row[0];
                 let name = &row[1];
                 let id = &row[2];
-                let file_path = extract_file_path(qn);
+                let file_path = file_path_of(qn).to_string();
 
                 let community_id = lookup_community(store, label, id);
                 let process_names = lookup_processes(store, label, id);
@@ -754,7 +756,7 @@ fn fetch_candidates(store: &GraphStore, label: &str) -> Result<Vec<Candidate>, S
         let name = &row[1];
         let id = &row[2];
 
-        let file_path = extract_file_path(qn);
+        let file_path = file_path_of(qn).to_string();
         let community_id = lookup_community(store, label, id);
         let process_names = lookup_processes(store, label, id);
 
@@ -779,14 +781,6 @@ fn fetch_candidates(store: &GraphStore, label: &str) -> Result<Vec<Candidate>, S
 
 fn parse_opt_u64(s: &str) -> Option<u64> {
     s.parse::<u64>().ok()
-}
-
-fn extract_file_path(qualified_name: &str) -> String {
-    if let Some(idx) = qualified_name.find("::") {
-        qualified_name[..idx].to_string()
-    } else {
-        qualified_name.to_string()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -966,7 +960,7 @@ fn find_node_details(store: &GraphStore, escaped: &str) -> Result<NodeDetails, S
                     return Ok((
                         label.to_string(),
                         row[0].clone(),
-                        extract_file_path(&row[1]),
+                        file_path_of(&row[1]).to_string(),
                         parse_opt_u64(&row[2]),
                         parse_opt_u64(&row[3]),
                         Some(row[4].clone()),
@@ -987,7 +981,7 @@ fn find_node_details(store: &GraphStore, escaped: &str) -> Result<NodeDetails, S
                     return Ok((
                         label.to_string(),
                         row[0].clone(),
-                        extract_file_path(&row[1]),
+                        file_path_of(&row[1]).to_string(),
                         None,
                         None,
                         None,
@@ -1279,11 +1273,8 @@ mod tests {
 
     #[test]
     fn test_extract_file_path() {
-        assert_eq!(
-            extract_file_path("src/main.rs::handle_tool_call"),
-            "src/main.rs"
-        );
-        assert_eq!(extract_file_path("src/lib.rs"), "src/lib.rs");
+        assert_eq!(file_path_of("src/main.rs::handle_tool_call"), "src/main.rs");
+        assert_eq!(file_path_of("src/lib.rs"), "src/lib.rs");
     }
 
     #[test]

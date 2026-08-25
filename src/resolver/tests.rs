@@ -48,7 +48,7 @@ fn test_is_external_via_provider() {
 #[test]
 fn test_extract_file_from_import_id() {
     assert_eq!(
-        extract_file_from_import_id("src/main.rs::graph_store::GraphStore"),
+        extract_file_prefix_or_self("src/main.rs::graph_store::GraphStore"),
         "src/main.rs"
     );
 }

@@ -62,7 +62,7 @@ fn resolve_one_import(
             }],
         );
     }
-    let file_id = extract_file_from_import_id(import_id);
+    let file_id = extract_file_prefix_or_self(import_id);
     let normalized = provider.normalize_import_path(path).to_string();
     let is_glob = is_glob_str == "true" || is_glob_str == "True";
 

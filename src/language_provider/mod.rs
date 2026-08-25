@@ -27,7 +27,12 @@
 // source: stages/stage-3b.md §5 (phase contract); per-constant sources cited
 // at each provider. Registered in BOTH lib.rs and main.rs (lib+bin crate).
 
+mod file_prefix;
 mod kotlin_prefixes;
+
+// Re-exported so every existing `language_provider::extract_file_prefix*`
+// path stays valid after the split.
+pub use file_prefix::*;
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -602,28 +607,4 @@ pub fn provider_for(language: &str) -> &'static dyn LanguageProvider {
         "go" => &GO,
         _ => &DEFAULT,
     }
-}
-
-/// All recognized source-file extensions (without the dot), across every
-/// supported language. File-id extraction needs no per-node language: the
-/// extension set is effectively disjoint, so the union recognizes any node's
-/// originating file. source: parser::Language::from_extension (authoritative).
-pub const ALL_EXTENSIONS: &[&str] = &[
-    "rs", "py", "ts", "tsx", "java", "kt", "kts", "swift", "m", "mm", "c", "h", "cc", "cpp", "cxx",
-    "hh", "hpp", "hxx", "go", "js", "jsx", "mjs", "cjs", "rb",
-];
-
-/// Extract the file-path prefix from a node id or qualified name of the form
-/// `<file_path>.<ext>::<rest>`. Tries every known extension; returns the file
-/// path (including extension) when one matches, else None. Replaces the
-/// resolver's hardcoded four-extension scan so all languages resolve.
-pub fn extract_file_prefix(id: &str) -> Option<String> {
-    for ext in ALL_EXTENSIONS {
-        let marker = format!(".{ext}::");
-        if let Some(i) = id.find(&marker) {
-            // keep up to and including the extension, drop the `::` separator.
-            return Some(id[..i + marker.len() - 2].to_string());
-        }
-    }
-    None
 }
