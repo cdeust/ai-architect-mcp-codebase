@@ -292,3 +292,79 @@ fn a_file_added_since_the_index_is_invisible_to_the_cheap_check() {
     assert_eq!(state["state"], json!("fresh"), "new files aren't scanned");
     assert_eq!(state["dirty_files"], json!(0));
 }
+
+#[test]
+fn a_manifest_key_that_escapes_the_root_is_never_stat_ed() {
+    // fleet-watch#112 review round 3, finding 9. `file_manifest.json` is an
+    // on-disk sidecar a caller can craft, and `root.join(rel)` does not
+    // constrain `rel`: an ABSOLUTE key discards the root entirely, a `..` key
+    // walks out of it. The stat that followed then reported, through
+    // `dirty_files`, whether an arbitrary host file's (mtime_ns, size) matched
+    // the attacker's guess — an existence-and-attributes oracle, one guess per
+    // tool call.
+    //
+    // This test IS that oracle. The manifest names a file outside the indexed
+    // root and records its TRUE mtime and size, so pre-fix the entry compares
+    // equal and the graph reads `fresh` with 0 dirty files — the attacker's
+    // guess confirmed. Post-fix the key never reaches `stat`, so it counts
+    // dirty and the answer carries no information about the target file.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (output_dir, graph, root) = scaffold(tmp.path());
+
+    // The target lives outside `root`, as a host file the caller never indexed.
+    let outside = tmp.path().join("outside_the_indexed_tree.txt");
+    fs::write(&outside, b"contents the caller was never shown\n").expect("write target");
+    let target = fs::metadata(&outside).expect("stat target");
+
+    for key in [
+        outside.to_string_lossy().to_string(), // absolute: join() drops the root
+        format!("../{}", "outside_the_indexed_tree.txt"), // parent-dir traversal
+    ] {
+        let mut m = manifest::FileManifest::new();
+        m.files.insert(
+            key.clone(),
+            FileState {
+                // The attacker's guess, set to the target's real values.
+                mtime_ns: manifest::mtime_ns(&target),
+                size: target.len(),
+                content_hash: String::new(),
+            },
+        );
+        manifest::save(&manifest::manifest_path(&output_dir), &m).expect("save manifest");
+        crate::query_handlers::write_graph_meta(&output_dir, &root);
+
+        let state = check(&graph);
+        assert_eq!(
+            state["dirty_files"],
+            json!(1),
+            "key {key:?} must be refused, not resolved against the host filesystem: {state}",
+        );
+        assert_eq!(
+            state["state"],
+            json!("stale"),
+            "an unverifiable manifest is not evidence of freshness: {state}",
+        );
+    }
+}
+
+#[test]
+fn contained_keys_are_exactly_the_relative_ordinary_ones() {
+    // The invariant the indexer already satisfies: it writes keys by stripping
+    // the root prefix, so every legitimate key is relative and made of ordinary
+    // components.
+    assert!(is_contained_key("src/main.rs"));
+    assert!(is_contained_key("a.rs"));
+    assert!(is_contained_key("deep/nested/path/to/file.rs"));
+
+    assert!(!is_contained_key(""), "empty key names nothing");
+    assert!(
+        !is_contained_key("/etc/hosts"),
+        "absolute discards the root"
+    );
+    assert!(!is_contained_key("../escape.rs"), "parent-dir traversal");
+    assert!(
+        !is_contained_key("src/../../escape.rs"),
+        "traversal mid-path"
+    );
+    assert!(!is_contained_key("./src/main.rs"), "non-canonical prefix");
+}

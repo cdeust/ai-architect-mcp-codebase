@@ -19,11 +19,11 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use std::process::Command;
 
-use crate::artifact::{git_head, is_hex_sha};
+use crate::git_provenance::{git_head, is_hex_sha};
 use crate::indexer::manifest::{self, FileState};
 
 /// The subset of `meta.json` (written by `query_handlers::write_graph_meta`)
@@ -51,20 +51,43 @@ pub(crate) const RESPONSE_KEY: &str = "graph_freshness";
 
 /// Stamps the freshness receipt onto a response envelope under `RESPONSE_KEY`.
 ///
-/// Exists so that EVERY exit of a read tool carries the receipt, not just the
-/// one that succeeds. A caller who receives `symbol_not_found` is precisely the
-/// caller who most needs to know the graph may simply be stale — an agent that
-/// adds a function and queries before re-indexing gets "not found" for a
-/// symbol that exists on disk (fleet-watch#112 review). Attaching at each
-/// `return` rather than once at the end is the only shape that reaches the
-/// early returns.
-///
 /// `response` is a response envelope — a JSON object — at every call site; a
 /// value with no keys has nowhere to carry a receipt and is left untouched.
-pub(crate) fn attach(response: &mut Value, graph_path: &Path) {
+fn attach(response: &mut Value, graph_path: &Path) {
     if let Some(envelope) = response.as_object_mut() {
         envelope.insert(RESPONSE_KEY.to_string(), check(graph_path));
     }
+}
+
+/// Stamps the receipt onto a read tool's response, taking the graph from the
+/// tool's own `arguments`.
+///
+/// EVERY exit of a read tool must carry the receipt, not just the ones that
+/// succeed: a caller told `symbol_not_found` is the caller who most needs to
+/// know the graph may simply predate the symbol, and a caller told the store
+/// could not be opened or the query failed is looking at the exact signature an
+/// in-progress re-index produces.
+///
+/// This is called from the `run_*` wrapper of each instrumented tool, and
+/// nowhere else. That wrapper is the tool's ONLY exit — `main.rs` dispatches to
+/// `run_get_symbol` / `run_get_impact` / `run_search_codebase`, each of which
+/// funnels both the `Ok` value and the `Err`-turned-envelope through one point.
+/// Attaching there is what makes the guarantee structural rather than a matter
+/// of remembering: an earlier revision attached at each named `return` inside
+/// the `do_*` body, which covered the exits it could see and silently missed
+/// every `?`-propagated failure before them — `graph_cache::open_cached(..)?`
+/// and the `find_symbol_*(..)?` calls (fleet-watch#112 review round 3). A `?`
+/// added anywhere in a `do_*` body in future is covered by construction.
+///
+/// No receipt when `arguments` names no `graph_path`: the call was rejected
+/// before any graph was identified, so there is no graph whose freshness could
+/// be reported. A `graph_path` that does not exist or cannot be read yields the
+/// receipt's own `"unknown"` state rather than silence.
+pub(crate) fn attach_from_arguments(response: &mut Value, arguments: &Value) {
+    let Some(graph_str) = arguments.get("graph_path").and_then(|v| v.as_str()) else {
+        return;
+    };
+    attach(response, Path::new(graph_str));
 }
 
 /// `graph_path` is `<output_dir>/graph`, already validated to exist by the
@@ -186,11 +209,52 @@ fn read_meta(output_dir: &Path) -> Option<GraphMeta> {
 fn count_dirty(root: &Path, files: &BTreeMap<String, FileState>) -> usize {
     files
         .iter()
-        .filter(|(rel, state)| match std::fs::metadata(root.join(rel)) {
-            Ok(m) => manifest::mtime_ns(&m) != state.mtime_ns || m.len() != state.size,
-            Err(_) => true,
+        .filter(|(rel, state)| {
+            if !is_contained_key(rel) {
+                // Never stat it. Counted dirty rather than skipped: a manifest
+                // we cannot verify against the tree is not evidence the graph
+                // is fresh.
+                return true;
+            }
+            match std::fs::metadata(root.join(rel)) {
+                Ok(m) => manifest::mtime_ns(&m) != state.mtime_ns || m.len() != state.size,
+                Err(_) => true,
+            }
         })
         .count()
+}
+
+/// True when `rel` is a manifest key this check may resolve against the indexed
+/// root — i.e. a relative path made only of ordinary components.
+///
+/// `file_manifest.json` is an on-disk sidecar a caller can craft, the same
+/// threat model `commit_sha` is guarded against by `is_hex_sha` above. The
+/// hazard here is `Path::join`, which does not constrain what it is given:
+/// handed an ABSOLUTE component it discards the base entirely — verified,
+/// `Path::new("/root/base").join("/etc/hosts")` is `/etc/hosts` — and a `..`
+/// component walks out of the tree. Either way the `stat` that follows reads a
+/// file the caller never indexed, and the dirty count then reports whether that
+/// file's (mtime_ns, size) matched the value the attacker put in the manifest.
+/// That is an existence-and-attributes oracle over the whole host filesystem,
+/// answered through a read-only tool's response, one guess per call.
+///
+/// The indexer writes keys by stripping the root prefix
+/// (`indexer::incremental::strip_prefix_path`), so every legitimate key is
+/// already a relative path of ordinary components. Requiring exactly that is
+/// both the real invariant and the cheapest possible check — no extra syscall
+/// on a path that already costs one `stat` per entry, so the documented
+/// `O(manifested files)` cost is unchanged.
+///
+/// Lexical containment only. A symlink INSIDE the indexed tree that points out
+/// of it still resolves outward; that is a property of the tree the caller
+/// asked to index and which the indexer itself already followed, not something
+/// the sidecar controls. Canonicalising per entry would add a syscall per file
+/// to defend a different threat, and is deliberately not done here.
+fn is_contained_key(rel: &str) -> bool {
+    !rel.is_empty()
+        && Path::new(rel)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
 }
 
 #[cfg(test)]
