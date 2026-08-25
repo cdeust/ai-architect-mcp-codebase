@@ -183,10 +183,9 @@ fn the_handshake_skips_a_server_request_sharing_our_id() {
 /// which is what this pins.
 #[test]
 fn the_probe_fails_fast_where_the_request_path_skips() {
-    assert_eq!(
-        UnparseableFrame::FailFast == UnparseableFrame::Skip,
-        false,
-        "the two callers must not share a policy"
+    assert!(
+        UnparseableFrame::FailFast != UnparseableFrame::Skip,
+        "the two callers must hold distinct policies"
     );
 
     // The probe stops on the first unparseable frame…
