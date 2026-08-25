@@ -336,29 +336,15 @@ impl GraphStore {
         cypher: &str,
         params: Vec<(&str, Value)>,
     ) -> Result<QueryResult, String> {
-        // The statement is TAKEN OUT of the cache so the `RefMut` ends before
-        // `execute` runs, then returned afterwards. Scoping the borrow with a
-        // block did not do this — `stmt` borrows from the map, so the guard
-        // stayed alive across `execute` + `drain_result` no matter where the
-        // braces went, and the comment claiming otherwise asserted a protection
-        // the code did not provide. This store is cached process-wide, so any
-        // future call reaching the cache from inside the drain would panic on a
-        // double borrow.
-        let mut stmt = match self.stmt_cache.borrow_mut().remove(cypher) {
-            Some(cached) => cached,
-            None => self
-                .conn
-                .prepare(cypher)
-                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?,
-        };
+        // Take / use / return, so no borrow of the cache is alive across
+        // `execute` + `drain_result`. See `take_cached_stmt` for why a scoped
+        // block cannot achieve this.
+        let mut stmt = self.take_cached_stmt(cypher)?;
         let outcome = match self.conn.execute(&mut stmt, params) {
             Ok(mut result) => Ok(drain_result(&mut result)),
             Err(e) => Err(format!("execute [{cypher}]: {e}")),
         };
-        // Returned on both paths: a failed execute does not invalidate the plan.
-        self.stmt_cache
-            .borrow_mut()
-            .insert(cypher.to_string(), stmt);
+        self.return_cached_stmt(cypher, stmt);
         outcome
     }
 
@@ -417,21 +403,14 @@ impl GraphStore {
     /// bulk chunks (common when indexing small files), and caching turns
     /// the whole bulk path into a single plan-once/execute-many loop.
     fn run_prepared(&self, cypher: &str, rows: Value) -> Result<(), String> {
-        let mut cache = self.stmt_cache.borrow_mut();
-        if !cache.contains_key(cypher) {
-            let stmt = self
-                .conn
-                .prepare(cypher)
-                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
-            cache.insert(cypher.to_string(), stmt);
-        }
-        let stmt = cache
-            .get_mut(cypher)
-            .expect("statement just inserted into cache");
-        self.conn
-            .execute(stmt, vec![("rows", rows)])
+        let mut stmt = self.take_cached_stmt(cypher)?;
+        let outcome = self
+            .conn
+            .execute(&mut stmt, vec![("rows", rows)])
             .map(|_| ())
-            .map_err(|e| format!("execute [{cypher}]: {e}"))
+            .map_err(|e| format!("execute [{cypher}]: {e}"));
+        self.return_cached_stmt(cypher, stmt);
+        outcome
     }
 
     /// Generalization of `run_prepared` for statements with more than one
@@ -440,21 +419,43 @@ impl GraphStore {
     /// prepared-statement cache: identical cypher text across calls, only
     /// the bound values differ.
     fn run_prepared_params(&self, cypher: &str, params: Vec<(&str, Value)>) -> Result<(), String> {
-        let mut cache = self.stmt_cache.borrow_mut();
-        if !cache.contains_key(cypher) {
-            let stmt = self
-                .conn
-                .prepare(cypher)
-                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
-            cache.insert(cypher.to_string(), stmt);
-        }
-        let stmt = cache
-            .get_mut(cypher)
-            .expect("statement just inserted into cache");
-        self.conn
-            .execute(stmt, params)
+        let mut stmt = self.take_cached_stmt(cypher)?;
+        let outcome = self
+            .conn
+            .execute(&mut stmt, params)
             .map(|_| ())
-            .map_err(|e| format!("execute [{cypher}]: {e}"))
+            .map_err(|e| format!("execute [{cypher}]: {e}"));
+        self.return_cached_stmt(cypher, stmt);
+        outcome
+    }
+
+    /// Removes the prepared statement for `cypher` from the cache, preparing
+    /// one on a miss.
+    ///
+    /// TAKING it out is the point. A `RefMut` held across `conn.execute` is a
+    /// double-borrow panic waiting for the first call that reaches this cache
+    /// from inside an execute or a drain, and this store is cached
+    /// process-wide. Scoping the guard with a block cannot help: the statement
+    /// borrows FROM the map, so the guard lives exactly as long as the
+    /// statement does, wherever the braces go. The borrow must END, which means
+    /// the statement must leave.
+    fn take_cached_stmt(&self, cypher: &str) -> Result<PreparedStatement, String> {
+        if let Some(cached) = self.stmt_cache.borrow_mut().remove(cypher) {
+            return Ok(cached);
+        }
+        self.conn
+            .prepare(cypher)
+            .map_err(|e| format!("prepare failed [{cypher}]: {e}"))
+    }
+
+    /// Puts the statement back so the next call plans once and executes many.
+    /// Called on the failure path too: a failed execute does not invalidate the
+    /// compiled plan, and dropping it would silently turn the cache off for
+    /// that statement.
+    fn return_cached_stmt(&self, cypher: &str, stmt: PreparedStatement) {
+        self.stmt_cache
+            .borrow_mut()
+            .insert(cypher.to_string(), stmt);
     }
 }
 

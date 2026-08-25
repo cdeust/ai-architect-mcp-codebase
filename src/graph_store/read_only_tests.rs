@@ -203,3 +203,55 @@ fn engine_classifies_every_filesystem_statement_as_read_only() {
         }
     }
 }
+
+/// The statement cache must not be BORROWED while a prepared statement is in
+/// use. Holding a `RefMut` across `conn.execute` is a double-borrow panic
+/// waiting for the first caller that reaches this cache from inside an execute
+/// or a drain — and this store is cached process-wide, so that panic would take
+/// the server down rather than one request.
+///
+/// No red-then-green pair exists for this one, and that is the finding rather
+/// than an omission: the panic needs a caller that does not exist yet, which is
+/// exactly why the review graded it "one refactor away". What IS testable is
+/// the invariant that makes the panic impossible — the cache is free while the
+/// statement is out — so that is what this pins. Under the previous shape the
+/// assertion could not even be written: the statement was a reference INTO the
+/// map, so its existence and the guard's were the same fact.
+#[test]
+fn a_statement_in_use_does_not_hold_the_cache_borrowed() {
+    let (_dir, store) = store_with_one_function();
+    let cypher = "MATCH (n:Function) RETURN n.id";
+
+    let stmt = store.take_cached_stmt(cypher).expect("prepare");
+    assert!(
+        store.stmt_cache.try_borrow_mut().is_ok(),
+        "the cache must be borrowable while a statement is checked out"
+    );
+    store.return_cached_stmt(cypher, stmt);
+}
+
+/// The statement goes back on BOTH paths, so the cache keeps its
+/// plan-once/execute-many property. A dropped statement would silently turn
+/// caching off for that cypher and nothing would report it.
+#[test]
+fn a_prepared_statement_is_returned_to_the_cache_after_use() {
+    let (_dir, store) = store_with_one_function();
+    let cypher = "MATCH (n:Function) RETURN n.id";
+
+    assert!(!store.stmt_cache.borrow().contains_key(cypher));
+    store
+        .query_prepared_params(cypher, Vec::new())
+        .expect("first call prepares");
+    assert!(
+        store.stmt_cache.borrow().contains_key(cypher),
+        "a successful call must leave the plan behind"
+    );
+
+    // A failing execute must also return it: the plan is still valid.
+    let bad = "MATCH (n:Function) WHERE n.id = $missing RETURN n.id";
+    let _ = store.query_prepared_params(bad, Vec::new());
+    store
+        .query_prepared_params(cypher, Vec::new())
+        .expect("the cached plan is still usable after a neighbouring failure");
+    assert!(store.stmt_cache.borrow().contains_key(cypher));
+}
