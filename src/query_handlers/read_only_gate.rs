@@ -320,3 +320,7 @@ fn preceded_by_identifier_sigil(bytes: &[u8], start: usize) -> bool {
 #[cfg(test)]
 #[path = "read_only_gate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "read_only_gate_differential_tests.rs"]
+mod differential_tests;
