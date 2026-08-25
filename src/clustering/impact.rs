@@ -51,8 +51,8 @@ pub struct ImpactResult {
 pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResult, String> {
     let esc = cypher_str(qualified_name);
 
-    let communities = collect_communities(store, &esc);
-    let processes = collect_processes(store, &esc);
+    let communities = collect_communities(store, qualified_name);
+    let processes = collect_processes(store, qualified_name);
 
     // Reverse-dependency traversal — the actual blast radius. The tool is
     // named for impact analysis but previously returned only community +
@@ -98,10 +98,10 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
 }
 
 /// Communities (`MemberOf_<Label>_Community`) the target symbol belongs to,
-/// across every `SYMBOL_LABELS` kind. `esc` must already be a
-/// `cypher_str`-quoted literal.
-fn collect_communities(store: &GraphStore, esc: &str) -> Vec<String> {
-    let symbol = SymbolMatch::EscapedIdOrQualifiedName(esc);
+/// across every `SYMBOL_LABELS` kind. Takes the RAW target — `membership`
+/// escapes it.
+fn collect_communities(store: &GraphStore, target: &str) -> Vec<String> {
+    let symbol = SymbolMatch::IdOrQualifiedName(target);
     super::SYMBOL_LABELS
         .iter()
         .flat_map(|label| community_ids(store, label, symbol))
@@ -109,9 +109,9 @@ fn collect_communities(store: &GraphStore, esc: &str) -> Vec<String> {
 }
 
 /// Processes (`ParticipatesIn_<Label>_Process`) the target symbol
-/// participates in. `esc` must already be a `cypher_str`-quoted literal.
-fn collect_processes(store: &GraphStore, esc: &str) -> Vec<String> {
-    let symbol = SymbolMatch::EscapedIdOrQualifiedName(esc);
+/// participates in. Takes the RAW target — `membership` escapes it.
+fn collect_processes(store: &GraphStore, target: &str) -> Vec<String> {
+    let symbol = SymbolMatch::IdOrQualifiedName(target);
     ["Function", "Method"]
         .iter()
         .flat_map(|label| process_names(store, label, symbol))

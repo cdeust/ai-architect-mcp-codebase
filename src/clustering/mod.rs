@@ -17,7 +17,7 @@ mod process;
 // Symbol labels eligible for clustering — source: stage-3c.md §2.4
 // ---------------------------------------------------------------------------
 
-pub(super) const SYMBOL_LABELS: &[&str] = &[
+pub(crate) const SYMBOL_LABELS: &[&str] = &[
     "Function",
     "Method",
     "Struct",

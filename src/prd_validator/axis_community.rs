@@ -6,7 +6,7 @@
 // verdict.rs's header for the full split rationale).
 
 use super::{ResolvedClaim, ScopeClaim, ValidationFinding};
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{community_of as graph_community_of, GraphStore, SymbolMatch};
 use serde_json::json;
 use std::collections::BTreeSet;
 
@@ -26,37 +26,18 @@ pub(super) fn communities_for_resolved(
         .collect()
 }
 
+/// The community `qualified_name` belongs to, through the shared membership
+/// traversal. Per-label iteration is an lbug dialect constraint (no rel-type
+/// alternation); the order is `clustering::SYMBOL_LABELS` and it is behaviour,
+/// because this returns the first hit.
 fn community_of(store: &GraphStore, qualified_name: &str) -> Option<String> {
-    // Iterate per-label rather than using rel-type alternation — mirrors
-    // search/mod.rs::lookup_community for lbug dialect compatibility.
-    let escaped = cypher_str(qualified_name);
-    for label in [
-        "Function",
-        "Method",
-        "Struct",
-        "Enum",
-        "Trait",
-        "Constant",
-        "TypeAlias",
-        "Module",
-    ] {
-        let rel = format!("MemberOf_{label}_Community");
-        let cypher = format!(
-            "MATCH (n:{label})-[:{rel}]->(c:Community) \
-             WHERE n.qualified_name = {escaped} \
-             RETURN c.id LIMIT 1"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            if let Some(row) = qr.rows.first() {
-                if let Some(cid) = row.first() {
-                    if !cid.is_empty() {
-                        return Some(cid.clone());
-                    }
-                }
-            }
-        }
-    }
-    None
+    crate::clustering::SYMBOL_LABELS
+        .iter()
+        .find_map(|label| {
+            graph_community_of(store, label, SymbolMatch::QualifiedName(qualified_name))
+        })
+        .map(|c| c.id)
+        .filter(|cid| !cid.is_empty())
 }
 
 pub(super) fn emit_community_consistency(

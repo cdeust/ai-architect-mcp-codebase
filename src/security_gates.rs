@@ -17,7 +17,9 @@
 // source: stages/stage-8.md §4 (gate definitions), §6 (severity ladder),
 //         §7 (tool schema).
 
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{
+    community_of as membership_community_of, cypher_str, GraphStore, SymbolMatch,
+};
 use crate::search;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -228,37 +230,20 @@ fn run_s1(
     });
 }
 
+/// The community `qualified_name` belongs to, through the shared membership
+/// traversal in `graph_store::membership`.
+///
+/// Per-label iteration rather than rel-type alternation is an lbug dialect
+/// constraint, not a preference. The label order is `clustering::SYMBOL_LABELS`
+/// and it is behaviour: this returns the first hit.
 fn community_of(store: &GraphStore, qualified_name: &str) -> Option<String> {
-    // Mirrors search/mod.rs::lookup_community — per-label iteration for
-    // lbug dialect compatibility (no rel-type alternation).
-    let escaped = cypher_str(qualified_name);
-    for label in [
-        "Function",
-        "Method",
-        "Struct",
-        "Enum",
-        "Trait",
-        "Constant",
-        "TypeAlias",
-        "Module",
-    ] {
-        let rel = format!("MemberOf_{label}_Community");
-        let cypher = format!(
-            "MATCH (n:{label})-[:{rel}]->(c:Community) \
-             WHERE n.qualified_name = {escaped} \
-             RETURN c.id LIMIT 1"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            if let Some(row) = qr.rows.first() {
-                if let Some(cid) = row.first() {
-                    if !cid.is_empty() {
-                        return Some(cid.clone());
-                    }
-                }
-            }
-        }
-    }
-    None
+    crate::clustering::SYMBOL_LABELS
+        .iter()
+        .find_map(|label| {
+            membership_community_of(store, label, SymbolMatch::QualifiedName(qualified_name))
+        })
+        .map(|c| c.id)
+        .filter(|cid| !cid.is_empty())
 }
 
 // ---------------------------------------------------------------------------

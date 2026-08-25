@@ -6,7 +6,7 @@
 // verdict.rs's header for the full split rationale).
 
 use super::{ResolvedClaim, ScopeClaim, ValidationFinding};
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{process_names, GraphStore, SymbolMatch};
 use serde_json::json;
 
 pub(super) fn processes_for_resolved(
@@ -23,22 +23,15 @@ pub(super) fn processes_for_resolved(
         .collect()
 }
 
+/// Processes `qualified_name` participates in, through the shared membership
+/// traversal, de-duplicated in first-seen order across the two callable labels.
 fn processes_of(store: &GraphStore, qualified_name: &str) -> Vec<String> {
-    let escaped = cypher_str(qualified_name);
+    let symbol = SymbolMatch::QualifiedName(qualified_name);
     let mut out: Vec<String> = Vec::new();
     for label in ["Function", "Method"] {
-        let rel = format!("ParticipatesIn_{label}_Process");
-        let cypher = format!(
-            "MATCH (n:{label})-[:{rel}]->(p:Process) \
-             WHERE n.qualified_name = {escaped} RETURN p.name"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            for row in &qr.rows {
-                if let Some(name) = row.first() {
-                    if !name.is_empty() && !out.contains(name) {
-                        out.push(name.clone());
-                    }
-                }
+        for name in process_names(store, label, symbol) {
+            if !name.is_empty() && !out.contains(&name) {
+                out.push(name);
             }
         }
     }

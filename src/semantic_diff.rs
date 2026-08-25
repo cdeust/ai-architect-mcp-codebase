@@ -40,7 +40,7 @@ pub const DETAILS_TRUNCATION: usize = 100;
 // source: stage-9 brief — labels whose qualified_name identity defines
 // "the same symbol" across two indexing runs. File/Directory/Import are
 // content-addressed and noisy; we restrict diffing to semantic symbols.
-const DIFFABLE_LABELS: &[&str] = &[
+pub(crate) const DIFFABLE_LABELS: &[&str] = &[
     "Function",
     "Method",
     "Struct",
