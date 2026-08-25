@@ -24,3 +24,14 @@ pub(crate) fn file_path_of(qualified_name: &str) -> &str {
         None => qualified_name,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_file_path() {
+        assert_eq!(file_path_of("src/main.rs::handle_tool_call"), "src/main.rs");
+        assert_eq!(file_path_of("src/lib.rs"), "src/lib.rs");
+    }
+}
