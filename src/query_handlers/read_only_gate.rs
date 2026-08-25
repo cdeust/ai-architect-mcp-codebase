@@ -218,24 +218,7 @@ pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
         match b[i] {
             q @ (b'\'' | b'"' | b'`') => {
                 let token_start = i;
-                i += 1; // opening quote already blanked
-                let mut closed = false;
-                while i < b.len() {
-                    // Backslash escapes the next byte inside quotes.
-                    if b[i] == b'\\' && q != b'`' && i + 1 < b.len() {
-                        i += 2;
-                        continue;
-                    }
-                    if b[i] == q {
-                        i += 1;
-                        closed = true;
-                        break;
-                    }
-                    i += 1;
-                }
-                if !closed {
-                    return None;
-                }
+                i = skip_quoted(b, i, q)?;
                 // A literal or backticked identifier is a TOKEN, not a gap.
                 for slot in out.iter_mut().take(i).skip(token_start) {
                     *slot = MASKED_TOKEN;
@@ -270,6 +253,32 @@ pub(crate) fn mask_non_executable(query: &str) -> Option<String> {
     // Masked bytes are ASCII spaces and kept bytes came from a valid UTF-8
     // string at boundaries the ASCII-only matches never split.
     String::from_utf8(out).ok()
+}
+
+/// Index just past the closing `q` of the quoted run that opens at `open`, or
+/// `None` when the run is never closed.
+///
+/// Extracted from `mask_non_executable` to hold that function under the §4.2
+/// cap. It is the escape grammar itself, and it is the reason the cap matters
+/// here rather than being paperwork: every refusal the read-only gate makes
+/// rests on this loop agreeing with lbug's lexer about where a literal ends.
+///
+/// A backslash escapes the next byte inside `'` and `"` runs but NOT inside a
+/// backticked identifier, which is why `q` is threaded through rather than
+/// assumed. An unterminated run fails closed at the caller.
+fn skip_quoted(b: &[u8], open: usize, q: u8) -> Option<usize> {
+    let mut i = open + 1; // the opening quote is already blanked
+    while i < b.len() {
+        if b[i] == b'\\' && q != b'`' && i + 1 < b.len() {
+            i += 2;
+            continue;
+        }
+        if b[i] == q {
+            return Some(i + 1);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Byte positions where `needle` occurs in `haystack` as a standalone keyword
