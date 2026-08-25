@@ -403,14 +403,7 @@ impl GraphStore {
     /// bulk chunks (common when indexing small files), and caching turns
     /// the whole bulk path into a single plan-once/execute-many loop.
     fn run_prepared(&self, cypher: &str, rows: Value) -> Result<(), String> {
-        let mut stmt = self.take_cached_stmt(cypher)?;
-        let outcome = self
-            .conn
-            .execute(&mut stmt, vec![("rows", rows)])
-            .map(|_| ())
-            .map_err(|e| format!("execute [{cypher}]: {e}"));
-        self.return_cached_stmt(cypher, stmt);
-        outcome
+        self.run_prepared_params(cypher, vec![("rows", rows)])
     }
 
     /// Generalization of `run_prepared` for statements with more than one

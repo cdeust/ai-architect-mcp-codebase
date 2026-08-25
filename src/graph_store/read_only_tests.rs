@@ -233,25 +233,36 @@ fn a_statement_in_use_does_not_hold_the_cache_borrowed() {
 /// The statement goes back on BOTH paths, so the cache keeps its
 /// plan-once/execute-many property. A dropped statement would silently turn
 /// caching off for that cypher and nothing would report it.
+///
+/// The failing case is asserted on ITS OWN cache entry. An earlier version of
+/// this test only re-checked an unrelated, already-cached statement afterwards,
+/// so a regression that dropped `return_cached_stmt` from the `Err` arm alone
+/// would still have passed — the sole guard for the invariant, not testing what
+/// it claimed.
 #[test]
 fn a_prepared_statement_is_returned_to_the_cache_after_use() {
     let (_dir, store) = store_with_one_function();
-    let cypher = "MATCH (n:Function) RETURN n.id";
+    let ok_cypher = "MATCH (n:Function) RETURN n.id";
 
-    assert!(!store.stmt_cache.borrow().contains_key(cypher));
+    assert!(!store.stmt_cache.borrow().contains_key(ok_cypher));
     store
-        .query_prepared_params(cypher, Vec::new())
+        .query_prepared_params(ok_cypher, Vec::new())
         .expect("first call prepares");
     assert!(
-        store.stmt_cache.borrow().contains_key(cypher),
-        "a successful call must leave the plan behind"
+        store.stmt_cache.borrow().contains_key(ok_cypher),
+        "a successful call must leave its plan behind"
     );
 
-    // A failing execute must also return it: the plan is still valid.
-    let bad = "MATCH (n:Function) WHERE n.id = $missing RETURN n.id";
-    let _ = store.query_prepared_params(bad, Vec::new());
-    store
-        .query_prepared_params(cypher, Vec::new())
-        .expect("the cached plan is still usable after a neighbouring failure");
-    assert!(store.stmt_cache.borrow().contains_key(cypher));
+    // A statement that PREPARES but fails at execute: the parameter it binds is
+    // never supplied. The plan is still valid, so its own entry must come back.
+    let failing = "MATCH (n:Function) WHERE n.id = $never_bound RETURN n.id";
+    assert!(
+        store.query_prepared_params(failing, Vec::new()).is_err(),
+        "fixture precondition: this must fail at execute, not at prepare"
+    );
+    assert!(
+        store.stmt_cache.borrow().contains_key(failing),
+        "the FAILING statement's own entry must be returned to the cache — a \
+         failed execute does not invalidate the compiled plan"
+    );
 }
