@@ -392,10 +392,12 @@ fn get_impact_reports_freshness_on_the_not_found_exit_too() {
     let (_guard, graph) = build_fixture("impact_freshness");
     let gp = graph.to_str().unwrap().to_string();
 
-    let found = do_get_impact(&json!({"graph_path": gp, "qualified_name": "helpers.rs::sanitize"}))
-        .unwrap();
+    // `run_get_impact`, not `do_get_impact`: the receipt is stamped at the
+    // tool's single exit, which is the entry point `main.rs` dispatches to.
+    let found =
+        run_get_impact(&json!({"graph_path": gp, "qualified_name": "helpers.rs::sanitize"}));
     let missing =
-        do_get_impact(&json!({"graph_path": gp, "qualified_name": "helpers.rs::saniti"})).unwrap();
+        run_get_impact(&json!({"graph_path": gp, "qualified_name": "helpers.rs::saniti"}));
     assert_eq!(
         missing["reason"],
         json!("symbol_not_found"),

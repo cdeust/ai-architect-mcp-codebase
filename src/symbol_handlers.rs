@@ -17,12 +17,17 @@ use crate::resolver;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn run_get_symbol(arguments: &Value) -> Value {
-    match do_get_symbol(arguments) {
+    let mut out = match do_get_symbol(arguments) {
         Ok(v) => v,
         Err(msg) => json!({
             "stage": 3, "status": "error", "reason": "symbol_lookup_failed", "message": msg
         }),
-    }
+    };
+    // fleet-watch#112: the tool's single exit, so the freshness receipt reaches
+    // every answer — including a store-open or query failure, which is what an
+    // in-progress re-index looks like from here.
+    crate::graph_freshness::attach_from_arguments(&mut out, arguments);
+    out
 }
 
 pub(crate) fn do_get_symbol(arguments: &Value) -> Result<Value, String> {
@@ -56,7 +61,7 @@ pub(crate) fn do_get_symbol(arguments: &Value) -> Result<Value, String> {
     // Returns the string already wrapped in single quotes.
     let escaped = graph_store::cypher_str(&resolved_qn);
 
-    let mut out = json!({
+    Ok(json!({
         "stage": 3,
         "status": "ok",
         "tool": "get_symbol",
@@ -67,11 +72,7 @@ pub(crate) fn do_get_symbol(arguments: &Value) -> Result<Value, String> {
             format!("see relationship context: get_context on '{resolved_qn}'"),
             format!("trace blast radius before changing it: get_impact on '{resolved_qn}'"),
         ],
-    });
-    // fleet-watch#112: cheap graph-vs-working-tree guard, converts silent
-    // staleness into a visible, reasoned-about condition.
-    crate::graph_freshness::attach(&mut out, graph_path);
-    Ok(out)
+    }))
 }
 
 /// The answer when the local graph does not define `qn`.
@@ -82,9 +83,9 @@ pub(crate) fn do_get_symbol(arguments: &Value) -> Result<Value, String> {
 /// original not-found surfaces unchanged. source: cross-repo bridge spec
 /// (bridge module).
 ///
-/// Both exits carry the freshness receipt: whichever answer this returns, the
-/// caller was told a symbol is not here, and "the graph predates it" is the
-/// alternative explanation they cannot otherwise see (fleet-watch#112 review).
+/// The freshness receipt is NOT attached here: `run_get_symbol` stamps it onto
+/// whatever this tool returns, so both of these exits carry it without either
+/// having to remember (fleet-watch#112 review round 3).
 fn unresolved_symbol_response(
     arguments: &Value,
     graph_path: &Path,
@@ -97,7 +98,7 @@ fn unresolved_symbol_response(
     } else {
         bridge::resolve_definition(&siblings, qn)
     };
-    let mut out = if foreign.is_empty() {
+    if foreign.is_empty() {
         json!({
             "stage": 3,
             "status": "error",
@@ -121,9 +122,7 @@ fn unresolved_symbol_response(
                  to the `repo` of a foreign definition".to_string(),
             ],
         })
-    };
-    crate::graph_freshness::attach(&mut out, graph_path);
-    out
+    }
 }
 
 /// Searches all node tables for a node matching by qualified_name or id.

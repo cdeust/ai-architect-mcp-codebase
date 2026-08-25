@@ -70,12 +70,17 @@ pub(crate) fn do_index_history(arguments: &Value) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn run_search_codebase(arguments: &Value) -> Value {
-    match do_search_codebase(arguments) {
+    let mut out = match do_search_codebase(arguments) {
         Ok(v) => v,
         Err(msg) => json!({
             "stage": 3, "status": "error", "reason": "search_failed", "message": msg
         }),
-    }
+    };
+    // fleet-watch#112: the tool's single exit, so the freshness receipt reaches
+    // every answer — including a store-open or query failure, which is what an
+    // in-progress re-index looks like from here.
+    crate::graph_freshness::attach_from_arguments(&mut out, arguments);
+    out
 }
 
 /// Scalar columns of a search hit, in tabular-projection order (issue #56). The
@@ -337,9 +342,6 @@ pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
     let mut out = search_envelope(&req, &page, &view, by_process, elapsed_ms);
     attach_foreign_results(&mut out, arguments, graph_path, &req);
     attach_search_next_steps(&mut out, &page.items);
-    // fleet-watch#112: cheap graph-vs-working-tree guard, converts silent
-    // staleness into a visible, reasoned-about condition on every response.
-    crate::graph_freshness::attach(&mut out, graph_path);
     Ok(out)
 }
 

@@ -20,12 +20,17 @@ use std::path::Path;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn run_get_impact(arguments: &Value) -> Value {
-    match do_get_impact(arguments) {
+    let mut out = match do_get_impact(arguments) {
         Ok(v) => v,
         Err(msg) => json!({
             "stage": 3, "status": "error", "reason": "impact_failed", "message": msg
         }),
-    }
+    };
+    // fleet-watch#112: the tool's single exit, so the freshness receipt reaches
+    // every answer — including a store-open or query failure, which is what an
+    // in-progress re-index looks like from here.
+    crate::graph_freshness::attach_from_arguments(&mut out, arguments);
+    out
 }
 
 /// Scalar columns of a reverse-dependency handle, in tabular-projection order
@@ -103,7 +108,7 @@ pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
     // answers File-target fan-in (issue #205) — see that module.
     let target = match search::resolve_impact_target(&store, qn) {
         Ok(t) => t,
-        Err(nf) => return Ok(target_not_found_response(graph_path, nf)),
+        Err(nf) => return Ok(target_not_found_response(nf)),
     };
     Ok(impact_response(
         &store, arguments, args, graph_path, &target, offset,
@@ -113,19 +118,17 @@ pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
 /// The answer when neither a symbol nor a file in this graph matches the
 /// caller's target.
 ///
-/// Carries the freshness receipt: "not found" is exactly where a caller needs
-/// to know the graph may simply predate the symbol rather than the symbol not
-/// existing (fleet-watch#112 review).
-fn target_not_found_response(graph_path: &Path, nf: search::SymbolNotFound) -> Value {
-    let mut out = json!({
+/// The freshness receipt is NOT attached here: `run_get_impact` stamps it onto
+/// whatever this tool returns, so every exit carries it without each exit
+/// having to remember (fleet-watch#112 review round 3).
+fn target_not_found_response(nf: search::SymbolNotFound) -> Value {
+    json!({
         "stage": 3,
         "status": "error",
         "reason": "symbol_not_found",
         "message": format!("not found: {}", nf.input),
         "did_you_mean": nf.did_you_mean,
-    });
-    crate::graph_freshness::attach(&mut out, graph_path);
-    out
+    })
 }
 
 /// Assembles the `get_impact` response for an already-resolved target.
@@ -146,13 +149,9 @@ fn impact_response(
     let mut impact = match clustering::get_impact(store, &target.key) {
         Ok(i) => i,
         Err(e) => {
-            let mut out = json!({
+            return json!({
                 "stage": 3, "status": "error", "reason": "query_failed", "message": e
-            });
-            // fleet-watch#112 review: a failed query says nothing about whether
-            // the graph still describes the tree — the receipt still does.
-            crate::graph_freshness::attach(&mut out, graph_path);
-            return out;
+            })
         }
     };
     sort_impact_lists(&mut impact);
@@ -165,9 +164,6 @@ fn impact_response(
     out["next_steps"] = impact_next_steps(&impact, &target.key);
 
     attach_foreign_callers(&mut out, arguments, graph_path, &target.key);
-    // fleet-watch#112: cheap graph-vs-working-tree guard, converts silent
-    // staleness into a visible, reasoned-about condition.
-    crate::graph_freshness::attach(&mut out, graph_path);
     out
 }
 

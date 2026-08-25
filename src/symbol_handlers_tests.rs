@@ -475,3 +475,73 @@ fn every_triple_builds_a_query_the_store_accepts() {
         rejected.join("\n  ")
     );
 }
+
+/// Builds an output dir whose `graph` EXISTS but is not a database, alongside
+/// `meta.json` + `file_manifest.json` describing a root whose file has since
+/// changed. Opening the graph therefore fails for real, and the freshness
+/// receipt has a substantive verdict to carry: `stale`.
+fn unopenable_graph_over_a_moved_tree() -> (crate::test_support::TestTempDir, std::path::PathBuf) {
+    use crate::indexer::manifest;
+    use crate::test_support::TempDirExt;
+    let base = tempfile::Builder::new()
+        .prefix("symbol_unopenable_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let _ = fs::remove_dir_all(&base);
+    let output_dir = base.join("out");
+    let root = base.join("repo");
+    fs::create_dir_all(&output_dir).expect("mk out");
+    fs::create_dir_all(&root).expect("mk repo");
+
+    let abs = root.join("a.rs");
+    fs::write(&abs, b"fn a() {}\n").expect("write a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    let meta = fs::metadata(&abs).expect("stat a.rs");
+    let mut m = manifest::FileManifest::new();
+    m.files.insert(
+        "a.rs".to_string(),
+        manifest::FileState {
+            mtime_ns: manifest::mtime_ns(&meta),
+            size: meta.len(),
+            content_hash: String::new(),
+        },
+    );
+    manifest::save(&manifest::manifest_path(&output_dir), &m).expect("save manifest");
+    // The tree moves after the snapshot, so the graph is provably stale.
+    fs::write(&abs, b"fn a() { changed(); }\n").expect("edit a.rs");
+
+    let graph = output_dir.join("graph");
+    fs::write(&graph, b"not a database").expect("write junk graph");
+    (base, graph)
+}
+
+#[test]
+fn a_store_that_cannot_be_opened_still_reports_freshness() {
+    // fleet-watch#112 review round 3. The receipt used to be attached at the
+    // NAMED early returns inside `do_get_symbol`, which left every
+    // `?`-propagated failure BEFORE them uncovered — `graph_cache::open_cached`
+    // above the name lookup, and the three `find_symbol_*` calls below it. A
+    // store that will not open is exactly what an in-progress re-index looks
+    // like from a read tool, so it is the case where "is this graph still
+    // current?" matters most, and it was the one shipping without an answer.
+    let (_guard, graph) = unopenable_graph_over_a_moved_tree();
+
+    let out = run_get_symbol(&json!({
+        "graph_path": graph.to_str().unwrap(),
+        "qualified_name": "a.rs::a",
+    }));
+
+    assert_eq!(
+        out["status"], "error",
+        "the store must genuinely fail to open, or this exit is untested: {out}"
+    );
+    let receipt = out
+        .get(crate::graph_freshness::RESPONSE_KEY)
+        .unwrap_or_else(|| panic!("a `?`-propagated failure carries no receipt: {out}"));
+    assert_eq!(
+        receipt["state"],
+        json!("stale"),
+        "the receipt must carry the real verdict, not a placeholder: {receipt}"
+    );
+}
