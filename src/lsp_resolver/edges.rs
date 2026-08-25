@@ -7,7 +7,7 @@
 // belongs in.
 
 use super::sites::{NodePosition, UnresolvedCallSite};
-use crate::graph_store::{is_known_rel_table, GraphStore};
+use crate::graph_store::{call_rel_table, is_known_rel_table, GraphStore};
 use crate::lsp_client;
 use std::collections::HashMap;
 use std::path::Path;
@@ -43,7 +43,7 @@ pub(super) fn try_add_lsp_edge(
         None => return false,
     };
 
-    let Some(rel_type) = rel_table_for(&site.caller_label, &target.label) else {
+    let Some(rel_type) = call_rel_table(&site.caller_label, &target.label) else {
         return false;
     };
     // Schema guard: dynamically formatted rel tables can outrun the
@@ -77,24 +77,6 @@ pub(super) fn try_add_lsp_edge(
             ],
         )
         .is_ok()
-}
-
-/// Which relationship table a caller→definition pair belongs in.
-///
-/// Calls is Function|Method -> Function|Method; ctor/variant/type-use targets
-/// degrade to Uses so the dependency edge survives instead of being dropped.
-/// Any other pair has no table and yields None.
-/// source: stages/stage-3b.md §2.
-fn rel_table_for(caller_label: &str, target_label: &str) -> Option<String> {
-    match (caller_label, target_label) {
-        ("Function" | "Method", "Function" | "Method") => {
-            Some(format!("Calls_{caller_label}_{target_label}"))
-        }
-        ("Function" | "Method", "Struct" | "Enum" | "Trait" | "TypeAlias") => {
-            Some(format!("Uses_{caller_label}_{target_label}"))
-        }
-        _ => None,
-    }
 }
 
 /// Maps a definition URI onto the codebase-root-relative path the indexer

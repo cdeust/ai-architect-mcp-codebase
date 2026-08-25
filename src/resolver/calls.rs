@@ -5,6 +5,7 @@
 // resolution types/helpers exactly as when this lived in one module.
 
 use super::*;
+use crate::graph_store::call_rel_table;
 
 // ---------------------------------------------------------------------------
 // Phase 2: Call resolution
@@ -154,12 +155,10 @@ struct CallTally<'a> {
 }
 
 /// Stages the Calls/Uses edge for one resolved callee, or records why it
-/// couldn't be staged (unknown rel table / wrong label combination).
-/// source: stages/stage-3b.md §2 — Calls is Function|Method ->
-/// Function|Method only. Names resolving to Struct/Enum/Trait/TypeAlias are
-/// tuple-struct ctors / enum-variant calls / type uses — preserved as
-/// Uses_* edges so the full dependency chain remains queryable; dropping
-/// them would hide real dependencies from change_impact/navigate.
+/// couldn't be staged (no rel table for the label combination).
+///
+/// The label-pair rule itself lives in `graph_store::call_rel_table`, shared
+/// with the LSP fallback pass so the two resolvers cannot drift.
 fn stage_call_edge(
     buf: &mut EdgeBuffer,
     site: &CallSite,
@@ -167,50 +166,33 @@ fn stage_call_edge(
     tally: &mut CallTally,
 ) {
     let target = matched.target;
-    let (rel_opt, kind) = match target.label.as_str() {
-        "Function" | "Method" => (
-            Some(format!("Calls_{}_{}", site.caller_label, target.label)),
-            "Calls",
-        ),
-        "Struct" | "Enum" | "Trait" | "TypeAlias"
-            if site.caller_label == "Function" || site.caller_label == "Method" =>
-        {
-            (
-                Some(format!("Uses_{}_{}", site.caller_label, target.label)),
-                "Uses",
-            )
-        }
-        _ => (None, "Calls"),
-    };
-    match rel_opt {
-        Some(rel) => {
-            if !check_known_rel_table(&rel, site.caller_qn, &target.id) {
-                // Schema doesn't declare this label combination — already
-                // logged by check_known_rel_table. Nothing more to do.
-            } else {
-                // All three `AddOutcome` variants mean the reference
-                // resolved to a real target (see `AddOutcome` doc comment);
-                // they differ only in whether a DB write is queued.
-                buf.add(
-                    &rel,
-                    site.caller_qn,
-                    &target.id,
-                    matched.confidence,
-                    ambiguity_policy::resolution_label(matched.evidence),
-                );
-                *tally.resolved += 1;
-            }
-        }
-        None => tally.unresolved.push(UnresolvedRef {
-            kind: kind.to_string(),
-            from_id: site.cs_id.to_string(),
-            target_text: site.callee.to_string(),
-            reason: format!(
+    let Some(rel) = call_rel_table(site.caller_label, &target.label) else {
+        return record_call_unresolved(
+            site,
+            tally,
+            format!(
                 "no rel table for {} -> {} (callsite-as-call)",
                 site.caller_label, target.label
             ),
-        }),
+        );
+    };
+    // Schema guard: every name `call_rel_table` returns is in REL_TABLES
+    // today, so this defends against a future schema edit rather than
+    // filtering live traffic. A drop is already logged inside.
+    if !check_known_rel_table(&rel, site.caller_qn, &target.id) {
+        return;
     }
+    // All three `AddOutcome` variants mean the reference resolved to a real
+    // target (see `AddOutcome` doc comment); they differ only in whether a
+    // DB write is queued.
+    buf.add(
+        &rel,
+        site.caller_qn,
+        &target.id,
+        matched.confidence,
+        ambiguity_policy::resolution_label(matched.evidence),
+    );
+    *tally.resolved += 1;
 }
 
 /// Resolves one callee reference via the shared ambiguity policy (issue

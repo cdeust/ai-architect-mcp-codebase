@@ -414,6 +414,35 @@ pub fn is_known_rel_table(name: &str) -> bool {
     REL_TABLES.iter().any(|(n, _, _)| *n == name)
 }
 
+/// Which relationship table a resolved caller→definition label pair belongs
+/// in, for the two passes that turn a call reference into an edge: the static
+/// resolver (`resolver::calls`) and the LSP fallback (`lsp_resolver::edges`).
+///
+/// `Calls` is `Function|Method -> Function|Method`. A target that is a type
+/// (`Struct`/`Enum`/`Trait`/`TypeAlias`) is a tuple-struct constructor, an
+/// enum-variant call or a type use; it degrades to `Uses` so the dependency
+/// edge survives instead of being dropped — dropping it would hide a real
+/// dependency from `get_impact`/`navigate`. Any other pair has no table and
+/// yields `None`.
+///
+/// Every name this returns is present in [`REL_TABLES`], so the caller's
+/// `is_known_rel_table` guard is a defence against a future schema edit
+/// rather than a live filter.
+///
+/// source: stages/stage-3b.md §2. One home for a rule the two passes each
+/// spelled out separately.
+pub fn call_rel_table(caller_label: &str, target_label: &str) -> Option<String> {
+    match (caller_label, target_label) {
+        ("Function" | "Method", "Function" | "Method") => {
+            Some(format!("Calls_{caller_label}_{target_label}"))
+        }
+        ("Function" | "Method", "Struct" | "Enum" | "Trait" | "TypeAlias") => {
+            Some(format!("Uses_{caller_label}_{target_label}"))
+        }
+        _ => None,
+    }
+}
+
 /// Single source of truth for "does this node label declare a `qualified_name`
 /// column?" — mirrors `node_column_types`. A read-side traversal that binds
 /// `n.qualified_name` MUST gate on this: lbug raises a hard Binder exception
