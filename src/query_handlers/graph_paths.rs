@@ -87,14 +87,27 @@ pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
 ///
 /// Schema 2 (fleet-watch#112) adds `commit_sha`: the indexed root's git HEAD
 /// at write time, `None` outside a git working tree. `graph_freshness` reads
-/// it back to compute a query-time commits-behind count against the root's
-/// CURRENT HEAD, the same `git_head` used to compute it here — a schema-1
+/// it back to count how far the root's CURRENT HEAD has moved from it in
+/// EITHER direction, using the same `git_head` used to compute it here — a
+/// schema-1
 /// sidecar (no `commit_sha` key) simply parses with the field absent, so an
 /// old sidecar degrades to the dirty-file signal alone rather than failing.
 ///
+/// Atomic (temp file + rename), matching the sibling `indexer::manifest::save`
+/// that writes the other sidecar in this same directory. Required as of
+/// fleet-watch#112: a plain `fs::write` truncates the file in place, so until
+/// this PR made `graph_freshness::check` the FIRST query-time reader of
+/// `meta.json`, the window between truncate and write had no reader to expose
+/// it. It does now — a re-index running while a read tool is answering could
+/// hand that reader an empty or half-written sidecar, which parses as "no
+/// provenance" and silently downgrades the staleness verdict. `rename(2)`
+/// within a directory is atomic, so a reader sees the whole previous sidecar
+/// or the whole new one, never a torn one.
+///
 /// Best-effort: a failed write is logged and ignored. The graph is the
 /// product; the sidecar is a convenience for consumers, and its absence just
-/// degrades a consumer's path reconstruction, never the index.
+/// degrades a consumer's path reconstruction, never the index. On failure the
+/// previous sidecar is left intact rather than destroyed.
 pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
     let meta = json!({
         "schema_version": 2,
@@ -103,8 +116,14 @@ pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
         "commit_sha": crate::artifact::git_head(root),
     });
     let meta_path = output_dir.join("meta.json");
-    if let Err(e) = fs::write(&meta_path, meta.to_string()) {
-        eprintln!("[ap] write graph meta {}: {e}", meta_path.display());
+    let tmp_path = meta_path.with_extension("json.tmp");
+    if let Err(e) = fs::write(&tmp_path, meta.to_string()) {
+        eprintln!("[ap] write graph meta {}: {e}", tmp_path.display());
+        return;
+    }
+    if let Err(e) = fs::rename(&tmp_path, &meta_path) {
+        let _ = fs::remove_file(&tmp_path);
+        eprintln!("[ap] rename graph meta {}: {e}", meta_path.display());
     }
 }
 
@@ -211,6 +230,57 @@ mod tests {
         // `root` is not a git working tree → commit_sha is present but null,
         // not simply absent (the field is always written, per schema 2).
         assert!(parsed.get("commit_sha").is_some_and(|v| v.is_null()));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_graph_meta_replaces_the_sidecar_atomically() {
+        // fleet-watch#112 review: this PR made `graph_freshness::check` the
+        // first query-time READER of meta.json, so a re-index writing it while
+        // a read tool answers can now hand that reader a torn file. A plain
+        // `fs::write` truncates and rewrites the SAME inode, so a reader that
+        // already opened the sidecar watches the content change underneath it —
+        // asserted here without any wall-clock: the handle is opened before the
+        // second write and read after it. tmp+rename swaps the directory entry
+        // instead, so the open reader keeps the whole previous version.
+        use crate::test_support::TempDirExt;
+        use std::io::Read;
+        let base = tempfile::Builder::new()
+            .prefix("ap-meta-atomic-")
+            .tempdir()
+            .expect("create temp dir")
+            .keep_managed();
+        let first_root = base.join("repo/one");
+        let second_root = base.join("repo/two-with-a-much-longer-name");
+
+        write_graph_meta(&base, &first_root);
+        let mut held = fs::File::open(base.join("meta.json")).expect("open sidecar");
+
+        // A concurrent re-index rewrites the sidecar while `held` is open.
+        write_graph_meta(&base, &second_root);
+
+        let mut seen = String::new();
+        held.read_to_string(&mut seen).expect("read held handle");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&seen).expect("an open reader must never see a torn sidecar");
+        assert_eq!(
+            parsed.get("root").and_then(|v| v.as_str()),
+            Some(first_root.to_string_lossy().as_ref()),
+            "the rewrite must land on a new inode, leaving the open reader's view whole",
+        );
+
+        // The replacement is visible to a reader that opens after the rename,
+        // and no temp file survives.
+        let now: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(base.join("meta.json")).unwrap()).unwrap();
+        assert_eq!(
+            now.get("root").and_then(|v| v.as_str()),
+            Some(second_root.to_string_lossy().as_ref()),
+        );
+        assert!(
+            !base.join("meta.json.tmp").exists(),
+            "no temp file may survive a successful write",
+        );
         let _ = fs::remove_dir_all(&base);
     }
 }
