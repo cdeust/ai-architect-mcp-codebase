@@ -18,10 +18,11 @@ mod recovery;
 mod schema;
 mod serialize;
 mod writes;
+pub use columns::label_declares_column;
 use columns::*;
 pub use config::*;
 use ddl::*;
-pub use membership::{community_ids, process_names, SymbolMatch};
+pub use membership::{community_ids, community_of, process_names, CommunityRow, SymbolMatch};
 // Only `tests.rs` reaches these via `use super::*` (production code calls
 // `Self::recover_from_stale_sidecars`/`is_stale_sidecar_db_id_error` through
 // their full paths) — gated to match, so a non-test build has no unused-import warning.

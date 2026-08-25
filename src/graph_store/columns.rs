@@ -256,6 +256,23 @@ pub(crate) fn node_column_types(label: &str) -> Result<ColTypes, String> {
     }
 }
 
+/// True when `label`'s node table declares `column`.
+///
+/// The DDL is the single source of truth for this question. lbug raises a hard
+/// Binder exception — not a NULL — when a query binds a property the matched
+/// label's table does not declare, and that drops the whole query's results, so
+/// a read-side traversal MUST gate its RETURN clause on the real column list.
+/// Hand-written partitions of "labels with line numbers" drift from the schema:
+/// one such copy asserted that Constant and TypeAlias carry no line range when
+/// `COLS_CONSTANT` and `COLS_TYPE_ALIAS` both declare `start_line`/`end_line`,
+/// which silently dropped those line numbers from every search result and
+/// get_context answer for those two kinds.
+pub fn label_declares_column(label: &str, column: &str) -> bool {
+    node_column_types(label)
+        .map(|cols| cols.iter().any(|(name, _)| *name == column))
+        .unwrap_or(false)
+}
+
 /// Returns the declared property schema for an edge table. Empty for
 /// untyped rel tables. source: rel_table_ddl() in this module.
 pub(crate) fn edge_column_types(rel_table: &str) -> ColTypes {
