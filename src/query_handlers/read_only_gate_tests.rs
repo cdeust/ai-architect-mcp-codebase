@@ -427,3 +427,47 @@ fn readonly_gate_allows_call_shaped_identifiers() {
         "a procedure name inside a literal is data, not a call"
     );
 }
+
+/// Documents what adding DETACH and USE to the denylist COSTS, so the
+/// narrowing is a known quantity rather than a surprise in a bug report.
+///
+/// Both are whole-word matches on executable text, so the ordinary ways these
+/// letters appear in a read query are unaffected: inside a literal, as a
+/// property, as a label, or inside a relationship-table name. What IS newly
+/// refused is a bare `use`/`detach` in executable position — most plausibly a
+/// pattern VARIABLE named `use`. That shape is rare, the workaround is a
+/// rename or backticks, and the alternative was leaving two statements that
+/// slip both the lexical gate and the engine's own read-only classifier.
+#[test]
+fn detach_and_use_narrowing_spares_identifier_positions() {
+    for still_allowed in [
+        // In a literal — masked before the scan.
+        "MATCH (n:Function) WHERE n.name = 'use' RETURN n",
+        "MATCH (n) WHERE n.doc = 'detach the volume' RETURN n",
+        // As a property or a label — identifier positions.
+        "MATCH (n:Function) RETURN n.use",
+        "MATCH (n:Use) RETURN n",
+        // Inside a relationship-table name this schema actually declares.
+        "MATCH (f:Function)-[:Uses_Function_Struct]->(s:Struct) RETURN s.id",
+        // In a comment.
+        "MATCH (n) RETURN n // detach database later",
+    ] {
+        assert_eq!(
+            forbidden_cypher_keyword(still_allowed),
+            None,
+            "must remain allowed: {still_allowed}"
+        );
+    }
+
+    // The cost, stated explicitly: a bare identifier spelled like the keyword.
+    assert!(
+        forbidden_cypher_keyword("MATCH (use:Function) RETURN use").is_some(),
+        "a pattern variable named `use` is refused — the accepted cost of \
+         closing the DETACH/USE gap"
+    );
+    // Backticking it is the workaround, and it works because backticks mask.
+    assert_eq!(
+        forbidden_cypher_keyword("MATCH (`use`:Function) RETURN `use`"),
+        None
+    );
+}
