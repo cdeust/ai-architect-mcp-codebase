@@ -1,5 +1,5 @@
 use crate::epistemic::{self, Boundary};
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{community_ids, cypher_str, process_names, GraphStore, SymbolMatch};
 
 /// A reverse-dependency edge endpoint, carried as a re-queryable handle
 /// (id + qualified_name + label) rather than a flattened name string, so a
@@ -101,37 +101,21 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
 /// across every `SYMBOL_LABELS` kind. `esc` must already be a
 /// `cypher_str`-quoted literal.
 fn collect_communities(store: &GraphStore, esc: &str) -> Vec<String> {
-    let mut communities = Vec::new();
-    for label in super::SYMBOL_LABELS {
-        let rel = format!("MemberOf_{label}_Community");
-        let cypher = format!(
-            "MATCH (n:{label})-[:{rel}]->(c:Community) \
-             WHERE n.id = {esc} OR n.qualified_name = {esc} \
-             RETURN c.id"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            communities.extend(qr.rows.iter().filter_map(|row| row.first().cloned()));
-        }
-    }
-    communities
+    let symbol = SymbolMatch::EscapedIdOrQualifiedName(esc);
+    super::SYMBOL_LABELS
+        .iter()
+        .flat_map(|label| community_ids(store, label, symbol))
+        .collect()
 }
 
 /// Processes (`ParticipatesIn_<Label>_Process`) the target symbol
 /// participates in. `esc` must already be a `cypher_str`-quoted literal.
 fn collect_processes(store: &GraphStore, esc: &str) -> Vec<String> {
-    let mut processes = Vec::new();
-    for label in &["Function", "Method"] {
-        let rel = format!("ParticipatesIn_{label}_Process");
-        let cypher = format!(
-            "MATCH (n:{label})-[:{rel}]->(p:Process) \
-             WHERE n.id = {esc} OR n.qualified_name = {esc} \
-             RETURN p.name"
-        );
-        if let Ok(qr) = store.execute_query(&cypher) {
-            processes.extend(qr.rows.iter().filter_map(|row| row.first().cloned()));
-        }
-    }
-    processes
+    let symbol = SymbolMatch::EscapedIdOrQualifiedName(esc);
+    ["Function", "Method"]
+        .iter()
+        .flat_map(|label| process_names(store, label, symbol))
+        .collect()
 }
 
 /// Assembles the epistemic-boundary reasons for a `get_impact` result:

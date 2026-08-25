@@ -13,6 +13,7 @@ use std::path::Path;
 mod columns;
 mod config;
 mod ddl;
+mod membership;
 mod recovery;
 mod schema;
 mod serialize;
@@ -20,6 +21,7 @@ mod writes;
 use columns::*;
 pub use config::*;
 use ddl::*;
+pub use membership::{community_ids, process_names, SymbolMatch};
 // Only `tests.rs` reaches these via `use super::*` (production code calls
 // `Self::recover_from_stale_sidecars`/`is_stale_sidecar_db_id_error` through
 // their full paths) — gated to match, so a non-test build has no unused-import warning.

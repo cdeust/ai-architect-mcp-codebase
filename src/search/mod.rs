@@ -18,7 +18,7 @@ pub mod vector;
 
 pub use impact_target::{resolve_impact_target, ImpactTarget};
 
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{community_ids, cypher_str, process_names, GraphStore, SymbolMatch};
 use qualified_name::file_path_of;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -890,45 +890,18 @@ fn load_process_counts(store: &GraphStore) -> HashMap<String, usize> {
     counts
 }
 
+/// The community this node belongs to, or `None`. Clustering assigns one per
+/// node, so taking the first of `community_ids` is the whole answer.
 fn lookup_community(store: &GraphStore, label: &str, node_id: &str) -> Option<String> {
-    let rel = format!("MemberOf_{label}_Community");
-    // fleet-watch#16: `node_id` is `qualified_name`, which embeds the file path,
-    // so a maliciously-named indexed file would inject Cypher on this hot search
-    // path. Route it through `cypher_str` (the returned value is already
-    // single-quoted) like every other site — never interpolate it raw.
-    let id = cypher_str(node_id);
-    let cypher = format!(
-        "MATCH (n:{label})-[:{rel}]->(c:Community) \
-         WHERE n.id = {id} RETURN c.id LIMIT 1"
-    );
-    if let Ok(qr) = store.execute_query(&cypher) {
-        if !qr.rows.is_empty() && !qr.rows[0].is_empty() {
-            return Some(qr.rows[0][0].clone());
-        }
-    }
-    None
+    community_ids(store, label, SymbolMatch::Id(node_id))
+        .into_iter()
+        .next()
 }
 
+/// The processes this node participates in. Empty for every label but
+/// `Function` and `Method`, which `process_names` enforces.
 fn lookup_processes(store: &GraphStore, label: &str, node_id: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    if !matches!(label, "Function" | "Method") {
-        return names;
-    }
-    let rel = format!("ParticipatesIn_{label}_Process");
-    // fleet-watch#16: escape the file-path-bearing `node_id` (see lookup_community).
-    let id = cypher_str(node_id);
-    let cypher = format!(
-        "MATCH (n:{label})-[:{rel}]->(p:Process) \
-         WHERE n.id = {id} RETURN p.name"
-    );
-    if let Ok(qr) = store.execute_query(&cypher) {
-        for row in &qr.rows {
-            if !row.is_empty() {
-                names.push(row[0].clone());
-            }
-        }
-    }
-    names
+    process_names(store, label, SymbolMatch::Id(node_id))
 }
 
 // ---------------------------------------------------------------------------
