@@ -26,7 +26,7 @@
 // edge set from the extended aggregates. `mode = Full` re-mines the window from
 // scratch. The aggregates + last-mined sha persist in a `cochange.json` sidecar.
 
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::GraphStore;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -277,7 +277,16 @@ fn rewrite_edges(store: &GraphStore, state: &CochangeState) -> Result<u64, Strin
         // exist); insert_edge's MATCH…MATCH…CREATE is a no-op otherwise.
         match store.insert_edge("FILE_CHANGES_WITH", a, b, &prop_refs) {
             Ok(()) => {
-                if edge_exists(store, a, b) {
+                // `insert_edge`'s MATCH…MATCH…CREATE is a silent no-op when
+                // either endpoint is absent, so a successful call is not proof
+                // the edge landed — probe for it. The endpoint labels come from
+                // REL_TABLES (`FILE_CHANGES_WITH` is File -> File), which is why
+                // this uses the store's own `edge_exists` rather than a
+                // second, hand-written File/File probe.
+                if store
+                    .edge_exists("FILE_CHANGES_WITH", a, b)
+                    .unwrap_or(false)
+                {
                     written += 1;
                 }
             }
@@ -285,23 +294,6 @@ fn rewrite_edges(store: &GraphStore, state: &CochangeState) -> Result<u64, Strin
         }
     }
     Ok(written)
-}
-
-/// True when a `FILE_CHANGES_WITH` edge between the two File ids exists.
-fn edge_exists(store: &GraphStore, a: &str, b: &str) -> bool {
-    let q = format!(
-        "MATCH (x:File)-[r:FILE_CHANGES_WITH]->(y:File) \
-         WHERE x.id = {} AND y.id = {} RETURN count(r)",
-        cypher_str(a),
-        cypher_str(b)
-    );
-    store
-        .execute_query(&q)
-        .ok()
-        .and_then(|qr| qr.rows.first().and_then(|r| r.first().cloned()))
-        .and_then(|c| c.parse::<u64>().ok())
-        .map(|n| n > 0)
-        .unwrap_or(false)
 }
 
 // -- git plumbing -----------------------------------------------------------
