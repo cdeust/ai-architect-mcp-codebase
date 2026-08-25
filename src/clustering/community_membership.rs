@@ -61,6 +61,15 @@ pub fn collect_cluster_memberships(store: &GraphStore) -> Result<ClusterMembersh
             if row.len() < 2 {
                 continue;
             }
+            // An empty `Community.id` identifies no community. This scan is a
+            // separate caller from the `membership` traversals — it sweeps
+            // whole edge tables rather than starting from one symbol — so it
+            // restates the rule instead of routing through them. Forwarding an
+            // empty id here made `cluster_graph`/`query_graph` disagree with
+            // `get_impact` and `get_context` about the same symbol.
+            if row[1].is_empty() {
+                continue;
+            }
             let cid = cluster_id_from_community_id(&row[1]);
             entries.push(ClusterMembership {
                 qualified_name: row[0].clone(),
@@ -106,4 +115,91 @@ pub fn cluster_id_from_community_id(community_id: &str) -> i64 {
         .next()
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(-1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph_store::{NODE_COMMUNITY, NODE_FUNCTION};
+
+    /// Inserts a Community and one Function that is a member of it. `cid` may
+    /// be empty — that degenerate shape is the subject of the test below.
+    fn insert_member_of(store: &GraphStore, cid: &str, member: &str) {
+        store
+            .insert_node(
+                NODE_COMMUNITY,
+                &[
+                    ("id", &cypher_str(cid)),
+                    ("name", &cypher_str(cid)),
+                    ("algorithm", "'louvain+c2'"),
+                    ("resolution_param", "1.0"),
+                    ("member_count", "1"),
+                    ("modularity_contribution", "0.0"),
+                ],
+            )
+            .expect("community");
+        let esc = cypher_str(member);
+        store
+            .insert_node(
+                NODE_FUNCTION,
+                &[
+                    ("id", &esc),
+                    ("name", &esc),
+                    ("qualified_name", &esc),
+                    ("start_line", "1"),
+                    ("end_line", "1"),
+                    ("visibility", "'pub'"),
+                    ("is_async", "false"),
+                ],
+            )
+            .expect("fn");
+        store
+            .insert_edge("MemberOf_Function_Community", member, cid, &[])
+            .expect("MemberOf");
+    }
+
+    /// Round-5 finding 4. `collect_cluster_memberships` sweeps whole edge
+    /// tables rather than starting from a symbol, so no round's centralization
+    /// reached it — and it feeds `cluster_graph`/`query_graph`. Forwarding an
+    /// empty `Community.id` here made those tools disagree with `get_impact`
+    /// and `get_context` about the same symbol, which is the exact divergence
+    /// this fix line has been closing one caller at a time.
+    #[test]
+    fn a_membership_with_an_empty_community_id_is_not_reported() {
+        let dir = tempfile::Builder::new()
+            .prefix("cluster_memberships_empty_id")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        store.create_schema().expect("schema");
+
+        insert_member_of(&store, "", "m.rs::degenerate");
+        insert_member_of(&store, "community::real", "m.rs::real");
+
+        // Precondition: BOTH edges exist, so the filter is what removes one.
+        assert_eq!(
+            store
+                .execute_query(
+                    "MATCH (n:Function)-[:MemberOf_Function_Community]->(c:Community) \
+                     RETURN c.id"
+                )
+                .expect("probe")
+                .rows
+                .len(),
+            2
+        );
+
+        let reported: Vec<String> = collect_cluster_memberships(&store)
+            .expect("collect")
+            .entries
+            .iter()
+            .map(|m| m.qualified_name.clone())
+            .collect();
+        assert_eq!(
+            reported,
+            vec!["m.rs::real".to_string()],
+            "a membership whose community id is empty names no community and \
+             must not be reported"
+        );
+    }
 }
