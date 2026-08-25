@@ -433,12 +433,27 @@ mod tests {
         insert_member(&store, NODE_STRUCT, qn, "community::real");
 
         // Precondition: the fixture must really produce the degenerate row on
-        // the FIRST-scanned label, or this test proves nothing.
-        let on_function =
-            crate::graph_store::community_of(&store, "Function", SymbolMatch::QualifiedName(qn));
+        // the FIRST-scanned label, or this test proves nothing. Since the rule
+        // moved INTO the traversal, "degenerate" now surfaces as `None` from
+        // `community_of` — while the raw edge is still there, which is what the
+        // scan has to look past.
         assert!(
-            on_function.is_some_and(|c| c.id.is_empty()),
-            "fixture precondition: Function must yield an EMPTY-id community"
+            crate::graph_store::community_of(&store, "Function", SymbolMatch::QualifiedName(qn))
+                .is_none(),
+            "fixture precondition: the Function label's community must read as \
+             none, because its id is empty"
+        );
+        assert_eq!(
+            store
+                .execute_query(
+                    "MATCH (n:Function)-[:MemberOf_Function_Community]->(c:Community) \
+                     RETURN c.id"
+                )
+                .expect("probe")
+                .rows
+                .len(),
+            1,
+            "fixture precondition: the degenerate edge really exists"
         );
 
         assert_eq!(
