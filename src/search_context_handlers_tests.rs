@@ -60,7 +60,7 @@ fn build_fixture(tag: &str) -> Fixture {
     // build_search_index writes `<output_dir>/search_index`, and the handler
     // resolves it as a sibling of the graph dir — so the output dir is the
     // graph's PARENT, not the graph itself.
-    search::build_search_index(&store, &tmp_root).expect("build search index");
+    search::build_search_index(&store, &tmp_root, &src).expect("build search index");
     drop(store);
     Fixture {
         _guard: tmp_root,

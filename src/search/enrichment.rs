@@ -150,7 +150,11 @@ pub(super) fn load_community_sizes(store: &GraphStore) -> HashMap<String, u64> {
     let cypher = "MATCH (c:Community) RETURN c.id, c.member_count";
     if let Ok(qr) = store.execute_query(cypher) {
         for row in &qr.rows {
-            if row.len() >= 2 {
+            // Same rule, third shape: an empty id keys nothing. Unreachable in
+            // practice now that `lookup_community` never returns one, but a
+            // dead "" entry in a boost table is the kind of inconsistency this
+            // sweep exists to remove.
+            if row.len() >= 2 && !row[0].is_empty() {
                 if let Ok(count) = row[1].parse::<u64>() {
                     sizes.insert(row[0].clone(), count);
                 }

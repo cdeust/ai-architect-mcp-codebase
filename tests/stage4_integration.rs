@@ -70,20 +70,15 @@ fn build_fixture_graph_inner(
     let _ = clustering::cluster_graph(&store, 1.0);
     if build_index {
         let output_dir = graph_dir.parent().unwrap();
-        let _ = search::build_search_index(&store, output_dir);
+        let _ = search::build_search_index(&store, output_dir, &fixture_dir.join("src"));
     }
 }
 
-fn stage_fake_verified(output_dir: &std::path::Path, run_id: &str, finding_id: &str) {
-    let finding_dir = output_dir
-        .join("runs")
-        .join(run_id)
-        .join("findings")
-        .join(finding_id);
-    fs::create_dir_all(&finding_dir).unwrap();
-
-    // stage-1.refined.json — the full refined artifact (stages/stage-1.md §4.2).
-    let refined = json!({
+/// The stage-1 refined artifact a verified finding leaves behind
+/// (stages/stage-1.md §4.2). Lifted out of `stage_fake_verified` so that
+/// function fits the §4.2 length cap — pure data, no logic.
+fn refined_artifact(finding_id: &str) -> serde_json::Value {
+    json!({
         "extracted": {
             "finding_id": finding_id,
             "title": "handle tool call should reject unknown tools",
@@ -107,7 +102,35 @@ fn stage_fake_verified(output_dir: &std::path::Path, run_id: &str, finding_id: &
             "orchestrator_version": "1.0.0",
             "refined_at": "2026-04-11T00:00:01Z"
         }
-    });
+    })
+}
+
+/// The run index entry pointing at that artifact. Same reason, same shape.
+fn run_index(run_id: &str, finding_id: &str) -> serde_json::Value {
+    json!({
+        "run_id": run_id,
+        "started_at": "2026-04-11T00:00:00Z",
+        "last_updated_at": "2026-04-11T00:01:00Z",
+        "findings": {
+            finding_id: {
+                "artifact_path": format!("findings/{}/stage-1.refined.json", finding_id),
+                "extractor_version": "1.0.0",
+                "verified": true
+            }
+        }
+    })
+}
+
+fn stage_fake_verified(output_dir: &std::path::Path, run_id: &str, finding_id: &str) {
+    let finding_dir = output_dir
+        .join("runs")
+        .join(run_id)
+        .join("findings")
+        .join(finding_id);
+    fs::create_dir_all(&finding_dir).unwrap();
+
+    // stage-1.refined.json — the full refined artifact (stages/stage-1.md §4.2).
+    let refined = refined_artifact(finding_id);
     fs::write(
         finding_dir.join("stage-1.refined.json"),
         serde_json::to_vec_pretty(&refined).unwrap(),
@@ -141,23 +164,44 @@ fn stage_fake_verified(output_dir: &std::path::Path, run_id: &str, finding_id: &
     .unwrap();
 
     // index.json with a stub entry — stage 4 only adds top-level markers.
-    let index = json!({
-        "run_id": run_id,
-        "started_at": "2026-04-11T00:00:00Z",
-        "last_updated_at": "2026-04-11T00:01:00Z",
-        "findings": {
-            finding_id: {
-                "artifact_path": format!("findings/{}/stage-1.refined.json", finding_id),
-                "extractor_version": "1.0.0",
-                "verified": true
-            }
-        }
-    });
+    let index = run_index(run_id, finding_id);
     fs::write(
         output_dir.join("runs").join(run_id).join("index.json"),
         serde_json::to_vec_pretty(&index).unwrap(),
     )
     .unwrap();
+}
+
+/// Every assertion about the stage-4 artifact's own contents. Lifted out of
+/// `test_prepare_prd_input_end_to_end` so that test fits the §4.2 length cap;
+/// the assertions and their comments are unchanged.
+fn assert_prd_input_artifact(v: &Value, run_id: &str, finding_id: &str) {
+    assert_eq!(v["run_id"], run_id);
+    assert_eq!(v["finding_id"], finding_id);
+    // Bumped by issue #18: prd_context now reports search_backend (additive,
+    // see prd_input::PREPARER_VERSION doc). Issue #14 bumped 1.0.0->1.1.0.
+    assert_eq!(v["preparer_version"], "1.2.0");
+    assert!(v["prd_context"]["finding_summary"]
+        .as_str()
+        .unwrap()
+        .contains("handle_tool_call"));
+
+    // issue #18: build_fixture_graph calls search::build_search_index, so
+    // this run must have actually used the hybrid BM25/vector index rather
+    // than silently falling back to substring search.
+    assert_eq!(
+        v["prd_context"]["search_backend"], "hybrid",
+        "a fixture with a built search index must report search_backend: hybrid"
+    );
+
+    // matched_symbols should contain at least handle_tool_call.
+    let ms = v["prd_context"]["matched_symbols"].as_array().unwrap();
+    assert!(
+        ms.iter()
+            .any(|m| m["name"].as_str() == Some("handle_tool_call")),
+        "expected handle_tool_call in matched_symbols; got {:?}",
+        ms.iter().map(|m| m["name"].clone()).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -188,32 +232,7 @@ fn test_prepare_prd_input_end_to_end() {
 
     let raw = fs::read_to_string(&outcome.artifact_path).unwrap();
     let v: Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(v["run_id"], run_id);
-    assert_eq!(v["finding_id"], finding_id);
-    // Bumped by issue #18: prd_context now reports search_backend (additive,
-    // see prd_input::PREPARER_VERSION doc). Issue #14 bumped 1.0.0->1.1.0.
-    assert_eq!(v["preparer_version"], "1.2.0");
-    assert!(v["prd_context"]["finding_summary"]
-        .as_str()
-        .unwrap()
-        .contains("handle_tool_call"));
-
-    // issue #18: build_fixture_graph calls search::build_search_index, so
-    // this run must have actually used the hybrid BM25/vector index rather
-    // than silently falling back to substring search.
-    assert_eq!(
-        v["prd_context"]["search_backend"], "hybrid",
-        "a fixture with a built search index must report search_backend: hybrid"
-    );
-
-    // matched_symbols should contain at least handle_tool_call.
-    let ms = v["prd_context"]["matched_symbols"].as_array().unwrap();
-    assert!(
-        ms.iter()
-            .any(|m| m["name"].as_str() == Some("handle_tool_call")),
-        "expected handle_tool_call in matched_symbols; got {:?}",
-        ms.iter().map(|m| m["name"].clone()).collect::<Vec<_>>()
-    );
+    assert_prd_input_artifact(&v, run_id, finding_id);
 
     // index.json must have stage4 markers.
     let idx_raw =

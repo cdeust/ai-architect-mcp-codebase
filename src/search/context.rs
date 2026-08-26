@@ -311,7 +311,13 @@ fn entry_point_processes(store: &GraphStore, label: &str, escaped: &str) -> Vec<
         Ok(qr) => qr
             .rows
             .iter()
-            .filter_map(|row| row.first().cloned())
+            .filter_map(|row| row.first())
+            // An empty `Process.name` names no process — the same rule
+            // `membership::first_column` applies to the ParticipatesIn half of
+            // this function. `EntryPointOf` has no second copy to share, so the
+            // rule is restated here rather than routed.
+            .filter(|name| !name.is_empty())
+            .cloned()
             .collect(),
         Err(_) => Vec::new(),
     }
@@ -389,5 +395,60 @@ mod tests {
             GetContextError::Other(m) => panic!("expected NotFound, got Other({m})"),
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Round-5 finding 3. `find_processes`' entry-point half read `p.name`
+    /// directly and forwarded an empty one, so `get_context` could report a
+    /// process that names nothing while every other consumer of the same graph
+    /// reported none. Third sibling of this defect class in three rounds.
+    #[test]
+    fn an_empty_process_name_is_not_an_entry_point() {
+        use crate::graph_store::{GraphStore, NODE_FUNCTION, NODE_PROCESS};
+
+        let dir = tempfile::Builder::new()
+            .prefix("context_empty_process_name")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        store.create_schema().expect("schema");
+
+        let qn = "m.rs::f";
+        store
+            .insert_node(NODE_PROCESS, &[("id", "'p0'"), ("name", "''")])
+            .expect("process");
+        store
+            .insert_node(
+                NODE_FUNCTION,
+                &[
+                    ("id", "'m.rs::f'"),
+                    ("name", "'f'"),
+                    ("qualified_name", "'m.rs::f'"),
+                    ("start_line", "1"),
+                    ("end_line", "1"),
+                    ("visibility", "'pub'"),
+                    ("is_async", "false"),
+                ],
+            )
+            .expect("fn");
+        store
+            .insert_edge("EntryPointOf_Function_Process", qn, "p0", &[])
+            .expect("EntryPointOf");
+
+        // Precondition: the degenerate edge really exists.
+        assert_eq!(
+            store
+                .execute_query(
+                    "MATCH (n:Function)-[:EntryPointOf_Function_Process]->(p:Process) \
+                     RETURN p.id"
+                )
+                .expect("probe")
+                .rows
+                .len(),
+            1
+        );
+        assert!(
+            find_processes(&store, qn).is_empty(),
+            "an empty Process.name names no process, on the entry-point half too"
+        );
     }
 }

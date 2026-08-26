@@ -23,115 +23,124 @@ struct EntryPoint {
     confidence: f64,
 }
 
-fn detect_entry_points(store: &GraphStore) -> Result<Vec<EntryPoint>, String> {
-    let mut entries = Vec::new();
+/// One entry-point detection rule: a Cypher predicate over the matched
+/// function `f`, the `kind` label it assigns, and how much to trust it.
+struct EntryRule {
+    predicate: &'static str,
+    kind: &'static str,
+    confidence: f64,
+}
 
-    // Bug 6 fix — original implementation only matched main / test_* / do_*.
-    // Missed every Android lifecycle callback, Compose function, Worker,
-    // ContentProvider CRUD, etc. → on dcp-wealth-android (3,200+ files,
-    // 55 ViewModels, 12 @Composable in settings-journey alone), only 1
-    // process was detected (a Python utility script). Added patterns for
-    // common framework entry-point shapes.
-    // source: Pictet-tech-fest benchmark 2026-05-20 / RUST_BUGS_VERIFIED.md
-    query_entries(store, "f.name = 'main'", "main", 1.0, &mut entries)?;
-    // Go program entry point. The runtime entry is `func main` in `package
-    // main` (caught by the lowercase rule above), but the idiomatic *testable*
-    // entry convention is a thin `func main` that delegates to an exported
-    // `func Main` carrying the real startup logic (`os.Exit(cli.Main())`), so a
-    // top-level Go `Main` is a program entry point too. Go is case-sensitive,
-    // so the lowercase-`main` rule cannot catch it; gated to Go because `Main`
-    // is not an entry marker in other languages (it would false-match e.g. a
-    // Kotlin/Java helper). Confidence just below the certain lowercase `main`.
-    // source: Go spec §"Program execution" (func main in package main); the
-    //   testscript / cobra `func Main` testable-entry convention.
-    //   Falsified as missing by the issue #64 head-to-head eval (go-D3).
-    query_entries(
-        store,
-        "f.language = 'go' AND f.name = 'Main'",
-        "main",
-        0.9,
-        &mut entries,
-    )?;
-    query_entries(
-        store,
-        "f.name STARTS WITH 'test_'",
-        "test",
-        1.0,
-        &mut entries,
-    )?;
-    query_entries(
-        store,
-        "f.name STARTS WITH 'do_'",
-        "handler",
-        0.8,
-        &mut entries,
-    )?;
-    // Android Activity / Fragment / Service / Receiver / Worker / Provider lifecycle.
-    // source: Android SDK reference 2025 — every lifecycle override is on[A-Z]*.
-    // ~5% false-positive in non-Android UI frameworks (e.g. onClick listeners).
-    query_entries(
-        store,
-        "f.name =~ '^on[A-Z][A-Za-z]*$'",
-        "android_lifecycle",
-        0.95,
-        &mut entries,
-    )?;
-    // ContentProvider CRUD — collides with non-Provider repos so weaker confidence.
+/// The detection rules, ORDERED BY DESCENDING SPECIFICITY.
+///
+/// The order is behaviour: `detect_entry_points` dedupes by id keeping the
+/// FIRST match, so a function matching several rules (`KeyboardFocusHandler`
+/// matches both the Composable-CamelCase shape and the `*Handler` suffix) is
+/// labelled by the most accurate one.
+///
+/// Bug 6 fix — the original implementation matched only main / test_* / do_*
+/// and missed every Android lifecycle callback, Compose function, Worker and
+/// ContentProvider CRUD method: on dcp-wealth-android (3,200+ files, 55
+/// ViewModels, 12 @Composable in settings-journey alone) exactly ONE process
+/// was detected, a Python utility script.
+/// source: Pictet-tech-fest benchmark 2026-05-20 / RUST_BUGS_VERIFIED.md
+const ENTRY_RULES: &[EntryRule] = &[
+    EntryRule {
+        predicate: "f.name = 'main'",
+        kind: "main",
+        confidence: 1.0,
+    },
+    // Go program entry. The runtime entry is `func main` in `package main`
+    // (caught above), but the idiomatic TESTABLE convention is a thin `func
+    // main` delegating to an exported `func Main` that carries the real startup
+    // logic (`os.Exit(cli.Main())`). Go is case-sensitive so the lowercase rule
+    // cannot catch it; gated to Go because `Main` is not an entry marker
+    // elsewhere. Confidence just below the certain lowercase `main`.
+    // source: Go spec §"Program execution"; the testscript / cobra `func Main`
+    //   convention. Falsified as missing by the issue #64 head-to-head (go-D3).
+    EntryRule {
+        predicate: "f.language = 'go' AND f.name = 'Main'",
+        kind: "main",
+        confidence: 0.9,
+    },
+    EntryRule {
+        predicate: "f.name STARTS WITH 'test_'",
+        kind: "test",
+        confidence: 1.0,
+    },
+    EntryRule {
+        predicate: "f.name STARTS WITH 'do_'",
+        kind: "handler",
+        confidence: 0.8,
+    },
+    // Android Activity / Fragment / Service / Receiver lifecycle: every
+    // lifecycle override is on[A-Z]*. ~5% false-positive in non-Android UI
+    // frameworks (e.g. onClick listeners).
+    // source: Android SDK reference 2025.
+    EntryRule {
+        predicate: "f.name =~ '^on[A-Z][A-Za-z]*$'",
+        kind: "android_lifecycle",
+        confidence: 0.95,
+    },
+    // ContentProvider CRUD — collides with non-Provider repos, hence weaker.
     // source: android.content.ContentProvider abstract methods.
-    query_entries(
-        store,
-        "f.name IN ['query', 'insert', 'update', 'delete', 'getType', 'openFile']",
-        "android_provider",
-        0.85,
-        &mut entries,
-    )?;
+    EntryRule {
+        predicate: "f.name IN ['query', 'insert', 'update', 'delete', 'getType', 'openFile']",
+        kind: "android_provider",
+        confidence: 0.85,
+    },
     // androidx.work.Worker / ListenableWorker / CoroutineWorker.
     // source: androidx.work 2.x — stable name across versions.
-    query_entries(
-        store,
-        "f.name IN ['doWork', 'createWork']",
-        "android_worker",
-        0.95,
-        &mut entries,
-    )?;
-    // Composable shape — CamelCase noun, no @Composable annotation tracking yet
-    // (parser would need annotation capture). Lower confidence because data
-    // classes and result wrappers also match.
-    // source: Jetpack Compose naming convention — Composable functions are nouns.
-    query_entries(
-        store,
-        "f.name =~ '^[A-Z][a-zA-Z0-9]{1,40}$' AND f.visibility IN ['public', 'pub']",
-        "composable_candidate",
-        0.5,
-        &mut entries,
-    )?;
-    // Tests (extra — JUnit/Vitest patterns beyond the original test_ prefix).
-    query_entries(
-        store,
-        "f.name STARTS WITH 'test' AND NOT f.name STARTS WITH 'test_'",
-        "test",
-        1.0,
-        &mut entries,
-    )?;
-    query_entries(store, "f.name ENDS WITH 'Test'", "test", 1.0, &mut entries)?;
-    // Web-framework handler names that don't fit the do_/Handler pattern.
-    query_entries(
-        store,
-        "f.name ENDS WITH '_handler' OR f.name ENDS WITH 'Handler'",
-        "handler",
-        0.8,
-        &mut entries,
-    )?;
+    EntryRule {
+        predicate: "f.name IN ['doWork', 'createWork']",
+        kind: "android_worker",
+        confidence: 0.95,
+    },
+    // Composable SHAPE — CamelCase noun. No @Composable annotation tracking yet
+    // (the parser would need annotation capture), so confidence is low: data
+    // classes and result wrappers match the same shape.
+    // source: Jetpack Compose naming convention — Composables are nouns.
+    EntryRule {
+        predicate: "f.name =~ '^[A-Z][a-zA-Z0-9]{1,40}$' AND f.visibility IN ['public', 'pub']",
+        kind: "composable_candidate",
+        confidence: 0.5,
+    },
+    // JUnit / Vitest patterns beyond the original `test_` prefix.
+    EntryRule {
+        predicate: "f.name STARTS WITH 'test' AND NOT f.name STARTS WITH 'test_'",
+        kind: "test",
+        confidence: 1.0,
+    },
+    EntryRule {
+        predicate: "f.name ENDS WITH 'Test'",
+        kind: "test",
+        confidence: 1.0,
+    },
+    // Web-framework handlers that do not fit the do_/Handler pattern.
+    EntryRule {
+        predicate: "f.name ENDS WITH '_handler' OR f.name ENDS WITH 'Handler'",
+        kind: "handler",
+        confidence: 0.8,
+    },
+];
 
+fn detect_entry_points(store: &GraphStore) -> Result<Vec<EntryPoint>, String> {
+    let mut entries = Vec::new();
+    for rule in ENTRY_RULES {
+        query_entries(
+            store,
+            rule.predicate,
+            rule.kind,
+            rule.confidence,
+            &mut entries,
+        )?;
+    }
     detect_lib_entries(store, &mut entries)?;
 
-    // Dedupe by id: multiple patterns may match the same function (e.g.
-    // `KeyboardFocusHandler` matches both the composable-CamelCase and the
-    // *Handler suffix patterns). Keep the first occurrence — patterns are
-    // ordered above by descending specificity, so the most accurate `kind`
-    // label wins.
-    // source: persist_processes — Process node id must be unique, lbug
-    //   enforces a primary-key uniqueness constraint that fires before insert.
+    // Dedupe by id: several rules may match one function. Keep the FIRST, which
+    // is the most specific — see ENTRY_RULES' ordering contract.
+    // source: persist_processes — a Process node id must be unique, and lbug's
+    //   primary-key constraint fires before insert.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     entries.retain(|e| seen.insert(e.id.clone()));
 
@@ -454,6 +463,11 @@ pub fn get_processes(store: &GraphStore) -> Result<Vec<ProcessInfo>, String> {
     let mut result = Vec::new();
     for row in &qr.rows {
         if row.len() < 6 {
+            continue;
+        }
+        // Found by the 2026-08-25 sweep, not by review: an empty `Process.name`
+        // names no process, and this is the `get_processes` tool's own output.
+        if row[1].is_empty() {
             continue;
         }
         result.push(ProcessInfo {

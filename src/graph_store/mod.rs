@@ -133,7 +133,12 @@ pub struct GraphStore {
     // UNWIND statements (File rows without size_bytes, etc.).
     // source: scalability_bench regression observed April 2026 when
     // prepare-per-call was introduced; caching restores linear scaling.
-    stmt_cache: RefCell<HashMap<String, PreparedStatement>>,
+    // `Option` so a statement can be TAKEN OUT for the duration of an
+    // execute without removing its entry: the key stays, so returning it costs
+    // no allocation. Removing the entry re-allocated the key on every call,
+    // which regressed the bulk-insert loop this cache exists for from zero
+    // allocations after the first chunk to one alloc/dealloc pair per chunk.
+    stmt_cache: RefCell<HashMap<String, Option<PreparedStatement>>>,
     // Safety: `_db` is heap-allocated via lbug's C++ bridge (UniquePtr).
     // `Connection` borrows `Database` through a raw pointer on the C++ side,
     // not through Rust's borrow checker. Moving the Rust struct does not
@@ -336,31 +341,16 @@ impl GraphStore {
         cypher: &str,
         params: Vec<(&str, Value)>,
     ) -> Result<QueryResult, String> {
-        // The borrow is held across `execute` + `drain_result` only because the
-        // statement lives in the cache. Scope it to the narrowest block that
-        // still covers the borrow of `stmt`, so a future call reached from
-        // inside the drain cannot meet an outstanding mutable borrow and panic
-        // on this process-wide cached store.
-        let mut cache = self.stmt_cache.borrow_mut();
-        if !cache.contains_key(cypher) {
-            let stmt = self
-                .conn
-                .prepare(cypher)
-                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
-            cache.insert(cypher.to_string(), stmt);
-        }
-        let drained = {
-            let stmt = cache
-                .get_mut(cypher)
-                .expect("statement just inserted into cache");
-            let mut result = self
-                .conn
-                .execute(stmt, params)
-                .map_err(|e| format!("execute [{cypher}]: {e}"))?;
-            drain_result(&mut result)
+        // Take / use / return, so no borrow of the cache is alive across
+        // `execute` + `drain_result`. See `take_cached_stmt` for why a scoped
+        // block cannot achieve this.
+        let mut stmt = self.take_cached_stmt(cypher)?;
+        let outcome = match self.conn.execute(&mut stmt, params) {
+            Ok(mut result) => Ok(drain_result(&mut result)),
+            Err(e) => Err(format!("execute [{cypher}]: {e}")),
         };
-        drop(cache);
-        Ok(drained)
+        self.return_cached_stmt(cypher, stmt);
+        outcome
     }
 
     /// Returns the total number of nodes across all node tables.
@@ -418,21 +408,7 @@ impl GraphStore {
     /// bulk chunks (common when indexing small files), and caching turns
     /// the whole bulk path into a single plan-once/execute-many loop.
     fn run_prepared(&self, cypher: &str, rows: Value) -> Result<(), String> {
-        let mut cache = self.stmt_cache.borrow_mut();
-        if !cache.contains_key(cypher) {
-            let stmt = self
-                .conn
-                .prepare(cypher)
-                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
-            cache.insert(cypher.to_string(), stmt);
-        }
-        let stmt = cache
-            .get_mut(cypher)
-            .expect("statement just inserted into cache");
-        self.conn
-            .execute(stmt, vec![("rows", rows)])
-            .map(|_| ())
-            .map_err(|e| format!("execute [{cypher}]: {e}"))
+        self.run_prepared_params(cypher, vec![("rows", rows)])
     }
 
     /// Generalization of `run_prepared` for statements with more than one
@@ -441,21 +417,53 @@ impl GraphStore {
     /// prepared-statement cache: identical cypher text across calls, only
     /// the bound values differ.
     fn run_prepared_params(&self, cypher: &str, params: Vec<(&str, Value)>) -> Result<(), String> {
-        let mut cache = self.stmt_cache.borrow_mut();
-        if !cache.contains_key(cypher) {
-            let stmt = self
-                .conn
-                .prepare(cypher)
-                .map_err(|e| format!("prepare failed [{cypher}]: {e}"))?;
-            cache.insert(cypher.to_string(), stmt);
-        }
-        let stmt = cache
-            .get_mut(cypher)
-            .expect("statement just inserted into cache");
-        self.conn
-            .execute(stmt, params)
+        let mut stmt = self.take_cached_stmt(cypher)?;
+        let outcome = self
+            .conn
+            .execute(&mut stmt, params)
             .map(|_| ())
-            .map_err(|e| format!("execute [{cypher}]: {e}"))
+            .map_err(|e| format!("execute [{cypher}]: {e}"));
+        self.return_cached_stmt(cypher, stmt);
+        outcome
+    }
+
+    /// Removes the prepared statement for `cypher` from the cache, preparing
+    /// one on a miss.
+    ///
+    /// TAKING it out is the point. A `RefMut` held across `conn.execute` is a
+    /// double-borrow panic waiting for the first call that reaches this cache
+    /// from inside an execute or a drain, and this store is cached
+    /// process-wide. Scoping the guard with a block cannot help: the statement
+    /// borrows FROM the map, so the guard lives exactly as long as the
+    /// statement does, wherever the braces go. The borrow must END, which means
+    /// the statement must leave.
+    fn take_cached_stmt(&self, cypher: &str) -> Result<PreparedStatement, String> {
+        // Takes the VALUE out and leaves the entry, so `return_cached_stmt`
+        // reuses the existing key instead of allocating a new one.
+        if let Some(slot) = self.stmt_cache.borrow_mut().get_mut(cypher) {
+            if let Some(cached) = slot.take() {
+                return Ok(cached);
+            }
+        }
+        self.conn
+            .prepare(cypher)
+            .map_err(|e| format!("prepare failed [{cypher}]: {e}"))
+    }
+
+    /// Puts the statement back so the next call plans once and executes many.
+    /// Called on the failure path too: a failed execute does not invalidate the
+    /// compiled plan, and dropping it would silently turn the cache off for
+    /// that statement.
+    fn return_cached_stmt(&self, cypher: &str, stmt: PreparedStatement) {
+        let mut cache = self.stmt_cache.borrow_mut();
+        match cache.get_mut(cypher) {
+            // The common path after the first call: the key is already there,
+            // so this is a move into an existing slot and allocates nothing.
+            Some(slot) => *slot = Some(stmt),
+            None => {
+                cache.insert(cypher.to_string(), Some(stmt));
+            }
+        }
     }
 }
 

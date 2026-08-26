@@ -112,6 +112,10 @@ fn resolve_file(store: &GraphStore, candidates: &[&str]) -> Option<String> {
 /// component the parser strips when it builds qualified names (`main.rs` →
 /// `src/main.rs`).
 ///
+/// An EXACT `File.id` match always wins, unconditionally — see
+/// [`exact_file_id`] for the wrong answers the previous single-query form
+/// returned. The suffix form is the fallback, and only that.
+///
 /// `ENDS WITH '/' || path` is anchored on a full path segment, so `main.rs`
 /// cannot match `domain.rs`. It can still match two files in different
 /// directories — but those two files would also share one `qualified_name`
@@ -119,18 +123,53 @@ fn resolve_file(store: &GraphStore, candidates: &[&str]) -> Option<String> {
 /// than of this lookup. `ORDER BY f.id` makes the choice deterministic instead
 /// of leaving it to the engine's scan order.
 ///
+/// Both queries BIND `path` rather than interpolating it: it is a
+/// caller-supplied qualified-name fragment, and each query text is constant so
+/// the prepared statement caches across every lookup.
+///
 /// Resolving instead through the symbol's `Defines_File_<Label>` edge was
 /// evaluated and rejected — see this module's header.
-fn query_file_id(store: &GraphStore, path: &str) -> Option<String> {
-    // Both forms are BOUND, not interpolated: `path` is a caller-supplied
-    // qualified-name fragment, and the query text is constant so the prepared
-    // statement caches across every lookup.
-    let cypher = "MATCH (f:File) WHERE f.id = $exact OR f.id ENDS WITH $suffix \
+///
+/// `pub(super)` rather than private: `hybrid::enrich_file_hit` resolves a
+/// doc/prose BM25 hit's key to its `File` through this same lookup
+/// (fleet-watch#112). Two File resolvers that tolerate different key shapes is
+/// how one of them silently stops finding files the other still finds.
+pub(super) fn query_file_id(store: &GraphStore, path: &str) -> Option<String> {
+    exact_file_id(store, path).or_else(|| suffix_file_id(store, path))
+}
+
+/// The `File` whose `id` IS `path`. Asked first, and separately, so that an
+/// exact match can never lose to a suffix collision.
+///
+/// The two lookups used to share one query —
+/// `WHERE f.id = $exact OR f.id ENDS WITH $suffix ORDER BY f.id LIMIT 1` —
+/// which made the winner whichever id sorted first, not whichever matched
+/// better. Both `docs/guide.md` (the real target) and `api/docs/guide.md` (an
+/// unrelated file that merely ends with the same segment) satisfy that WHERE,
+/// and `api/...` sorts earlier, so the caller silently received metadata for
+/// the wrong file. A wrong answer, not an error — nothing anywhere reported it.
+///
+/// Ordering by a computed priority (`ORDER BY (f.id = $exact) DESC`) would also
+/// work, but rests on how the engine sorts booleans; asking the exact question
+/// first rests on nothing. It is also the cheaper shape in the common case,
+/// where the exact lookup is a primary-key hit and the second query never runs.
+fn exact_file_id(store: &GraphStore, path: &str) -> Option<String> {
+    let cypher = "MATCH (f:File) WHERE f.id = $exact RETURN f.id LIMIT 1";
+    let params = vec![("exact", Value::String(path.to_string()))];
+    let qr = store.query_prepared_params(cypher, params).ok()?;
+    qr.rows.first()?.first().cloned()
+}
+
+/// The `File` whose `id` ends with `/path` — the one leading path component the
+/// parser strips when it builds qualified names (`main.rs` → `src/main.rs`).
+///
+/// Only consulted when no exact match exists. `ORDER BY f.id` makes the choice
+/// among several suffix collisions deterministic rather than leaving it to the
+/// engine's scan order; it no longer decides anything against an exact match.
+fn suffix_file_id(store: &GraphStore, path: &str) -> Option<String> {
+    let cypher = "MATCH (f:File) WHERE f.id ENDS WITH $suffix \
                   RETURN f.id ORDER BY f.id LIMIT 1";
-    let params = vec![
-        ("exact", Value::String(path.to_string())),
-        ("suffix", Value::String(format!("/{path}"))),
-    ];
+    let params = vec![("suffix", Value::String(format!("/{path}")))];
     let qr = store.query_prepared_params(cypher, params).ok()?;
     qr.rows.first()?.first().cloned()
 }
@@ -215,6 +254,50 @@ mod tests {
                 "both input forms must recover the same File.id; input: {input}"
             );
         }
+    }
+
+    /// Review round 3, finding 1. The exact match and the suffix fallback used
+    /// to share one `WHERE f.id = $exact OR f.id ENDS WITH $suffix ORDER BY
+    /// f.id LIMIT 1`, which let alphabetical order decide between them. Both
+    /// `docs/guide.md` (the real target, an exact id) and `api/docs/guide.md`
+    /// (unrelated, merely ending in the same segment) satisfy that WHERE, and
+    /// `api/…` sorts first — so the caller silently got the wrong file's
+    /// metadata. A wrong answer, not an error.
+    ///
+    /// This test fails on the pre-fix code, returning `api/docs/guide.md`.
+    #[test]
+    fn an_exact_match_beats_a_lexicographically_earlier_suffix_collision() {
+        let (_dir, store) = fixture();
+        for id in ["api/docs/guide.md", "zz/docs/guide.md"] {
+            store
+                .insert_node(
+                    NODE_FILE,
+                    &[
+                        ("id", cypher_str(id).as_str()),
+                        ("path", cypher_str(id).as_str()),
+                        ("name", "'guide.md'"),
+                        ("extension", "'md'"),
+                        ("size_bytes", "1"),
+                        ("parse_errors", "0"),
+                    ],
+                )
+                .expect("insert file");
+        }
+        // `docs/guide.md` is itself a File.id (from `fixture`), and sorts
+        // AFTER `api/docs/guide.md`.
+        assert_eq!(
+            resolve_file(&store, &["docs/guide.md"]).as_deref(),
+            Some("docs/guide.md"),
+            "an exact File.id must win over any suffix collision, whatever the order"
+        );
+
+        // With no exact match, the suffix fallback still answers, and still
+        // does so deterministically (lowest id among the collisions).
+        assert_eq!(
+            resolve_file(&store, &["guide.md"]).as_deref(),
+            Some("api/docs/guide.md"),
+            "the fallback is unchanged when nothing matches exactly"
+        );
     }
 
     #[test]

@@ -1,6 +1,82 @@
 use super::*;
 use crate::test_support::TempDirExt;
 
+/// One indexed fixture: a temp tree holding `filename` with `source`, indexed
+/// into a graph, plus a store over it.
+///
+/// Extracted because the two end-to-end tests below opened with an identical
+/// 21-line preamble, which is also what put both over §4.2's 50-line cap (66
+/// and 85 lines). Their subject is what `search_and_classify` returns, not how
+/// a fixture is built.
+struct IndexedFixture {
+    tmp: crate::test_support::TestTempDir,
+    src_dir: std::path::PathBuf,
+    graph_dir: std::path::PathBuf,
+    store: GraphStore,
+}
+
+fn indexed_fixture(prefix: &str, filename: &str, source: &str) -> IndexedFixture {
+    // issue #25 audit: process::id() collides across processes under PID
+    // reuse; tempfile's random suffix does not.
+    let tmp = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let src_dir = tmp.join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::write(src_dir.join(filename), source).unwrap();
+    let graph_dir = tmp.join("graph");
+    let r = crate::indexer::index_codebase(&src_dir, &graph_dir).expect("index fixture");
+    let store = GraphStore::open_or_create(&r.graph_path).unwrap();
+    IndexedFixture {
+        tmp,
+        src_dir,
+        graph_dir,
+        store,
+    }
+}
+
+impl IndexedFixture {
+    /// Resolves + clusters the graph and builds the hybrid search index over
+    /// it, returning the directory `search_and_classify` should be handed.
+    fn with_search_index(&self) -> std::path::PathBuf {
+        let _ = crate::resolver::resolve_graph(&self.store);
+        let _ = crate::clustering::cluster_graph(&self.store, 1.0);
+        let output_dir = self.graph_dir.parent().unwrap();
+        crate::search::build_search_index(&self.store, output_dir, &self.src_dir)
+            .expect("build search index");
+        crate::search::resolve_search_index_dir(&self.graph_dir)
+            .expect("fixture must produce a search index for this measurement")
+    }
+}
+
+/// Prints the measured candidate-leak delta issue #18's test exists to record.
+/// Kept as output rather than an assertion: the absolute counts move with the
+/// scorer, so pinning them would make this a change-detector; the ordering
+/// between them is what the test asserts.
+fn report_candidate_delta(before: &MatchOutcome, after: &MatchOutcome) {
+    eprintln!(
+        "[measured issue18] candidate_symbols before(substring, index_dir=None)={} \
+         after(hybrid, index_dir=resolved)={}",
+        before.candidates.len(),
+        after.candidates.len()
+    );
+}
+
+/// Asserts `name` is present in `outcome.matched` as a verbatim citation.
+fn assert_verbatim_match(outcome: &MatchOutcome, name: &str, via: &str) {
+    assert!(
+        outcome
+            .matched
+            .iter()
+            .any(|m| m.name == name && m.match_mode == MatchMode::Verbatim),
+        "{via} must classify the verbatim citation `{name}` correctly; matched={:?}",
+        outcome.matched.iter().map(|m| &m.name).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn test_extract_verbatim_identifiers() {
     let text = "Use `grad_rgb` and `make_bar()` to render the gauge.";
@@ -150,18 +226,9 @@ fn test_lexical_and_exact_score_identically_by_ratio() {
 // the actual `search_and_classify` pipeline stage-4 uses in production.
 #[test]
 fn test_repro_issue14_lexical_false_positive_excluded_from_matched() {
-    // issue #25 audit: process::id() collides across processes under PID
-    // reuse; tempfile's random suffix does not.
-    let tmp = tempfile::Builder::new()
-        .prefix("prd_input_issue14_")
-        .tempdir()
-        .expect("create temp dir")
-        .keep_managed();
-    let _ = std::fs::remove_dir_all(&tmp);
-    let src_dir = tmp.join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    std::fs::write(
-        src_dir.join("fixture.rs"),
+    let f = indexed_fixture(
+        "prd_input_issue14_",
+        "fixture.rs",
         r#"
 pub const _CONCRETE_ANCHOR: &str = "anchor";
 
@@ -173,11 +240,8 @@ pub fn make_bar(v: u8) -> String {
     format!("bar-{v}")
 }
 "#,
-    )
-    .unwrap();
-    let graph_dir = tmp.join("graph");
-    let r = crate::indexer::index_codebase(&src_dir, &graph_dir).expect("index fixture");
-    let store = GraphStore::open_or_create(&r.graph_path).unwrap();
+    );
+    let store = &f.store;
 
     // Mirrors the real issue #14 report: description cites `grad_rgb`
     // verbatim and separately uses the natural word "anchor" (a pure
@@ -187,16 +251,9 @@ pub fn make_bar(v: u8) -> String {
     let combined = format!("{title} {description}");
     let verbatim = extract_verbatim_identifiers(&combined);
     let natural = tokenize_natural(title, description);
-    let outcome = search_and_classify(&store, &verbatim, &natural, None);
+    let outcome = search_and_classify(store, &verbatim, &natural, None);
 
-    assert!(
-        outcome
-            .matched
-            .iter()
-            .any(|m| m.name == "grad_rgb" && m.match_mode == MatchMode::Verbatim),
-        "grad_rgb must be matched via verbatim citation; matched={:?}",
-        outcome.matched.iter().map(|m| &m.name).collect::<Vec<_>>()
-    );
+    assert_verbatim_match(&outcome, "grad_rgb", "the substring-fallback path");
     assert!(
         !outcome.matched.iter().any(|m| m.name == "_CONCRETE_ANCHOR"),
         "issue #14: _CONCRETE_ANCHOR must never be verified grounding purely \
@@ -214,7 +271,7 @@ pub fn make_bar(v: u8) -> String {
         );
     }
 
-    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(&f.tmp);
 }
 
 // Complement: when nothing exact or verbatim resolves, matched_symbols
@@ -272,36 +329,16 @@ fn test_repro_issue14_pure_lexical_description_yields_empty_matched() {
 // source: measured on 2026-07-15, this test's own fixture (below).
 #[test]
 fn test_issue18_hybrid_index_reduces_spurious_candidates() {
-    // issue #25 audit: process::id() collides across processes under PID
-    // reuse; tempfile's random suffix does not.
-    let tmp = tempfile::Builder::new()
-        .prefix("prd_input_issue18_")
-        .tempdir()
-        .expect("create temp dir")
-        .keep_managed();
-    let _ = std::fs::remove_dir_all(&tmp);
-    let src_dir = tmp.join("src");
-    std::fs::create_dir_all(&src_dir).unwrap();
-    std::fs::write(
-        src_dir.join("main.rs"),
+    let f = indexed_fixture(
+        "prd_input_issue18_",
+        "main.rs",
         "fn main() {\n    handle_tool_call(\"probe\");\n}\n\n\
          fn handle_tool_call(name: &str) -> String {\n    resolve_name(name)\n}\n\n\
          fn resolve_name(name: &str) -> String {\n    name.to_string()\n}\n\n\
          pub struct Tool {\n    pub name: String,\n}\n",
-    )
-    .unwrap();
-    let graph_dir = tmp.join("graph");
-    let r = crate::indexer::index_codebase(&src_dir, &graph_dir).expect("index fixture");
-    let store = GraphStore::open_or_create(&r.graph_path).unwrap();
-    let _ = crate::resolver::resolve_graph(&store);
-    let _ = crate::clustering::cluster_graph(&store, 1.0);
-    let output_dir = graph_dir.parent().unwrap();
-    crate::search::build_search_index(&store, output_dir).expect("build search index");
-    let index_dir = crate::search::resolve_search_index_dir(&graph_dir);
-    assert!(
-        index_dir.is_some(),
-        "fixture must produce a search index for this measurement"
     );
+    let store = &f.store;
+    let index_dir = f.with_search_index();
 
     // Description mixes one genuine exact citation (`handle_tool_call`)
     // with natural-language filler words that have NO substring relation
@@ -315,34 +352,17 @@ fn test_issue18_hybrid_index_reduces_spurious_candidates() {
 
     // Pre-fix behavior, reproduced explicitly (not via the production path,
     // which no longer passes None once the fixture has an index).
-    let before = search_and_classify(&store, &verbatim, &natural, None);
+    let before = search_and_classify(store, &verbatim, &natural, None);
     // Fixed behavior — the resolved hybrid index.
-    let after = search_and_classify(&store, &verbatim, &natural, index_dir.as_deref());
+    let after = search_and_classify(store, &verbatim, &natural, Some(index_dir.as_path()));
 
-    eprintln!(
-        "[measured issue18] candidate_symbols before(substring, index_dir=None)={} \
-         after(hybrid, index_dir=resolved)={}",
-        before.candidates.len(),
-        after.candidates.len()
-    );
+    report_candidate_delta(&before, &after);
 
     // The exact verbatim citation must resolve identically either way —
     // wiring in the hybrid index must not change match_mode semantics for
     // a real hit (issue #14's classification is independent of scorer).
-    assert!(
-        before
-            .matched
-            .iter()
-            .any(|m| m.name == "handle_tool_call" && m.match_mode == MatchMode::Verbatim),
-        "substring-fallback path (pre-fix behavior) must still classify the citation correctly"
-    );
-    assert!(
-        after
-            .matched
-            .iter()
-            .any(|m| m.name == "handle_tool_call" && m.match_mode == MatchMode::Verbatim),
-        "hybrid path must still classify the same verbatim citation correctly"
-    );
+    assert_verbatim_match(&before, "handle_tool_call", "the substring-fallback path");
+    assert_verbatim_match(&after, "handle_tool_call", "the hybrid path");
 
     // The substring-fallback path leaks zero-relevance candidates (see
     // header comment); the hybrid path only surfaces symbols BM25/vector
@@ -355,7 +375,7 @@ fn test_issue18_hybrid_index_reduces_spurious_candidates() {
         after.candidates.len()
     );
 
-    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(&f.tmp);
 }
 
 // Regression: a symbol can be hit by a WEAK token (lexical) before its
@@ -414,4 +434,62 @@ fn test_weak_token_before_exact_token_still_classifies_as_exact() {
     );
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Review round 3, finding 3. `matched_symbols` is documented as verified
+/// code-symbol grounding for PRD generation, but nothing in the matcher checked
+/// a hit's LABEL — `is_exact_hit` classifies on string identity alone. Since
+/// fleet-watch#112 `search_graph` can also return `File`-labeled doc-content
+/// hits, so a doc file surfaced by its prose could be presented to a PRD author
+/// as a code symbol the graph confirms exists.
+///
+/// The severity, stated exactly: on the pre-fix code this could not be reached
+/// end-to-end, because `clean_token` strips `.` from every token while a doc
+/// hit's `name` always carries one (a `File` becomes a doc document only by
+/// having a `DOC_EXTENSIONS` extension). Two unrelated rules happened to meet.
+/// Nothing stated that, nothing tested it, and either rule could move. So the
+/// test asserts the RULE rather than the coincidence: a File-labeled hit is not
+/// a code symbol, whatever its name happens to be.
+///
+/// This test fails on the pre-fix code, where `is_code_symbol` does not exist
+/// and a File-labeled hit is indistinguishable from a symbol.
+#[test]
+fn a_file_labelled_hit_is_never_treated_as_a_code_symbol() {
+    let doc_hit = search::SearchResult {
+        // Deliberately dot-free: this is the shape `clean_token` can produce a
+        // token for, i.e. the case the accidental invariant does NOT cover.
+        qualified_name: "docs/architecture".to_string(),
+        name: "architecture".to_string(),
+        label: crate::graph_store::NODE_FILE.to_string(),
+        file_path: "docs/architecture".to_string(),
+        score: 1.0,
+        community_id: None,
+        process_names: Vec::new(),
+        start_line: None,
+        end_line: None,
+    };
+    assert!(
+        !is_code_symbol(&doc_hit),
+        "a doc-content File hit is evidence of documentation, not of a symbol"
+    );
+    assert!(
+        is_exact_hit("architecture", &doc_hit),
+        "string identity alone WOULD have promoted it — which is the finding"
+    );
+
+    let symbol_hit = search::SearchResult {
+        qualified_name: "main.rs::architecture".to_string(),
+        name: "architecture".to_string(),
+        label: "Function".to_string(),
+        file_path: "main.rs".to_string(),
+        score: 1.0,
+        community_id: None,
+        process_names: Vec::new(),
+        start_line: Some(1),
+        end_line: Some(2),
+    };
+    assert!(
+        is_code_symbol(&symbol_hit),
+        "the exclusion must be scoped to File and not swallow real symbols"
+    );
 }

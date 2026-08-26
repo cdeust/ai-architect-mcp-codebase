@@ -21,7 +21,8 @@ mod uri;
 pub use commands::{
     detect_lsp_command, is_command_available, validate_lsp_command, LSP_COMMAND_ALLOWLIST,
 };
-use frames::{next_frame, spawn_frame_reader};
+use frames::{drain_pending, next_frame, spawn_frame_reader};
+use protocol::FrameError;
 pub(crate) use protocol::{is_lsp_timeout, LSP_TIMEOUT_PREFIX};
 pub use uri::{file_uri_to_path, path_to_file_uri};
 
@@ -33,9 +34,24 @@ use protocol::{
 // Public types
 // ---------------------------------------------------------------------------
 
+/// How many times `shutdown` re-checks whether the server exited on its own
+/// before killing it, and how long it waits between checks — 200 ms in total.
+///
+/// The budget only has to exceed a COOPERATIVE server's flush-and-exit after it
+/// receives `exit`; a server still running past it is not going to stop, and
+/// waiting longer only delays the kill. It is deliberately orders of magnitude
+/// below the request timeout, because this is a teardown path.
+///
+/// source: provisional heuristic. Calibrate against a measured server that
+/// exits cleanly but takes longer than this ceiling — its flush time is the
+/// number to raise this to; a torn cache after shutdown is the symptom that
+/// would show it is too low.
+const SHUTDOWN_GRACE_POLLS: u32 = 20;
+const SHUTDOWN_GRACE_STEP: Duration = Duration::from_millis(10);
+
 pub struct LspClient {
     process: Child,
-    frames: Receiver<Result<Value, String>>,
+    frames: Receiver<Result<Value, FrameError>>,
     request_id: AtomicI64,
     timeout: Duration,
 }
@@ -181,23 +197,14 @@ impl LspClient {
         id: i64,
         probe_timeout: Duration,
     ) -> Result<Value, String> {
-        let deadline = Instant::now() + probe_timeout;
-        loop {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .unwrap_or(Duration::ZERO);
-            if remaining.is_zero() {
-                return Err(format!(
+        self.read_response(id, probe_timeout, UnparseableFrame::FailFast)
+            .map_err(|e| match e {
+                ReadFailure::Expired => format!(
                     "lsp_probe_failed: no response within probe timeout ({}ms)",
                     probe_timeout.as_millis()
-                ));
-            }
-            let msg = next_frame(&self.frames, remaining).map_err(classify_probe_err)?;
-            if msg.get("id").and_then(|v| v.as_i64()) == Some(id) {
-                return Ok(msg);
-            }
-            // notifications / other ids — keep reading within the window.
-        }
+                ),
+                ReadFailure::Frame(message) => classify_probe_err(message),
+            })
     }
 
     /// Notify the server about an open document.
@@ -255,6 +262,24 @@ impl LspClient {
         }
         let notif = json!({ "jsonrpc": "2.0", "method": "exit", "params": null });
         let _ = self.send_notification(&notif);
+        // BOUNDED, with a grace period. `wait()` alone blocks forever on a
+        // server that ignores `exit` — the same hang B.6 removed from the read
+        // path, one call later — but a single `try_wait` fired immediately
+        // after the write SIGKILLs a well-behaved server that merely needs a
+        // few milliseconds to flush, risking a torn cache. Poll briefly, then
+        // fall back to kill; `wait` after `kill` returns promptly.
+        //
+        // source: provisional heuristic. The budget only needs to exceed a
+        // cooperative server's flush-and-exit, which is milliseconds for the
+        // servers this drives; it is deliberately far below the request
+        // timeout, because a server that has not exited by then is not going to.
+        for _ in 0..SHUTDOWN_GRACE_POLLS {
+            if matches!(self.process.try_wait(), Ok(Some(_))) {
+                return Ok(());
+            }
+            std::thread::sleep(SHUTDOWN_GRACE_STEP);
+        }
+        let _ = self.process.kill();
         let _ = self.process.wait();
         Ok(())
     }
@@ -266,6 +291,20 @@ impl LspClient {
     }
 
     fn send_request(&mut self, msg: &Value) -> Result<(), String> {
+        // Emptying the queue here NARROWS the deadlock window; it does not
+        // close it. The cycle is: a full queue stops the reader thread, which
+        // stops draining the server's stdout, which fills the server's stdout
+        // pipe, which stops the server reading our stdin, which hangs the write
+        // below. This drain runs ONCE, and `write_lsp_message` then makes two
+        // separate blocking `write_all` calls with nothing draining between
+        // them — so a payload large enough for a chatty server to refill the
+        // channel mid-write can still hang. `did_open` carries a whole file,
+        // which is where that is reachable.
+        //
+        // TRACKED, NOT CLOSED. Closing it needs the drain to run DURING the
+        // write (chunked writes, or non-blocking pipe IO) — a change of shape
+        // rather than of wording, and deliberately out of scope here.
+        drain_pending(&self.frames);
         let bytes = serde_json::to_vec(msg).map_err(|e| format!("serialize request: {e}"))?;
         let stdin = self.process.stdin.as_mut().ok_or("LSP stdin unavailable")?;
         write_lsp_message(stdin, &bytes)
@@ -275,29 +314,96 @@ impl LspClient {
         self.send_request(msg)
     }
 
-    /// Read messages until we find one with the matching id.
-    /// Discards notifications and other responses along the way.
+    /// Read messages until one is a response to `target_id`.
+    ///
+    /// Discards notifications, server-initiated requests and other responses
+    /// along the way. `LSP_TIMEOUT_PREFIX` on expiry, so a timed-out request
+    /// classifies as one everywhere.
     fn read_response_for_id(&mut self, target_id: i64) -> Result<Value, String> {
-        let deadline = Instant::now() + self.timeout;
+        self.read_response(target_id, self.timeout, UnparseableFrame::Skip)
+            .map_err(|e| match e {
+                ReadFailure::Expired => {
+                    format!("{LSP_TIMEOUT_PREFIX} waiting for response id={target_id}")
+                }
+                ReadFailure::Frame(message) => message,
+            })
+    }
+
+    /// The ONE deadline/skip/match loop, shared by the probe and the
+    /// request/response path.
+    ///
+    /// These were two independently-maintained copies, and that is precisely
+    /// why the bare-`id` match survived two review rounds after `is_response_to`
+    /// was added to only one of them. They differ in exactly two things — the
+    /// error wording, which the callers apply, and what an unparseable frame
+    /// means, which `policy` names — so those are the only two parameters.
+    fn read_response(
+        &self,
+        target_id: i64,
+        budget: Duration,
+        policy: UnparseableFrame,
+    ) -> Result<Value, ReadFailure> {
+        let deadline = Instant::now() + budget;
         loop {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .unwrap_or(Duration::ZERO);
             if remaining.is_zero() {
-                return Err(format!(
-                    "{LSP_TIMEOUT_PREFIX} waiting for response id={target_id}"
-                ));
+                return Err(ReadFailure::Expired);
             }
-            let msg = next_frame(&self.frames, remaining)?;
-            // Check if this is our response
-            if let Some(id) = msg.get("id") {
-                if id.as_i64() == Some(target_id) {
-                    return Ok(msg);
-                }
+            let msg = match next_frame(&self.frames, remaining) {
+                Ok(msg) => msg,
+                Err(e) if e.is_skippable() && policy == UnparseableFrame::Skip => continue,
+                Err(e) => return Err(ReadFailure::Frame(e.message())),
+            };
+            if is_response_to(&msg, target_id) {
+                return Ok(msg);
             }
-            // Otherwise it's a notification or different response — skip
+            // A notification, a server-initiated request, or another response.
+            // A server request sharing our id (`window/showMessageRequest`
+            // during the handshake) must NOT be taken for our answer.
         }
     }
+}
+
+/// What a read loop does with a frame whose payload would not parse but whose
+/// stream is still aligned.
+///
+/// The two callers need OPPOSITE behaviour, so unifying them on one policy is
+/// what the previous round got wrong:
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnparseableFrame {
+    /// Skip it and keep waiting. A request/response exchange must survive one
+    /// malformed notification from a server that is otherwise answering.
+    Skip,
+    /// Fail immediately. The PROBE is deciding whether this binary speaks LSP
+    /// at all, and a framed-but-unparseable first frame IS that answer — so
+    /// tolerating it burns the whole probe window on a binary already known to
+    /// be wrong, against the probe's own fail-fast contract.
+    FailFast,
+}
+
+/// Why `read_response` stopped, kept separate from its wording because the two
+/// callers report the same cause differently.
+#[derive(Debug)]
+enum ReadFailure {
+    /// The budget ran out.
+    Expired,
+    /// A frame error the policy did not absorb.
+    Frame(String),
+}
+
+/// True when `msg` is a RESPONSE to `target_id`, as opposed to a server-
+/// initiated REQUEST that happens to carry the same id.
+///
+/// Both directions of JSON-RPC use `id`, and the two id spaces are independent:
+/// a server request (`window/workDoneProgress/create`,
+/// `workspace/configuration`) numbers its own, so matching on `id` alone
+/// returned the server's question to us as if it were our answer. A response
+/// carries no `method`; a request always does. source: JSON-RPC 2.0 §5 and LSP
+/// 3.17 §Base Protocol.
+fn is_response_to(msg: &Value, target_id: i64) -> bool {
+    msg.get("method").is_none() && msg.get("id").and_then(Value::as_i64) == Some(target_id)
 }
 
 impl Drop for LspClient {
@@ -308,40 +414,5 @@ impl Drop for LspClient {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_lsp_graceful_fallback_on_fake_lsp() {
-        // source: C-correctness bug 1 — a binary that passes the PATH check
-        // but exits silently (rustup proxy, stub, /bin/true) used to surface
-        // the cryptic "missing Content-Length header". It must now be
-        // classified as `lsp_probe_failed` so the MCP layer can report a
-        // clean error instead of a protocol-level mystery.
-        //
-        // We bypass the allowlist via `start_unchecked` because the point of
-        // this test is the probe logic, not the upstream command validator.
-        let tmp = std::env::temp_dir();
-        // `/usr/bin/true` exists on macOS and Linux; exits 0, writes nothing.
-        // Use whichever `true` is available — all POSIX systems have one.
-        let true_bin = if Path::new("/usr/bin/true").exists() {
-            "/usr/bin/true"
-        } else if Path::new("/bin/true").exists() {
-            "/bin/true"
-        } else {
-            panic!("no `true` binary available for test");
-        };
-
-        let client = LspClient::start_unchecked(true_bin, &[], &tmp, Duration::from_secs(5));
-        let mut client = client.expect("spawn /bin/true should succeed");
-
-        let err = client
-            .initialize_with_probe(&tmp, Duration::from_secs(2))
-            .expect_err("probe against /bin/true must fail");
-
-        assert!(
-            err.starts_with("lsp_probe_failed"),
-            "expected lsp_probe_failed prefix, got: {err}"
-        );
-    }
-}
+#[path = "lsp_client_tests.rs"]
+mod tests;

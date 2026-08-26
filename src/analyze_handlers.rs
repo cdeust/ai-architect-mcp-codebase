@@ -179,7 +179,7 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let lsp_result = lsp_phase(&req, &store);
     // Phase 3: cluster. Phase 4: build the BM25 + TF-IDF search index.
     let cluster_result = clustering::cluster_graph(&store, req.gamma)?;
-    let search_index_result = search::build_search_index(&store, &req.output_dir)?;
+    let search_index_result = search::build_search_index(&store, &req.output_dir, &req.codebase)?;
 
     let mut response = analyze_envelope(
         &index_result,

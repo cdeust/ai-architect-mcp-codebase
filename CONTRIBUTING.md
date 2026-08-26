@@ -1,7 +1,7 @@
 # Contributing to ai-architect-mcp-codebase
 
 Thanks for considering a contribution. This is a Rust MCP server with
-**26 tools, 1300+ tests, zero warnings, every constant sourced**. Every
+**26 tools, 1400+ tests, zero warnings, every constant sourced**. Every
 change is held to that bar.
 
 ---
@@ -31,7 +31,7 @@ cargo build --release
 # First build: ~5 minutes (compiles LadybugDB C++ core)
 # Subsequent builds: <1 second incremental
 
-cargo test --release        # full test suite (1300+ tests)
+cargo test --release        # full test suite (1400+ tests)
 cargo clippy --release -- -D warnings   # zero warnings policy
 cargo fmt --check
 ```
@@ -127,7 +127,7 @@ is tested against published reference implementations. Changes here:
 ## Testing
 
 ```bash
-cargo test                              # full suite (1327 tests, measured 2026-08-25)
+cargo test                              # full suite (1441 tests, measured 2026-08-26 on CI/ubuntu)
 cargo test --release                    # same suite, release profile
 cargo test --release -- --test-threads=1   # serial mode (debugging flakes)
 cargo bench                             # micro-benchmarks
@@ -157,8 +157,9 @@ are answered against, so it has to be true rather than aspirational.
 3. **A defence that only a reviewer enforces will be defeated.** Where a fix can
    be silently reintroduced, add a mechanical guard that fails `cargo test`,
    not a comment asking future readers to be careful.
-4. **Statement coverage must not regress below 80%.** It is 81.59% (measured
-   2026-07-27 with `cargo llvm-cov --workspace`). Run it locally before a large
+4. **Statement coverage must not regress below 80%.** It is 90.02% (measured
+   2026-08-26 by the `cargo llvm-cov (80% line floor)` CI job, which is the
+   figure the README badge is gated against). Run it locally before a large
    change: `cargo llvm-cov --workspace --summary-only`.
 
 ---

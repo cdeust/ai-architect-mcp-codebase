@@ -42,7 +42,7 @@ const FRAME_QUEUE_DEPTH: usize = 64;
 /// with a deadline it can actually enforce.
 pub(super) fn spawn_frame_reader(
     stdout: std::process::ChildStdout,
-) -> Receiver<Result<Value, String>> {
+) -> Receiver<Result<Value, FrameError>> {
     let (tx, rx) = mpsc::sync_channel(FRAME_QUEUE_DEPTH);
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -54,7 +54,7 @@ pub(super) fn spawn_frame_reader(
             // `eof_before_header`.
             let frame = read_lsp_message(&mut reader);
             let stop = matches!(frame, Err(FrameError::Fatal(_)));
-            let sent = tx.send(frame.map_err(FrameError::message));
+            let sent = tx.send(frame);
             // A closed receiver means the client was dropped; stop.
             if sent.is_err() || stop {
                 return;
@@ -71,25 +71,40 @@ pub(super) fn spawn_frame_reader(
 /// means the reader thread ended — it has already sent whatever error ended it,
 /// so anything after that is EOF.
 pub(super) fn next_frame(
-    frames: &Receiver<Result<Value, String>>,
+    frames: &Receiver<Result<Value, FrameError>>,
     timeout: Duration,
-) -> Result<Value, String> {
+) -> Result<Value, FrameError> {
     match frames.recv_timeout(timeout) {
         Ok(frame) => frame,
-        Err(RecvTimeoutError::Timeout) => {
-            Err(format!("{LSP_TIMEOUT_PREFIX} no frame within {timeout:?}"))
-        }
-        Err(RecvTimeoutError::Disconnected) => {
-            Err("eof_before_header: child stdout closed without LSP framing".to_string())
-        }
+        Err(RecvTimeoutError::Timeout) => Err(FrameError::Timeout(format!(
+            "{LSP_TIMEOUT_PREFIX} no frame within {timeout:?}"
+        ))),
+        Err(RecvTimeoutError::Disconnected) => Err(FrameError::Fatal(
+            "eof_before_header: child stdout closed without LSP framing".to_string(),
+        )),
     }
+}
+
+/// Drains every frame already queued, without waiting.
+///
+/// Called before writing a request. The reader thread blocks when the bounded
+/// queue is full; a blocked reader stops draining the server's stdout, the
+/// server's stdout pipe fills, the server stops reading OUR stdin, and our next
+/// blocking write deadlocks against it. Emptying the queue first breaks that
+/// cycle at the only point in it we control.
+///
+/// Discarding is safe here: every request is followed immediately by a read for
+/// its own id, so anything still queued when the NEXT request goes out is
+/// server-initiated traffic that `read_response_for_id` would have skipped
+/// anyway.
+pub(super) fn drain_pending(frames: &Receiver<Result<Value, FrameError>>) {
+    while frames.try_recv().is_ok() {}
 }
 
 #[cfg(test)]
 mod frame_bound_tests {
     // Reachable only from these tests, so gated with them: `clippy
     // --all-targets` compiles the lib separately from unittests.
-    use super::super::protocol::is_lsp_timeout;
     use super::*;
     use std::sync::mpsc;
 
@@ -112,12 +127,12 @@ mod frame_bound_tests {
         // A sender held open with nothing sent models a server that wrote a
         // partial header and stopped: the reader thread is still blocked, so
         // no frame is ever pushed.
-        let (_tx, rx) = mpsc::channel::<Result<Value, String>>();
+        let (_tx, rx) = mpsc::channel::<Result<Value, FrameError>>();
         let err = next_frame(&rx, Duration::from_millis(50))
             .expect_err("a frame that never arrives must not block forever");
         assert!(
-            is_lsp_timeout(&err),
-            "must classify as this module's timeout: {err}"
+            matches!(err, FrameError::Timeout(_)),
+            "must classify as this module's timeout"
         );
     }
 
@@ -126,14 +141,14 @@ mod frame_bound_tests {
     /// different reason codes.
     #[test]
     fn next_frame_reports_eof_when_the_reader_thread_is_gone() {
-        let (tx, rx) = mpsc::channel::<Result<Value, String>>();
+        let (tx, rx) = mpsc::channel::<Result<Value, FrameError>>();
         drop(tx);
         let err = next_frame(&rx, Duration::from_millis(50)).expect_err("no frame");
         assert!(
-            !is_lsp_timeout(&err),
-            "a dead reader is not a timeout: {err}"
+            !matches!(err, FrameError::Timeout(_)),
+            "a dead reader is not a timeout"
         );
-        assert!(err.contains("eof_before_header"), "{err}");
+        assert!(err.message().contains("eof_before_header"));
     }
 
     /// The queue is BOUNDED, so a chatty server cannot grow it without limit —
@@ -142,7 +157,7 @@ mod frame_bound_tests {
     /// must not affect what a waiting caller sees.
     #[test]
     fn a_full_queue_blocks_the_producer_without_disturbing_the_consumer() {
-        let (tx, rx) = mpsc::sync_channel::<Result<Value, String>>(FRAME_QUEUE_DEPTH);
+        let (tx, rx) = mpsc::sync_channel::<Result<Value, FrameError>>(FRAME_QUEUE_DEPTH);
         for i in 0..FRAME_QUEUE_DEPTH {
             tx.try_send(Ok(serde_json::json!({ "id": i })))
                 .expect("the queue accepts up to its depth");
@@ -163,7 +178,7 @@ mod frame_bound_tests {
     /// Frames the thread already pushed are delivered without waiting.
     #[test]
     fn next_frame_delivers_a_queued_frame() {
-        let (tx, rx) = mpsc::channel::<Result<Value, String>>();
+        let (tx, rx) = mpsc::channel::<Result<Value, FrameError>>();
         tx.send(Ok(serde_json::json!({"id": 1}))).expect("send");
         let msg = next_frame(&rx, Duration::from_millis(50)).expect("queued frame");
         assert_eq!(msg.get("id").and_then(|v| v.as_i64()), Some(1));
@@ -220,5 +235,54 @@ mod frame_bound_tests {
         let out = read_lsp_message(&mut reader).err();
         let _ = child.wait();
         out
+    }
+
+    /// Round-3 finding 1. The reader thread survived a Payload error, but the
+    /// CONSUMER still propagated it, so one malformed notification failed the
+    /// in-flight call even though the very next frame carried its answer. The
+    /// previous test checked the classification only; this checks the recovery.
+    ///
+    /// `is_skippable` is the predicate both consumer loops key on, so it is
+    /// what this pins.
+    #[test]
+    fn a_payload_error_is_skippable_and_the_next_frame_still_arrives() {
+        let (tx, rx) = mpsc::sync_channel::<Result<Value, FrameError>>(FRAME_QUEUE_DEPTH);
+        tx.send(Err(FrameError::Payload("parse JSON body: x".into())))
+            .expect("queue the bad frame");
+        tx.send(Ok(serde_json::json!({"id": 7})))
+            .expect("queue the good one behind it");
+
+        let first = next_frame(&rx, Duration::from_millis(50)).expect_err("the bad frame");
+        assert!(
+            first.is_skippable(),
+            "a fully-consumed body that would not parse must be skippable"
+        );
+        // …and the answer behind it is still there.
+        let second = next_frame(&rx, Duration::from_millis(50)).expect("the good frame");
+        assert_eq!(second.get("id").and_then(Value::as_i64), Some(7));
+    }
+
+    /// The other two error kinds end the call rather than being skipped.
+    #[test]
+    fn framing_and_timeout_errors_are_not_skippable() {
+        assert!(!FrameError::Fatal("eof_before_header: x".into()).is_skippable());
+        assert!(!FrameError::Timeout("lsp_timeout: x".into()).is_skippable());
+    }
+
+    /// Finding 4. `drain_pending` empties the queue without waiting, which is
+    /// what unblocks the reader thread before a blocking write.
+    #[test]
+    fn drain_pending_empties_the_queue_without_waiting() {
+        let (tx, rx) = mpsc::sync_channel::<Result<Value, FrameError>>(FRAME_QUEUE_DEPTH);
+        for i in 0..FRAME_QUEUE_DEPTH {
+            tx.try_send(Ok(serde_json::json!({ "id": i })))
+                .expect("fill it");
+        }
+        assert!(tx.try_send(Ok(serde_json::json!({"id": "over"}))).is_err());
+
+        drain_pending(&rx);
+
+        tx.try_send(Ok(serde_json::json!({"id": "now fits"})))
+            .expect("a drained queue accepts again, which is what frees the reader");
     }
 }
