@@ -37,8 +37,34 @@ adheres to [Semantic Versioning](https://semver.org/).
   shared temp path; a schema-1 sidecar from an older index still parses, just
   without the commit signal.
 
+### Fixed
+
+- The query-time staleness receipt no longer reports a verdict it cannot stand
+  behind (fleet-watch#112). Three cases now read `"unknown"` instead: the graph
+  artifact itself is gone (previously `"fresh"` alongside the tool's own
+  `status: "error"`); the two sidecars do not belong to the same index; and the
+  manifest is empty with no git provenance, where nothing was examined at all.
+- `meta.json` and `file_manifest.json` are written in one order by both indexing
+  paths — manifest first, `meta.json` last — making `meta.json` an index's
+  commit point, and it now records which manifest it accompanies. The full
+  re-index wrote them the other way round from the incremental path, so a read
+  landing between the two paired a fresh commit sha with the previous manifest
+  and called a just-rebuilt graph stale, single-process, with no concurrent
+  writer involved. `meta.json` moves to schema 3; a schema-1/2 sidecar still
+  parses and simply skips the pairing check.
+
 ### Security
 
+- The staleness check no longer trusts `meta.json`'s `root` as a filesystem
+  join base (fleet-watch#112). `root` is the base for every `stat` and the `-C`
+  argument to `git`, so an unvalidated value walked straight past the manifest-key
+  containment below it: `"root": "/"` with an ordinary key like `"etc/shadow"`
+  resolved to an absolute system path and the dirty count reported whether that
+  file matched the attacker's guess. The root must now be absolute, resolvable,
+  a directory, and not one of the system paths the server already refuses
+  elsewhere. This bounds the sweep and refuses every system directory; it does
+  not authenticate the root, which no on-disk sidecar can — see the note on
+  `validated_root`.
 - The query-time staleness check no longer resolves `file_manifest.json` keys
   that escape the indexed root (fleet-watch#112). `Path::join` discards its base
   when handed an absolute component, so a crafted sidecar key — `/etc/shadow`,
