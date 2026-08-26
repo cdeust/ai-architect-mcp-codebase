@@ -289,9 +289,9 @@ pub(crate) fn bootstrap_import(
         );
         return BootstrapOutcome::Reindex(None);
     }
-    if let Err(e) = write_graph_meta(output_dir, codebase) {
+    let meta_err = write_graph_meta(output_dir, codebase).err().inspect(|e| {
         eprintln!("[ap] graph meta sidecar write failed (bootstrap succeeded): {e}");
-    }
+    });
     let (node_count, edge_count) = graph_counts(graph_dir);
     let mut resp = json!({
         "stage": 3,
@@ -313,6 +313,9 @@ pub(crate) fn bootstrap_import(
     // Coverage (issue #57): the bootstrapped graph inherits the exporter's
     // coverage sidecar (bundled in the artifact, unpacked beside the graph).
     resp["coverage"] = coverage_summary_for_graph(graph_dir);
+    if let Some(e) = meta_err {
+        resp["meta_write_error"] = json!(e);
+    }
     BootstrapOutcome::Imported(resp)
 }
 
@@ -360,9 +363,9 @@ pub(crate) fn bootstrap_import_and_fill(
     // `meta.json` last, as everywhere else: the fill rewrites the manifest, so a
     // sidecar written before it would name the imported manifest rather than the
     // filled one and read as a torn pair forever (fleet-watch#112 review round 4).
-    if let Err(e) = write_graph_meta(output_dir, codebase) {
+    let meta_err = write_graph_meta(output_dir, codebase).err().inspect(|e| {
         eprintln!("[ap] graph meta sidecar write failed (bootstrap succeeded): {e}");
-    }
+    });
     let fill_method = match fill.method {
         indexer::FillMethod::GitDiff => "git_diff",
         indexer::FillMethod::ContentHash => "content_hash",
@@ -394,6 +397,9 @@ pub(crate) fn bootstrap_import_and_fill(
     }
     // Coverage (issue #57): refreshed by the fill (carry-forward + reparsed gaps).
     resp["coverage"] = coverage_summary_for_graph(graph_dir);
+    if let Some(e) = meta_err {
+        resp["meta_write_error"] = json!(e);
+    }
     BootstrapOutcome::Imported(resp)
 }
 
