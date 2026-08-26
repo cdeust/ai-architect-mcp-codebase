@@ -62,8 +62,18 @@ adheres to [Semantic Versioning](https://semver.org/).
   resolved to an absolute system path and the dirty count reported whether that
   file matched the attacker's guess. The root must now be absolute, resolvable,
   a directory, and not one of the system paths the server already refuses
-  elsewhere. This bounds the sweep and refuses every system directory; it does
-  not authenticate the root, which no on-disk sidecar can — see the note on
+  elsewhere.
+
+  This is a BOUNDED mitigation, not a closure, and the residual is exactly
+  this: **an attacker with write access to `output_dir` can still direct `root`
+  at any real, absolute, resolvable, non-blacklisted directory on the host and
+  use `dirty_files` / `state` as an existence, size and mtime oracle for files
+  under it.** What no longer works is a non-existent, non-canonicalizable,
+  non-directory, or blacklisted-system-root value. No on-disk sidecar can
+  authenticate the root; the two real closures — a caller-supplied
+  `codebase_path` on the read tools, or a signed sidecar — are a breaking
+  schema change and a break of the portable-artifact use case respectively, and
+  are deliberately deferred as design decisions. See the note on
   `validated_root`.
 - The query-time staleness check no longer resolves `file_manifest.json` keys
   that escape the indexed root (fleet-watch#112). `Path::join` discards its base
