@@ -34,7 +34,7 @@
 // source: stage-4 brief (token-per-word search cap); issue #14 root-cause
 // discussion (this file's header); RRF citation retained in `crate::search`.
 
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{cypher_str, GraphStore, NODE_FILE};
 use crate::search;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -261,6 +261,28 @@ fn upsert_best(
     best.push((hit, mode));
 }
 
+/// Search hits for one token, restricted to CODE SYMBOLS.
+///
+/// `label_filter` stays `None` — the filter would have to name a single kind,
+/// and every symbol kind is wanted here — so the exclusion is applied to the
+/// results instead (review round 3, finding 3). Since fleet-watch#112,
+/// `search_graph` can also return `File`-labeled doc-content hits: a markdown
+/// or plain-text file surfaced by its PROSE. Those are not symbols, and
+/// everything downstream of this function treats what it returns as verified
+/// code-symbol grounding for PRD generation — `matched_symbols` is documented
+/// as exactly that. A doc file reaching it would be presented to a PRD author
+/// as a code symbol the graph confirms exists.
+///
+/// Severity, stated precisely rather than dramatised: no doc file can reach
+/// `matched` on today's code, because `is_exact_hit` compares against tokens
+/// that `clean_token` has stripped of `.` (its own test pins
+/// `clean_token("bar.baz") == "barbaz"`), while every doc hit's `name` is a
+/// filename that necessarily carries one — a `File` only becomes a BM25 doc
+/// document by having a `DOC_EXTENSIONS` extension. So a doc hit always
+/// classifies `Lexical` and lands in `candidates`. That is an accident of two
+/// unrelated rules meeting, not a decision: nothing states it, no test pins it,
+/// and either rule may change. The label check makes the guarantee explicit and
+/// stops it resting on that coincidence.
 fn search_hits(
     store: &GraphStore,
     token: &str,
@@ -271,7 +293,18 @@ fn search_hits(
         label_filter: None,
         min_score: 0.0,
     };
-    search::search_graph(store, token, &opts, index_dir).unwrap_or_default()
+    search::search_graph(store, token, &opts, index_dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(is_code_symbol)
+        .collect()
+}
+
+/// True for a hit the graph holds as a code symbol, false for a doc-content
+/// `File` hit. The PRD matcher grounds claims about CODE; a file surfaced by
+/// its prose is evidence of documentation, not of a symbol.
+fn is_code_symbol(hit: &search::SearchResult) -> bool {
+    !hit.label.eq_ignore_ascii_case(NODE_FILE)
 }
 
 /// True iff `token` equals the hit's name or the tail of its qualified name
