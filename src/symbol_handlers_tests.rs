@@ -496,7 +496,6 @@ fn unopenable_graph_over_a_moved_tree() -> (crate::test_support::TestTempDir, st
 
     let abs = root.join("a.rs");
     fs::write(&abs, b"fn a() {}\n").expect("write a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
     let meta = fs::metadata(&abs).expect("stat a.rs");
     let mut m = manifest::FileManifest::new();
     m.files.insert(
@@ -508,6 +507,9 @@ fn unopenable_graph_over_a_moved_tree() -> (crate::test_support::TestTempDir, st
         },
     );
     manifest::save(&manifest::manifest_path(&output_dir), &m).expect("save manifest");
+    // Manifest first, `meta.json` last — the order both indexing paths use, and
+    // the order the sidecar-pairing check requires.
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
     // The tree moves after the snapshot, so the graph is provably stale.
     fs::write(&abs, b"fn a() { changed(); }\n").expect("edit a.rs");
 

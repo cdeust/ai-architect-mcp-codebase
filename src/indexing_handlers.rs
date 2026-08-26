@@ -26,145 +26,219 @@ pub(crate) fn run_index_codebase(arguments: &Value) -> Value {
     }
 }
 
+/// Everything `index_codebase` needs after its arguments have been validated
+/// and the output directory prepared.
+///
+/// A parameter object rather than ten positional arguments (§4.4): these values
+/// are derived together, travel together through bootstrap / incremental / full
+/// paths, and are meaningless apart.
+struct IndexRequest {
+    codebase: std::path::PathBuf,
+    output_dir: std::path::PathBuf,
+    graph_dir: std::path::PathBuf,
+    manifest_path: std::path::PathBuf,
+    options: indexer::IndexOptions,
+    want_export: bool,
+    want_bootstrap: bool,
+    accept_stale: bool,
+    want_full: bool,
+    want_cochange: bool,
+}
+
+impl IndexRequest {
+    /// Validates the caller's arguments and prepares the output directory.
+    ///
+    /// Touches the filesystem deliberately — hence `prepare`, not `parse`: the
+    /// legacy artifact-dir migration (#195) must run before anything walks the
+    /// tree, and `validate_graph_path_safe` must run before any destructive op
+    /// on the derived `graph/` path (source: H4 fix).
+    fn prepare(args: &serde_json::Map<String, Value>) -> Result<Self, String> {
+        let path_str = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or("missing required field 'path'")?;
+        let output_str = args
+            .get("output_dir")
+            .and_then(|v| v.as_str())
+            .ok_or("missing required field 'output_dir'")?;
+        let options = indexer::IndexOptions {
+            language_filter: parse_language_filter(args)?,
+            dependency_scope: parse_dependency_scope(args)?,
+            exclude_dirs: parse_exclude_dirs(args)?,
+        };
+        let codebase = require_absolute(path_str, "path")?;
+        if !codebase.exists() {
+            return Err(format!("path does not exist: {}", codebase.display()));
+        }
+        artifact::migrate_legacy_dir(&codebase);
+        let output_dir = require_absolute(output_str, "output_dir")?;
+        fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir: {e}"))?;
+        let graph_dir = output_dir.join("graph");
+        validate_graph_path_safe(&graph_dir)?;
+        let manifest_path = indexer::manifest::manifest_path(&output_dir);
+        Ok(IndexRequest {
+            codebase,
+            output_dir,
+            graph_dir,
+            manifest_path,
+            options,
+            want_export: parse_bool_arg(args, "export_artifact", false)?,
+            want_bootstrap: parse_bool_arg(args, "bootstrap", false)?,
+            accept_stale: parse_bool_arg(args, "accept_stale", false)?,
+            // Issue #62: force a from-scratch rebuild even when an incremental
+            // baseline exists (e.g. after changing the language filter or
+            // dependency scope, which the manifest does not capture).
+            want_full: parse_bool_arg(args, "full", false)?,
+            // Issue #58: mine git temporal coupling (FILE_CHANGES_WITH) after
+            // indexing. Cheap (one bounded `git log`) and the architect agent
+            // reads churning pairs straight from the graph.
+            want_cochange: parse_bool_arg(args, "cochange", true)?,
+        })
+    }
+}
+
+/// Issue #62 incremental mode: when a prior local graph AND a readable file
+/// manifest exist and the caller did not force `full`, re-index only the changed
+/// files. `None` means "not applicable, or it failed" — a failure logs loudly
+/// and the caller falls through to a full rebuild (§13 — no silent path).
+fn try_incremental_index(req: &IndexRequest) -> Option<Value> {
+    if req.want_full || !req.graph_dir.exists() {
+        return None;
+    }
+    let prior = indexer::manifest::load(&req.manifest_path)?;
+    match indexer::index_incremental(
+        &req.codebase,
+        &req.graph_dir,
+        &req.manifest_path,
+        &req.options,
+        &prior,
+    ) {
+        Ok(inc) => {
+            // `index_incremental` has already saved the refreshed manifest, so
+            // `meta.json` lands last and names it (see write_graph_meta).
+            write_graph_meta(&req.output_dir, &req.codebase);
+            Some(finish_incremental_response(
+                inc,
+                &req.graph_dir,
+                &req.codebase,
+                &req.manifest_path,
+                req.want_export,
+                req.want_cochange,
+            ))
+        }
+        Err(e) => {
+            eprintln!("[ap] incremental index failed ({e}); falling back to a full re-index");
+            None
+        }
+    }
+}
+
+/// Writes the three sidecars a completed full index leaves beside the graph, in
+/// the one order every path uses, and mines temporal coupling.
+///
+/// ORDER IS LOAD-BEARING (fleet-watch#112 review round 4): the manifest is
+/// written BEFORE `meta.json`, matching the incremental path, so `meta.json` is
+/// the single commit point of an index and can record which manifest it
+/// accompanies. Written the other way round — as this path did — a query-time
+/// reader landing between the two got a fresh commit sha paired with the
+/// previous manifest and called a just-rebuilt graph stale, in a plain
+/// single-process run with no concurrent writer.
+///
+/// All three writes are best-effort: a failed sidecar costs the next run its
+/// incremental baseline or an honesty signal, never this index.
+fn persist_full_index_sidecars(
+    req: &IndexRequest,
+    result: &indexer::IndexResult,
+) -> (std::path::PathBuf, Value) {
+    if let Err(e) = indexer::write_full_manifest(&req.codebase, &req.manifest_path, &req.options) {
+        eprintln!("[ap] file manifest write failed (index succeeded): {e}");
+    }
+    // Records the absolute source root beside the graph; relative file paths
+    // stay in the graph, and the root lets consumers rebuild absolute ones.
+    write_graph_meta(&req.output_dir, &req.codebase);
+    // Issue #57: the coverage-honesty sidecar (parse-incomplete, skipped, and
+    // quarantined files).
+    let coverage_path = indexer::coverage::coverage_path(&req.output_dir);
+    if let Err(e) = indexer::coverage::save(&coverage_path, &result.coverage) {
+        eprintln!("[ap] coverage sidecar write failed (index succeeded): {e}");
+    }
+    // Issue #58: full index → full re-mine of the co-change window.
+    let cochange_summary = if req.want_cochange {
+        run_cochange(
+            &req.graph_dir,
+            &req.codebase,
+            &req.output_dir,
+            cochange::Mode::Full,
+        )
+    } else {
+        Value::Null
+    };
+    (coverage_path, cochange_summary)
+}
+
+/// Issue #55: an explicit index is the single (best-ratio, zstd-9) export tier.
+/// Failure to export is LOUD but non-fatal — the index itself succeeded.
+fn attach_artifact_export(
+    response: &mut Value,
+    req: &IndexRequest,
+    result: &indexer::IndexResult,
+    coverage_path: &Path,
+) {
+    match artifact::export_artifact(
+        &req.graph_dir,
+        &req.codebase,
+        result.node_count,
+        result.edge_count,
+        Some(&req.manifest_path),
+        Some(coverage_path),
+    ) {
+        Ok(stats) => {
+            response["artifact_path"] = json!(stats.artifact_path.to_string_lossy());
+            response["artifact_compressed_bytes"] = json!(stats.compressed_bytes);
+            response["artifact_original_bytes"] = json!(stats.original_bytes);
+        }
+        Err(e) => {
+            eprintln!("[ap] artifact export failed (index succeeded): {e}");
+            response["artifact_error"] = json!(e);
+        }
+    }
+}
+
 pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
     let args = arguments.as_object().ok_or("arguments must be an object")?;
-    let path_str = args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .ok_or("missing required field 'path'")?;
-    let output_str = args
-        .get("output_dir")
-        .and_then(|v| v.as_str())
-        .ok_or("missing required field 'output_dir'")?;
-    let lang_filter = parse_language_filter(args)?;
-    let dependency_scope = parse_dependency_scope(args)?;
-    let exclude_dirs = parse_exclude_dirs(args)?;
-    let options = indexer::IndexOptions {
-        language_filter: lang_filter,
-        dependency_scope,
-        exclude_dirs,
-    };
-    let want_export = parse_bool_arg(args, "export_artifact", false)?;
-    let want_bootstrap = parse_bool_arg(args, "bootstrap", false)?;
-    let accept_stale = parse_bool_arg(args, "accept_stale", false)?;
-    // Issue #62: force a from-scratch rebuild even when an incremental baseline
-    // exists (e.g. after changing the language filter or dependency scope, which
-    // the manifest does not capture). Default false → auto-incremental when a
-    // prior index + manifest are present.
-    let want_full = parse_bool_arg(args, "full", false)?;
-    // Issue #58: mine git temporal coupling (FILE_CHANGES_WITH) after indexing.
-    // Default true — it is cheap (one bounded `git log`) and the architect agent
-    // reads churning pairs straight from the graph. Set false to skip (e.g. a
-    // non-git tree, though mining self-skips there too).
-    let want_cochange = parse_bool_arg(args, "cochange", true)?;
-
-    let codebase = require_absolute(path_str, "path")?;
-    if !codebase.exists() {
-        return Err(format!("path does not exist: {}", codebase.display()));
-    }
-    // Issue #195: migrate the pre-rename artifact dir before anything below
-    // walks the tree or reads it — this is the earliest touchpoint for a
-    // full-index call, and `artifact::migrate_legacy_dir` is a cheap no-op
-    // once migrated.
-    artifact::migrate_legacy_dir(&codebase);
-    let output_dir = require_absolute(output_str, "output_dir")?;
-    fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir: {e}"))?;
-    let graph_dir = output_dir.join("graph");
-    let manifest_path = indexer::manifest::manifest_path(&output_dir);
-    // source: H4 fix — validate the derived path ends in `/graph` and is not
-    // a forbidden system root before any destructive op.
-    validate_graph_path_safe(&graph_dir)?;
+    let req = IndexRequest::prepare(args)?;
 
     // Issue #55/#62 bootstrap: when the caller opts in AND there is no local
     // graph yet, import the committed snapshot instead of cold-indexing. The
-    // evolved staleness contract (fresh → import; stale → import THEN incremental
-    // fill by DEFAULT; stale + accept_stale → import as-is, skip the fill;
-    // import/fill failure → reindex) lives in `attempt_bootstrap`. Any path that
-    // does NOT import falls through to the full index below, carrying an
-    // assertable `bootstrap_skipped` note.
+    // staleness contract lives in `attempt_bootstrap`; any path that does NOT
+    // import falls through below carrying an assertable `bootstrap_skipped`.
     let mut bootstrap_skipped: Option<Value> = None;
-    if want_bootstrap && !graph_dir.exists() {
+    if req.want_bootstrap && !req.graph_dir.exists() {
         match attempt_bootstrap(
-            &codebase,
-            &output_dir,
-            &graph_dir,
-            &manifest_path,
-            accept_stale,
-            &options,
+            &req.codebase,
+            &req.output_dir,
+            &req.graph_dir,
+            &req.manifest_path,
+            req.accept_stale,
+            &req.options,
         ) {
             BootstrapOutcome::Imported(resp) => return Ok(resp),
             BootstrapOutcome::Reindex(note) => bootstrap_skipped = note,
         }
     }
-
-    // Issue #62 incremental mode: when a prior local graph AND a readable file
-    // manifest exist and the caller did not force `full`, re-index only the
-    // changed files. Any failure logs loudly and falls through to a full
-    // rebuild (§13 — no silent path). Auto-selected so the common "re-index
-    // after editing a few files" call pays work proportional to the diff.
-    if !want_full && graph_dir.exists() {
-        if let Some(prior) = indexer::manifest::load(&manifest_path) {
-            match indexer::index_incremental(
-                &codebase,
-                &graph_dir,
-                &manifest_path,
-                &options,
-                &prior,
-            ) {
-                Ok(inc) => {
-                    write_graph_meta(&output_dir, &codebase);
-                    return Ok(finish_incremental_response(
-                        inc,
-                        &graph_dir,
-                        &codebase,
-                        &manifest_path,
-                        want_export,
-                        want_cochange,
-                    ));
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[ap] incremental index failed ({e}); falling back to a full re-index"
-                    );
-                }
-            }
-        }
+    if let Some(resp) = try_incremental_index(&req) {
+        return Ok(resp);
     }
 
-    // lbug creates the database itself; if a stale graph artifact exists from a
-    // prior run, remove it so lbug can initialise cleanly.
-    if graph_dir.exists() {
-        // Prior run may have left a dir OR a single-file Kuzu db; remove either.
-        remove_stale_graph_artifact(&graph_dir)?;
+    // lbug creates the database itself; a stale artifact from a prior run (a
+    // directory OR a single-file db) must go first so it can initialise cleanly.
+    if req.graph_dir.exists() {
+        remove_stale_graph_artifact(&req.graph_dir)?;
     }
+    let result =
+        indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
+    let (coverage_path, cochange_summary) = persist_full_index_sidecars(&req, &result);
 
-    let result = indexer::index_codebase_with_language(&codebase, &graph_dir, &options)?;
-    // Record the absolute source root beside the graph (relative file paths
-    // stay in the graph; the root lets consumers reconstruct absolute paths).
-    write_graph_meta(&output_dir, &codebase);
-    // Issue #62: persist the per-file manifest so the NEXT index_codebase call
-    // can run incrementally. Best-effort — a failed manifest write only forces
-    // the next run to full-index, never fails this one.
-    if let Err(e) = indexer::write_full_manifest(&codebase, &manifest_path, &options) {
-        eprintln!("[ap] file manifest write failed (index succeeded): {e}");
-    }
-    // Issue #57: persist the coverage-honesty sidecar (parse-incomplete, skipped,
-    // and quarantined files). Best-effort — a failed write only drops the honesty
-    // signal, never the index.
-    let coverage_path = indexer::coverage::coverage_path(&output_dir);
-    if let Err(e) = indexer::coverage::save(&coverage_path, &result.coverage) {
-        eprintln!("[ap] coverage sidecar write failed (index succeeded): {e}");
-    }
-    // Issue #58: mine git temporal coupling into FILE_CHANGES_WITH edges. Full
-    // index → full re-mine of the window.
-    let cochange_summary = if want_cochange {
-        run_cochange(&graph_dir, &codebase, &output_dir, cochange::Mode::Full)
-    } else {
-        Value::Null
-    };
-
-    // Issue #55: an explicit index is the single (best-ratio, zstd-9) export
-    // tier. Failure to export is LOUD but non-fatal — the index itself succeeded.
     let mut response = json!({
         "stage": 3,
         "status": "ok",
@@ -182,25 +256,8 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
     if let Some(note) = bootstrap_skipped {
         response["bootstrap_skipped"] = note;
     }
-    if want_export {
-        match artifact::export_artifact(
-            &graph_dir,
-            &codebase,
-            result.node_count,
-            result.edge_count,
-            Some(&manifest_path),
-            Some(&coverage_path),
-        ) {
-            Ok(stats) => {
-                response["artifact_path"] = json!(stats.artifact_path.to_string_lossy());
-                response["artifact_compressed_bytes"] = json!(stats.compressed_bytes);
-                response["artifact_original_bytes"] = json!(stats.original_bytes);
-            }
-            Err(e) => {
-                eprintln!("[ap] artifact export failed (index succeeded): {e}");
-                response["artifact_error"] = json!(e);
-            }
-        }
+    if req.want_export {
+        attach_artifact_export(&mut response, &req, &result, &coverage_path);
     }
     Ok(response)
 }
@@ -386,6 +443,74 @@ pub(crate) const CALLABLE_LABELS: &[&str] = &["Function", "Method"];
 /// OBSERVED_CALLS edge (unmatched_created), or was recorded as unresolved
 /// (endpoint not a Function/Method node). The response reports the three counts
 /// plus a capped list of the created divergences and the unresolved names.
+/// Sums observations per (caller, callee) so repeated pairs add up instead of
+/// creating duplicate edges.
+fn aggregate_traces(
+    traces: &[Value],
+) -> Result<std::collections::BTreeMap<(String, String), i64>, String> {
+    let mut agg: std::collections::BTreeMap<(String, String), i64> =
+        std::collections::BTreeMap::new();
+    for t in traces {
+        let caller = t.get("caller").and_then(|v| v.as_str());
+        let callee = t.get("callee").and_then(|v| v.as_str());
+        let (caller, callee) = match (caller, callee) {
+            (Some(a), Some(b)) => (a.to_string(), b.to_string()),
+            _ => return Err("each trace needs 'caller' and 'callee' strings".to_string()),
+        };
+        let count = t.get("count").and_then(|v| v.as_i64()).unwrap_or(1).max(1);
+        *agg.entry((caller, callee)).or_insert(0) += count;
+    }
+    Ok(agg)
+}
+
+/// Running totals while folding runtime observations into the graph.
+#[derive(Default)]
+struct TraceTally {
+    matched: u64,
+    unmatched_created: u64,
+    unresolved: Vec<String>,
+    divergences: Vec<Value>,
+}
+
+impl TraceTally {
+    /// Folds one observed call in: annotate the static edge if there is one,
+    /// otherwise record the divergence as an OBSERVED_CALLS edge. An endpoint
+    /// that is not a callable node is unresolved, not an error.
+    fn absorb(
+        &mut self,
+        store: &crate::graph_store::GraphStore,
+        caller: &str,
+        callee: &str,
+        count: i64,
+    ) -> Result<(), String> {
+        let from_label = callable_label(store, caller);
+        let to_label = callable_label(store, callee);
+        let (Some(from_label), Some(to_label)) = (from_label, to_label) else {
+            if callable_label(store, caller).is_none() {
+                self.unresolved.push(caller.to_string());
+            }
+            if callable_label(store, callee).is_none() {
+                self.unresolved.push(callee.to_string());
+            }
+            return Ok(());
+        };
+        let static_table = format!("Calls_{from_label}_{to_label}");
+        if annotate_static_call(store, &static_table, caller, callee, count)? {
+            self.matched += 1;
+            return Ok(());
+        }
+        let observed_table = format!("OBSERVED_CALLS_{from_label}_{to_label}");
+        upsert_observed_call(store, &observed_table, caller, callee, count)?;
+        self.unmatched_created += 1;
+        if self.divergences.len() < COVERAGE_LIST_CAP {
+            self.divergences.push(json!({
+                "caller": caller, "callee": callee, "observed_count": count
+            }));
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn do_ingest_traces(arguments: &Value) -> Result<Value, String> {
     let args = arguments.as_object().ok_or("arguments must be an object")?;
     let graph_str = args
@@ -401,56 +526,17 @@ pub(crate) fn do_ingest_traces(arguments: &Value) -> Result<Value, String> {
         .and_then(|v| v.as_array())
         .ok_or("missing required field 'traces' (array of {caller, callee, count})")?;
 
-    // Aggregate observations per (caller, callee) so repeated pairs sum instead
-    // of creating duplicate edges.
-    let mut agg: std::collections::BTreeMap<(String, String), i64> =
-        std::collections::BTreeMap::new();
-    for t in traces {
-        let caller = t.get("caller").and_then(|v| v.as_str());
-        let callee = t.get("callee").and_then(|v| v.as_str());
-        let (caller, callee) = match (caller, callee) {
-            (Some(a), Some(b)) => (a.to_string(), b.to_string()),
-            _ => return Err("each trace needs 'caller' and 'callee' strings".to_string()),
-        };
-        let count = t.get("count").and_then(|v| v.as_i64()).unwrap_or(1).max(1);
-        *agg.entry((caller, callee)).or_insert(0) += count;
-    }
-
     let store = graph_cache::open_cached(graph_path)?;
-    let mut matched = 0u64;
-    let mut unmatched_created = 0u64;
-    let mut unresolved: Vec<String> = Vec::new();
-    let mut divergences: Vec<Value> = Vec::new();
-
-    for ((caller, callee), count) in agg {
-        let from_label = callable_label(&store, &caller);
-        let to_label = callable_label(&store, &callee);
-        let (from_label, to_label) = match (from_label, to_label) {
-            (Some(f), Some(t)) => (f, t),
-            _ => {
-                if from_label.is_none() {
-                    unresolved.push(caller.clone());
-                }
-                if to_label.is_none() {
-                    unresolved.push(callee.clone());
-                }
-                continue;
-            }
-        };
-        let static_table = format!("Calls_{from_label}_{to_label}");
-        if annotate_static_call(&store, &static_table, &caller, &callee, count)? {
-            matched += 1;
-        } else {
-            let observed_table = format!("OBSERVED_CALLS_{from_label}_{to_label}");
-            upsert_observed_call(&store, &observed_table, &caller, &callee, count)?;
-            unmatched_created += 1;
-            if divergences.len() < COVERAGE_LIST_CAP {
-                divergences.push(json!({
-                    "caller": caller, "callee": callee, "observed_count": count
-                }));
-            }
-        }
+    let mut tally = TraceTally::default();
+    for ((caller, callee), count) in aggregate_traces(traces)? {
+        tally.absorb(&store, &caller, &callee, count)?;
     }
+    let TraceTally {
+        matched,
+        unmatched_created,
+        mut unresolved,
+        divergences,
+    } = tally;
 
     unresolved.sort();
     unresolved.dedup();

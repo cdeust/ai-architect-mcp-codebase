@@ -333,7 +333,6 @@ pub(crate) fn bootstrap_import_and_fill(
         );
         return BootstrapOutcome::Reindex(None);
     }
-    write_graph_meta(output_dir, codebase);
     // The bundled manifest (unpacked alongside the graph) is the artifact-sha
     // baseline the content-hash fallback classifies against when git can't diff.
     let imported_manifest = indexer::manifest::load(manifest_path);
@@ -353,6 +352,10 @@ pub(crate) fn bootstrap_import_and_fill(
             return BootstrapOutcome::Reindex(Some(note));
         }
     };
+    // `meta.json` last, as everywhere else: the fill rewrites the manifest, so a
+    // sidecar written before it would name the imported manifest rather than the
+    // filled one and read as a torn pair forever (fleet-watch#112 review round 4).
+    write_graph_meta(output_dir, codebase);
     let fill_method = match fill.method {
         indexer::FillMethod::GitDiff => "git_diff",
         indexer::FillMethod::ContentHash => "content_hash",

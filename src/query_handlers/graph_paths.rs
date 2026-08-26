@@ -143,11 +143,21 @@ fn unique_tmp_name() -> String {
 /// degrades a consumer's path reconstruction, never the index. On failure the
 /// previous sidecar is left intact rather than destroyed.
 pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
+    // Schema 3 (fleet-watch#112 review round 4): record WHICH `file_manifest.json`
+    // this sidecar accompanies. Both indexing paths write the manifest first and
+    // this file last, so `meta.json` is an index's commit point; naming the
+    // manifest lets a reader that lands mid-index see that the pair does not
+    // match and report "unknown" instead of pairing a fresh commit sha with a
+    // stale manifest and calling a just-rebuilt graph stale. Absent manifest →
+    // nulls, and the reader has no manifest to check either.
+    let manifest = fs::metadata(crate::indexer::manifest::manifest_path(output_dir)).ok();
     let meta = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "root": root.to_string_lossy(),
         "tool": "ai-architect-mcp-codebase",
         "commit_sha": crate::git_provenance::git_head(root),
+        "manifest_size": manifest.as_ref().map(|m| m.len()),
+        "manifest_mtime_ns": manifest.as_ref().map(crate::indexer::manifest::mtime_ns),
     });
     let meta_path = output_dir.join("meta.json");
     let tmp_path = output_dir.join(unique_tmp_name());
@@ -259,10 +269,10 @@ mod tests {
         );
         assert_eq!(
             parsed.get("schema_version").and_then(|v| v.as_u64()),
-            Some(2),
+            Some(3),
         );
         // `root` is not a git working tree → commit_sha is present but null,
-        // not simply absent (the field is always written, per schema 2).
+        // not simply absent (the field is always written, per schema 3).
         assert!(parsed.get("commit_sha").is_some_and(|v| v.is_null()));
         let _ = fs::remove_dir_all(&base);
     }
