@@ -34,15 +34,16 @@ use crate::indexer::manifest::{self, FileState};
 #[derive(Deserialize)]
 struct GraphMeta {
     root: String,
-    /// Absent on the schema-1 sidecar that predates any versioning here; a
-    /// missing version reads as 0, i.e. "older than the pairing contract".
-    #[serde(default)]
-    schema_version: u32,
     #[serde(default)]
     commit_sha: Option<String>,
-    /// Schema 3: the size and mtime of the `file_manifest.json` this sidecar was
-    /// written to accompany. Absent on a schema-1/2 sidecar — see
-    /// `describes_manifest_at`.
+    /// The size and mtime of the `file_manifest.json` this sidecar was written
+    /// to accompany. Absent on a sidecar written before schema 3 — and absent
+    /// is not a pass, see `describes_manifest_at`.
+    ///
+    /// `schema_version` is deliberately NOT read. It is a number the sidecar
+    /// declares about itself, and this module's whole threat model is that the
+    /// sidecar is attacker-writable, so a version field can only ever say what
+    /// the writer wants it to say (fleet-watch#112 review round 6).
     #[serde(default)]
     manifest_size: Option<u64>,
     #[serde(default)]
@@ -65,20 +66,29 @@ impl GraphMeta {
     /// A schema-1/2 sidecar carries no identity to compare, so it pairs by
     /// default — an old sidecar degrades to the previous behaviour instead of
     /// reading as permanently torn.
-    fn describes_manifest_at(&self, manifest_path: &Path) -> bool {
-        if self.schema_version < MANIFEST_PAIRING_SCHEMA {
-            return true; // predates the contract; nothing to compare against
-        }
-        let (Some(size), Some(mtime_ns)) = (self.manifest_size, self.manifest_mtime_ns) else {
-            // Schema 3 and no identity means the writer looked for a manifest and
-            // found none — so this sidecar was written BEFORE its manifest, the
-            // ordering bug itself. It does not pair with whatever is there now.
+    fn describes_manifest(&self, size: u64, mtime_ns: i64) -> bool {
+        let (Some(claimed_size), Some(claimed_mtime)) =
+            (self.manifest_size, self.manifest_mtime_ns)
+        else {
+            // No identity recorded. Two ways to get here and both mean the same
+            // thing — this sidecar cannot be shown to belong to that manifest:
+            // a pre-schema-3 sidecar that never recorded one, or a sidecar
+            // written BEFORE its manifest, which is the ordering bug itself.
+            //
+            // Previously a sidecar could opt OUT of this check by declaring
+            // `"schema_version": 2`, so a forged `meta.json` carrying nothing
+            // but a root and a commit_sha bypassed the whole pairing defence
+            // with one field and no race at all (fleet-watch#112 review round
+            // 6). The version is no longer consulted: absence of identity is a
+            // failure to pair, whatever the sidecar says about itself.
+            //
+            // Cost of the strictness: a graph indexed by an older build reads
+            // as `"unknown"` until it is re-indexed. That is the honest answer
+            // — the pair genuinely cannot be verified — and it is the safe
+            // direction, unlike a bypass that reports `"fresh"`.
             return false;
         };
-        match std::fs::metadata(manifest_path) {
-            Ok(m) => m.len() == size && manifest::mtime_ns(&m) == mtime_ns,
-            Err(_) => false,
-        }
+        claimed_size == size && claimed_mtime == mtime_ns
     }
 }
 
@@ -93,10 +103,6 @@ impl GraphMeta {
 /// (fleet-watch#112 review). The string field keeps its name and its meaning;
 /// the new object gets its own.
 pub(crate) const RESPONSE_KEY: &str = "graph_freshness";
-
-/// First `meta.json` schema that records which manifest it accompanies. Below
-/// this, a sidecar carries no identity and is paired by default.
-const MANIFEST_PAIRING_SCHEMA: u32 = 3;
 
 /// Stamps the freshness receipt onto a response envelope under `RESPONSE_KEY`.
 ///
@@ -177,12 +183,16 @@ fn admissible_inputs(graph_path: &Path) -> Option<CheckInputs> {
     let output_dir = graph_path.parent()?;
     let meta = read_meta(output_dir)?;
     let root = validated_root(&meta.root)?;
-    let manifest_path = manifest::manifest_path(output_dir);
-    let loaded = manifest::load(&manifest_path)?;
+    // Content AND identity from a single open handle. Reading the manifest and
+    // then stat-ing the path separately samples the name twice, so a rewrite
+    // between the two reads pairs one index's bytes with another's identity —
+    // a narrower race than the one below, but the same class (round 6).
+    let (loaded, size, mtime_ns) =
+        manifest::load_with_identity(&manifest::manifest_path(output_dir))?;
     // The two sidecars must be a matching pair: landing between an index's
     // manifest write and its meta write yields one half of each, and neither
     // half alone is a verdict (round 4).
-    if !meta.describes_manifest_at(&manifest_path) {
+    if !meta.describes_manifest(size, mtime_ns) {
         return None;
     }
     Some(CheckInputs {

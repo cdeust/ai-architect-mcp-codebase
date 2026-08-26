@@ -630,3 +630,96 @@ fn a_sidecar_root_reached_through_a_symlink_cannot_become_a_join_base() {
         canonical.display(),
     );
 }
+
+#[test]
+fn a_sidecar_cannot_opt_out_of_pairing_by_declaring_an_old_schema() {
+    // fleet-watch#112 review round 6, finding 1. `describes_manifest_at` used to
+    // return `true` whenever the sidecar declared `schema_version < 3` — a
+    // number the sidecar asserts about ITSELF, inside a module whose entire
+    // threat model is that the sidecar is attacker-writable. So a forged
+    // meta.json carrying nothing but a root and a commit_sha, plus one field
+    // saying "I am old", bypassed the whole round-4 pairing defence. No race,
+    // no timing, one field.
+    //
+    // The manifest here describes a tree that has MOVED, so a bypassed pairing
+    // does not merely skip a check — it goes on to report a verdict about a
+    // graph whose sidecars were never shown to belong together.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (output_dir, graph, root) = scaffold(tmp.path());
+    fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
+    write_manifest_matching_disk(&output_dir, &root, "a.rs");
+
+    // A sidecar that claims to predate the pairing contract and records no
+    // manifest identity at all.
+    fs::write(
+        output_dir.join("meta.json"),
+        json!({
+            "schema_version": 2,
+            "root": root.to_string_lossy(),
+            "tool": "ai-architect-mcp-codebase",
+            "commit_sha": Value::Null,
+        })
+        .to_string(),
+    )
+    .expect("write forged meta");
+
+    assert_eq!(
+        check(&graph),
+        json!({"state": "unknown"}),
+        "a sidecar that records no manifest identity cannot be paired, whatever \
+         version it declares",
+    );
+}
+
+#[test]
+fn analyze_codebase_leaves_a_manifest_that_sees_later_files() {
+    // fleet-watch#112 review round 6, finding 2. `analyze_codebase` wrote
+    // `meta.json` and never a manifest. It and `index_codebase` are documented
+    // as interchangeable entry points over one `output_dir`, so an analyze run
+    // on top of an earlier index froze that index's manifest in place: every
+    // file added afterwards was permanently invisible to `count_dirty`, and the
+    // graph read `fresh` while missing them. No race — just the wrong entry
+    // point.
+    //
+    // The assertion is the consequence, not the mechanism: index, analyze, then
+    // CHANGE a file that only the analyze run could have manifested, and require
+    // the guard to see it.
+    use crate::test_support::TempDirExt;
+    let base = tempfile::Builder::new()
+        .prefix("freshness_analyze_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let _ = fs::remove_dir_all(&base);
+    let repo = base.join("repo/src");
+    let out = base.join("out");
+    fs::create_dir_all(&repo).expect("mk repo");
+    fs::write(repo.join("a.rs"), "pub fn a() {}\n").expect("write a.rs");
+
+    let args = json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+    });
+    crate::indexing_handlers::do_index_codebase(&args).expect("index");
+
+    // A file that exists only from the analyze run's point of view.
+    fs::write(repo.join("b.rs"), "pub fn b() {}\n").expect("write b.rs");
+    crate::analyze_handlers::do_analyze_codebase(&args).expect("analyze");
+
+    let graph = out.join("graph");
+    assert_eq!(
+        check(&graph)["state"],
+        json!("fresh"),
+        "precondition: straight after analyze the graph describes the tree",
+    );
+
+    fs::write(repo.join("b.rs"), "pub fn b() { changed(); }\n").expect("edit b.rs");
+    let state = check(&graph);
+    assert_eq!(
+        state["state"],
+        json!("stale"),
+        "analyze must leave a manifest that covers b.rs, or edits to it are \
+         invisible forever: {state}",
+    );
+    let _ = fs::remove_dir_all(&base);
+}
