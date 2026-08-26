@@ -29,6 +29,45 @@ pub(super) struct HybridIndexes<'a> {
 /// be fused at all.
 const OVERFETCH_FACTOR: usize = 3;
 
+/// How many candidates each retriever is asked for when the caller narrowed the
+/// query with `label_filter`.
+///
+/// `label_filter` is applied during enrichment, AFTER both retrievers have
+/// already truncated to their own top-K — neither can pre-filter, because the
+/// BM25 `label` field is STORED but not INDEXED (see `bm25::build_schema`) and
+/// the vector index carries no label predicate at all. So an unwidened fetch
+/// silently loses matches the filter was supposed to surface: with the default
+/// limit of 20, `limit * OVERFETCH_FACTOR` is 60 candidates, and 60 boosted
+/// symbol hits are easy to come by, so two genuinely-matching doc files ranked
+/// 61st and 62nd are discarded before `label_filter: "File"` ever sees them.
+/// The caller gets an empty result and no indication that real matches existed.
+///
+/// source: measured on this repository, 2026-08-26 — `git ls-files` holds 250
+/// files with a `DOC_EXTENSIONS` extension against 307 `.rs` files. 2000 is
+/// therefore 8x the entire doc corpus of a repository of this size, so no doc
+/// hit here can be crowded out however the symbol hits rank. The bound is on
+/// the RETRIEVER's result list, not on a graph scan, and RRF over 2000 entries
+/// is a hash insert per entry — the cost is paid only when a caller actually
+/// narrows, which is an explicit, rare request.
+///
+/// The honest limit of this fix: it is a deep pool, not a pushdown. A corpus
+/// whose filtered class exceeds 2000 documents can still be truncated. Making
+/// that impossible means indexing the `label` field and filtering inside the
+/// retriever, which is a schema change and its own piece of work.
+const FILTERED_FETCH_LIMIT: usize = 2000;
+
+/// How many candidates to pull from each retriever for this request.
+///
+/// Widened whenever the caller narrowed by label, because the filter runs after
+/// truncation — see [`FILTERED_FETCH_LIMIT`].
+fn fetch_limit_for(options: &SearchOptions) -> usize {
+    if options.label_filter.is_some() {
+        FILTERED_FETCH_LIMIT.max(options.limit * OVERFETCH_FACTOR)
+    } else {
+        options.limit * OVERFETCH_FACTOR
+    }
+}
+
 /// Boost weights for the fused path. Three orders of magnitude below the
 /// substring path's: RRF scores cluster tightly around 1/(k+rank), so a nudge
 /// sized for a 0..1 score would dominate the ranking rather than tilt it.
@@ -54,7 +93,7 @@ pub(super) fn search_hybrid(
     options: &SearchOptions,
     indexes: &HybridIndexes<'_>,
 ) -> Result<Vec<SearchResult>, String> {
-    let fetch_limit = options.limit * OVERFETCH_FACTOR;
+    let fetch_limit = fetch_limit_for(options);
 
     let bm25_ranked = if indexes.bm25 {
         let hits = bm25::query_index(&indexes.dir.join("bm25"), query, fetch_limit)?;

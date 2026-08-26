@@ -236,3 +236,58 @@ fn a_file_label_filter_excludes_symbol_hits() {
     assert!(enrich_from_graph(&store, &hit("docs/guide.md", 0.01), &boosts, &opts).is_some());
     assert!(enrich_from_graph(&store, &hit("main.rs::alpha", 0.01), &boosts, &opts).is_none());
 }
+
+/// Review round 3, finding 2. `label_filter` is applied during enrichment,
+/// after both retrievers have truncated to their own top-K, so an unwidened
+/// fetch discards matching doc hits before the filter can ever see them: with
+/// the default limit of 20, only 60 candidates are pulled, and 60 symbol hits
+/// are easy to come by. The caller gets an empty result and no indication that
+/// real matches existed.
+///
+/// This test fails on the pre-fix code, which returns 60 for both.
+#[test]
+fn a_label_filtered_query_fetches_a_pool_deep_enough_to_survive_the_filter() {
+    let unfiltered = SearchOptions {
+        limit: 20,
+        label_filter: None,
+        min_score: 0.0,
+    };
+    assert_eq!(
+        fetch_limit_for(&unfiltered),
+        20 * OVERFETCH_FACTOR,
+        "an unfiltered query keeps the ordinary overfetch"
+    );
+
+    let filtered = SearchOptions {
+        limit: 20,
+        label_filter: Some(NODE_FILE.to_string()),
+        min_score: 0.0,
+    };
+    assert!(
+        fetch_limit_for(&filtered) >= FILTERED_FETCH_LIMIT,
+        "a filtered query must pull a pool deeper than the class it filters to, \
+         got {}",
+        fetch_limit_for(&filtered)
+    );
+
+    // Every label narrows the same way, so every label widens the same way —
+    // File is not a special case here.
+    let by_kind = SearchOptions {
+        limit: 20,
+        label_filter: Some("Function".to_string()),
+        min_score: 0.0,
+    };
+    assert!(fetch_limit_for(&by_kind) >= FILTERED_FETCH_LIMIT);
+
+    // A caller asking for more than the floor still gets what it asked for.
+    let huge = SearchOptions {
+        limit: FILTERED_FETCH_LIMIT,
+        label_filter: Some(NODE_FILE.to_string()),
+        min_score: 0.0,
+    };
+    assert_eq!(
+        fetch_limit_for(&huge),
+        FILTERED_FETCH_LIMIT * OVERFETCH_FACTOR,
+        "the floor must never shrink a larger explicit request"
+    );
+}
