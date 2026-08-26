@@ -32,7 +32,17 @@ mod schema;
 #[cfg(test)]
 pub(super) use schema::build_legacy_index;
 pub use schema::indexes_doc_bodies;
-use schema::{build_schema, Bm25Fields, OpenedFields};
+// Re-exported, not merely imported: `search::bm25::build_schema` and
+// `search::bm25::Bm25Fields` were `pub` before this PR, and Cargo.toml's
+// [lib] section promises to "keep the Rust import path stable for workspace
+// consumers and downstream users". Splitting this file into a private
+// submodule narrowed both to crate-internal without anyone deciding to —
+// a silent breaking change to a published path, inside a feature PR that
+// had no business making one. The re-export restores the exact pre-PR
+// surface; `tests/public_api_paths.rs` pins it from OUTSIDE the crate,
+// where `pub(crate)` would not resolve.
+use schema::OpenedFields;
+pub use schema::{build_schema, Bm25Fields};
 
 // ---------------------------------------------------------------------------
 // Schema fields

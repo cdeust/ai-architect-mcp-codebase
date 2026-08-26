@@ -25,7 +25,7 @@ const F_LABEL: &str = "label";
 const F_FILE_PATH: &str = "file_path";
 const F_BODY: &str = "body";
 
-pub(crate) struct Bm25Fields {
+pub struct Bm25Fields {
     pub qualified_name: Field,
     pub name: Field,
     pub label: Field,
@@ -33,7 +33,7 @@ pub(crate) struct Bm25Fields {
     pub body: Field,
 }
 
-pub(super) fn build_schema() -> (Schema, Bm25Fields) {
+pub fn build_schema() -> (Schema, Bm25Fields) {
     let mut builder = Schema::builder();
     let qualified_name = builder.add_text_field(F_QUALIFIED_NAME, TEXT | STORED);
     let name = builder.add_text_field(F_NAME, TEXT | STORED);
