@@ -211,12 +211,6 @@ pub fn search_graph(
     options: &SearchOptions,
     index_dir: Option<&Path>,
 ) -> Result<Vec<SearchResult>, String> {
-    let query_lower = query.to_lowercase();
-    let terms: Vec<&str> = query_lower.split_whitespace().collect();
-    if terms.is_empty() {
-        return Ok(Vec::new());
-    }
-
     // The search-index directory is passed by the caller (sibling
     // ``search_index/`` of the graph dir). It used to be smuggled through the
     // process-global env var ``AA_SEARCH_INDEX_DIR``, which raced across
@@ -229,11 +223,21 @@ pub fn search_graph(
         vector: dir.join("vector_index.bin").exists(),
     });
 
-    // ONE capability check, ahead of the dispatch, so it covers BOTH branches.
-    // Placing it inside the fallback arm only — as the first revision did —
-    // left it guarding the half that cannot crash while the hybrid half chose
-    // its path on bare directory existence.
+    // ONE capability check, before EVERY return this function can take.
+    // It has now been placed too late twice: first inside the substring arm
+    // only, leaving the hybrid arm unguarded; then above the dispatch but below
+    // the empty-query return, leaving that third path answering `Ok([])` to an
+    // unservable filter — the same silent-empty-versus-explanatory-refusal
+    // guarantee, defeated by a return the guard sat beneath. It answers a
+    // question about the INDEX, not about the query, so nothing about the query
+    // belongs above it.
     reject_unservable_file_filter(options, indexes.as_ref())?;
+
+    let query_lower = query.to_lowercase();
+    let terms: Vec<&str> = query_lower.split_whitespace().collect();
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
 
     match indexes {
         Some(ref indexes) if indexes.bm25 || indexes.vector => {
@@ -375,6 +379,45 @@ mod fallback_tests {
             search_graph(&store, "handle_tool_call", &options, Some(&index_dir)).is_ok(),
             "a legacy index must remain queryable, just without doc content"
         );
+    }
+
+    /// Review round 3, finding 4. The guard was placed above the dispatch but
+    /// BELOW the empty-query early return, so a blank query slipped past it and
+    /// answered `Ok([])` — the same silent-empty-versus-explanatory-refusal
+    /// guarantee this PR already fixed twice, defeated a third time by a return
+    /// the guard happened to sit beneath. The guard answers a question about the
+    /// INDEX, so nothing about the query belongs above it.
+    ///
+    /// This test fails on the round-2 code, which returns `Ok(vec![])`.
+    #[test]
+    fn a_blank_query_does_not_smuggle_an_unservable_file_filter_past_the_guard() {
+        let (_dir, store) = store_without_an_index();
+        let options = SearchOptions {
+            limit: 10,
+            label_filter: Some(NODE_FILE.to_string()),
+            min_score: 0.0,
+        };
+        for blank in ["", "   ", "\t\n "] {
+            let Err(err) = search_graph(&store, blank, &options, None) else {
+                panic!("blank query {blank:?} must not answer an unservable filter with silence");
+            };
+            assert!(err.contains("analyze_codebase"), "got: {err}");
+        }
+    }
+
+    /// A blank query with a SERVABLE filter is still an ordinary empty result —
+    /// the guard must not turn "you matched nothing" into an error.
+    #[test]
+    fn a_blank_query_without_an_unservable_filter_is_still_empty_not_an_error() {
+        let (_dir, store) = store_without_an_index();
+        let options = SearchOptions {
+            limit: 10,
+            label_filter: Some("Function".to_string()),
+            min_score: 0.0,
+        };
+        let hits =
+            search_graph(&store, "   ", &options, None).expect("blank query is not an error");
+        assert!(hits.is_empty());
     }
 
     /// The refusal is specific to the unservable combination: every other
