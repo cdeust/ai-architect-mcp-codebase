@@ -35,7 +35,18 @@ adheres to [Semantic Versioning](https://semver.org/).
   file named per writer) so neither a concurrent reader can be handed a torn
   sidecar nor two concurrent indexers of one `output_dir` interleave through a
   shared temp path; a schema-1 sidecar from an older index still parses, just
-  without the commit signal.
+  without the commit signal. The write goes through the repository's existing
+  `handler_util::atomic_write` rather than a local reimplementation of it, which
+  restores the `fsync` a hand-rolled version had dropped — without it a crash
+  between the write and the rename could publish an empty or truncated sidecar.
+- `write_graph_meta` reports a failed sidecar write instead of logging it and
+  carrying on (fleet-watch#112). That was defensible while the sidecar was only
+  a convenience for path reconstruction; it is not, now that the staleness
+  receipt reads it. On Windows a rename over a destination another process holds
+  open can fail with a sharing violation, and a swallowed failure there leaves
+  the PREVIOUS `meta.json` in place while the caller is told a fresh index
+  completed. `index_codebase` now carries a `meta_write_error` field on the
+  response when this happens; the index itself still succeeds.
 
 ### Fixed
 
@@ -63,6 +74,13 @@ adheres to [Semantic Versioning](https://semver.org/).
   file matched the attacker's guess. The root must now be absolute, resolvable,
   a directory, and not one of the system paths the server already refuses
   elsewhere.
+
+  The blacklist is matched against the CANONICAL form of each entry as well as
+  its literal one. Comparing a canonicalized root against literal strings did
+  not work and silently did not: on macOS `/etc`, `/tmp`, `/var` and `/home` are
+  themselves symlinks, so `"root": "/etc"` canonicalized to `/private/etc` — a
+  path the literal list never named — and was accepted, reopening the oracle for
+  a real directory rather than the degenerate `/`.
 
   This is a BOUNDED mitigation, not a closure, and the residual is exactly
   this: **an attacker with write access to `output_dir` can still direct `root`
