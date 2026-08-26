@@ -164,6 +164,7 @@ mod process_impact_handlers;
 mod query_handlers;
 mod search_context_handlers;
 mod symbol_handlers;
+mod trace_ingest;
 mod verification_core;
 mod verification_ops;
 
@@ -178,6 +179,7 @@ pub(crate) use process_impact_handlers::*;
 pub(crate) use query_handlers::*;
 pub(crate) use search_context_handlers::*;
 pub(crate) use symbol_handlers::*;
+use trace_ingest::*;
 pub(crate) use verification_ops::*;
 
 // ---------------------------------------------------------------------------
