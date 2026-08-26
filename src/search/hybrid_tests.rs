@@ -237,57 +237,219 @@ fn a_file_label_filter_excludes_symbol_hits() {
     assert!(enrich_from_graph(&store, &hit("main.rs::alpha", 0.01), &boosts, &opts).is_none());
 }
 
-/// Review round 3, finding 2. `label_filter` is applied during enrichment,
-/// after both retrievers have truncated to their own top-K, so an unwidened
-/// fetch discards matching doc hits before the filter can ever see them: with
-/// the default limit of 20, only 60 candidates are pulled, and 60 symbol hits
-/// are easy to come by. The caller gets an empty result and no indication that
-/// real matches existed.
+// ---------------------------------------------------------------------------
+// Retrieval depth and early label filtering (review round 4, findings 1 and 2)
+// ---------------------------------------------------------------------------
+
+/// A fake retriever returning `total` hits of `label`, recording the depth it
+/// was asked for on each call so a test can assert the escalation sequence.
+fn recording_retriever<'a>(
+    label: &'static str,
+    total: usize,
+    calls: &'a std::cell::RefCell<Vec<usize>>,
+) -> impl Fn(usize) -> Result<Vec<Candidate>, String> + 'a {
+    move |n: usize| {
+        calls.borrow_mut().push(n);
+        Ok((0..total.min(n))
+            .map(|i| Candidate {
+                key: format!("k{i}"),
+                label: label.to_string(),
+            })
+            .collect())
+    }
+}
+
+fn opts(limit: usize, label_filter: Option<&str>) -> SearchOptions {
+    SearchOptions {
+        limit,
+        label_filter: label_filter.map(str::to_string),
+        min_score: 0.0,
+    }
+}
+
+/// Review round 4, finding 2. The previous revision widened the fetch to a flat
+/// 2000 for ANY `label_filter`, but `tool_schemas.rs` documents `label_filter`
+/// (Function/Method/Struct/…) as the STANDARD way to narrow a search, not a rare
+/// request — so every routine call paid a 2000-candidate fetch from both
+/// retrievers to find results the ordinary depth already contained.
 ///
-/// This test fails on the pre-fix code, which returns 60 for both.
+/// Measured on this repository, Function is 58.3% of the 5148-document index, so
+/// the first fetch is satisfied outright and must never escalate.
+///
+/// This test fails on the round-3 code, which asks for 2000 immediately.
 #[test]
-fn a_label_filtered_query_fetches_a_pool_deep_enough_to_survive_the_filter() {
-    let unfiltered = SearchOptions {
-        limit: 20,
-        label_filter: None,
-        min_score: 0.0,
-    };
-    assert_eq!(
-        fetch_limit_for(&unfiltered),
-        20 * OVERFETCH_FACTOR,
-        "an unfiltered query keeps the ordinary overfetch"
-    );
+fn a_common_label_is_satisfied_by_the_first_fetch_and_never_escalates() {
+    let calls = std::cell::RefCell::new(Vec::new());
+    let options = opts(20, Some("Function"));
+    // A pool where the requested class is plentiful, as Function is.
+    let ranked = retrieve_ranked(recording_retriever("Function", 10_000, &calls), &options)
+        .expect("retrieve");
 
-    let filtered = SearchOptions {
-        limit: 20,
-        label_filter: Some(NODE_FILE.to_string()),
-        min_score: 0.0,
-    };
+    assert_eq!(
+        calls.borrow().len(),
+        1,
+        "a plentiful class must cost exactly one fetch, got {:?}",
+        calls.borrow()
+    );
+    assert_eq!(
+        calls.borrow()[0],
+        base_fetch_limit(&options),
+        "and that fetch is the ordinary depth, not a widened one"
+    );
+    assert!(ranked.len() >= options.limit * OVERFETCH_FACTOR);
+}
+
+/// The other direction of the same trade-off: a class rare enough that the
+/// ordinary depth cannot fill the pool must escalate until it can.
+///
+/// Measured on this repository the rarest searchable classes are Trait (0.23%)
+/// and TypeAlias (0.35%) — BOTH rarer than File doc bodies (0.87%). Scoping the
+/// widening to `label_filter: "File"` specifically, as the round-3 revision did
+/// in spirit, would therefore have left the two rarest classes starving. The
+/// escalation is keyed on how the pool actually fills, not on the label's name.
+#[test]
+fn a_rare_label_escalates_until_the_pool_is_deep_enough() {
+    for rare in ["Trait", "TypeAlias", NODE_FILE] {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let options = opts(20, Some(rare));
+        // The retriever holds plenty of hits, but only a thin slice matches.
+        let retriever = |n: usize| {
+            calls.borrow_mut().push(n);
+            Ok((0..n)
+                .map(|i| Candidate {
+                    key: format!("k{i}"),
+                    // 1 in 50 carries the requested label.
+                    label: if i % 50 == 0 {
+                        rare.to_string()
+                    } else {
+                        "Function".to_string()
+                    },
+                })
+                .collect())
+        };
+        let ranked = retrieve_ranked(retriever, &options).expect("retrieve");
+
+        assert!(
+            calls.borrow().len() > 1,
+            "{rare}: a 1-in-50 class must escalate past the first fetch, got {:?}",
+            calls.borrow()
+        );
+        assert!(
+            ranked.len() >= options.limit * OVERFETCH_FACTOR,
+            "{rare}: escalation must fill the pool, got {}",
+            ranked.len()
+        );
+        assert!(
+            *calls.borrow().last().expect("a call") <= MAX_FETCH_LIMIT,
+            "{rare}: escalation must respect the ceiling"
+        );
+    }
+}
+
+/// Escalation stops when the retriever has nothing more to give, rather than
+/// re-reading a complete result set until it hits the ceiling.
+#[test]
+fn escalation_stops_when_the_index_is_exhausted() {
+    let calls = std::cell::RefCell::new(Vec::new());
+    let options = opts(20, Some("Trait"));
+    // Only 3 hits exist in the whole index, and none match.
+    let ranked =
+        retrieve_ranked(recording_retriever("Function", 3, &calls), &options).expect("retrieve");
+
+    assert_eq!(
+        calls.borrow().len(),
+        1,
+        "an exhausted retriever must not be asked again, got {:?}",
+        calls.borrow()
+    );
+    assert!(ranked.is_empty(), "and no Trait exists to return");
+}
+
+/// Review round 4, finding 1. The default, unfiltered path is this tool's
+/// primary documented use case, and its pool was sized when the index held
+/// symbols and nothing else. Doc bodies are now permanently part of what it
+/// draws from, competing for the same top-K on the same terms, so the same
+/// 60-candidate pool yields fewer symbol candidates than it did pre-PR.
+///
+/// This test fails on the round-3 code, where the unfiltered depth is exactly
+/// `limit * OVERFETCH_FACTOR`.
+#[test]
+fn the_unfiltered_pool_carries_headroom_for_the_mixed_corpus() {
+    let options = opts(20, None);
+    let pre_pr_depth = options.limit * OVERFETCH_FACTOR;
     assert!(
-        fetch_limit_for(&filtered) >= FILTERED_FETCH_LIMIT,
-        "a filtered query must pull a pool deeper than the class it filters to, \
-         got {}",
-        fetch_limit_for(&filtered)
+        base_fetch_limit(&options) > pre_pr_depth,
+        "the default pool must be deeper than the symbols-only sizing it inherited"
     );
 
-    // Every label narrows the same way, so every label widens the same way —
-    // File is not a special case here.
-    let by_kind = SearchOptions {
-        limit: 20,
-        label_filter: Some("Function".to_string()),
-        min_score: 0.0,
+    // It must absorb a corpus where doc bodies outnumber symbols, i.e. keep at
+    // least the pre-PR count of symbol candidates at a 50% doc share.
+    let calls = std::cell::RefCell::new(Vec::new());
+    let retriever = |n: usize| {
+        calls.borrow_mut().push(n);
+        Ok((0..n)
+            .map(|i| Candidate {
+                key: format!("k{i}"),
+                label: if i % 2 == 0 { "Function" } else { NODE_FILE }.to_string(),
+            })
+            .collect())
     };
-    assert!(fetch_limit_for(&by_kind) >= FILTERED_FETCH_LIMIT);
+    let ranked = retrieve_ranked(retriever, &options).expect("retrieve");
+    let symbol_candidates = ranked.len() / 2;
+    assert!(
+        symbol_candidates >= pre_pr_depth / 2,
+        "at a 50% doc share the pool must still hold the pre-PR symbol count"
+    );
+}
 
-    // A caller asking for more than the floor still gets what it asked for.
-    let huge = SearchOptions {
-        limit: FILTERED_FETCH_LIMIT,
-        label_filter: Some(NODE_FILE.to_string()),
-        min_score: 0.0,
+/// The label filter runs BEFORE the ranking is built, so the fusion budget is
+/// spent only on candidates that can survive it. Round 3 filtered during
+/// enrichment, behind `rrf::fuse`'s cut to `limit * 2` — which is why widening
+/// only the retriever fetch did not actually cure the starvation.
+#[test]
+fn the_label_filter_runs_before_the_ranking_is_built() {
+    let calls = std::cell::RefCell::new(Vec::new());
+    let options = opts(5, Some(NODE_FILE));
+    let retriever = |n: usize| {
+        calls.borrow_mut().push(n);
+        Ok((0..n)
+            .map(|i| Candidate {
+                key: format!("k{i}"),
+                label: if i % 3 == 0 { NODE_FILE } else { "Function" }.to_string(),
+            })
+            .collect())
     };
+    let ranked = retrieve_ranked(retriever, &options).expect("retrieve");
+
+    // Only the 1-in-3 File hits reach the ranking; the Function hits were
+    // discarded before it was built, so they never consumed a rank.
+    let fetched = *calls.borrow().last().expect("a call");
+    let expected_files = fetched.div_ceil(3);
     assert_eq!(
-        fetch_limit_for(&huge),
-        FILTERED_FETCH_LIMIT * OVERFETCH_FACTOR,
-        "the floor must never shrink a larger explicit request"
+        ranked.len(),
+        expected_files,
+        "the ranking must hold ONLY the requested class: {fetched} fetched, \
+         {expected_files} of them File"
     );
+    for (i, entry) in ranked.iter().enumerate() {
+        assert_eq!(entry.rank, i + 1, "ranks must be dense after filtering");
+    }
+}
+
+/// An unfiltered query keeps every hit, whatever its label.
+#[test]
+fn an_unfiltered_query_keeps_both_kinds() {
+    let calls = std::cell::RefCell::new(Vec::new());
+    let options = opts(4, None);
+    let retriever = |n: usize| {
+        calls.borrow_mut().push(n);
+        Ok((0..n)
+            .map(|i| Candidate {
+                key: format!("k{i}"),
+                label: if i % 2 == 0 { NODE_FILE } else { "Function" }.to_string(),
+            })
+            .collect())
+    };
+    let ranked = retrieve_ranked(retriever, &options).expect("retrieve");
+    assert_eq!(ranked.len(), base_fetch_limit(&options));
 }

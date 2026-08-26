@@ -29,42 +29,103 @@ pub(super) struct HybridIndexes<'a> {
 /// be fused at all.
 const OVERFETCH_FACTOR: usize = 3;
 
-/// How many candidates each retriever is asked for when the caller narrowed the
-/// query with `label_filter`.
+/// Extra depth the DEFAULT, unfiltered pool carries because the corpus this
+/// tool draws from is now permanently mixed.
 ///
-/// `label_filter` is applied during enrichment, AFTER both retrievers have
-/// already truncated to their own top-K — neither can pre-filter, because the
-/// BM25 `label` field is STORED but not INDEXED (see `bm25::build_schema`) and
-/// the vector index carries no label predicate at all. So an unwidened fetch
-/// silently loses matches the filter was supposed to surface: with the default
-/// limit of 20, `limit * OVERFETCH_FACTOR` is 60 candidates, and 60 boosted
-/// symbol hits are easy to come by, so two genuinely-matching doc files ranked
-/// 61st and 62nd are discarded before `label_filter: "File"` ever sees them.
-/// The caller gets an empty result and no indication that real matches existed.
+/// `OVERFETCH_FACTOR` was sized when the index held symbol documents and
+/// nothing else. Since fleet-watch#112 it also holds doc/prose file bodies,
+/// which compete for the same top-K on the same terms — so the same 60-candidate
+/// pool now yields FEWER symbol candidates than it did before this PR, and a
+/// marginal symbol that used to be fused is silently gone. That is a recall
+/// regression on this tool's primary documented path ("USE THIS INSTEAD OF
+/// grep/ripgrep"), not on an opt-in one.
 ///
-/// source: measured on this repository, 2026-08-26 — `git ls-files` holds 250
-/// files with a `DOC_EXTENSIONS` extension against 307 `.rs` files. 2000 is
-/// therefore 8x the entire doc corpus of a repository of this size, so no doc
-/// hit here can be crowded out however the symbol hits rank. The bound is on
-/// the RETRIEVER's result list, not on a graph scan, and RRF over 2000 entries
-/// is a hash insert per entry — the cost is paid only when a caller actually
-/// narrows, which is an explicit, rare request.
+/// To keep the pre-PR symbol-candidate count under a doc share of `s`, the pool
+/// must grow by `1/(1-s)`. Doubling covers every corpus up to `s = 0.5` — a
+/// repository whose indexed doc bodies outnumber all its symbols combined.
 ///
-/// The honest limit of this fix: it is a deep pool, not a pushdown. A corpus
-/// whose filtered class exceeds 2000 documents can still be truncated. Making
-/// that impossible means indexing the `label` field and filtering inside the
-/// retriever, which is a schema change and its own piece of work.
-const FILTERED_FETCH_LIMIT: usize = 2000;
+/// source: measured on this repository, 2026-08-26, from its own
+/// `analyze_codebase` run — 5148 BM25 documents, of which 5103 are symbols and
+/// 45 are doc bodies, i.e. `s = 0.87%`. The measured need here is a factor of
+/// 1.009; 2 is deliberately far above it, because the constant has to hold for
+/// documentation-heavy repositories this one is not representative of.
+const MIXED_CORPUS_HEADROOM: usize = 2;
 
-/// How many candidates to pull from each retriever for this request.
+/// Ceiling on how deep [`retrieve_ranked`] will escalate for a narrow label.
 ///
-/// Widened whenever the caller narrowed by label, because the filter runs after
-/// truncation — see [`FILTERED_FETCH_LIMIT`].
-fn fetch_limit_for(options: &SearchOptions) -> usize {
-    if options.label_filter.is_some() {
-        FILTERED_FETCH_LIMIT.max(options.limit * OVERFETCH_FACTOR)
-    } else {
-        options.limit * OVERFETCH_FACTOR
+/// Escalation exists to find a rare class, not to walk the whole index. This
+/// bounds the worst case at a fixed cost; past it the honest answer is the
+/// partial one, since the alternative is an unbounded scan per query.
+const MAX_FETCH_LIMIT: usize = 4000;
+
+/// The candidate pool each retriever is asked for before any escalation.
+fn base_fetch_limit(options: &SearchOptions) -> usize {
+    options.limit * OVERFETCH_FACTOR * MIXED_CORPUS_HEADROOM
+}
+
+/// One retriever hit, reduced to what ranking and filtering need.
+pub(super) struct Candidate {
+    pub(super) key: String,
+    pub(super) label: String,
+}
+
+/// Whether `candidate` survives the caller's `label_filter`.
+fn passes_label_filter(candidate: &Candidate, options: &SearchOptions) -> bool {
+    match options.label_filter.as_deref() {
+        Some(filter) => candidate.label.eq_ignore_ascii_case(filter),
+        None => true,
+    }
+}
+
+/// Fetches from one retriever and returns its hits as an RRF ranking, with the
+/// caller's `label_filter` already applied.
+///
+/// Filtering HERE — at the earliest point the label is known — is the fix for
+/// the starvation the previous revision only half-addressed. `label_filter`
+/// used to be applied during enrichment, which sits behind TWO truncations: the
+/// retriever's own top-K, and `rrf::fuse`'s cut to `limit * 2`. Widening only
+/// the first left the second binding, so a deeper fetch was cut straight back
+/// to 40 fused hits before the filter ever ran, and a narrow class still came
+/// back empty. Neither retriever can push a label predicate down (the BM25
+/// `label` field is STORED but not INDEXED, and the vector index has no
+/// predicate at all), but both RETURN the label on every hit — so the filter
+/// can run before the ranking is built, which is what makes the fusion budget
+/// get spent on candidates that can actually survive.
+///
+/// Depth escalates instead of being fixed, because how deep is deep enough is a
+/// property of how rare the requested class is in THIS index, which no constant
+/// can know. Measured on this repository, the searchable classes span
+/// Function at 58.3% of the index down to Trait at 0.23% — two and a half
+/// orders of magnitude. A single widened constant is therefore wrong in both
+/// directions at once: wasteful for the common labels that `tool_schemas.rs`
+/// documents as the standard way to narrow a search, and still too shallow for
+/// the rarest. Doubling from the ordinary depth until the pool holds enough
+/// survivors self-calibrates to whatever the class share actually is, in any
+/// repository, and costs a common label nothing — a `Function` filter is
+/// satisfied by the first fetch and never escalates at all.
+fn retrieve_ranked<F>(fetch: F, options: &SearchOptions) -> Result<Vec<rrf::RankedEntry>, String>
+where
+    F: Fn(usize) -> Result<Vec<Candidate>, String>,
+{
+    let target = options.limit * OVERFETCH_FACTOR;
+    let mut fetch_limit = base_fetch_limit(options);
+    loop {
+        let hits = fetch(fetch_limit)?;
+        let exhausted = hits.len() < fetch_limit;
+        let kept: Vec<String> = hits
+            .into_iter()
+            .filter(|c| passes_label_filter(c, options))
+            .map(|c| c.key)
+            .collect();
+
+        // Stop when the pool is deep enough, when the index has no more to
+        // give, or at the ceiling. Without the `exhausted` check a narrow
+        // class in a small index would escalate to MAX_FETCH_LIMIT every
+        // time, re-reading the same complete result set.
+        if kept.len() >= target || exhausted || fetch_limit >= MAX_FETCH_LIMIT {
+            return Ok(as_ranking(kept));
+        }
+        fetch_limit = (fetch_limit * 2).min(MAX_FETCH_LIMIT);
     }
 }
 
@@ -87,24 +148,61 @@ fn as_ranking(qualified_names: impl IntoIterator<Item = String>) -> Vec<rrf::Ran
         .collect()
 }
 
+/// The BM25 half of the fused retrieval: label-filtered, depth-escalated, and
+/// turned into an RRF ranking.
+fn bm25_ranking(
+    dir: &Path,
+    query: &str,
+    options: &SearchOptions,
+) -> Result<Vec<rrf::RankedEntry>, String> {
+    let bm25_dir = dir.join("bm25");
+    retrieve_ranked(
+        |n| {
+            Ok(bm25::query_index(&bm25_dir, query, n)?
+                .into_iter()
+                .map(|r| Candidate {
+                    key: r.qualified_name,
+                    label: r.label,
+                })
+                .collect())
+        },
+        options,
+    )
+}
+
+/// The vector half, on the same terms as [`bm25_ranking`].
+fn vector_ranking(
+    dir: &Path,
+    query: &str,
+    options: &SearchOptions,
+) -> Result<Vec<rrf::RankedEntry>, String> {
+    retrieve_ranked(
+        |n| {
+            Ok(vector::query_index(dir, query, n)?
+                .into_iter()
+                .map(|r| Candidate {
+                    key: r.qualified_name,
+                    label: r.label,
+                })
+                .collect())
+        },
+        options,
+    )
+}
+
 pub(super) fn search_hybrid(
     store: &GraphStore,
     query: &str,
     options: &SearchOptions,
     indexes: &HybridIndexes<'_>,
 ) -> Result<Vec<SearchResult>, String> {
-    let fetch_limit = fetch_limit_for(options);
-
     let bm25_ranked = if indexes.bm25 {
-        let hits = bm25::query_index(&indexes.dir.join("bm25"), query, fetch_limit)?;
-        as_ranking(hits.into_iter().map(|r| r.qualified_name))
+        bm25_ranking(indexes.dir, query, options)?
     } else {
         Vec::new()
     };
-
     let vector_ranked = if indexes.vector {
-        let hits = vector::query_index(indexes.dir, query, fetch_limit)?;
-        as_ranking(hits.into_iter().map(|r| r.qualified_name))
+        vector_ranking(indexes.dir, query, options)?
     } else {
         Vec::new()
     };
