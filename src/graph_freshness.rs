@@ -217,15 +217,26 @@ pub(crate) fn check(graph_path: &Path) -> Value {
 /// `is_contained_key` enforces per key is enforced against a real directory
 /// rather than a string.
 ///
-/// HONEST LIMIT, stated rather than implied: this bounds the sweep to a
-/// plausible source tree and refuses every system directory, but it does not
-/// AUTHENTICATE the root — a sidecar naming some other ordinary directory still
-/// redirects the sweep there. Nothing on disk can authenticate it, because
-/// anything written beside the sidecar is equally forgeable; closing that needs
-/// either a `codebase_path` supplied by the caller at query time or a signed
-/// sidecar, and a signed sidecar would break the artifact feature's whole point
-/// of moving a graph between machines. Flagged for the owner rather than solved
-/// silently.
+/// RESIDUAL EXPOSURE — a bounded mitigation, NOT a closure. Stated precisely so
+/// no reader mistakes this for authentication of the root:
+///
+/// > An attacker with write access to `output_dir` can still direct `root` at
+/// > any real, absolute, resolvable, non-blacklisted directory on the host and
+/// > use `dirty_files` / `state` as an existence, size and mtime oracle for
+/// > files under it.
+///
+/// That is the same prerequisite this module's threat model already assumes for
+/// the vectors it DOES close (`commit_sha`, manifest keys) — the difference is
+/// that those are shut and this one is only narrowed: what no longer works is a
+/// non-existent, non-canonicalizable, non-directory, or blacklisted-system-root
+/// value.
+///
+/// Nothing on disk can close it, because anything written beside the sidecar is
+/// equally forgeable. The two real closures are API/architecture decisions
+/// deliberately NOT taken here: a caller-supplied `codebase_path` on all three
+/// read tools is a breaking schema change for every MCP consumer, and a signed
+/// sidecar breaks the portable-artifact use case of moving a built graph
+/// between machines. Both are raised with the owner outside this change.
 fn validated_root(claimed: &str) -> Option<PathBuf> {
     let claimed = Path::new(claimed);
     if !claimed.is_absolute() {
