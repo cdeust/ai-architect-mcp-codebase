@@ -13,6 +13,9 @@ use crate::indexer;
 use crate::indexing_handlers::*;
 use crate::query_handlers::*;
 
+/// Node labels a runtime trace endpoint may resolve to (callables).
+pub(crate) const CALLABLE_LABELS: &[&str] = &["Function", "Method"];
+
 /// The callable label ("Function"/"Method") of the node with id `qn`, or `None`
 /// if no such callable node exists.
 pub(crate) fn callable_label(store: &graph_store::GraphStore, qn: &str) -> Option<&'static str> {
@@ -286,7 +289,9 @@ pub(crate) fn bootstrap_import(
         );
         return BootstrapOutcome::Reindex(None);
     }
-    write_graph_meta(output_dir, codebase);
+    if let Err(e) = write_graph_meta(output_dir, codebase) {
+        eprintln!("[ap] graph meta sidecar write failed (bootstrap succeeded): {e}");
+    }
     let (node_count, edge_count) = graph_counts(graph_dir);
     let mut resp = json!({
         "stage": 3,
@@ -355,7 +360,9 @@ pub(crate) fn bootstrap_import_and_fill(
     // `meta.json` last, as everywhere else: the fill rewrites the manifest, so a
     // sidecar written before it would name the imported manifest rather than the
     // filled one and read as a torn pair forever (fleet-watch#112 review round 4).
-    write_graph_meta(output_dir, codebase);
+    if let Err(e) = write_graph_meta(output_dir, codebase) {
+        eprintln!("[ap] graph meta sidecar write failed (bootstrap succeeded): {e}");
+    }
     let fill_method = match fill.method {
         indexer::FillMethod::GitDiff => "git_diff",
         indexer::FillMethod::ContentHash => "content_hash",

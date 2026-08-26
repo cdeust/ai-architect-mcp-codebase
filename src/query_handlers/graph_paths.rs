@@ -8,7 +8,6 @@
 use serde_json::json;
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
 // Graph-path safety — source: H4 fix.
@@ -74,29 +73,6 @@ pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
     outcome.map_err(|e| format!("remove stale graph artifact: {e}"))
 }
 
-/// A temp filename no other in-flight `write_graph_meta` can be using.
-///
-/// The atomic write below is `write(tmp)` then `rename(tmp, meta.json)`. A
-/// FIXED tmp name makes that safe against a concurrent READER and unsafe
-/// against a concurrent WRITER: two `index_codebase` calls aimed at the same
-/// `output_dir` would write the same tmp path, so one can overwrite the
-/// other's bytes between its write and its rename, and the rename then
-/// publishes the wrong indexer's content (fleet-watch#112 review). Naming the
-/// tmp file per writer removes the shared path entirely — each writer renames
-/// its own bytes, and last-rename-wins is a legitimate outcome for two
-/// indexers of the same directory.
-///
-/// Process id separates processes; the counter separates threads and repeat
-/// calls within one process, which a pid alone cannot (this project has
-/// already been bitten by treating `process::id()` as unique — issue #25).
-/// A leftover from a crashed process that happened to hold the same pid is
-/// harmless: it is truncated by the `write` before it is renamed.
-fn unique_tmp_name() -> String {
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("meta.json.{}.{n}.tmp", std::process::id())
-}
-
 /// Write a ``meta.json`` sidecar in ``output_dir`` recording the ABSOLUTE
 /// source root this graph was indexed from.
 ///
@@ -117,32 +93,45 @@ fn unique_tmp_name() -> String {
 /// sidecar (no `commit_sha` key) simply parses with the field absent, so an
 /// old sidecar degrades to the dirty-file signal alone rather than failing.
 ///
-/// Atomic (temp file + rename). Required as of
-/// fleet-watch#112: a plain `fs::write` truncates the file in place, so until
-/// this PR made `graph_freshness::check` the FIRST query-time reader of
-/// `meta.json`, the window between truncate and write had no reader to expose
-/// it. It does now — a re-index running while a read tool is answering could
-/// hand that reader an empty or half-written sidecar, which parses as "no
-/// provenance" and silently downgrades the staleness verdict. `rename(2)`
-/// within a directory is atomic, so a reader sees the whole previous sidecar
-/// or the whole new one, never a torn one. The temp file is named per writer
-/// (`unique_tmp_name`) so that concurrent WRITERS into one `output_dir` cannot
-/// interleave through a shared temp path either.
+/// Atomic, via the shared `handler_util::atomic_write` (POSIX rename(2), IEEE
+/// Std 1003.1-2017). Required as of fleet-watch#112: a plain `fs::write`
+/// truncates the file in place, so until this PR made `graph_freshness::check`
+/// the FIRST query-time reader of `meta.json`, the window between truncate and
+/// write had no reader to expose it. It does now — a re-index running while a
+/// read tool is answering could hand that reader an empty or half-written
+/// sidecar, which parses as "no provenance" and silently downgrades the
+/// staleness verdict.
+///
+/// The shared helper rather than a local temp+rename (fleet-watch#112 review
+/// round 5): an earlier revision here hand-rolled the same shape and, doing so,
+/// dropped the `sync_all` the helper already performs — so a crash between the
+/// write and the rename could publish an empty or truncated sidecar, a
+/// durability regression against a guarantee this repository already provided
+/// one module away. The helper also derives a per-writer temp name from pid,
+/// clock and a random suffix, which is what keeps two `index_codebase` calls
+/// aimed at one `output_dir` from interleaving through a shared temp path.
 ///
 /// The sibling `indexer::manifest::save` writes the other sidecar into this
-/// same directory with the same temp-file-plus-rename shape, but NOT the same
-/// naming: its temp path is a fixed `file_manifest.json.tmp`, so it still has
-/// the concurrent-writer exposure the per-writer name removes here. Stated
-/// rather than glossed as parity, because an earlier revision of this comment
-/// claimed the two matched and they do not (fleet-watch#112 review round 3).
-/// Extending `unique_tmp_name` to `manifest::save` is agreed follow-up work,
-/// deliberately not done in this change.
+/// same directory with the same temp-file-plus-rename SHAPE, but not through
+/// this helper: its temp path is a fixed `file_manifest.json.tmp` and it does
+/// not fsync, so it still carries both exposures. Stated rather than glossed as
+/// parity, because an earlier revision of this comment claimed the two matched
+/// and they do not. Routing it through `atomic_write` too is agreed follow-up
+/// work, deliberately not done in this change.
 ///
-/// Best-effort: a failed write is logged and ignored. The graph is the
-/// product; the sidecar is a convenience for consumers, and its absence just
-/// degrades a consumer's path reconstruction, never the index. On failure the
-/// previous sidecar is left intact rather than destroyed.
-pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
+/// Returns the failure instead of swallowing it (fleet-watch#112 review round
+/// 5). This used to `eprintln!` and carry on, which was defensible while the
+/// sidecar was only a convenience for path reconstruction — it is not, now that
+/// the staleness receipt reads it. On Windows a rename over a destination
+/// another thread or process holds open can fail with a sharing violation, and
+/// a swallowed failure there leaves the PREVIOUS `meta.json` in place while the
+/// caller is told a fresh index completed. The regression test for that shape
+/// runs only on Unix in CI (`windows-build.yml` builds but does not test), so
+/// the guarantee cannot rest on the test — it has to rest on the caller being
+/// told. Callers decide: every one of them logs loudly, and the ones with a
+/// response attach the error to it. On failure the previous sidecar is left
+/// intact rather than destroyed.
+pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) -> Result<(), String> {
     // Schema 3 (fleet-watch#112 review round 4): record WHICH `file_manifest.json`
     // this sidecar accompanies. Both indexing paths write the manifest first and
     // this file last, so `meta.json` is an index's commit point; naming the
@@ -159,16 +148,7 @@ pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) {
         "manifest_size": manifest.as_ref().map(|m| m.len()),
         "manifest_mtime_ns": manifest.as_ref().map(crate::indexer::manifest::mtime_ns),
     });
-    let meta_path = output_dir.join("meta.json");
-    let tmp_path = output_dir.join(unique_tmp_name());
-    if let Err(e) = fs::write(&tmp_path, meta.to_string()) {
-        eprintln!("[ap] write graph meta {}: {e}", tmp_path.display());
-        return;
-    }
-    if let Err(e) = fs::rename(&tmp_path, &meta_path) {
-        let _ = fs::remove_file(&tmp_path);
-        eprintln!("[ap] rename graph meta {}: {e}", meta_path.display());
-    }
+    crate::handler_util::atomic_write(&output_dir.join("meta.json"), meta.to_string().as_bytes())
 }
 
 #[cfg(test)]
@@ -256,7 +236,7 @@ mod tests {
         fs::create_dir_all(&base).unwrap();
         let root = base.join("some/repo/root");
 
-        write_graph_meta(&base, &root);
+        write_graph_meta(&base, &root).expect("write meta");
 
         let meta_path = base.join("meta.json");
         assert!(meta_path.is_file(), "meta.json must be written");
@@ -297,11 +277,11 @@ mod tests {
         let first_root = base.join("repo/one");
         let second_root = base.join("repo/two-with-a-much-longer-name");
 
-        write_graph_meta(&base, &first_root);
+        write_graph_meta(&base, &first_root).expect("write meta");
         let mut held = fs::File::open(base.join("meta.json")).expect("open sidecar");
 
         // A concurrent re-index rewrites the sidecar while `held` is open.
-        write_graph_meta(&base, &second_root);
+        write_graph_meta(&base, &second_root).expect("write meta");
 
         let mut seen = String::new();
         held.read_to_string(&mut seen).expect("read held handle");
@@ -328,36 +308,72 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
-    /// True when any `*.tmp` entry remains directly under `dir`.
+    /// True when any temp artifact remains directly under `dir`. Matches the
+    /// shape `handler_util::atomic_write` uses: `.<name>.tmp.<pid>.<s>.<ns>.<rand>`.
     fn leftover_tmp_files(dir: &Path) -> bool {
         fs::read_dir(dir)
             .expect("read output dir")
             .flatten()
-            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .any(|e| e.file_name().to_string_lossy().contains(".tmp."))
     }
 
     #[test]
-    fn each_meta_writer_gets_its_own_temp_path() {
-        // fleet-watch#112 review: the temp name used to be a fixed
-        // `meta.json.tmp` per output_dir. Two `index_codebase` calls aimed at
-        // one output_dir therefore shared a temp path, and one could overwrite
-        // the other's bytes between its write and its rename — publishing the
-        // wrong indexer's content through an operation whose whole purpose is
-        // to publish atomically. Distinct names per writer is what removes the
-        // shared path; asserted directly, with no scheduling in the verdict.
-        let first = unique_tmp_name();
-        let second = unique_tmp_name();
-        assert_ne!(
-            first, second,
-            "two writers in one process must not share a temp path",
+    fn repeated_writes_leave_one_sidecar_and_no_temp_residue() {
+        // The temp-name uniqueness that used to live here now belongs to
+        // `handler_util::atomic_write`, which derives it from pid, clock and a
+        // random suffix. What this module still owns is the OUTCOME: repeated
+        // writes into one `output_dir` converge on a single, complete
+        // `meta.json` and leave nothing behind — the observable that a shared
+        // temp path would break (fleet-watch#112 review round 5).
+        use crate::test_support::TempDirExt;
+        let base = tempfile::Builder::new()
+            .prefix("ap-meta-repeat-")
+            .tempdir()
+            .expect("create temp dir")
+            .keep_managed();
+        let first_root = base.join("repo/one");
+        let second_root = base.join("repo/two");
+
+        write_graph_meta(&base, &first_root).expect("first write");
+        write_graph_meta(&base, &second_root).expect("second write");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(base.join("meta.json")).unwrap())
+                .expect("the surviving sidecar must be complete JSON");
+        assert_eq!(
+            parsed.get("root").and_then(|v| v.as_str()),
+            Some(second_root.to_string_lossy().as_ref()),
         );
-        let prefix = format!("meta.json.{}.", std::process::id());
-        for name in [&first, &second] {
-            assert!(
-                name.starts_with(&prefix),
-                "the temp name must be scoped to this process: {name}",
-            );
-            assert!(name.ends_with(".tmp"), "must remain a temp file: {name}");
-        }
+        assert!(!leftover_tmp_files(&base), "no temp artifact may survive");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_failed_sidecar_write_is_reported_not_swallowed() {
+        // fleet-watch#112 review round 5, finding 3. This used to `eprintln!`
+        // and return `()`, so a caller could not tell a written sidecar from an
+        // unwritten one — on Windows a rename over a handle another process
+        // holds open fails with a sharing violation, and the swallowed failure
+        // leaves the PREVIOUS meta.json in place while the caller is told a
+        // fresh index completed. The old signature made that unobservable by
+        // construction; this asserts it is observable now.
+        use crate::test_support::TempDirExt;
+        let base = tempfile::Builder::new()
+            .prefix("ap-meta-fail-")
+            .tempdir()
+            .expect("create temp dir")
+            .keep_managed();
+        // A regular FILE standing where the output directory must be, so the
+        // write cannot succeed no matter the platform.
+        let blocked = base.join("occupied-by-a-file");
+        fs::write(&blocked, b"not a directory").expect("write blocker");
+
+        let err = write_graph_meta(&blocked, &base)
+            .expect_err("a sidecar that cannot be written must say so");
+        assert!(
+            err.contains("atomic_write"),
+            "the error must name the failing operation: {err}",
+        );
+        let _ = fs::remove_dir_all(&base);
     }
 }

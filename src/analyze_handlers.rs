@@ -32,83 +32,95 @@ pub(crate) fn run_analyze_codebase(arguments: &Value) -> Value {
     }
 }
 
-pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
-    let args = arguments.as_object().ok_or("arguments must be an object")?;
-    let path_str = args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .ok_or("missing required field 'path'")?;
-    let output_str = args
-        .get("output_dir")
-        .and_then(|v| v.as_str())
-        .ok_or("missing required field 'output_dir'")?;
-    let gamma = args
-        .get("resolution_param")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1.0);
-    let enable_lsp = args.get("lsp").and_then(|v| v.as_bool()).unwrap_or(false);
-    let lang_filter = parse_language_filter(args)?;
-    let dependency_scope = parse_dependency_scope(args)?;
-    let exclude_dirs = parse_exclude_dirs(args)?;
-    let options = indexer::IndexOptions {
-        language_filter: lang_filter,
-        dependency_scope,
-        exclude_dirs,
-    };
+/// The caller-supplied half of an `analyze_codebase` call, validated once and
+/// its output directory prepared.
+///
+/// A parameter object (§4.4): the four settings and the three derived paths are
+/// resolved together and used together by all four phases.
+struct AnalyzeRequest {
+    codebase: std::path::PathBuf,
+    output_dir: std::path::PathBuf,
+    graph_dir: std::path::PathBuf,
+    options: indexer::IndexOptions,
+    lang_filter: Option<crate::parser::Language>,
+    gamma: f64,
+    enable_lsp: bool,
+}
 
-    let codebase = require_absolute(path_str, "path")?;
-    if !codebase.exists() {
-        return Err(format!("path does not exist: {}", codebase.display()));
+impl AnalyzeRequest {
+    /// Touches the filesystem deliberately — hence `prepare`, not `parse`:
+    /// `validate_graph_path_safe` must run before the stale-artifact removal
+    /// below it (source: H4 fix — see do_index_codebase).
+    fn prepare(args: &serde_json::Map<String, Value>) -> Result<Self, String> {
+        let path_str = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or("missing required field 'path'")?;
+        let output_str = args
+            .get("output_dir")
+            .and_then(|v| v.as_str())
+            .ok_or("missing required field 'output_dir'")?;
+        let lang_filter = parse_language_filter(args)?;
+        let codebase = require_absolute(path_str, "path")?;
+        if !codebase.exists() {
+            return Err(format!("path does not exist: {}", codebase.display()));
+        }
+        let output_dir = require_absolute(output_str, "output_dir")?;
+        fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir: {e}"))?;
+        let graph_dir = output_dir.join("graph");
+        validate_graph_path_safe(&graph_dir)?;
+        Ok(AnalyzeRequest {
+            codebase,
+            output_dir,
+            graph_dir,
+            options: indexer::IndexOptions {
+                language_filter: lang_filter,
+                dependency_scope: parse_dependency_scope(args)?,
+                exclude_dirs: parse_exclude_dirs(args)?,
+            },
+            lang_filter,
+            gamma: args
+                .get("resolution_param")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0),
+            enable_lsp: args.get("lsp").and_then(|v| v.as_bool()).unwrap_or(false),
+        })
     }
-    let output_dir = require_absolute(output_str, "output_dir")?;
-    fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir: {e}"))?;
-    let graph_dir = output_dir.join("graph");
-    // source: H4 fix — see do_index_codebase.
-    validate_graph_path_safe(&graph_dir)?;
-    if graph_dir.exists() {
-        // Prior run may have left a dir OR a single-file Kuzu db; remove either.
-        remove_stale_graph_artifact(&graph_dir)?;
+}
+
+/// Phase 2b, optional. Graceful fallback by contract: any LSP error yields
+/// `None` and the pipeline continues on the static resolution alone.
+fn lsp_phase(
+    req: &AnalyzeRequest,
+    store: &graph_store::GraphStore,
+) -> Option<crate::lsp_client::LspResolutionResult> {
+    if !req.enable_lsp {
+        return None;
     }
-
-    let total_start = std::time::Instant::now();
-
-    // Phase 1: index
-    let index_result = indexer::index_codebase_with_language(&codebase, &graph_dir, &options)?;
-    // Record the absolute source root beside the graph (see write_graph_meta).
-    write_graph_meta(&output_dir, &codebase);
-
-    // Phase 2: resolve
-    let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
-    let resolve_result = resolver::resolve_graph(&store)?;
-
-    // Phase 2b: LSP-enhanced resolution (optional)
-    let lsp_result = if enable_lsp {
-        let effective_lang = match lang_filter {
-            Some(lang) => lang.as_str().to_string(),
-            None => detect_dominant_language(&codebase),
-        };
-        // graceful fallback: any LSP error is silently ignored below
-        lsp_resolver::resolve_with_lsp(
-            &store,
-            &codebase,
-            &effective_lang,
-            None,
-            std::time::Duration::from_secs(30),
-        )
-        .ok()
-    } else {
-        None
+    let effective_lang = match req.lang_filter {
+        Some(lang) => lang.as_str().to_string(),
+        None => detect_dominant_language(&req.codebase),
     };
+    lsp_resolver::resolve_with_lsp(
+        store,
+        &req.codebase,
+        &effective_lang,
+        None,
+        std::time::Duration::from_secs(30),
+    )
+    .ok()
+}
 
-    // Phase 3: cluster
-    let cluster_result = clustering::cluster_graph(&store, gamma)?;
-
-    // Phase 4: build search index (BM25 + TF-IDF vectors)
-    let search_index_result = search::build_search_index(&store, &output_dir)?;
-
-    let total_ms = total_start.elapsed().as_millis() as u64;
-
-    Ok(json!({
+/// The four phases' counts, as one response.
+fn analyze_envelope(
+    index_result: &indexer::IndexResult,
+    resolve_result: &resolver::ResolutionResult,
+    cluster_result: &clustering::ClusteringResult,
+    search_index_result: &search::SearchIndexResult,
+    lsp_result: Option<&crate::lsp_client::LspResolutionResult>,
+    total_ms: u64,
+) -> Value {
+    json!({
         "stage": 3,
         "status": "ok",
         "tool": "analyze_codebase",
@@ -135,7 +147,7 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
             "vector_doc_count": search_index_result.vector_doc_count,
             "elapsed_ms": search_index_result.elapsed_ms,
         },
-        "lsp_resolve": match &lsp_result {
+        "lsp_resolve": match lsp_result {
             Some(r) => json!({
                 "resolved_count": r.resolved_count,
                 "failed_count": r.failed_count,
@@ -145,7 +157,40 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
             None => json!(null),
         },
         "total_elapsed_ms": total_ms,
-    }))
+    })
+}
+
+pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
+    let args = arguments.as_object().ok_or("arguments must be an object")?;
+    let req = AnalyzeRequest::prepare(args)?;
+    if req.graph_dir.exists() {
+        // Prior run may have left a dir OR a single-file Kuzu db; remove either.
+        remove_stale_graph_artifact(&req.graph_dir)?;
+    }
+    let total_start = std::time::Instant::now();
+
+    // Phase 1: index. `meta.json` last, as everywhere else (see write_graph_meta).
+    let index_result =
+        indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
+    if let Err(e) = write_graph_meta(&req.output_dir, &req.codebase) {
+        eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}");
+    }
+    // Phase 2: resolve, then optionally refine with an LSP.
+    let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
+    let resolve_result = resolver::resolve_graph(&store)?;
+    let lsp_result = lsp_phase(&req, &store);
+    // Phase 3: cluster. Phase 4: build the BM25 + TF-IDF search index.
+    let cluster_result = clustering::cluster_graph(&store, req.gamma)?;
+    let search_index_result = search::build_search_index(&store, &req.output_dir)?;
+
+    Ok(analyze_envelope(
+        &index_result,
+        &resolve_result,
+        &cluster_result,
+        &search_index_result,
+        lsp_result.as_ref(),
+        total_start.elapsed().as_millis() as u64,
+    ))
 }
 
 // ---------------------------------------------------------------------------

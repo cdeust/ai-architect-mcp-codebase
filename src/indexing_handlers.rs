@@ -7,7 +7,6 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-use crate::graph_cache;
 use crate::handler_util::*;
 use crate::history_handlers::*;
 use crate::indexer;
@@ -116,15 +115,17 @@ fn try_incremental_index(req: &IndexRequest) -> Option<Value> {
         Ok(inc) => {
             // `index_incremental` has already saved the refreshed manifest, so
             // `meta.json` lands last and names it (see write_graph_meta).
-            write_graph_meta(&req.output_dir, &req.codebase);
-            Some(finish_incremental_response(
+            let meta_err = write_graph_meta(&req.output_dir, &req.codebase).err();
+            let mut resp = finish_incremental_response(
                 inc,
                 &req.graph_dir,
                 &req.codebase,
                 &req.manifest_path,
                 req.want_export,
                 req.want_cochange,
-            ))
+            );
+            report_meta_error(&mut resp, meta_err);
+            Some(resp)
         }
         Err(e) => {
             eprintln!("[ap] incremental index failed ({e}); falling back to a full re-index");
@@ -146,16 +147,30 @@ fn try_incremental_index(req: &IndexRequest) -> Option<Value> {
 ///
 /// All three writes are best-effort: a failed sidecar costs the next run its
 /// incremental baseline or an honesty signal, never this index.
+/// Surfaces a failed `meta.json` write on the response instead of leaving the
+/// caller believing a complete index landed.
+///
+/// The index itself DID succeed — the graph is the product — so this is a note
+/// on an `ok` response rather than a failure. But the sidecar is what the
+/// query-time staleness receipt reads, so a caller that does not learn it is
+/// missing would go on trusting a receipt that has nothing to stand on
+/// (fleet-watch#112 review round 5).
+fn report_meta_error(response: &mut Value, err: Option<String>) {
+    let Some(err) = err else { return };
+    eprintln!("[ap] graph meta sidecar write failed (index succeeded): {err}");
+    response["meta_write_error"] = json!(err);
+}
+
 fn persist_full_index_sidecars(
     req: &IndexRequest,
     result: &indexer::IndexResult,
-) -> (std::path::PathBuf, Value) {
+) -> (std::path::PathBuf, Value, Option<String>) {
     if let Err(e) = indexer::write_full_manifest(&req.codebase, &req.manifest_path, &req.options) {
         eprintln!("[ap] file manifest write failed (index succeeded): {e}");
     }
     // Records the absolute source root beside the graph; relative file paths
     // stay in the graph, and the root lets consumers rebuild absolute ones.
-    write_graph_meta(&req.output_dir, &req.codebase);
+    let meta_err = write_graph_meta(&req.output_dir, &req.codebase).err();
     // Issue #57: the coverage-honesty sidecar (parse-incomplete, skipped, and
     // quarantined files).
     let coverage_path = indexer::coverage::coverage_path(&req.output_dir);
@@ -173,7 +188,7 @@ fn persist_full_index_sidecars(
     } else {
         Value::Null
     };
-    (coverage_path, cochange_summary)
+    (coverage_path, cochange_summary, meta_err)
 }
 
 /// Issue #55: an explicit index is the single (best-ratio, zstd-9) export tier.
@@ -237,8 +252,23 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
     }
     let result =
         indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
-    let (coverage_path, cochange_summary) = persist_full_index_sidecars(&req, &result);
+    Ok(full_index_response(
+        &req,
+        &result,
+        bootstrap_skipped,
+        persist_full_index_sidecars(&req, &result),
+    ))
+}
 
+/// The `index_codebase` response for a completed full index, with the optional
+/// sections a given call earns.
+fn full_index_response(
+    req: &IndexRequest,
+    result: &indexer::IndexResult,
+    bootstrap_skipped: Option<Value>,
+    sidecars: (std::path::PathBuf, Value, Option<String>),
+) -> Value {
+    let (coverage_path, cochange_summary, meta_err) = sidecars;
     let mut response = json!({
         "stage": 3,
         "status": "ok",
@@ -257,9 +287,10 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
         response["bootstrap_skipped"] = note;
     }
     if req.want_export {
-        attach_artifact_export(&mut response, &req, &result, &coverage_path);
+        attach_artifact_export(&mut response, req, result, &coverage_path);
     }
-    Ok(response)
+    report_meta_error(&mut response, meta_err);
+    response
 }
 
 /// Max example files listed per coverage kind in a tool response. The counts are
@@ -413,149 +444,5 @@ pub(crate) fn do_index_status(arguments: &Value) -> Result<Value, String> {
         "node_count": node_count,
         "edge_count": edge_count,
         "coverage": coverage_summary_for_graph(graph_path),
-    }))
-}
-
-// ---------------------------------------------------------------------------
-// Stage 3 — ingest_traces (issue #58 runtime enrichment)
-// ---------------------------------------------------------------------------
-
-pub(crate) fn run_ingest_traces(arguments: &Value) -> Value {
-    match do_ingest_traces(arguments) {
-        Ok(v) => v,
-        Err(msg) => json!({
-            "stage": 3, "status": "error", "reason": "ingest_traces_failed", "message": msg
-        }),
-    }
-}
-
-/// Node labels a runtime trace endpoint may resolve to (callables).
-pub(crate) const CALLABLE_LABELS: &[&str] = &["Function", "Method"];
-
-/// Folds runtime caller→callee observations into the graph (issue #58): annotate
-/// a matching static Calls edge with `observed_count`, or create an
-/// `OBSERVED_CALLS` edge where static resolution found none (the divergence
-/// signal — runtime truth the static analysis missed).
-///
-/// Input: `{graph_path, traces: [{caller, callee, count}]}`. `caller`/`callee`
-/// are qualified names (`file::symbol`); `count` defaults to 1. Postconditions:
-/// each trace either annotated a static Calls edge (matched), created/updated an
-/// OBSERVED_CALLS edge (unmatched_created), or was recorded as unresolved
-/// (endpoint not a Function/Method node). The response reports the three counts
-/// plus a capped list of the created divergences and the unresolved names.
-/// Sums observations per (caller, callee) so repeated pairs add up instead of
-/// creating duplicate edges.
-fn aggregate_traces(
-    traces: &[Value],
-) -> Result<std::collections::BTreeMap<(String, String), i64>, String> {
-    let mut agg: std::collections::BTreeMap<(String, String), i64> =
-        std::collections::BTreeMap::new();
-    for t in traces {
-        let caller = t.get("caller").and_then(|v| v.as_str());
-        let callee = t.get("callee").and_then(|v| v.as_str());
-        let (caller, callee) = match (caller, callee) {
-            (Some(a), Some(b)) => (a.to_string(), b.to_string()),
-            _ => return Err("each trace needs 'caller' and 'callee' strings".to_string()),
-        };
-        let count = t.get("count").and_then(|v| v.as_i64()).unwrap_or(1).max(1);
-        *agg.entry((caller, callee)).or_insert(0) += count;
-    }
-    Ok(agg)
-}
-
-/// Running totals while folding runtime observations into the graph.
-#[derive(Default)]
-struct TraceTally {
-    matched: u64,
-    unmatched_created: u64,
-    unresolved: Vec<String>,
-    divergences: Vec<Value>,
-}
-
-impl TraceTally {
-    /// Folds one observed call in: annotate the static edge if there is one,
-    /// otherwise record the divergence as an OBSERVED_CALLS edge. An endpoint
-    /// that is not a callable node is unresolved, not an error.
-    fn absorb(
-        &mut self,
-        store: &crate::graph_store::GraphStore,
-        caller: &str,
-        callee: &str,
-        count: i64,
-    ) -> Result<(), String> {
-        let from_label = callable_label(store, caller);
-        let to_label = callable_label(store, callee);
-        let (Some(from_label), Some(to_label)) = (from_label, to_label) else {
-            if callable_label(store, caller).is_none() {
-                self.unresolved.push(caller.to_string());
-            }
-            if callable_label(store, callee).is_none() {
-                self.unresolved.push(callee.to_string());
-            }
-            return Ok(());
-        };
-        let static_table = format!("Calls_{from_label}_{to_label}");
-        if annotate_static_call(store, &static_table, caller, callee, count)? {
-            self.matched += 1;
-            return Ok(());
-        }
-        let observed_table = format!("OBSERVED_CALLS_{from_label}_{to_label}");
-        upsert_observed_call(store, &observed_table, caller, callee, count)?;
-        self.unmatched_created += 1;
-        if self.divergences.len() < COVERAGE_LIST_CAP {
-            self.divergences.push(json!({
-                "caller": caller, "callee": callee, "observed_count": count
-            }));
-        }
-        Ok(())
-    }
-}
-
-pub(crate) fn do_ingest_traces(arguments: &Value) -> Result<Value, String> {
-    let args = arguments.as_object().ok_or("arguments must be an object")?;
-    let graph_str = args
-        .get("graph_path")
-        .and_then(|v| v.as_str())
-        .ok_or("missing required field 'graph_path'")?;
-    let graph_path = Path::new(graph_str);
-    if !graph_path.exists() {
-        return Err(format!("graph_path does not exist: {graph_str}"));
-    }
-    let traces = args
-        .get("traces")
-        .and_then(|v| v.as_array())
-        .ok_or("missing required field 'traces' (array of {caller, callee, count})")?;
-
-    let store = graph_cache::open_cached(graph_path)?;
-    let mut tally = TraceTally::default();
-    for ((caller, callee), count) in aggregate_traces(traces)? {
-        tally.absorb(&store, &caller, &callee, count)?;
-    }
-    let TraceTally {
-        matched,
-        unmatched_created,
-        mut unresolved,
-        divergences,
-    } = tally;
-
-    unresolved.sort();
-    unresolved.dedup();
-    let unresolved_total = unresolved.len();
-    unresolved.truncate(COVERAGE_LIST_CAP);
-
-    Ok(json!({
-        "stage": 3,
-        "status": "ok",
-        "tool": "ingest_traces",
-        "matched": matched,
-        "unmatched_created": unmatched_created,
-        "unresolved_names": unresolved_total,
-        "unresolved_names_sample": unresolved,
-        "observed_divergences": divergences,
-        "note": "matched = a static Calls edge annotated with observed_count. \
-                 unmatched_created = OBSERVED_CALLS edges where runtime saw a call \
-                 static analysis did not — the valuable divergence signal. \
-                 unresolved_names = trace endpoints that are not Function/Method \
-                 nodes (wrong qualified name, or an uncovered/unindexed symbol).",
     }))
 }

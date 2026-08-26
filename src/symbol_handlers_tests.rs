@@ -509,7 +509,7 @@ fn unopenable_graph_over_a_moved_tree() -> (crate::test_support::TestTempDir, st
     manifest::save(&manifest::manifest_path(&output_dir), &m).expect("save manifest");
     // Manifest first, `meta.json` last — the order both indexing paths use, and
     // the order the sidecar-pairing check requires.
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
     // The tree moves after the snapshot, so the graph is provably stale.
     fs::write(&abs, b"fn a() { changed(); }\n").expect("edit a.rs");
 
