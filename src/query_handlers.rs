@@ -19,6 +19,7 @@ mod read_only_gate;
 
 pub(crate) use graph_paths::{
     remove_stale_graph_artifact, validate_graph_path_safe, write_graph_meta,
+    FORBIDDEN_GRAPH_PATH_PREFIXES,
 };
 use read_only_gate::{
     forbidden_cypher_keyword, is_multi_statement, is_separator, keyword_token_positions,

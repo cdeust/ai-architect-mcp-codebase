@@ -101,8 +101,8 @@ fn fresh_when_the_working_tree_matches_the_manifest() {
     let (output_dir, graph, root) = scaffold(tmp.path());
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
 
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
 
     let state = check(&graph);
     assert_eq!(state["state"], json!("fresh"));
@@ -118,8 +118,8 @@ fn stale_when_a_manifested_file_changes_on_disk() {
     let (output_dir, graph, root) = scaffold(tmp.path());
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
 
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
 
     // Edit the file after the manifest was captured.
     fs::write(root.join("a.rs"), b"fn a() { changed(); }\n").expect("edit a.rs");
@@ -135,8 +135,8 @@ fn stale_when_a_manifested_file_is_deleted() {
     let (output_dir, graph, root) = scaffold(tmp.path());
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
 
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
 
     fs::remove_file(root.join("a.rs")).expect("delete a.rs");
 
@@ -154,8 +154,8 @@ fn commits_behind_is_reported_in_a_git_repo() {
     commit_all(&root, "initial");
 
     // write_graph_meta stamps commit_sha == HEAD at this point.
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
 
     // Move HEAD forward by editing the tracked file and committing.
     fs::write(root.join("a.rs"), b"fn a() { changed(); }\n").expect("edit a.rs");
@@ -189,8 +189,8 @@ fn a_head_that_moved_backward_is_stale_even_with_no_dirty_file() {
     commit_all(&root, "docs only");
 
     // The graph is indexed HERE, at the second commit.
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
 
     // HEAD walks BACK one commit. a.rs is byte-identical across the two
     // commits, so git does not rewrite it and its mtime does not move.
@@ -227,8 +227,8 @@ fn commits_behind_is_zero_when_head_is_unchanged() {
     init_repo(&root);
     commit_all(&root, "initial");
 
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
 
     let state = check(&graph);
     assert_eq!(state["state"], json!("fresh"));
@@ -283,8 +283,8 @@ fn a_file_added_since_the_index_is_invisible_to_the_cheap_check() {
     let (output_dir, graph, root) = scaffold(tmp.path());
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
 
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
 
     fs::write(root.join("b.rs"), b"fn b() {}\n").expect("write new file b.rs");
 
@@ -367,4 +367,201 @@ fn contained_keys_are_exactly_the_relative_ordinary_ones() {
         "traversal mid-path"
     );
     assert!(!is_contained_key("./src/main.rs"), "non-canonical prefix");
+}
+
+/// Writes `meta.json` in `output_dir` by hand, so a test can craft the fields
+/// `write_graph_meta` would otherwise compute honestly.
+fn write_crafted_meta(output_dir: &Path, root: &str, extra: Value) {
+    // Record the real manifest identity, so a test that means to exercise some
+    // OTHER guard is not silently satisfied by the pairing check instead.
+    let paired = fs::metadata(manifest::manifest_path(output_dir)).expect("stat manifest");
+    let mut meta = json!({
+        "schema_version": 3,
+        "root": root,
+        "tool": "ai-architect-mcp-codebase",
+        "commit_sha": Value::Null,
+        "manifest_size": paired.len(),
+        "manifest_mtime_ns": manifest::mtime_ns(&paired),
+    });
+    if let (Some(target), Value::Object(source)) = (meta.as_object_mut(), extra) {
+        target.extend(source);
+    }
+    fs::write(output_dir.join("meta.json"), meta.to_string()).expect("write crafted meta");
+}
+
+#[test]
+fn a_sidecar_root_naming_a_system_directory_is_refused() {
+    // fleet-watch#112 review round 4, finding 1. Round 3 closed this oracle on
+    // the manifest-KEY vector; `root` reopened it from the other side of the
+    // same file. `"root": "/"` with a perfectly ordinary key — one that passes
+    // `is_contained_key` without complaint — resolves through `root.join(rel)`
+    // to an absolute system path, and `dirty_files` then reports whether that
+    // file's (mtime_ns, size) matched what the attacker wrote in the sidecar.
+    //
+    // This test IS that oracle, aimed at a file every supported platform has.
+    // The manifest records /etc/hosts's REAL mtime and size, so pre-fix the
+    // entry compares equal and the receipt reads `fresh`, confirming the guess.
+    let host_file = Path::new("/etc/hosts");
+    let target = match fs::metadata(host_file) {
+        Ok(m) => m,
+        // No /etc/hosts (unusual, but do not fake a pass): nothing to assert.
+        Err(_) => return,
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (output_dir, graph, _root) = scaffold(tmp.path());
+
+    let mut m = manifest::FileManifest::new();
+    m.files.insert(
+        "etc/hosts".to_string(), // relative + ordinary: is_contained_key says yes
+        FileState {
+            mtime_ns: manifest::mtime_ns(&target),
+            size: target.len(),
+            content_hash: String::new(),
+        },
+    );
+    manifest::save(&manifest::manifest_path(&output_dir), &m).expect("save manifest");
+    write_crafted_meta(&output_dir, "/", json!({}));
+
+    assert_eq!(
+        check(&graph),
+        json!({"state": "unknown"}),
+        "a sidecar naming a system root must never become a join base",
+    );
+}
+
+#[test]
+fn a_root_that_is_not_a_resolvable_directory_is_refused() {
+    // The rest of the root policy, asserted directly: relative paths, paths
+    // that do not exist, and a file standing where a directory must be.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let file = tmp.path().join("not-a-dir");
+    fs::write(&file, b"x").expect("write file");
+
+    assert!(validated_root("relative/path").is_none(), "not absolute");
+    assert!(
+        validated_root(&tmp.path().join("no/such/dir").to_string_lossy()).is_none(),
+        "does not resolve",
+    );
+    assert!(
+        validated_root(&file.to_string_lossy()).is_none(),
+        "a file is not an indexed root",
+    );
+    assert!(
+        validated_root(&tmp.path().to_string_lossy()).is_some(),
+        "an ordinary existing directory is accepted",
+    );
+}
+
+#[test]
+fn a_deleted_graph_artifact_is_never_reported_fresh() {
+    // fleet-watch#112 review round 4, finding 2. `run_*` stamps the receipt onto
+    // the error envelope the read tools return when `graph_path` is gone, so
+    // without this the caller saw `status: "error"` beside `state: "fresh"` —
+    // a receipt contradicting the very answer it is attached to.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (output_dir, graph, root) = scaffold(tmp.path());
+    fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
+    write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    assert_eq!(
+        check(&graph)["state"],
+        json!("fresh"),
+        "precondition: with the artifact present this graph reads fresh",
+    );
+
+    fs::remove_dir_all(&graph).expect("delete the graph artifact");
+
+    assert_eq!(
+        check(&graph),
+        json!({"state": "unknown"}),
+        "a graph that is not there cannot be fresh",
+    );
+}
+
+#[test]
+fn sidecars_from_two_different_indexes_are_not_a_verdict() {
+    // fleet-watch#112 review round 4, finding 3. The two sidecars are written by
+    // two separate atomic operations, so a read landing between them sees one
+    // half of the new index and one half of the old. Pairing a fresh commit_sha
+    // with a stale manifest reports a just-rebuilt graph as stale.
+    //
+    // Reproduced without any concurrency: write the manifest, commit it with
+    // `meta.json`, then replace the manifest alone — precisely the on-disk state
+    // an interrupted index leaves, and the state a reader observes mid-index.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (output_dir, graph, root) = scaffold(tmp.path());
+    fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
+    write_manifest_matching_disk(&output_dir, &root, "a.rs");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    assert_eq!(
+        check(&graph)["state"],
+        json!("fresh"),
+        "precondition: a matched pair yields a verdict",
+    );
+
+    // A later index rewrites the manifest; its `meta.json` has not landed yet.
+    fs::write(root.join("b.rs"), b"fn b() {}\n").expect("write b.rs");
+    write_manifest_matching_disk(&output_dir, &root, "b.rs");
+
+    assert_eq!(
+        check(&graph),
+        json!({"state": "unknown"}),
+        "half of one index plus half of another is not evidence either way",
+    );
+}
+
+#[test]
+fn a_full_index_leaves_its_two_sidecars_paired() {
+    // The write-ORDER half of finding 3, end to end through the real tool. The
+    // full-index path used to write `meta.json` BEFORE the manifest, so the
+    // sidecar recorded whichever manifest preceded it — on a first index, none
+    // at all. Writing the manifest first makes `meta.json` the commit point, and
+    // the pairing check below is exactly what fails if that order regresses.
+    use crate::test_support::TempDirExt;
+    let base = tempfile::Builder::new()
+        .prefix("freshness_full_index_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let _ = fs::remove_dir_all(&base);
+    let repo = base.join("repo/src");
+    let out = base.join("out");
+    fs::create_dir_all(&repo).expect("mk repo");
+    fs::write(repo.join("a.rs"), "pub fn a() {}\n").expect("write a.rs");
+
+    crate::indexing_handlers::do_index_codebase(&json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "full": true,
+    }))
+    .expect("index");
+
+    let state = check(&out.join("graph"));
+    assert_ne!(
+        state["state"],
+        json!("unknown"),
+        "a just-completed full index must leave a readable, paired pair: {state}",
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn an_empty_manifest_outside_git_verifies_nothing_and_says_so() {
+    // fleet-watch#112 review round 4, finding 4. Zero tracked files and no
+    // commit provenance means no check ran at all; "fresh" would be a clean
+    // bill of health issued without an examination.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (output_dir, graph, root) = scaffold(tmp.path());
+    manifest::save(
+        &manifest::manifest_path(&output_dir),
+        &manifest::FileManifest::new(),
+    )
+    .expect("save empty manifest");
+    crate::query_handlers::write_graph_meta(&output_dir, &root);
+
+    assert_eq!(
+        check(&graph),
+        json!({"state": "unknown"}),
+        "nothing was verified, so nothing is attested",
+    );
 }

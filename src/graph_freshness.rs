@@ -19,7 +19,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use std::process::Command;
 
@@ -33,8 +33,52 @@ use crate::indexer::manifest::{self, FileState};
 #[derive(Deserialize)]
 struct GraphMeta {
     root: String,
+    /// Absent on the schema-1 sidecar that predates any versioning here; a
+    /// missing version reads as 0, i.e. "older than the pairing contract".
+    #[serde(default)]
+    schema_version: u32,
     #[serde(default)]
     commit_sha: Option<String>,
+    /// Schema 3: the size and mtime of the `file_manifest.json` this sidecar was
+    /// written to accompany. Absent on a schema-1/2 sidecar — see
+    /// `describes_manifest_at`.
+    #[serde(default)]
+    manifest_size: Option<u64>,
+    #[serde(default)]
+    manifest_mtime_ns: Option<i64>,
+}
+
+impl GraphMeta {
+    /// True when the manifest on disk is the one this `meta.json` was written
+    /// for — i.e. the two sidecars are a matching pair rather than two halves of
+    /// different indexes.
+    ///
+    /// Both indexing paths now write the manifest FIRST and `meta.json` LAST, so
+    /// `meta.json` is the commit point of an index and names the manifest it
+    /// belongs to. A reader that lands mid-index therefore sees the OLD meta
+    /// beside the NEW manifest, and the recorded identity no longer matches —
+    /// which is the signal, and the reason this is checked after `manifest::load`
+    /// rather than before: a manifest swapped between the load and this stat is
+    /// caught by the same comparison (fleet-watch#112 review round 4).
+    ///
+    /// A schema-1/2 sidecar carries no identity to compare, so it pairs by
+    /// default — an old sidecar degrades to the previous behaviour instead of
+    /// reading as permanently torn.
+    fn describes_manifest_at(&self, manifest_path: &Path) -> bool {
+        if self.schema_version < MANIFEST_PAIRING_SCHEMA {
+            return true; // predates the contract; nothing to compare against
+        }
+        let (Some(size), Some(mtime_ns)) = (self.manifest_size, self.manifest_mtime_ns) else {
+            // Schema 3 and no identity means the writer looked for a manifest and
+            // found none — so this sidecar was written BEFORE its manifest, the
+            // ordering bug itself. It does not pair with whatever is there now.
+            return false;
+        };
+        match std::fs::metadata(manifest_path) {
+            Ok(m) => m.len() == size && manifest::mtime_ns(&m) == mtime_ns,
+            Err(_) => false,
+        }
+    }
 }
 
 /// The response key the read tools carry this receipt under.
@@ -48,6 +92,10 @@ struct GraphMeta {
 /// (fleet-watch#112 review). The string field keeps its name and its meaning;
 /// the new object gets its own.
 pub(crate) const RESPONSE_KEY: &str = "graph_freshness";
+
+/// First `meta.json` schema that records which manifest it accompanies. Below
+/// this, a sidecar carries no identity and is paired by default.
+const MANIFEST_PAIRING_SCHEMA: u32 = 3;
 
 /// Stamps the freshness receipt onto a response envelope under `RESPONSE_KEY`.
 ///
@@ -95,17 +143,36 @@ pub(crate) fn attach_from_arguments(response: &mut Value, arguments: &Value) {
 /// opening the store. Reads `meta.json` and `file_manifest.json`, both
 /// siblings of `graph` in `output_dir`.
 pub(crate) fn check(graph_path: &Path) -> Value {
+    // The graph artifact itself must be there. Without this the receipt happily
+    // reports "fresh" beside a `status: "error"` envelope when the graph was
+    // deleted and its sidecars left behind — the exact contradiction this
+    // receipt exists to prevent. The read tools gate on the same condition and
+    // return `Err` first, but `run_*` stamps the receipt onto that error
+    // envelope regardless (fleet-watch#112 review round 4).
+    if !graph_path.exists() {
+        return unknown();
+    }
     let Some(output_dir) = graph_path.parent() else {
         return unknown();
     };
     let Some(meta) = read_meta(output_dir) else {
         return unknown();
     };
-    let Some(loaded) = manifest::load(&manifest::manifest_path(output_dir)) else {
+    let Some(root) = validated_root(&meta.root) else {
         return unknown();
     };
+    let manifest_path = manifest::manifest_path(output_dir);
+    let Some(loaded) = manifest::load(&manifest_path) else {
+        return unknown();
+    };
+    if !meta.describes_manifest_at(&manifest_path) {
+        // The two sidecars are not a matching pair: we caught an index between
+        // its manifest write and its meta write. Neither half alone is a
+        // verdict.
+        return unknown();
+    }
 
-    let root = Path::new(&meta.root);
+    let root = root.as_path();
     let dirty_files = count_dirty(root, &loaded.files);
     let divergence = commit_divergence(root, meta.commit_sha.as_deref());
     // A HEAD that sits on a different commit than the one indexed is staleness
@@ -116,6 +183,14 @@ pub(crate) fn check(graph_path: &Path) -> Value {
     // the two signals, not a special case per direction.
     let head_moved = divergence.is_some_and(|(ahead, behind)| ahead > 0 || behind > 0);
 
+    // "fresh" has to mean something was checked and came back clean. With an
+    // empty manifest and no commit provenance nothing was examined at all, and
+    // reporting a clean bill for a check that never ran is the same error as
+    // trusting an unverifiable manifest key (fleet-watch#112 review round 4).
+    if loaded.files.is_empty() && divergence.is_none() {
+        return unknown();
+    }
+
     json!({
         "state": if dirty_files == 0 && !head_moved { "fresh" } else { "stale" },
         "checked_files": loaded.files.len(),
@@ -123,6 +198,51 @@ pub(crate) fn check(graph_path: &Path) -> Value {
         "commits_behind": divergence.map(|(_, behind)| behind),
         "commits_ahead": divergence.map(|(ahead, _)| ahead),
     })
+}
+
+/// The indexed root, accepted ONLY after the sidecar's claim survives policy.
+///
+/// `meta.json` is attacker-craftable, exactly like `commit_sha` and the manifest
+/// keys this module already guards. `root` is the join base for every `stat` in
+/// `count_dirty` AND the `-C` argument to `git`, so an unvalidated value walks
+/// straight past the round-3 key-containment fix: `"root": "/"` with an
+/// perfectly ordinary key like `"etc/shadow"` passes `is_contained_key` and
+/// resolves to `/etc/shadow`. Same existence-and-attributes oracle, entered
+/// through a different field of the same file (fleet-watch#112 review round 4).
+///
+/// The policy: absolute, resolvable, a directory, and not one of the system
+/// roots `validate_graph_path_safe` already refuses to treat as a working path.
+/// `canonicalize` is what makes the later joins meaningful — it resolves `..`
+/// and any symlink IN THE ROOT ITSELF once per call, so the containment
+/// `is_contained_key` enforces per key is enforced against a real directory
+/// rather than a string.
+///
+/// HONEST LIMIT, stated rather than implied: this bounds the sweep to a
+/// plausible source tree and refuses every system directory, but it does not
+/// AUTHENTICATE the root — a sidecar naming some other ordinary directory still
+/// redirects the sweep there. Nothing on disk can authenticate it, because
+/// anything written beside the sidecar is equally forgeable; closing that needs
+/// either a `codebase_path` supplied by the caller at query time or a signed
+/// sidecar, and a signed sidecar would break the artifact feature's whole point
+/// of moving a graph between machines. Flagged for the owner rather than solved
+/// silently.
+fn validated_root(claimed: &str) -> Option<PathBuf> {
+    let claimed = Path::new(claimed);
+    if !claimed.is_absolute() {
+        return None;
+    }
+    let root = std::fs::canonicalize(claimed).ok()?;
+    if !root.is_dir() {
+        return None;
+    }
+    let resolved = root.to_string_lossy();
+    if crate::query_handlers::FORBIDDEN_GRAPH_PATH_PREFIXES
+        .iter()
+        .any(|forbidden| resolved == *forbidden)
+    {
+        return None;
+    }
+    Some(root)
 }
 
 /// Commits separating the index-time sha from the root's CURRENT HEAD, as
