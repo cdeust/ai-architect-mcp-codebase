@@ -50,6 +50,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `analyze_codebase` writes the file manifest, not just `meta.json`
+  (fleet-watch#112). It and `index_codebase` are documented as interchangeable
+  entry points over one `output_dir`, so an analyze run on top of an earlier
+  index froze that index's manifest in place and every file added afterwards was
+  permanently invisible to the staleness check — the graph read `fresh` while
+  missing them, with no race involved.
+- `file_manifest.json` is written through the same atomic helper as `meta.json`,
+  which adds the `fsync` and the per-writer temp name it previously lacked. The
+  two sidecars are compared against each other, so the pairing defence was only
+  as strong as the weaker of the two writes. That helper now lives in one place
+  (`atomic_file`) instead of being reimplemented per call site.
+- A failed sidecar write is reported by every path that writes one — the two
+  bootstrap paths and `analyze_codebase` previously logged it and carried on, so
+  only `index_codebase` surfaced it to the caller.
+
 - The query-time staleness receipt no longer reports a verdict it cannot stand
   behind (fleet-watch#112). Three cases now read `"unknown"` instead: the graph
   artifact itself is gone (previously `"fresh"` alongside the tool's own
@@ -65,6 +80,17 @@ adheres to [Semantic Versioning](https://semver.org/).
   parses and simply skips the pairing check.
 
 ### Security
+
+- The sidecar-pairing check can no longer be switched off by the sidecar
+  (fleet-watch#112). It trusted a `schema_version` the sidecar declares about
+  ITSELF, inside a module whose whole threat model is that the sidecar is
+  attacker-writable — so a forged `meta.json` carrying nothing but a root, a
+  commit sha and `"schema_version": 2` bypassed the entire round-4 pairing
+  defence with one field and no race at all. The version is no longer consulted:
+  a sidecar that records no manifest identity does not pair, whatever it says
+  about itself. A graph indexed by an older build therefore reads as
+  `"unknown"` until re-indexed — the honest answer, rather than a bypass
+  reporting `"fresh"`.
 
 - The staleness check no longer trusts `meta.json`'s `root` as a filesystem
   join base (fleet-watch#112). `root` is the base for every `stat` and the `-C`
