@@ -169,12 +169,10 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     }
     let total_start = std::time::Instant::now();
 
-    // Phase 1: index. `meta.json` last, as everywhere else (see write_graph_meta).
+    // Phase 1: index, then BOTH sidecars — manifest first, `meta.json` last.
     let index_result =
         indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
-    if let Err(e) = write_graph_meta(&req.output_dir, &req.codebase) {
-        eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}");
-    }
+    let sidecar_err = persist_analyze_sidecars(&req);
     // Phase 2: resolve, then optionally refine with an LSP.
     let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
     let resolve_result = resolver::resolve_graph(&store)?;
@@ -183,14 +181,52 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let cluster_result = clustering::cluster_graph(&store, req.gamma)?;
     let search_index_result = search::build_search_index(&store, &req.output_dir)?;
 
-    Ok(analyze_envelope(
+    let mut response = analyze_envelope(
         &index_result,
         &resolve_result,
         &cluster_result,
         &search_index_result,
         lsp_result.as_ref(),
         total_start.elapsed().as_millis() as u64,
-    ))
+    );
+    report_sidecar_error(&mut response, sidecar_err);
+    Ok(response)
+}
+
+/// Writes the two sidecars a completed `analyze_codebase` leaves beside the
+/// graph, in the one order every path uses: manifest first, `meta.json` last.
+///
+/// `analyze_codebase` used to write `meta.json` and NO manifest at all
+/// (fleet-watch#112 review round 6). It and `index_codebase` are documented as
+/// interchangeable entry points over the same `output_dir`, so running analyze
+/// where a previous index had left a manifest froze that manifest in place:
+/// every file added afterwards stayed permanently invisible to `count_dirty`,
+/// and the graph reported fresh while missing them. Writing no manifest at all
+/// is equally wrong in the other direction — the freshness check then has
+/// nothing to compare and can never answer.
+///
+/// Best-effort, like the index path: the graph is the product. The error is
+/// returned so the caller can say so rather than leave it to a log nobody reads.
+fn persist_analyze_sidecars(req: &AnalyzeRequest) -> Option<String> {
+    let manifest_path = indexer::manifest::manifest_path(&req.output_dir);
+    if let Err(e) = indexer::write_full_manifest(&req.codebase, &manifest_path, &req.options) {
+        eprintln!("[ap] file manifest write failed (analyze succeeded): {e}");
+        return Some(e);
+    }
+    write_graph_meta(&req.output_dir, &req.codebase)
+        .err()
+        .inspect(|e| {
+            eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}");
+        })
+}
+
+/// Surfaces a failed sidecar write on the response rather than leaving the
+/// caller believing a complete, queryable graph landed (review round 6 finding
+/// 4: three of five `write_graph_meta` call sites swallowed this).
+fn report_sidecar_error(response: &mut Value, err: Option<String>) {
+    if let Some(err) = err {
+        response["meta_write_error"] = json!(err);
+    }
 }
 
 // ---------------------------------------------------------------------------
