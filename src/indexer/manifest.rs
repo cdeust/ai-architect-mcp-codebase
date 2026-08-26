@@ -81,27 +81,55 @@ pub fn manifest_path(output_dir: &Path) -> PathBuf {
 /// sidecar degrades to a full rebuild instead of failing the tool.
 pub fn load(path: &Path) -> Option<FileManifest> {
     let bytes = fs::read(path).ok()?;
-    let manifest: FileManifest = serde_json::from_slice(&bytes).ok()?;
+    parse(&bytes)
+}
+
+/// Loads the manifest at `path` together with the identity of the exact file
+/// the bytes came from, as `(manifest, size, mtime_ns)`.
+///
+/// One `open` then `fstat` on THAT handle, not a read followed by a separate
+/// `stat` of the same name: sampling the path twice lets a rewrite land between
+/// them and pairs one index's bytes with another index's identity. The caller —
+/// `graph_freshness` — compares this identity against what `meta.json` claims
+/// to accompany, so a mismatch there must mean "the pair is wrong", never "the
+/// pair was re-read at the wrong moment" (fleet-watch#112 review round 6).
+pub fn load_with_identity(path: &Path) -> Option<(FileManifest, u64, i64)> {
+    use std::io::Read;
+    let mut file = fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.read_to_end(&mut bytes).ok()?;
+    Some((parse(&bytes)?, meta.len(), mtime_ns(&meta)))
+}
+
+/// Decodes manifest bytes, rejecting a schema this build does not understand.
+fn parse(bytes: &[u8]) -> Option<FileManifest> {
+    let manifest: FileManifest = serde_json::from_slice(bytes).ok()?;
     if manifest.schema_version > MANIFEST_SCHEMA_VERSION {
         return None;
     }
     Some(manifest)
 }
 
-/// Writes `manifest` to `path` atomically (temp file + rename).
+/// Writes `manifest` to `path` atomically, through the shared
+/// `handler_util::write_json_atomic`.
 ///
-/// Preconditions: `path`'s parent directory exists. Postconditions on `Ok`:
-/// `path` contains the serialized manifest and no partial temp file remains; on
-/// `Err`, `path` is left untouched (the temp write/rename failed before
-/// replacing it).
+/// Preconditions: none. Postconditions on `Ok`: `path` contains the serialized
+/// manifest and no partial temp file remains; on `Err`, `path` is left
+/// untouched (the temp write or the rename failed before replacing it).
+///
+/// The shared helper rather than a local temp+rename (fleet-watch#112 review
+/// round 6): this used to hand-roll one with a FIXED `file_manifest.json.tmp`
+/// name and no `fsync`, so two concurrent indexers of one `output_dir` could
+/// interleave through the shared temp path, and a crash between the write and
+/// the rename could publish a truncated manifest. `meta.json` — written into
+/// the same directory, and paired against this file by `graph_freshness` — was
+/// given the shared helper in round 5; leaving this half hand-rolled undercut
+/// the pairing defence that reads both.
 pub fn save(path: &Path, manifest: &FileManifest) -> Result<(), String> {
-    let json = serde_json::to_vec_pretty(manifest).map_err(|e| format!("manifest: encode: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, &json).map_err(|e| format!("manifest: write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        format!("manifest: rename into place: {e}")
-    })
+    crate::atomic_file::write_json_atomic(path, manifest)
+        .map(|_| ())
+        .map_err(|e| format!("manifest: {e}"))
 }
 
 /// File modification time in nanoseconds since the Unix epoch, or 0 when the
@@ -203,6 +231,62 @@ mod tests {
         assert_eq!(
             h1,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+    #[test]
+    fn save_replaces_the_manifest_atomically_and_leaves_no_residue() {
+        // Guards the reader-atomicity property of `save` (fleet-watch#112 review
+        // round 6, finding 3): a reader opens the file, a second save lands, and
+        // the held handle must still yield the whole previous version. No
+        // wall-clock in the verdict.
+        //
+        // Scope, stated plainly: the hand-rolled write this replaced ALSO did
+        // temp+rename, so it passed this test too. What routing through
+        // `atomic_file` actually adds is the `fsync` before the rename and a
+        // per-writer temp name — durability across a crash and safety against a
+        // concurrent writer, neither of which a single-threaded test can
+        // observe. Both were verified by inspection: the replaced body had no
+        // `sync_all` and a fixed `file_manifest.json.tmp`. This test exists so
+        // the property that IS observable cannot regress underneath them.
+        use std::io::Read;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("file_manifest.json");
+
+        let mut first = FileManifest::new();
+        first.files.insert(
+            "only-in-the-first.rs".to_string(),
+            FileState {
+                mtime_ns: 1,
+                size: 2,
+                content_hash: String::new(),
+            },
+        );
+        save(&path, &first).expect("first save");
+        let mut held = fs::File::open(&path).expect("open manifest");
+
+        save(&path, &FileManifest::new()).expect("second save");
+
+        let mut seen = String::new();
+        held.read_to_string(&mut seen).expect("read held handle");
+        let parsed: FileManifest =
+            serde_json::from_str(&seen).expect("an open reader must never see a torn manifest");
+        assert!(
+            parsed.files.contains_key("only-in-the-first.rs"),
+            "the rewrite must land on a new inode, leaving the open reader's view whole",
+        );
+        assert!(
+            load(&path).expect("reload").files.is_empty(),
+            "the second save must win"
+        );
+        let residue: Vec<_> = fs::read_dir(tmp.path())
+            .expect("read dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n != "file_manifest.json")
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "no temp artifact may survive: {residue:?}"
         );
     }
 }

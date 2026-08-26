@@ -6,6 +6,7 @@
 
 pub mod ambiguity_policy;
 pub mod artifact;
+pub mod atomic_file;
 pub mod bridge;
 pub mod call_evidence;
 pub mod clustering;

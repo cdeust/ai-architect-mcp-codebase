@@ -19,6 +19,7 @@
 
 mod ambiguity_policy;
 mod artifact;
+mod atomic_file;
 mod bridge;
 mod call_evidence;
 mod cli;
