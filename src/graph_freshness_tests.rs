@@ -90,7 +90,7 @@ fn unknown_when_meta_exists_but_manifest_does_not() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (output_dir, graph, root) = scaffold(tmp.path());
 
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
     // No file_manifest.json written.
     assert_eq!(check(&graph), json!({"state": "unknown"}));
 }
@@ -102,7 +102,7 @@ fn fresh_when_the_working_tree_matches_the_manifest() {
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
 
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
     let state = check(&graph);
     assert_eq!(state["state"], json!("fresh"));
@@ -119,7 +119,7 @@ fn stale_when_a_manifested_file_changes_on_disk() {
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
 
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
     // Edit the file after the manifest was captured.
     fs::write(root.join("a.rs"), b"fn a() { changed(); }\n").expect("edit a.rs");
@@ -136,7 +136,7 @@ fn stale_when_a_manifested_file_is_deleted() {
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
 
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
     fs::remove_file(root.join("a.rs")).expect("delete a.rs");
 
@@ -155,7 +155,7 @@ fn commits_behind_is_reported_in_a_git_repo() {
 
     // write_graph_meta stamps commit_sha == HEAD at this point.
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
     // Move HEAD forward by editing the tracked file and committing.
     fs::write(root.join("a.rs"), b"fn a() { changed(); }\n").expect("edit a.rs");
@@ -190,7 +190,7 @@ fn a_head_that_moved_backward_is_stale_even_with_no_dirty_file() {
 
     // The graph is indexed HERE, at the second commit.
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
     // HEAD walks BACK one commit. a.rs is byte-identical across the two
     // commits, so git does not rewrite it and its mtime does not move.
@@ -228,7 +228,7 @@ fn commits_behind_is_zero_when_head_is_unchanged() {
     commit_all(&root, "initial");
 
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
     let state = check(&graph);
     assert_eq!(state["state"], json!("fresh"));
@@ -284,7 +284,7 @@ fn a_file_added_since_the_index_is_invisible_to_the_cheap_check() {
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
 
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
     fs::write(root.join("b.rs"), b"fn b() {}\n").expect("write new file b.rs");
 
@@ -331,7 +331,7 @@ fn a_manifest_key_that_escapes_the_root_is_never_stat_ed() {
             },
         );
         manifest::save(&manifest::manifest_path(&output_dir), &m).expect("save manifest");
-        crate::query_handlers::write_graph_meta(&output_dir, &root);
+        crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
         let state = check(&graph);
         assert_eq!(
@@ -462,7 +462,7 @@ fn a_deleted_graph_artifact_is_never_reported_fresh() {
     let (output_dir, graph, root) = scaffold(tmp.path());
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
     assert_eq!(
         check(&graph)["state"],
         json!("fresh"),
@@ -492,7 +492,7 @@ fn sidecars_from_two_different_indexes_are_not_a_verdict() {
     let (output_dir, graph, root) = scaffold(tmp.path());
     fs::write(root.join("a.rs"), b"fn a() {}\n").expect("write a.rs");
     write_manifest_matching_disk(&output_dir, &root, "a.rs");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
     assert_eq!(
         check(&graph)["state"],
         json!("fresh"),
@@ -557,11 +557,76 @@ fn an_empty_manifest_outside_git_verifies_nothing_and_says_so() {
         &manifest::FileManifest::new(),
     )
     .expect("save empty manifest");
-    crate::query_handlers::write_graph_meta(&output_dir, &root);
+    crate::query_handlers::write_graph_meta(&output_dir, &root).expect("write meta");
 
     assert_eq!(
         check(&graph),
         json!({"state": "unknown"}),
         "nothing was verified, so nothing is attested",
+    );
+}
+
+#[test]
+fn a_symlinked_system_root_is_refused_like_its_literal_form() {
+    // fleet-watch#112 review round 5, finding 1. The blacklist compared a
+    // CANONICALIZED root against LITERAL strings, and on macOS several of the
+    // literals are themselves symlinks: `/etc` canonicalizes to `/private/etc`,
+    // which the list never mentions. So `"root": "/etc"` was accepted, and
+    // `count_dirty` joined attacker-chosen manifest keys onto it — the same
+    // oracle round 4 closed for `"root": "/"`, reopened through a real
+    // directory.
+    //
+    // Asserted against whatever this platform actually does rather than against
+    // an assumption about it: only the entries that really are symlinks here
+    // exercise the bug, and they must be refused in BOTH forms.
+    for literal in crate::query_handlers::FORBIDDEN_GRAPH_PATH_PREFIXES {
+        let Ok(canonical) = fs::canonicalize(literal) else {
+            continue; // absent on this platform — nothing to assert
+        };
+        assert!(
+            validated_root(literal).is_none(),
+            "the literal form must be refused: {literal}",
+        );
+        assert!(
+            validated_root(&canonical.to_string_lossy()).is_none(),
+            "the canonical form must be refused too: {literal} -> {}",
+            canonical.display(),
+        );
+    }
+}
+
+#[test]
+fn a_sidecar_root_reached_through_a_symlink_cannot_become_a_join_base() {
+    // The same finding, end to end through `check`, on the concrete host path
+    // the review named. Skipped rather than faked where /etc is not a symlink.
+    let Ok(canonical) = fs::canonicalize("/etc") else {
+        return;
+    };
+    if canonical == Path::new("/etc") {
+        return; // not a symlink on this platform; the literal entry covers it
+    }
+    let Ok(target) = fs::metadata("/etc/hosts") else {
+        return;
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (output_dir, graph, _root) = scaffold(tmp.path());
+
+    let mut m = manifest::FileManifest::new();
+    m.files.insert(
+        "hosts".to_string(), // relative + ordinary: is_contained_key says yes
+        FileState {
+            mtime_ns: manifest::mtime_ns(&target),
+            size: target.len(),
+            content_hash: String::new(),
+        },
+    );
+    manifest::save(&manifest::manifest_path(&output_dir), &m).expect("save manifest");
+    write_crafted_meta(&output_dir, "/etc", json!({}));
+
+    assert_eq!(
+        check(&graph),
+        json!({"state": "unknown"}),
+        "/etc canonicalizes to {} and must still be refused",
+        canonical.display(),
     );
 }

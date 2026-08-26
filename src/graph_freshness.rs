@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 use std::process::Command;
 
@@ -143,38 +144,58 @@ pub(crate) fn attach_from_arguments(response: &mut Value, arguments: &Value) {
 /// opening the store. Reads `meta.json` and `file_manifest.json`, both
 /// siblings of `graph` in `output_dir`.
 pub(crate) fn check(graph_path: &Path) -> Value {
+    let Some(inputs) = admissible_inputs(graph_path) else {
+        return unknown();
+    };
+    verdict(&inputs)
+}
+
+/// The three things a freshness verdict is computed from, once every gate that
+/// could disqualify them has passed.
+struct CheckInputs {
+    root: PathBuf,
+    files: BTreeMap<String, FileState>,
+    commit_sha: Option<String>,
+}
+
+/// Every reason this check can decline to answer, in one place.
+///
+/// `None` means "no verdict is available", which the caller reports as
+/// `"unknown"`. Split out of `check` so the gates read as the list they are
+/// (fleet-watch#112 review round 5) and so each one can be given its reason
+/// without burying the two-line computation that follows them.
+fn admissible_inputs(graph_path: &Path) -> Option<CheckInputs> {
     // The graph artifact itself must be there. Without this the receipt happily
     // reports "fresh" beside a `status: "error"` envelope when the graph was
     // deleted and its sidecars left behind — the exact contradiction this
     // receipt exists to prevent. The read tools gate on the same condition and
     // return `Err` first, but `run_*` stamps the receipt onto that error
-    // envelope regardless (fleet-watch#112 review round 4).
+    // envelope regardless (round 4).
     if !graph_path.exists() {
-        return unknown();
+        return None;
     }
-    let Some(output_dir) = graph_path.parent() else {
-        return unknown();
-    };
-    let Some(meta) = read_meta(output_dir) else {
-        return unknown();
-    };
-    let Some(root) = validated_root(&meta.root) else {
-        return unknown();
-    };
+    let output_dir = graph_path.parent()?;
+    let meta = read_meta(output_dir)?;
+    let root = validated_root(&meta.root)?;
     let manifest_path = manifest::manifest_path(output_dir);
-    let Some(loaded) = manifest::load(&manifest_path) else {
-        return unknown();
-    };
+    let loaded = manifest::load(&manifest_path)?;
+    // The two sidecars must be a matching pair: landing between an index's
+    // manifest write and its meta write yields one half of each, and neither
+    // half alone is a verdict (round 4).
     if !meta.describes_manifest_at(&manifest_path) {
-        // The two sidecars are not a matching pair: we caught an index between
-        // its manifest write and its meta write. Neither half alone is a
-        // verdict.
-        return unknown();
+        return None;
     }
+    Some(CheckInputs {
+        root,
+        files: loaded.files,
+        commit_sha: meta.commit_sha,
+    })
+}
 
-    let root = root.as_path();
-    let dirty_files = count_dirty(root, &loaded.files);
-    let divergence = commit_divergence(root, meta.commit_sha.as_deref());
+/// The receipt itself, over inputs already known to be admissible.
+fn verdict(inputs: &CheckInputs) -> Value {
+    let dirty_files = count_dirty(&inputs.root, &inputs.files);
+    let divergence = commit_divergence(&inputs.root, inputs.commit_sha.as_deref());
     // A HEAD that sits on a different commit than the one indexed is staleness
     // the file check cannot see: a commit that only ADDS files leaves every
     // manifested file byte-identical, and `count_dirty` has no entry to compare
@@ -182,18 +203,18 @@ pub(crate) fn check(graph_path: &Path) -> Value {
     // back, or diverged onto another branch — so the verdict is a plain OR over
     // the two signals, not a special case per direction.
     let head_moved = divergence.is_some_and(|(ahead, behind)| ahead > 0 || behind > 0);
-
-    // "fresh" has to mean something was checked and came back clean. With an
-    // empty manifest and no commit provenance nothing was examined at all, and
-    // reporting a clean bill for a check that never ran is the same error as
-    // trusting an unverifiable manifest key (fleet-watch#112 review round 4).
-    if loaded.files.is_empty() && divergence.is_none() {
+    // "fresh" has to mean something was checked and came back clean. An empty
+    // manifest with no commit provenance examined nothing at all, and a clean
+    // bill for an examination that never happened is the same error as trusting
+    // an unverifiable manifest key (round 4). Decided here rather than in
+    // `admissible_inputs` because it needs `divergence`, and asking git for it
+    // twice to move the gate earlier would cost a subprocess for nothing.
+    if inputs.files.is_empty() && divergence.is_none() {
         return unknown();
     }
-
     json!({
         "state": if dirty_files == 0 && !head_moved { "fresh" } else { "stale" },
-        "checked_files": loaded.files.len(),
+        "checked_files": inputs.files.len(),
         "dirty_files": dirty_files,
         "commits_behind": divergence.map(|(_, behind)| behind),
         "commits_ahead": divergence.map(|(ahead, _)| ahead),
@@ -246,14 +267,43 @@ fn validated_root(claimed: &str) -> Option<PathBuf> {
     if !root.is_dir() {
         return None;
     }
-    let resolved = root.to_string_lossy();
-    if crate::query_handlers::FORBIDDEN_GRAPH_PATH_PREFIXES
-        .iter()
-        .any(|forbidden| resolved == *forbidden)
-    {
+    if forbidden_roots().contains(&root) {
         return None;
     }
     Some(root)
+}
+
+/// The system roots this check refuses, in BOTH their literal and canonical
+/// forms, resolved once per process.
+///
+/// Comparing a canonicalized root against literal strings does not work, and
+/// silently did not: on macOS `/etc`, `/tmp`, `/var` and `/home` are themselves
+/// symlinks, so `"root": "/etc"` canonicalizes to `/private/etc` — a path the
+/// literal list never mentions. The blacklist accepted it, `count_dirty` joined
+/// attacker-chosen manifest keys onto it, and the oracle round 4 closed for
+/// `"root": "/"` was open again through a real directory (fleet-watch#112
+/// review round 5; verified on this host — `/etc` → `/private/etc`, `/tmp` →
+/// `/private/tmp`, `/var` → `/private/var`, `/home` → `/System/Volumes/Data/home`).
+///
+/// Both forms are kept because neither subsumes the other: the canonical form
+/// is what a canonicalized input will equal on macOS, and the literal form is
+/// what it will equal on a platform where the path is a real directory. An
+/// entry that does not resolve on this platform contributes only its literal.
+fn forbidden_roots() -> &'static [PathBuf] {
+    static ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    ROOTS.get_or_init(|| {
+        let mut roots = Vec::new();
+        for entry in crate::query_handlers::FORBIDDEN_GRAPH_PATH_PREFIXES {
+            let literal = PathBuf::from(entry);
+            if let Ok(canonical) = std::fs::canonicalize(&literal) {
+                if canonical != literal {
+                    roots.push(canonical);
+                }
+            }
+            roots.push(literal);
+        }
+        roots
+    })
 }
 
 /// Commits separating the index-time sha from the root's CURRENT HEAD, as
