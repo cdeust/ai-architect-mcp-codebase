@@ -494,10 +494,6 @@ fn path_size(path: &Path) -> u64 {
     total
 }
 
-// ---------------------------------------------------------------------------
-// Tests — in a sibling file so this module stays under the 500-line limit.
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 #[path = "artifact_tests.rs"]
 mod tests;

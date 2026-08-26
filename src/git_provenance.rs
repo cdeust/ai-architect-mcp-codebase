@@ -6,8 +6,16 @@
 //! before this work; exposing two of its private helpers to `graph_freshness`
 //! would have grown it further instead of putting a shared concern where it
 //! belongs. The concern is cohesive on its own — provenance READS, no writes,
-//! no artifact knowledge — and now has exactly one home rather than being
-//! reachable only through an unrelated module.
+//! no artifact knowledge — and is now reachable directly rather than only
+//! through an unrelated module.
+//!
+//! NOT yet the only copy, despite what an earlier revision of this comment
+//! claimed (fleet-watch#112 review round 6). `indexer::incremental` still
+//! carries its own `is_hex_sha`, and its comment points at `artifact::is_hex_sha`
+//! — a path that no longer exists since the function moved here. `history` and
+//! `cochange` each carry their own `git_head`. Consolidating those is real work
+//! with its own blast radius, tracked as follow-up; asserting it was already
+//! done was worse than leaving it undone.
 //!
 //! Layer: infrastructure/adapter. Depends on std only. Every call passes its
 //! arguments to `Command` directly, never through a shell, so there is no
