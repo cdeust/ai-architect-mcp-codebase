@@ -107,9 +107,9 @@ fn ref_triple(e: &ExtractedRef) -> (String, String, String) {
 
 fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|Config|com/app/Demo.java::Dog::greet#7::call@38:20#9|38|38|package|[(\"callee_name\", \"Config\")]",
-        "CallSite|helper|com/app/Demo.java::Dog::greet#7::call@39:9#8|39|39|package|[(\"callee_name\", \"helper\")]",
-        "CallSite|requireNonNull|com/app/Demo.java::Dog::Dog#5::call@34:9#6|34|34|package|[(\"callee_name\", \"requireNonNull\")]",
+        "CallSite|Config|com/app/Demo.java::Dog::greet#7::call@38:20#9|38|38|package|[(\"callee_name\", \"Config\"), (\"lsp_col\", \"19\")]",
+        "CallSite|helper|com/app/Demo.java::Dog::greet#7::call@39:9#8|39|39|package|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"8\")]",
+        "CallSite|requireNonNull|com/app/Demo.java::Dog::Dog#5::call@34:9#6|34|34|package|[(\"callee_name\", \"requireNonNull\"), (\"lsp_col\", \"8\")]",
         "Constant|KIND|com/app/Demo.java::Dog::KIND|30|30|package|[]",
         "Constant|age|com/app/Demo.java::Dog::age|29|29|private|[]",
         "Constant|code|com/app/Demo.java::Color::code|20|20|package|[]",
@@ -138,6 +138,15 @@ fn expected_node_records() -> Vec<&'static str> {
 }
 
 fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut v = Vec::new();
+    v.extend(expected_refs_part0());
+    v.extend(expected_refs_part1());
+    v.extend(expected_refs_part2());
+    v.extend(expected_refs_part3());
+    v
+}
+
+fn expected_refs_part0() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         ("Calls", "com/app/Demo.java::Dog::Dog#5", "requireNonNull"),
         ("Calls", "com/app/Demo.java::Dog::greet#7", "Config"),
@@ -169,6 +178,11 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         ("Defines", "com/app/Demo.java", "com/app/Demo.java::Marker"),
         ("Defines", "com/app/Demo.java", "com/app/Demo.java::Point"),
         ("Defines", "com/app/Demo.java", "com/app/Demo.java::Walker"),
+    ]
+}
+
+fn expected_refs_part1() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         ("Extends", "com/app/Demo.java::Dog", "Animal"),
         (
             "HasMethod",
@@ -195,6 +209,11 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
             "com/app/Demo.java::Dog",
             "com/app/Demo.java::Dog::helper#11",
         ),
+    ]
+}
+
+fn expected_refs_part2() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "com/app/Demo.java::Dog",
@@ -225,6 +244,11 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
             "com/app/Demo.java::Color",
             "com/app/Demo.java::Color::RED",
         ),
+    ]
+}
+
+fn expected_refs_part3() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         ("Implements", "com/app/Demo.java::Dog", "Greeter"),
         ("Implements", "com/app/Demo.java::Dog", "Walker"),
         ("Imports", "com/app/Demo.java", "com.app.Config"),

@@ -174,84 +174,119 @@ fn has_language_col(label: &str) -> bool {
     )
 }
 
+/// Reads one extra property the parser attached to `node`, or "" when absent.
+/// A free function (not a closure) so each per-label helper below can share
+/// it without capturing `node` by reference through a closure boundary.
+fn find_property(node: &parser::ExtractedNode, key: &str) -> String {
+    node.properties
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default()
+}
+
 /// Maps parser extra properties to schema columns by label.
+///
+/// One small per-label helper each (Fowler "Extract Function", §4.2): this
+/// dispatch table used to inline every label's body directly, which grew the
+/// function past the §4.2 cap one property at a time — a size cap that is
+/// itself the failure mode this split closes off structurally rather than
+/// re-opening at the next property added.
 fn append_label_properties(props: &mut Vec<(String, String)>, node: &parser::ExtractedNode) {
-    let find = |key: &str| -> String {
-        node.properties
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.clone())
-            .unwrap_or_default()
-    };
     match node.label.as_str() {
-        "Function" => {
-            props.push(("is_async".to_string(), find("is_async")));
-            // source: issue #92 — Uses-edge inputs; "" when the parser set none.
-            props.push(("return_type".to_string(), cypher_str(&find("return_type"))));
-            props.push((
-                "constructed_types".to_string(),
-                cypher_str(&find("constructed_types")),
-            ));
-        }
-        "Method" => {
-            props.push(("is_async".to_string(), find("is_async")));
-            props.push((
-                "receiver_type".to_string(),
-                cypher_str(&find("receiver_type")),
-            ));
-            // source: implements fix — trait_name set by the parser on methods
-            // inside `impl Trait for Type` blocks; resolve_implements reads it.
-            props.push(("trait_name".to_string(), cypher_str(&find("trait_name"))));
-            // source: issue #92 — Uses-edge inputs; "" when the parser set none.
-            props.push(("return_type".to_string(), cypher_str(&find("return_type"))));
-            props.push((
-                "constructed_types".to_string(),
-                cypher_str(&find("constructed_types")),
-            ));
-        }
-        "Field" => {
-            props.push((
-                "type_annotation".to_string(),
-                cypher_str(&find("type_annotation")),
-            ));
-        }
-        "Constant" => {
-            props.push((
-                "type_annotation".to_string(),
-                cypher_str(&find("type_annotation")),
-            ));
-        }
-        "TypeAlias" => {
-            props.push(("target_type".to_string(), cypher_str(&find("target_type"))));
-        }
-        // source: Spike B' BUG #9 — bases CSV emitted by parser/python.rs
-        // for class/struct/trait/enum nodes; consumed by resolver.resolve_extends.
-        // implements fix — `implements` CSV (derived/declared trait names) is
-        // the parallel column consumed by resolver.resolve_implements.
-        "Struct" | "Enum" | "Trait" => {
-            props.push(("bases".to_string(), cypher_str(&find("bases"))));
-            props.push(("implements".to_string(), cypher_str(&find("implements"))));
-        }
-        "Import" => {
-            props.push(("path".to_string(), cypher_str(&find("path"))));
-            props.push(("alias".to_string(), cypher_str(&find("alias"))));
-            props.push(("is_glob".to_string(), find("is_glob")));
-            // §10.1 span for the import statement; §10.4 is_resolved starts false
-            // and is flipped by the resolver's resolve pass.
-            props.push(("start_line".to_string(), node.start_line.to_string()));
-            props.push(("end_line".to_string(), node.end_line.to_string()));
-            props.push(("is_resolved".to_string(), "false".to_string()));
-        }
-        "CallSite" => {
-            props.push(("callee_name".to_string(), cypher_str(&find("callee_name"))));
-            props.push(("line".to_string(), node.start_line.to_string()));
-            props.push(("col".to_string(), "0".to_string()));
-            // §10.4 is_resolved starts false; the resolver flips it to true when
-            // it emits the resolved Calls edge for this site.
-            props.push(("is_resolved".to_string(), "false".to_string()));
-        }
+        "Function" => append_function_properties(props, node),
+        "Method" => append_method_properties(props, node),
+        // Field and Constant carry the identical single property.
+        "Field" | "Constant" => props.push((
+            "type_annotation".to_string(),
+            cypher_str(&find_property(node, "type_annotation")),
+        )),
+        "TypeAlias" => props.push((
+            "target_type".to_string(),
+            cypher_str(&find_property(node, "target_type")),
+        )),
+        "Struct" | "Enum" | "Trait" => append_bases_and_implements(props, node),
+        "Import" => append_import_properties(props, node),
+        "CallSite" => append_callsite_properties(props, node),
         _ => {}
     }
+}
+
+fn append_function_properties(props: &mut Vec<(String, String)>, node: &parser::ExtractedNode) {
+    props.push(("is_async".to_string(), find_property(node, "is_async")));
+    // source: issue #92 — Uses-edge inputs; "" when the parser set none.
+    props.push((
+        "return_type".to_string(),
+        cypher_str(&find_property(node, "return_type")),
+    ));
+    props.push((
+        "constructed_types".to_string(),
+        cypher_str(&find_property(node, "constructed_types")),
+    ));
+}
+
+fn append_method_properties(props: &mut Vec<(String, String)>, node: &parser::ExtractedNode) {
+    append_function_properties(props, node);
+    props.push((
+        "receiver_type".to_string(),
+        cypher_str(&find_property(node, "receiver_type")),
+    ));
+    // source: implements fix — trait_name set by the parser on methods
+    // inside `impl Trait for Type` blocks; resolve_implements reads it.
+    props.push((
+        "trait_name".to_string(),
+        cypher_str(&find_property(node, "trait_name")),
+    ));
+}
+
+/// source: Spike B' BUG #9 — bases CSV emitted by parser/python.rs for
+/// class/struct/trait/enum nodes; consumed by resolver.resolve_extends.
+/// implements fix — `implements` CSV (derived/declared trait names) is the
+/// parallel column consumed by resolver.resolve_implements.
+fn append_bases_and_implements(props: &mut Vec<(String, String)>, node: &parser::ExtractedNode) {
+    props.push((
+        "bases".to_string(),
+        cypher_str(&find_property(node, "bases")),
+    ));
+    props.push((
+        "implements".to_string(),
+        cypher_str(&find_property(node, "implements")),
+    ));
+}
+
+fn append_import_properties(props: &mut Vec<(String, String)>, node: &parser::ExtractedNode) {
+    props.push(("path".to_string(), cypher_str(&find_property(node, "path"))));
+    props.push((
+        "alias".to_string(),
+        cypher_str(&find_property(node, "alias")),
+    ));
+    props.push(("is_glob".to_string(), find_property(node, "is_glob")));
+    // §10.1 span for the import statement; §10.4 is_resolved starts false
+    // and is flipped by the resolver's resolve pass.
+    props.push(("start_line".to_string(), node.start_line.to_string()));
+    props.push(("end_line".to_string(), node.end_line.to_string()));
+    props.push(("is_resolved".to_string(), "false".to_string()));
+}
+
+fn append_callsite_properties(props: &mut Vec<(String, String)>, node: &parser::ExtractedNode) {
+    props.push((
+        "callee_name".to_string(),
+        cypher_str(&find_property(node, "callee_name")),
+    ));
+    props.push(("line".to_string(), node.start_line.to_string()));
+    // source: LSP 3.17 Base Protocol §Text Documents — positions are
+    // 0-based. Every parser spec now emits the call node's raw tree-sitter
+    // 0-based column as the `lsp_col` property (the qualified_name's own
+    // embedded column is 1-based in most specs, used only for id
+    // uniqueness — see call_site()/call_entry() in src/parser/spec/*.rs).
+    // Falls back to 0 only if a parser spec omitted the property, which is
+    // a parser bug to fix at the source, not a legitimate "column 0" call
+    // site.
+    let lsp_col = find_property(node, "lsp_col").parse::<u64>().unwrap_or(0);
+    props.push(("col".to_string(), lsp_col.to_string()));
+    // §10.4 is_resolved starts false; the resolver flips it to true when it
+    // emits the resolved Calls edge for this site.
+    props.push(("is_resolved".to_string(), "false".to_string()));
 }
 
 // Schema awareness — source: graph_store.rs node_table_ddl().

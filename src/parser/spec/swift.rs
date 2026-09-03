@@ -370,7 +370,17 @@ impl LanguageConventions for SwiftConventions {
             name: callee.to_string(),
             qualified_name: format!("{caller_qn}::call@{line}:{col}#{seq}"),
             visibility: "internal".to_string(),
-            properties: vec![("callee_name".to_string(), callee.to_string())],
+            properties: vec![
+                ("callee_name".to_string(), callee.to_string()),
+                // source: LSP 3.17 Base Protocol — positions are 0-based;
+                // `col` above is 1-based, so `lsp_col` carries the raw
+                // tree-sitter 0-based column separately. Read by
+                // indexer::persist::nodes::append_label_properties.
+                (
+                    "lsp_col".to_string(),
+                    call_node.start_position().column.to_string(),
+                ),
+            ],
             start_line: call_node.start_position().row as u64 + 1,
             end_line: call_node.end_position().row as u64 + 1,
             ref_kind: "Calls",

@@ -132,21 +132,29 @@ export * from './reexport';
 pub(super) const PATH: &str = "app/mod.ts";
 
 pub(super) fn expected_node_records() -> Vec<&'static str> {
+    let mut v = Vec::new();
+    v.extend(expected_node_records_part0());
+    v.extend(expected_node_records_part1());
+    v.extend(expected_node_records_part2());
+    v
+}
+
+fn expected_node_records_part0() -> Vec<&'static str> {
     vec![
-        "CallSite|Promise.resolve|app/mod.ts::Animal::fetch::call@69:15#1371-1390|69|69||[(\"callee_name\", \"Promise.resolve\"), (\"caller_qn\", \"app/mod.ts::Animal::fetch\")]",
-        "CallSite|Promise.resolve|app/mod.ts::Dog::speak::call@75:15#1481-1504|75|75||[(\"callee_name\", \"Promise.resolve\"), (\"caller_qn\", \"app/mod.ts::Dog::speak\")]",
-        "CallSite|draw|app/mod.ts::Widget::render::call@107:8#2009-2015|107|107||[(\"callee_name\", \"draw\"), (\"caller_qn\", \"app/mod.ts::Widget::render\")]",
+        "CallSite|Promise.resolve|app/mod.ts::Animal::fetch::call@69:15#1371-1390|69|69||[(\"callee_name\", \"Promise.resolve\"), (\"caller_qn\", \"app/mod.ts::Animal::fetch\"), (\"lsp_col\", \"15\")]",
+        "CallSite|Promise.resolve|app/mod.ts::Dog::speak::call@75:15#1481-1504|75|75||[(\"callee_name\", \"Promise.resolve\"), (\"caller_qn\", \"app/mod.ts::Dog::speak\"), (\"lsp_col\", \"15\")]",
+        "CallSite|draw|app/mod.ts::Widget::render::call@107:8#2009-2015|107|107||[(\"callee_name\", \"draw\"), (\"caller_qn\", \"app/mod.ts::Widget::render\"), (\"lsp_col\", \"8\")]",
         // #142: object-literal `api` method + arrow-property bodies scanned for calls.
-        "CallSite|fetch|app/mod.ts::api::call@112:30#2077-2087|112|112||[(\"callee_name\", \"fetch\"), (\"caller_qn\", \"app/mod.ts::api\")]",
-        "CallSite|send|app/mod.ts::api::call@113:27#2119-2128|113|113||[(\"callee_name\", \"send\"), (\"caller_qn\", \"app/mod.ts::api\")]",
-        "CallSite|fetchData|app/mod.ts::asyncArrow::call@30:10#678-692|30|30||[(\"callee_name\", \"fetchData\"), (\"caller_qn\", \"app/mod.ts::asyncArrow\")]",
-        "CallSite|fetch|app/mod.ts::fetchData::call@18:11#486-496|18|18||[(\"callee_name\", \"fetch\"), (\"caller_qn\", \"app/mod.ts::fetchData\")]",
-        "CallSite|format|app/mod.ts::greet::call@14:11#392-404|14|14||[(\"callee_name\", \"format\"), (\"caller_qn\", \"app/mod.ts::greet\")]",
-        "CallSite|greet|app/mod.ts::handler::call@26:4#608-622|26|26||[(\"callee_name\", \"greet\"), (\"caller_qn\", \"app/mod.ts::handler\")]",
-        "CallSite|greet|app/mod.ts::main::call@117:4#2177-2190|117|117||[(\"callee_name\", \"greet\"), (\"caller_qn\", \"app/mod.ts::main\")]",
-        "CallSite|helper|app/mod.ts::internalFn::call@34:4#732-740|34|34||[(\"callee_name\", \"helper\"), (\"caller_qn\", \"app/mod.ts::internalFn\")]",
-        "CallSite|super|app/mod.ts::Animal::constructor::call@48:8#1012-1019|48|48||[(\"callee_name\", \"super\"), (\"caller_qn\", \"app/mod.ts::Animal::constructor\")]",
-        "CallSite|this.fetch|app/mod.ts::Animal::speak::call@65:21#1296-1308|65|65||[(\"callee_name\", \"this.fetch\"), (\"caller_qn\", \"app/mod.ts::Animal::speak\")]",
+        "CallSite|fetch|app/mod.ts::api::call@112:30#2077-2087|112|112||[(\"callee_name\", \"fetch\"), (\"caller_qn\", \"app/mod.ts::api\"), (\"lsp_col\", \"30\")]",
+        "CallSite|send|app/mod.ts::api::call@113:27#2119-2128|113|113||[(\"callee_name\", \"send\"), (\"caller_qn\", \"app/mod.ts::api\"), (\"lsp_col\", \"27\")]",
+        "CallSite|fetchData|app/mod.ts::asyncArrow::call@30:10#678-692|30|30||[(\"callee_name\", \"fetchData\"), (\"caller_qn\", \"app/mod.ts::asyncArrow\"), (\"lsp_col\", \"10\")]",
+        "CallSite|fetch|app/mod.ts::fetchData::call@18:11#486-496|18|18||[(\"callee_name\", \"fetch\"), (\"caller_qn\", \"app/mod.ts::fetchData\"), (\"lsp_col\", \"11\")]",
+        "CallSite|format|app/mod.ts::greet::call@14:11#392-404|14|14||[(\"callee_name\", \"format\"), (\"caller_qn\", \"app/mod.ts::greet\"), (\"lsp_col\", \"11\")]",
+        "CallSite|greet|app/mod.ts::handler::call@26:4#608-622|26|26||[(\"callee_name\", \"greet\"), (\"caller_qn\", \"app/mod.ts::handler\"), (\"lsp_col\", \"4\")]",
+        "CallSite|greet|app/mod.ts::main::call@117:4#2177-2190|117|117||[(\"callee_name\", \"greet\"), (\"caller_qn\", \"app/mod.ts::main\"), (\"lsp_col\", \"4\")]",
+        "CallSite|helper|app/mod.ts::internalFn::call@34:4#732-740|34|34||[(\"callee_name\", \"helper\"), (\"caller_qn\", \"app/mod.ts::internalFn\"), (\"lsp_col\", \"4\")]",
+        "CallSite|super|app/mod.ts::Animal::constructor::call@48:8#1012-1019|48|48||[(\"callee_name\", \"super\"), (\"caller_qn\", \"app/mod.ts::Animal::constructor\"), (\"lsp_col\", \"8\")]",
+        "CallSite|this.fetch|app/mod.ts::Animal::speak::call@65:21#1296-1308|65|65||[(\"callee_name\", \"this.fetch\"), (\"caller_qn\", \"app/mod.ts::Animal::speak\"), (\"lsp_col\", \"21\")]",
         "Constant|MAX_RETRIES|app/mod.ts::MAX_RETRIES|8|8|pub|[(\"type_annotation\", \"\")]",
         "Constant|TIMEOUT|app/mod.ts::TIMEOUT|9|9|pub|[(\"type_annotation\", \"number\")]",
         "Constant|api|app/mod.ts::api|111|114|pub|[(\"type_annotation\", \"\")]",
@@ -163,6 +171,11 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Field|value|app/mod.ts::Container::value|80|80||[(\"type_annotation\", \"T\")]",
         "Function|asyncArrow|app/mod.ts::asyncArrow|29|31|pub|[(\"is_async\", \"true\")]",
         "Function|fetchData|app/mod.ts::fetchData|17|19|pub|[(\"is_async\", \"true\"), (\"return_type\", \"Promise<Response>\")]",
+    ]
+}
+
+fn expected_node_records_part1() -> Vec<&'static str> {
+    vec![
         "Function|gen|app/mod.ts::gen|21|23|pub|[(\"is_async\", \"false\"), (\"return_type\", \"Generator<number>\")]",
         "Function|greet|app/mod.ts::greet|13|15|pub|[(\"is_async\", \"false\"), (\"return_type\", \"string\")]",
         "Function|handler|app/mod.ts::handler|25|27|pub|[(\"is_async\", \"false\")]",
@@ -193,6 +206,11 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         // (`s.bases`/`s.implements`), not the raw refs, so without them the
         // clause never resolved to a graph edge.
         "Struct|Animal|app/mod.ts::Animal|41|71|pub|[(\"bases\", \"Base\"), (\"implements\", \"Serializable\")]",
+    ]
+}
+
+fn expected_node_records_part2() -> Vec<&'static str> {
+    vec![
         "Struct|Base|app/mod.ts::Base|37|39|pub|[]",
         "Struct|Container|app/mod.ts::Container|79|81|pub|[(\"bases\", \"Wrapper\")]",
         "Struct|Dog|app/mod.ts::Dog|73|77|pub|[(\"bases\", \"Animal\")]",
@@ -211,6 +229,18 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
 /// The full 78-triple ref MULTISET (with the two identical
 /// `HasMethod(→…::Animal::displayName)` edges for the getter/setter pair).
 pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut v = Vec::new();
+    v.extend(expected_refs_part0());
+    v.extend(expected_refs_part1());
+    v.extend(expected_refs_part2());
+    v.extend(expected_refs_part3());
+    v.extend(expected_refs_part4());
+    v.extend(expected_refs_part5());
+    v.extend(expected_refs_part6());
+    v
+}
+
+fn expected_refs_part0() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         ("Calls", "app/mod.ts::Animal::constructor", "super"),
         ("Calls", "app/mod.ts::Animal::fetch", "resolve"),
@@ -241,6 +271,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/mod.ts::Animal::speak",
             "app/mod.ts::Animal::speak::call@65:21#1296-1308",
         ),
+    ]
+}
+
+fn expected_refs_part1() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "app/mod.ts::Dog::speak",
@@ -267,6 +302,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/mod.ts::asyncArrow",
             "app/mod.ts::asyncArrow::call@30:10#678-692",
         ),
+    ]
+}
+
+fn expected_refs_part2() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "app/mod.ts::fetchData",
@@ -297,6 +337,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
         ("Defines", "app/mod.ts", "app/mod.ts::.::types::Config"),
         ("Defines", "app/mod.ts", "app/mod.ts::Animal"),
         ("Defines", "app/mod.ts", "app/mod.ts::Base"),
+    ]
+}
+
+fn expected_refs_part3() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         ("Defines", "app/mod.ts", "app/mod.ts::Color"),
         ("Defines", "app/mod.ts", "app/mod.ts::Container"),
         ("Defines", "app/mod.ts", "app/mod.ts::Direction"),
@@ -327,6 +372,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
         ("Extends", "app/mod.ts::Serializable", "Base"),
         ("HasField", "app/mod.ts::Animal", "app/mod.ts::Animal::age"),
         ("HasField", "app/mod.ts::Animal", "app/mod.ts::Animal::id"),
+    ]
+}
+
+fn expected_refs_part4() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         ("HasField", "app/mod.ts::Animal", "app/mod.ts::Animal::kind"),
         ("HasField", "app/mod.ts::Animal", "app/mod.ts::Animal::name"),
         (
@@ -356,6 +406,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
         ),
         // #141: `Base` now owns its abstract `compute` requirement.
         ("HasMethod", "app/mod.ts::Base", "app/mod.ts::Base::compute"),
+    ]
+}
+
+fn expected_refs_part5() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "app/mod.ts::Animal",
@@ -382,6 +437,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/mod.ts::Animal::speak",
         ),
         ("HasMethod", "app/mod.ts::Dog", "app/mod.ts::Dog::speak"),
+    ]
+}
+
+fn expected_refs_part6() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "app/mod.ts::Serializable",

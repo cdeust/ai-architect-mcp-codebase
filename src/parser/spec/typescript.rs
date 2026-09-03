@@ -131,6 +131,11 @@ impl LanguageConventions for TsConventions {
             properties: vec![
                 ("callee_name".to_string(), callee.to_string()),
                 ("caller_qn".to_string(), caller_qn.to_string()),
+                // source: LSP 3.17 Base Protocol — positions are 0-based;
+                // `col` above is already 0-based here, so `lsp_col` mirrors
+                // it verbatim. Read by
+                // indexer::persist::nodes::append_label_properties.
+                ("lsp_col".to_string(), col.to_string()),
             ],
             start_line: line,
             end_line: line,

@@ -146,14 +146,14 @@ fn ref_triple(e: &ExtractedRef) -> (String, String, String) {
 
 fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|NSLog|app/Shape.m::Shape::start#4::call@28:5#6|28|28|public|[(\"callee_name\", \"NSLog\")]",
-        "CallSite|compute:|app/Shape.m::Shape::areaWithWidth:height:#9::call@32:12#10|32|32|public|[(\"callee_name\", \"compute:\")]",
-        "CallSite|doThingWith:andY:|app/Shape.m::Shape::start#4::call@26:5#8|26|26|public|[(\"callee_name\", \"doThingWith:andY:\")]",
-        "CallSite|helper|app/Shape.m::Shape::start#4::call@29:5#5|29|29|public|[(\"callee_name\", \"helper\")]",
-        "CallSite|helper|app/Shape.m::gated#15::call@47:12#16|47|47|public|[(\"callee_name\", \"helper\")]",
-        "CallSite|method|app/Shape.m::freeFunction#12::call@42:5#13|42|42|public|[(\"callee_name\", \"method\")]",
-        "CallSite|printf|app/Shape.m::freeFunction#12::call@41:5#14|41|41|public|[(\"callee_name\", \"printf\")]",
-        "CallSite|refresh|app/Shape.m::Shape::start#4::call@27:5#7|27|27|public|[(\"callee_name\", \"refresh\")]",
+        "CallSite|NSLog|app/Shape.m::Shape::start#4::call@28:5#6|28|28|public|[(\"callee_name\", \"NSLog\"), (\"lsp_col\", \"4\")]",
+        "CallSite|compute:|app/Shape.m::Shape::areaWithWidth:height:#9::call@32:12#10|32|32|public|[(\"callee_name\", \"compute:\"), (\"lsp_col\", \"11\")]",
+        "CallSite|doThingWith:andY:|app/Shape.m::Shape::start#4::call@26:5#8|26|26|public|[(\"callee_name\", \"doThingWith:andY:\"), (\"lsp_col\", \"4\")]",
+        "CallSite|helper|app/Shape.m::Shape::start#4::call@29:5#5|29|29|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"4\")]",
+        "CallSite|helper|app/Shape.m::gated#15::call@47:12#16|47|47|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"11\")]",
+        "CallSite|method|app/Shape.m::freeFunction#12::call@42:5#13|42|42|public|[(\"callee_name\", \"method\"), (\"lsp_col\", \"4\")]",
+        "CallSite|printf|app/Shape.m::freeFunction#12::call@41:5#14|41|41|public|[(\"callee_name\", \"printf\"), (\"lsp_col\", \"4\")]",
+        "CallSite|refresh|app/Shape.m::Shape::start#4::call@27:5#7|27|27|public|[(\"callee_name\", \"refresh\"), (\"lsp_col\", \"4\")]",
         "Constant|MyInt|app/Shape.m::MyInt|9|9|public|[(\"typedef\", \"true\")]",
         "Constant|NORTH|app/Shape.m::Dir::NORTH|8|8|public|[(\"enum_entry\", \"true\")]",
         "Constant|NodeT|app/Shape.m::NodeT|10|10|public|[(\"typedef\", \"true\")]",
@@ -192,6 +192,14 @@ fn expected_node_records() -> Vec<&'static str> {
 /// `Defines(→…::Shape)` edges). Order-independent, so it is compared as a sorted
 /// `Vec` to keep the duplicates.
 fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut v = Vec::new();
+    v.extend(expected_refs_part0());
+    v.extend(expected_refs_part1());
+    v.extend(expected_refs_part2());
+    v
+}
+
+fn expected_refs_part0() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         (
             "Calls",
@@ -223,6 +231,11 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
         ("Extends", "app/Shape.m::Shape", "NSObject"),
         ("HasField", "app/Shape.m::Node", "app/Shape.m::Node::v"),
         ("HasField", "app/Shape.m::Point", "app/Shape.m::Point::x"),
+    ]
+}
+
+fn expected_refs_part1() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         ("HasField", "app/Shape.m::Point", "app/Shape.m::Point::y"),
         ("HasField", "app/Shape.m::Value", "app/Shape.m::Value::f"),
         ("HasField", "app/Shape.m::Value", "app/Shape.m::Value::i"),
@@ -251,6 +264,11 @@ fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
             "app/Shape.m::Shape",
             "app/Shape.m::Shape::shapeNamed:#3",
         ),
+    ]
+}
+
+fn expected_refs_part2() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "app/Shape.m::Shape",

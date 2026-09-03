@@ -233,160 +233,191 @@ fn call_scan_of<'t>(spec: &ShallowSpec, node: Node<'t>) -> Node<'t> {
         .unwrap_or(node)
 }
 
-/// Emits one `CallSite` node plus its `Calls` edge, attributed to `caller_qn`.
-fn emit_call(spec: &ShallowSpec, ctx: &mut ShallowCtx, node: Node, caller_qn: &str) {
-    let Some(callee) = callee_of(spec, ctx.source, node) else {
-        return;
-    };
-    let line = line_of(node);
-    let col = node.start_position().column as u64 + 1;
-    let qn = format!("{caller_qn}{QN_SEP}call@{line}:{col}");
-    ctx.push_node(ExtractedNode {
-        label: LABEL_CALL_SITE.to_string(),
-        name: callee.clone(),
-        qualified_name: qn.clone(),
-        start_line: line,
-        end_line: end_line_of(node),
-        // Shallow rows carry no visibility (ADR-0056 decision 3).
-        visibility: String::new(),
-        properties: vec![("callee_name".to_string(), callee.clone())],
-    });
-    ctx.push_ref("Calls", &qn, &callee);
+/// Bundles the two values every walker function threads together (the
+/// language's node-kind table and the mutable per-file accumulator) behind
+/// method calls, so a function needing an additional positional parameter
+/// (`scope`, `as_method`, `in_class`) does not cross the §4.4 four-parameter
+/// cap the way five bare positional arguments did. Three independent
+/// lifetimes: `'s` borrows the (`'static`) spec row, `'w` is this borrow of
+/// `ctx`, `'src` is `ctx`'s own source-text lifetime — collapsing any pair of
+/// these into one is what previously made the borrow checker reject a
+/// version of this struct that tried to unify them.
+struct Walk<'s, 'w, 'src> {
+    spec: &'s ShallowSpec,
+    ctx: &'w mut ShallowCtx<'src>,
 }
 
-/// Emits `CallSite` nodes and `Calls` edges for every call under `root`,
-/// attributed to the definition `caller_qn`.
-fn walk_calls(spec: &ShallowSpec, ctx: &mut ShallowCtx, root: Node, caller_qn: &str) {
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
-        if kind_in(spec.call_node_kinds, n.kind()) {
-            emit_call(spec, ctx, n, caller_qn);
-        }
-        let mut cursor = n.walk();
-        for c in n.children(&mut cursor) {
-            stack.push(c);
-        }
+impl Walk<'_, '_, '_> {
+    /// Emits one `CallSite` node plus its `Calls` edge, attributed to
+    /// `caller_qn`.
+    fn emit_call(&mut self, node: Node, caller_qn: &str) {
+        let Some(callee) = callee_of(self.spec, self.ctx.source, node) else {
+            return;
+        };
+        let line = line_of(node);
+        let col = node.start_position().column as u64 + 1;
+        let qn = format!("{caller_qn}{QN_SEP}call@{line}:{col}");
+        self.ctx.push_node(ExtractedNode {
+            label: LABEL_CALL_SITE.to_string(),
+            name: callee.clone(),
+            qualified_name: qn.clone(),
+            start_line: line,
+            end_line: end_line_of(node),
+            // Shallow rows carry no visibility (ADR-0056 decision 3).
+            visibility: String::new(),
+            properties: vec![
+                ("callee_name".to_string(), callee.clone()),
+                // source: LSP 3.17 Base Protocol — positions are 0-based;
+                // `col` above is 1-based, so `lsp_col` carries the raw
+                // tree-sitter 0-based column separately. Read by
+                // indexer::persist::nodes::append_label_properties.
+                (
+                    "lsp_col".to_string(),
+                    node.start_position().column.to_string(),
+                ),
+            ],
+        });
+        self.ctx.push_ref("Calls", &qn, &callee);
     }
-}
 
-/// Emits an `Import` node plus its `Imports` edge. An import whose path is
-/// empty is skipped rather than emitted as a blank node.
-fn emit_import(ctx: &mut ShallowCtx, node: Node, scope: &str) {
-    let path = import_path_of(ctx.source, node);
-    if path.is_empty() {
-        return;
-    }
-    let display = last_segment(&path);
-    let qn = qual(scope, &format!("import:{path}"));
-    ctx.push_node(ExtractedNode {
-        label: LABEL_IMPORT.to_string(),
-        name: if display.is_empty() {
-            path.clone()
-        } else {
-            display
-        },
-        qualified_name: qn.clone(),
-        start_line: line_of(node),
-        end_line: end_line_of(node),
-        visibility: String::new(),
-        properties: vec![("path".to_string(), path.clone())],
-    });
-    ctx.push_ref("Imports", &qn, &path);
-}
-
-/// Emits a function or method definition and scans its body for calls.
-///
-/// `as_method` selects the label/edge pair: a definition reached inside a
-/// class body, or declared with a method node kind, is a `Method` +
-/// `HasMethod`; anything else is a `Function` + `Defines`.
-fn emit_def(spec: &ShallowSpec, ctx: &mut ShallowCtx, node: Node, scope: &str, as_method: bool) {
-    let name = node_field_text(ctx.source, node, spec.name_field);
-    if name.is_empty() {
-        return;
-    }
-    let start_line = line_of(node);
-    let qn = ctx.dedup(qual(scope, &name), start_line);
-    let (label, edge) = if as_method {
-        (LABEL_METHOD, "HasMethod")
-    } else {
-        (LABEL_FUNCTION, "Defines")
-    };
-    ctx.push_node(ExtractedNode {
-        label: label.to_string(),
-        name,
-        qualified_name: qn.clone(),
-        start_line,
-        end_line: end_line_of(node),
-        visibility: String::new(),
-        properties: Vec::new(),
-    });
-    ctx.push_ref(edge, scope, &qn);
-    let body = call_scan_of(spec, node);
-    walk_calls(spec, ctx, body, &qn);
-}
-
-/// Emits a class-like declaration and recurses into it so its members become
-/// methods scoped to the class.
-fn emit_class(spec: &ShallowSpec, ctx: &mut ShallowCtx, node: Node, scope: &str) {
-    let name = node_field_text(ctx.source, node, spec.name_field);
-    if name.is_empty() {
-        return;
-    }
-    let start_line = line_of(node);
-    let qn = ctx.dedup(qual(scope, &name), start_line);
-    ctx.push_node(ExtractedNode {
-        label: LABEL_STRUCT.to_string(),
-        name,
-        qualified_name: qn.clone(),
-        start_line,
-        end_line: end_line_of(node),
-        // No inheritance edges and no visibility on the shallow path.
-        visibility: String::new(),
-        properties: Vec::new(),
-    });
-    ctx.push_ref("Defines", scope, &qn);
-    let body = spec
-        .body_field
-        .and_then(|f| node.child_by_field_name(f))
-        .unwrap_or(node);
-    walk(spec, ctx, body, &qn, true);
-}
-
-/// Recursive descent over the tree.
-///
-/// `in_class` makes a function-kind definition a method by enclosing scope,
-/// which is how most grammars express methods; `method_node_kinds` covers the
-/// grammars that give methods their own node kind.
-fn walk(spec: &ShallowSpec, ctx: &mut ShallowCtx, parent: Node, scope: &str, in_class: bool) {
-    let mut cursor = parent.walk();
-    for child in parent.children(&mut cursor) {
-        let k = child.kind();
-        if kind_in(spec.class_node_kinds, k) {
-            emit_class(spec, ctx, child, scope);
-        } else if kind_in(spec.method_node_kinds, k) {
-            emit_def(spec, ctx, child, scope, true);
-        } else if kind_in(spec.function_node_kinds, k) {
-            emit_def(spec, ctx, child, scope, in_class);
-        } else if kind_in(spec.import_node_kinds, k) {
-            emit_import(ctx, child, scope);
-        } else {
-            // A call reached HERE is one outside any definition — top-level or
-            // class-body code — so it is attributed to the enclosing scope
-            // (the file or the class) rather than dropped.
-            //
-            // This matters more on the shallow path than on the deep one: in
-            // several shallow languages the module system IS top-level code
-            // (Ruby's `require` is an ordinary call, not an import node), so
-            // ignoring file-scope calls would discard a language's entire
-            // dependency signal. Definitions are handled by the arms above and
-            // scan their own bodies, so nothing is counted twice.
-            if kind_in(spec.call_node_kinds, k) {
-                emit_call(spec, ctx, child, scope);
+    /// Emits `CallSite` nodes and `Calls` edges for every call under `root`,
+    /// attributed to the definition `caller_qn`.
+    fn walk_calls(&mut self, root: Node, caller_qn: &str) {
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            if kind_in(self.spec.call_node_kinds, n.kind()) {
+                self.emit_call(n, caller_qn);
             }
-            // Descend regardless, so definitions nested in blocks/namespaces
-            // the row does not model — and calls nested in arguments — are
-            // still reached.
-            walk(spec, ctx, child, scope, in_class);
+            let mut cursor = n.walk();
+            for c in n.children(&mut cursor) {
+                stack.push(c);
+            }
+        }
+    }
+
+    /// Emits an `Import` node plus its `Imports` edge. An import whose path
+    /// is empty is skipped rather than emitted as a blank node.
+    fn emit_import(&mut self, node: Node, scope: &str) {
+        let path = import_path_of(self.ctx.source, node);
+        if path.is_empty() {
+            return;
+        }
+        let display = last_segment(&path);
+        let qn = qual(scope, &format!("import:{path}"));
+        self.ctx.push_node(ExtractedNode {
+            label: LABEL_IMPORT.to_string(),
+            name: if display.is_empty() {
+                path.clone()
+            } else {
+                display
+            },
+            qualified_name: qn.clone(),
+            start_line: line_of(node),
+            end_line: end_line_of(node),
+            visibility: String::new(),
+            properties: vec![("path".to_string(), path.clone())],
+        });
+        self.ctx.push_ref("Imports", &qn, &path);
+    }
+
+    /// Emits a function or method definition and scans its body for calls.
+    ///
+    /// `as_method` selects the label/edge pair: a definition reached inside a
+    /// class body, or declared with a method node kind, is a `Method` +
+    /// `HasMethod`; anything else is a `Function` + `Defines`.
+    fn emit_def(&mut self, node: Node, scope: &str, as_method: bool) {
+        let name = node_field_text(self.ctx.source, node, self.spec.name_field);
+        if name.is_empty() {
+            return;
+        }
+        let start_line = line_of(node);
+        let qn = self.ctx.dedup(qual(scope, &name), start_line);
+        let (label, edge) = if as_method {
+            (LABEL_METHOD, "HasMethod")
+        } else {
+            (LABEL_FUNCTION, "Defines")
+        };
+        self.ctx.push_node(ExtractedNode {
+            label: label.to_string(),
+            name,
+            qualified_name: qn.clone(),
+            start_line,
+            end_line: end_line_of(node),
+            visibility: String::new(),
+            properties: Vec::new(),
+        });
+        self.ctx.push_ref(edge, scope, &qn);
+        let body = call_scan_of(self.spec, node);
+        self.walk_calls(body, &qn);
+    }
+
+    /// Emits a class-like declaration and recurses into it so its members
+    /// become methods scoped to the class.
+    fn emit_class(&mut self, node: Node, scope: &str) {
+        let name = node_field_text(self.ctx.source, node, self.spec.name_field);
+        if name.is_empty() {
+            return;
+        }
+        let start_line = line_of(node);
+        let qn = self.ctx.dedup(qual(scope, &name), start_line);
+        self.ctx.push_node(ExtractedNode {
+            label: LABEL_STRUCT.to_string(),
+            name,
+            qualified_name: qn.clone(),
+            start_line,
+            end_line: end_line_of(node),
+            // No inheritance edges and no visibility on the shallow path.
+            visibility: String::new(),
+            properties: Vec::new(),
+        });
+        self.ctx.push_ref("Defines", scope, &qn);
+        let body = self
+            .spec
+            .body_field
+            .and_then(|f| node.child_by_field_name(f))
+            .unwrap_or(node);
+        self.walk(body, &qn, true);
+    }
+
+    /// Recursive descent over the tree.
+    ///
+    /// `in_class` makes a function-kind definition a method by enclosing
+    /// scope, which is how most grammars express methods;
+    /// `method_node_kinds` covers the grammars that give methods their own
+    /// node kind.
+    fn walk(&mut self, parent: Node, scope: &str, in_class: bool) {
+        let mut cursor = parent.walk();
+        for child in parent.children(&mut cursor) {
+            let k = child.kind();
+            if kind_in(self.spec.class_node_kinds, k) {
+                self.emit_class(child, scope);
+            } else if kind_in(self.spec.method_node_kinds, k) {
+                self.emit_def(child, scope, true);
+            } else if kind_in(self.spec.function_node_kinds, k) {
+                self.emit_def(child, scope, in_class);
+            } else if kind_in(self.spec.import_node_kinds, k) {
+                self.emit_import(child, scope);
+            } else {
+                // A call reached HERE is one outside any definition —
+                // top-level or class-body code — so it is attributed to the
+                // enclosing scope (the file or the class) rather than
+                // dropped.
+                //
+                // This matters more on the shallow path than on the deep
+                // one: in several shallow languages the module system IS
+                // top-level code (Ruby's `require` is an ordinary call, not
+                // an import node), so ignoring file-scope calls would
+                // discard a language's entire dependency signal.
+                // Definitions are handled by the arms above and scan their
+                // own bodies, so nothing is counted twice.
+                if kind_in(self.spec.call_node_kinds, k) {
+                    self.emit_call(child, scope);
+                }
+                // Descend regardless, so definitions nested in
+                // blocks/namespaces the row does not model — and calls
+                // nested in arguments — are still reached.
+                self.walk(child, scope, in_class);
+            }
         }
     }
 }
@@ -427,7 +458,11 @@ pub(crate) fn parse_shallow(
         refs: Vec::new(),
         emitted_qns: HashSet::new(),
     };
-    walk(spec, &mut ctx, tree.root_node(), file_path, false);
+    Walk {
+        spec,
+        ctx: &mut ctx,
+    }
+    .walk(tree.root_node(), file_path, false);
     Ok(ParseResult {
         nodes: ctx.nodes,
         refs: ctx.refs,

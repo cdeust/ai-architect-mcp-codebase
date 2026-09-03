@@ -96,10 +96,10 @@ fn ref_triple(e: &ExtractedRef) -> (String, String, String) {
 
 fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|Println|app/main.go::NewConfig#1::call@27:2#2|27|27|public|[(\"callee_name\", \"Println\")]",
-        "CallSite|TrimSpace|app/main.go::Config::Validate#3::call@32:2#5|32|32|public|[(\"callee_name\", \"TrimSpace\")]",
-        "CallSite|_init|app/main.go::setup#7::call@40:2#8|40|40|public|[(\"callee_name\", \"_init\")]",
-        "CallSite|helper|app/main.go::Config::Validate#3::call@33:2#4|33|33|public|[(\"callee_name\", \"helper\")]",
+        "CallSite|Println|app/main.go::NewConfig#1::call@27:2#2|27|27|public|[(\"callee_name\", \"Println\"), (\"lsp_col\", \"1\")]",
+        "CallSite|TrimSpace|app/main.go::Config::Validate#3::call@32:2#5|32|32|public|[(\"callee_name\", \"TrimSpace\"), (\"lsp_col\", \"1\")]",
+        "CallSite|_init|app/main.go::setup#7::call@40:2#8|40|40|public|[(\"callee_name\", \"_init\"), (\"lsp_col\", \"1\")]",
+        "CallSite|helper|app/main.go::Config::Validate#3::call@33:2#4|33|33|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"1\")]",
         "Constant|GlobalName|app/main.go::GlobalName|11|11|public|[]",
         "Constant|MaxRetries|app/main.go::MaxRetries|10|10|public|[]",
         "Field|High|app/main.go::Config::High|18|18|public|[(\"type_annotation\", \"int\")]",

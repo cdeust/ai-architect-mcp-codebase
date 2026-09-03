@@ -124,10 +124,11 @@ fn drive_pass(
         }
 
         for site in sites {
+            let (line, col) = site.lsp_position();
             pass.record(
                 store,
                 site,
-                client.get_definition(&file_uri, site.line, site.col),
+                client.get_definition(&file_uri, line, col),
                 &plan.ctx,
             );
             // Respect the overall budget. Breaking out of BOTH loops matters:

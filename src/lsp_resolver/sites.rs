@@ -17,11 +17,55 @@ pub(super) struct UnresolvedCallSite {
     pub(super) id: String,
     pub(super) caller_qn: String,
     pub(super) caller_label: String,
-    #[allow(dead_code)] // retained for diagnostics and future logging
     pub(super) callee_name: String,
     pub(super) file_path: String,
     pub(super) line: u64,
     pub(super) col: u64,
+}
+
+impl UnresolvedCallSite {
+    /// The 0-based (line, character) `textDocument/definition` must target:
+    /// the call's own identifier, never its receiver.
+    ///
+    /// Two corrections over the stored (line, col):
+    ///
+    /// - `line` is 1-based in the graph (`CallSite.line` == the parser's
+    ///   `node.start_line`); LSP positions are 0-based (LSP 3.17 §Text
+    ///   Documents).
+    /// - `col` (as of the `lsp_col` property fix in
+    ///   `indexer::persist::nodes`) is 0-based but still points at the START
+    ///   of the callee expression — the RECEIVER for a method call, not the
+    ///   method. Verified 2026-09-03 against rust-analyzer on
+    ///   `self.response_of(i)`: querying column 16 (`self`) returns the
+    ///   `self` binding; column 21 (`response_of`) returns the method.
+    ///   `last_segment_offset` walks to the byte offset of the LAST `.` or
+    ///   `::` in `callee_name` — which is the verbatim source substring
+    ///   starting at `col` (every `call_callee`/`call_entry` in
+    ///   `src/parser/spec/*.rs` reads it straight from the source file), so
+    ///   that offset is exactly the identifier's column.
+    pub(super) fn lsp_position(&self) -> (u64, u64) {
+        let line0 = self.line.saturating_sub(1);
+        let col = self.col + last_segment_offset(&self.callee_name) as u64;
+        (line0, col)
+    }
+}
+
+/// Byte offset, within `callee_name`, of the start of its LAST `.`- or
+/// `::`-separated segment: the actual identifier a receiver/path expression
+/// resolves through. `self.response_of` -> offset of `response_of`;
+/// `helpers::normalize` -> offset of `normalize`; a bare name (no separator)
+/// is its own last segment, offset 0.
+///
+/// Byte offsets, not char offsets: LSP `character` is a UTF-16 code unit
+/// count (LSP 3.17 §Text Documents), and tree-sitter's own `column` is a byte
+/// count — the two coincide only for ASCII source text. Every column already
+/// flowing through this pass (`lsp_col`, `CallSite.col`) carries the same
+/// ASCII assumption; widening it to non-ASCII identifiers is out of scope
+/// here and would need re-encoding at the parser, not at this call site.
+fn last_segment_offset(callee_name: &str) -> usize {
+    let dot = callee_name.rfind('.').map(|i| i + 1);
+    let scope = callee_name.rfind("::").map(|i| i + 2);
+    dot.into_iter().chain(scope).max().unwrap_or(0)
 }
 
 /// Every call site the static 3b resolver left open.
@@ -288,6 +332,57 @@ mod tests {
             extract_caller_from_callsite_id("src/foo.rs::bar"),
             "src/foo.rs::bar"
         );
+    }
+
+    /// Root cause 2 (fix/lsp-receiver-calls). `CallSite.col` (post the
+    /// `lsp_col` fix) still points at the START of the callee expression —
+    /// the RECEIVER for a method call — not the method identifier.
+    /// rust-analyzer resolves that position to the receiver's own binding,
+    /// not the method: verified 2026-09-03 on `self.response_of(i)`, column
+    /// 16 (`self`) -> the `self` binding, column 21 (`response_of`) -> the
+    /// method, same line. `lsp_position` must therefore target the LAST
+    /// `.`/`::`-separated segment, never the stored column verbatim.
+    #[test]
+    fn lsp_definition_targets_method_identifier_not_receiver() {
+        let cases: &[(&str, u64, u64, u64)] = &[
+            // (callee_name, line, col, expected identifier col)
+            ("self.response_of", 5, 8, 8 + "self.".len() as u64),
+            ("s.response_of", 5, 8, 8 + "s.".len() as u64),
+            ("trial.response_of", 5, 8, 8 + "trial.".len() as u64),
+            ("helpers::normalize", 5, 8, 8 + "helpers::".len() as u64),
+            // A chained call: the LAST segment is the identifier, not the
+            // first receiver nor an intermediate call's parens.
+            (
+                "input.trim().to_string",
+                5,
+                8,
+                8 + "input.trim().".len() as u64,
+            ),
+            // A bare function call has no separator: identifier == col.
+            ("helper", 5, 8, 8),
+        ];
+        for (callee_name, line, col, expected_col) in cases {
+            let site = UnresolvedCallSite {
+                id: "src/a.rs::caller::call@x".to_string(),
+                caller_qn: "src/a.rs::caller".to_string(),
+                caller_label: "Method".to_string(),
+                callee_name: callee_name.to_string(),
+                file_path: "src/a.rs".to_string(),
+                line: *line,
+                col: *col,
+            };
+            let (lsp_line, lsp_col) = site.lsp_position();
+            assert_eq!(
+                lsp_line,
+                line - 1,
+                "line must be converted from the graph's 1-based to LSP's \
+                 0-based: {callee_name}"
+            );
+            assert_eq!(
+                lsp_col, *expected_col,
+                "identifier column for callee_name={callee_name:?}"
+            );
+        }
     }
 
     #[test]

@@ -302,6 +302,13 @@ fn callee_dispatch_verbatim_transform_and_call_entry_are_wired() {
         "Verbatim: field text used as-is, no tail split"
     );
 
+    // lsp_col fix: `call_entry` also emits the call node's raw tree-sitter
+    // 0-based column (LSP 3.17 positions are 0-based; this spec's own QN
+    // column is 1-based) — read it straight from the node under test rather
+    // than hand-counting the fixture source, so this pins the WIRING, not a
+    // column literal that would silently drift if the fixture changed.
+    let expected_lsp_col = call.start_position().column.to_string();
+
     let entry = conv.call_entry(source, call, "caller", &callee, 1);
     assert_eq!(entry.visibility, "");
     assert_eq!(entry.ref_kind, "Defines");
@@ -312,6 +319,7 @@ fn callee_dispatch_verbatim_transform_and_call_entry_are_wired() {
         vec![
             ("callee_name".to_string(), "g".to_string()),
             ("caller_qn".to_string(), "caller".to_string()),
+            ("lsp_col".to_string(), expected_lsp_col),
         ],
         "PropertySet::CalleeAndCaller"
     );

@@ -174,13 +174,13 @@ pub(super) const PATH: &str = "app/main.cpp";
 
 pub(super) fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|_internal|app/main.cpp::freeFunction#17::call@77:5#18|77|77|public|[(\"callee_name\", \"_internal\")]",
-        "CallSite|call|app/main.cpp::freeFunction#17::call@75:5#20|75|75|public|[(\"callee_name\", \"call\")]",
-        "CallSite|compute|app/main.cpp::geometry::Shape::getId#8::call@27:26#9|27|27|public|[(\"callee_name\", \"compute\")]",
-        "CallSite|helper|app/main.cpp::gated#24::call@86:12#25|86|86|public|[(\"callee_name\", \"helper\")]",
-        "CallSite|identity|app/main.cpp::freeFunction#17::call@76:5#19|76|76|public|[(\"callee_name\", \"identity\")]",
-        "CallSite|method|app/main.cpp::freeFunction#17::call@74:5#21|74|74|public|[(\"callee_name\", \"method\")]",
-        "CallSite|printf|app/main.cpp::freeFunction#17::call@73:5#22|73|73|public|[(\"callee_name\", \"printf\")]",
+        "CallSite|_internal|app/main.cpp::freeFunction#17::call@77:5#18|77|77|public|[(\"callee_name\", \"_internal\"), (\"lsp_col\", \"4\")]",
+        "CallSite|call|app/main.cpp::freeFunction#17::call@75:5#20|75|75|public|[(\"callee_name\", \"call\"), (\"lsp_col\", \"4\")]",
+        "CallSite|compute|app/main.cpp::geometry::Shape::getId#8::call@27:26#9|27|27|public|[(\"callee_name\", \"compute\"), (\"lsp_col\", \"25\")]",
+        "CallSite|helper|app/main.cpp::gated#24::call@86:12#25|86|86|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"11\")]",
+        "CallSite|identity|app/main.cpp::freeFunction#17::call@76:5#19|76|76|public|[(\"callee_name\", \"identity\"), (\"lsp_col\", \"4\")]",
+        "CallSite|method|app/main.cpp::freeFunction#17::call@74:5#21|74|74|public|[(\"callee_name\", \"method\"), (\"lsp_col\", \"4\")]",
+        "CallSite|printf|app/main.cpp::freeFunction#17::call@73:5#22|73|73|public|[(\"callee_name\", \"printf\"), (\"lsp_col\", \"4\")]",
         "Constant|BLUE|app/main.cpp::geometry::Color::BLUE|49|49|public|[(\"enum_entry\", \"true\")]",
         "Constant|FAIL|app/main.cpp::geometry::Status::FAIL|51|51|public|[(\"enum_entry\", \"true\")]",
         "Constant|GREEN|app/main.cpp::geometry::Color::GREEN|49|49|public|[(\"enum_entry\", \"true\")]",
@@ -230,6 +230,18 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
 }
 
 pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut v = Vec::new();
+    v.extend(expected_refs_part0());
+    v.extend(expected_refs_part1());
+    v.extend(expected_refs_part2());
+    v.extend(expected_refs_part3());
+    v.extend(expected_refs_part4());
+    v.extend(expected_refs_part5());
+    v.extend(expected_refs_part6());
+    v
+}
+
+fn expected_refs_part0() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         ("Calls", "app/main.cpp::freeFunction#17", "_internal"),
         ("Calls", "app/main.cpp::freeFunction#17", "call"),
@@ -257,6 +269,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/main.cpp::geometry",
             "app/main.cpp::geometry::Container",
         ),
+    ]
+}
+
+fn expected_refs_part1() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "app/main.cpp::geometry",
@@ -287,6 +304,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/main.cpp::geometry",
             "app/main.cpp::geometry::Status",
         ),
+    ]
+}
+
+fn expected_refs_part2() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "app/main.cpp::geometry",
@@ -317,6 +339,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/main.cpp::geometry::Status",
             "app/main.cpp::geometry::Status::FAIL",
         ),
+    ]
+}
+
+fn expected_refs_part3() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "app/main.cpp::geometry::Status",
@@ -345,6 +372,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/main.cpp::geometry::Shape",
             "app/main.cpp::geometry::Shape::id",
         ),
+    ]
+}
+
+fn expected_refs_part4() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasField",
             "app/main.cpp::geometry::Value",
@@ -375,6 +407,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/main.cpp::geometry::Container",
             "app/main.cpp::geometry::Container::add#13",
         ),
+    ]
+}
+
+fn expected_refs_part5() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "app/main.cpp::geometry::Container",
@@ -405,6 +442,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "app/main.cpp::geometry::Shape",
             "app/main.cpp::geometry::Shape::Shape#4",
         ),
+    ]
+}
+
+fn expected_refs_part6() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "app/main.cpp::geometry::Shape",

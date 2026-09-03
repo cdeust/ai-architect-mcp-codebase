@@ -103,14 +103,14 @@ pub(super) const PATH: &str = "com/example/app/Demo.kt";
 
 pub(super) fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|bark|com/example/app/Demo.kt::Dog::greet#8::call@46:16#9|46|46|public|[(\"callee_name\", \"bark\")]",
-        "CallSite|compute|com/example/app/Demo.kt::Registry::register#4::call@32:16#5|32|32|public|[(\"callee_name\", \"compute\")]",
-        "CallSite|compute|com/example/app/Demo.kt::Shape::Circle::area#2::call@22:20#3|22|22|public|[(\"callee_name\", \"compute\")]",
-        "CallSite|helper|com/example/app/Demo.kt::topLevel#11::call@54:12#12|54|54|public|[(\"callee_name\", \"helper\")]",
-        "CallSite|inhale|com/example/app/Demo.kt::Animal::breathe#6::call@39:9#7|39|39|public|[(\"callee_name\", \"inhale\")]",
-        "CallSite|listOf|com/example/app/Demo.kt::useLambda#15::call@64:5#17|64|64|public|[(\"callee_name\", \"listOf\")]",
-        "CallSite|map|com/example/app/Demo.kt::useLambda#15::call@64:5#16|64|64|public|[(\"callee_name\", \"map\")]",
-        "CallSite|uppercase|com/example/app/Demo.kt::shout#13::call@58:12#14|58|58|public|[(\"callee_name\", \"uppercase\")]",
+        "CallSite|bark|com/example/app/Demo.kt::Dog::greet#8::call@46:16#9|46|46|public|[(\"callee_name\", \"bark\"), (\"lsp_col\", \"15\")]",
+        "CallSite|compute|com/example/app/Demo.kt::Registry::register#4::call@32:16#5|32|32|public|[(\"callee_name\", \"compute\"), (\"lsp_col\", \"15\")]",
+        "CallSite|compute|com/example/app/Demo.kt::Shape::Circle::area#2::call@22:20#3|22|22|public|[(\"callee_name\", \"compute\"), (\"lsp_col\", \"19\")]",
+        "CallSite|helper|com/example/app/Demo.kt::topLevel#11::call@54:12#12|54|54|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"11\")]",
+        "CallSite|inhale|com/example/app/Demo.kt::Animal::breathe#6::call@39:9#7|39|39|public|[(\"callee_name\", \"inhale\"), (\"lsp_col\", \"8\")]",
+        "CallSite|listOf|com/example/app/Demo.kt::useLambda#15::call@64:5#17|64|64|public|[(\"callee_name\", \"listOf\"), (\"lsp_col\", \"4\")]",
+        "CallSite|map|com/example/app/Demo.kt::useLambda#15::call@64:5#16|64|64|public|[(\"callee_name\", \"map\"), (\"lsp_col\", \"4\")]",
+        "CallSite|uppercase|com/example/app/Demo.kt::shout#13::call@58:12#14|58|58|public|[(\"callee_name\", \"uppercase\"), (\"lsp_col\", \"11\")]",
         "Constant|BLUE|com/example/app/Demo.kt::Color::BLUE|16|16|public|[(\"enum_entry\", \"true\")]",
         "Constant|GREEN|com/example/app/Demo.kt::Color::GREEN|15|15|public|[(\"enum_entry\", \"true\")]",
         "Constant|RED|com/example/app/Demo.kt::Color::RED|14|14|public|[(\"enum_entry\", \"true\")]",
@@ -146,6 +146,17 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
 }
 
 pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut v = Vec::new();
+    v.extend(expected_refs_part0());
+    v.extend(expected_refs_part1());
+    v.extend(expected_refs_part2());
+    v.extend(expected_refs_part3());
+    v.extend(expected_refs_part4());
+    v.extend(expected_refs_part5());
+    v
+}
+
+fn expected_refs_part0() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         (
             "Calls",
@@ -177,6 +188,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "com/example/app/Demo.kt",
             "com/example/app/Demo.kt::Color",
         ),
+    ]
+}
+
+fn expected_refs_part1() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "com/example/app/Demo.kt",
@@ -207,6 +223,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "com/example/app/Demo.kt",
             "com/example/app/Demo.kt::Shape",
         ),
+    ]
+}
+
+fn expected_refs_part2() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "com/example/app/Demo.kt",
@@ -234,6 +255,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "com/example/app/Demo.kt::Animal",
             "com/example/app/Demo.kt::Animal::species",
         ),
+    ]
+}
+
+fn expected_refs_part3() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "com/example/app/Demo.kt::Color",
@@ -260,6 +286,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "com/example/app/Demo.kt::Registry",
             "com/example/app/Demo.kt::Registry::instances",
         ),
+    ]
+}
+
+fn expected_refs_part4() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "com/example/app/Demo.kt::Shape",
@@ -288,6 +319,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "com/example/app/Demo.kt::Greeter",
             "com/example/app/Demo.kt::Greeter::greet#1",
         ),
+    ]
+}
+
+fn expected_refs_part5() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "com/example/app/Demo.kt::Registry",

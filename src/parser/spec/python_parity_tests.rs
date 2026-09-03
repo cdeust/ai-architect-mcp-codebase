@@ -94,9 +94,9 @@ fn ref_triple(e: &ExtractedRef) -> (String, String, String) {
 
 fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|client.get|zoo/animal.py::fetch::call@18:17#291-306|18|18||[(\"callee_name\", \"client.get\"), (\"caller_qn\", \"zoo/animal.py::fetch\")]",
-        "CallSite|format|zoo/animal.py::greet::call@13:11#226-238|13|13||[(\"callee_name\", \"format\"), (\"caller_qn\", \"zoo/animal.py::greet\")]",
-        "CallSite|helper|zoo/animal.py::Animal::_speak::call@26:8#426-434|26|26||[(\"callee_name\", \"helper\"), (\"caller_qn\", \"zoo/animal.py::Animal::_speak\")]",
+        "CallSite|client.get|zoo/animal.py::fetch::call@18:17#291-306|18|18||[(\"callee_name\", \"client.get\"), (\"caller_qn\", \"zoo/animal.py::fetch\"), (\"lsp_col\", \"17\")]",
+        "CallSite|format|zoo/animal.py::greet::call@13:11#226-238|13|13||[(\"callee_name\", \"format\"), (\"caller_qn\", \"zoo/animal.py::greet\"), (\"lsp_col\", \"11\")]",
+        "CallSite|helper|zoo/animal.py::Animal::_speak::call@26:8#426-434|26|26||[(\"callee_name\", \"helper\"), (\"caller_qn\", \"zoo/animal.py::Animal::_speak\"), (\"lsp_col\", \"8\")]",
         "Constant|MAX_SIZE|zoo/animal.py::MAX_SIZE|7|7||[(\"type_annotation\", \"int\")]",
         "Constant|_PRIVATE|zoo/animal.py::_PRIVATE|8|8||[(\"type_annotation\", \"\")]",
         "Function|fetch|zoo/animal.py::fetch|17|18||[(\"is_async\", \"true\"), (\"decorators\", \"decorator\")]",

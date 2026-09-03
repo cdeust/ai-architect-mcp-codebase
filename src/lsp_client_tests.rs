@@ -41,6 +41,65 @@ fn test_lsp_graceful_fallback_on_fake_lsp() {
     );
 }
 
+/// Root cause 3 (fix/lsp-receiver-calls). Drives a REAL fake LSP server
+/// (Python, `tests/fixtures/lsp/fake_workdone_progress_server.py`) that can
+/// only reach "begin_sent"/"end_sent" in its own log AFTER it has read the
+/// CLIENT's ack of `window/workDoneProgress/create` on stdin — so if
+/// `initialize_with_probe` returns at all, the wire round trip already
+/// completed IN ORDER: create -> ack -> begin -> end. The assertion is on
+/// that log's CONTENT, never on elapsed time — a wall-clock verdict is a
+/// load sensor, not a test.
+///
+/// This is what stands between rust-analyzer answering
+/// `textDocument/definition` with `[]` (workspace not yet loaded) and a
+/// correct answer: `resolve_with_lsp`'s first definition request is issued
+/// strictly after `initialize` returns, so gating THAT return on workDone
+/// END is what gates the first definition request.
+#[test]
+fn lsp_client_waits_for_work_done_progress_end_before_first_definition() {
+    if !is_command_available("python3") {
+        eprintln!("skipping: python3 not on PATH (fake LSP server fixture needs it)");
+        return;
+    }
+    let log = tempfile::Builder::new()
+        .prefix("lsp_readiness_log")
+        .tempfile()
+        .expect("tempfile");
+    let log_path = log.path().to_path_buf();
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/lsp/fake_workdone_progress_server.py"
+    );
+    let tmp = std::env::temp_dir();
+    let mut client = LspClient::start_unchecked(
+        "python3",
+        &[script, log_path.to_str().expect("utf8 path")],
+        &tmp,
+        Duration::from_secs(10),
+    )
+    .expect("spawn fake server");
+
+    client
+        .initialize_with_probe(&tmp, Duration::from_secs(5))
+        .expect("initialize must succeed once the server completes its script");
+
+    let events = std::fs::read_to_string(&log_path).expect("read log");
+    let lines: Vec<&str> = events.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "initialize_answered",
+            "received:initialized",
+            "create_sent",
+            "create_acked",
+            "begin_sent",
+            "end_sent",
+        ],
+        "the full workDoneProgress round trip must complete, in order, \
+         before initialize_with_probe returns: {events}"
+    );
+}
+
 /// Round-3 finding 5. Both directions of JSON-RPC use `id`, and the two id
 /// spaces are INDEPENDENT: a server-initiated request
 /// (`window/workDoneProgress/create`, `workspace/configuration`) numbers its

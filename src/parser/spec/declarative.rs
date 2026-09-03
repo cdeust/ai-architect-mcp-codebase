@@ -209,13 +209,19 @@ impl LanguageConventions for DeclarativeConventions {
                 }
             }
         };
-        let properties = match rule.properties {
+        // source: LSP 3.17 Base Protocol — positions are 0-based; `col` above
+        // is 1-based (this spec's QN convention), so `lsp_col` carries the
+        // raw tree-sitter 0-based column separately. Read by
+        // indexer::persist::nodes::append_label_properties.
+        let lsp_col = call_node.start_position().column.to_string();
+        let mut properties = match rule.properties {
             PropertySet::CalleeOnly => vec![("callee_name".to_string(), callee.to_string())],
             PropertySet::CalleeAndCaller => vec![
                 ("callee_name".to_string(), callee.to_string()),
                 ("caller_qn".to_string(), caller_qn.to_string()),
             ],
         };
+        properties.push(("lsp_col".to_string(), lsp_col));
         CallEntry {
             name: callee.to_string(),
             qualified_name,

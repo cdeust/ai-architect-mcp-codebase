@@ -413,6 +413,68 @@ fn measure_full_ast_cost_on_own_src() {
     );
 }
 
+/// Root cause 1 (fix/lsp-receiver-calls): `indexer::persist::nodes` used to
+/// hardcode `CallSite.col` to `"0"` for every call site, regardless of where
+/// the call actually sat on its line — `lsp_resolve` then queried
+/// `textDocument/definition` at column 0 on every request, landing on
+/// whatever token starts the line (indentation, a brace, an unrelated
+/// identifier) instead of the call. Every parser spec now emits the call's
+/// own 0-based tree-sitter column as the `lsp_col` property (see
+/// `src/parser/spec/rust.rs::call_site` and its siblings), and
+/// `append_label_properties` persists it as `CallSite.col`.
+///
+/// This fixture puts the call four columns deep in an indented method body,
+/// so `col == 0` (the pre-fix value) and the correct value are
+/// distinguishable — a bug that happened to leave `col` at a coincidental 0
+/// would not be caught by an assertion that merely checks `> 0` against a
+/// call at column 0.
+#[test]
+fn callsite_column_is_persisted_not_zero() {
+    use crate::test_support::TempDirExt;
+
+    let src_dir = tempfile::Builder::new()
+        .prefix("callsite_col_src_")
+        .tempdir()
+        .expect("src tempdir");
+    std::fs::write(
+        src_dir.path().join("lib.rs"),
+        "struct Widget;\n\
+         impl Widget {\n\
+         \x20\x20\x20\x20fn helper(&self, i: i32) -> i32 { i }\n\
+         \x20\x20\x20\x20fn caller(&self) -> i32 {\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20self.helper(1)\n\
+         \x20\x20\x20\x20}\n\
+         }\n",
+    )
+    .expect("write fixture");
+
+    let graph_dir = tempfile::Builder::new()
+        .prefix("callsite_col_graph_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let _ = std::fs::remove_dir_all(&graph_dir);
+
+    index_codebase(src_dir.path(), &graph_dir).expect("index");
+
+    let store = GraphStore::open_or_create(&graph_dir).expect("open store");
+    let qr = store
+        .execute_query(
+            "MATCH (cs:CallSite) WHERE cs.callee_name = 'self.helper' \
+             RETURN cs.col",
+        )
+        .expect("query CallSite.col");
+    assert_eq!(qr.rows.len(), 1, "exactly one `self.helper(1)` call site");
+    // Line 5, `        self.helper(1)` — 8 spaces of indentation before
+    // `self`, 0-based column 8. The pre-fix code persisted "0" here
+    // regardless of the call's real position.
+    assert_eq!(
+        qr.rows[0][0], "8",
+        "CallSite.col must be the call's real 0-based column, not the \
+         hardcoded 0 the pre-fix indexer wrote for every call site"
+    );
+}
+
 #[cfg(test)]
 fn dir_size(path: &std::path::Path) -> u64 {
     // lbug may materialize the database as a single file OR a directory

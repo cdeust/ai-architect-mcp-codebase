@@ -39,23 +39,23 @@ pub(super) const PATH: &str = "Sources/App/Demo.swift";
 
 pub(super) fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|at|Sources/App/Demo.swift::Point::subscript#10::call@36:16#11|36|36|internal|[(\"callee_name\", \"at\")]",
-        "CallSite|bump|Sources/App/Demo.swift::Counter::increment#17::call@60:9#18|60|60|internal|[(\"callee_name\", \"bump\")]",
-        "CallSite|cleanup|Sources/App/Demo.swift::Animal::deinit#13::call@48:9#14|48|48|internal|[(\"callee_name\", \"cleanup\")]",
-        "CallSite|compute|Sources/App/Demo.swift::Point::distance#7::call@28:16#8|28|28|internal|[(\"callee_name\", \"compute\")]",
-        "CallSite|compute|Sources/App/Demo.swift::helper#3::call@13:5#4|13|13|internal|[(\"callee_name\", \"compute\")]",
-        "CallSite|convert|Sources/App/Demo.swift::Color::hex#19::call@70:16#20|70|70|internal|[(\"callee_name\", \"convert\")]",
-        "CallSite|describe|Sources/App/Demo.swift::Point::init#5::call@24:22#6|24|24|internal|[(\"callee_name\", \"describe\")]",
-        "CallSite|fetch|Sources/App/Demo.swift::useClosures#24::call@90:5#27|90|92|internal|[(\"callee_name\", \"fetch\")]",
-        "CallSite|format|Sources/App/Demo.swift::greet#1::call@9:12#2|9|9|internal|[(\"callee_name\", \"format\")]",
-        "CallSite|handle|Sources/App/Demo.swift::useClosures#24::call@91:9#28|91|91|internal|[(\"callee_name\", \"handle\")]",
-        "CallSite|map|Sources/App/Demo.swift::useClosures#24::call@89:5#29|89|89|internal|[(\"callee_name\", \"map\")]",
-        "CallSite|parse|Sources/App/Demo.swift::useClosures#24::call@93:5#26|93|93|internal|[(\"callee_name\", \"parse\")]",
-        "CallSite|render|Sources/App/Demo.swift::Animal::describe#22::call@80:16#23|80|80|internal|[(\"callee_name\", \"render\")]",
-        "CallSite|reset|Sources/App/Demo.swift::useClosures#24::call@94:5#25|94|94|internal|[(\"callee_name\", \"reset\")]",
-        "CallSite|sound|Sources/App/Demo.swift::Animal::speak#15::call@52:16#16|52|52|internal|[(\"callee_name\", \"sound\")]",
-        "CallSite|sqrt|Sources/App/Demo.swift::Point::magnitude::call@32:16#9|32|32|internal|[(\"callee_name\", \"sqrt\")]",
-        "CallSite|transform|Sources/App/Demo.swift::useClosures#24::call@89:17#30|89|89|internal|[(\"callee_name\", \"transform\")]",
+        "CallSite|at|Sources/App/Demo.swift::Point::subscript#10::call@36:16#11|36|36|internal|[(\"callee_name\", \"at\"), (\"lsp_col\", \"15\")]",
+        "CallSite|bump|Sources/App/Demo.swift::Counter::increment#17::call@60:9#18|60|60|internal|[(\"callee_name\", \"bump\"), (\"lsp_col\", \"8\")]",
+        "CallSite|cleanup|Sources/App/Demo.swift::Animal::deinit#13::call@48:9#14|48|48|internal|[(\"callee_name\", \"cleanup\"), (\"lsp_col\", \"8\")]",
+        "CallSite|compute|Sources/App/Demo.swift::Point::distance#7::call@28:16#8|28|28|internal|[(\"callee_name\", \"compute\"), (\"lsp_col\", \"15\")]",
+        "CallSite|compute|Sources/App/Demo.swift::helper#3::call@13:5#4|13|13|internal|[(\"callee_name\", \"compute\"), (\"lsp_col\", \"4\")]",
+        "CallSite|convert|Sources/App/Demo.swift::Color::hex#19::call@70:16#20|70|70|internal|[(\"callee_name\", \"convert\"), (\"lsp_col\", \"15\")]",
+        "CallSite|describe|Sources/App/Demo.swift::Point::init#5::call@24:22#6|24|24|internal|[(\"callee_name\", \"describe\"), (\"lsp_col\", \"21\")]",
+        "CallSite|fetch|Sources/App/Demo.swift::useClosures#24::call@90:5#27|90|92|internal|[(\"callee_name\", \"fetch\"), (\"lsp_col\", \"4\")]",
+        "CallSite|format|Sources/App/Demo.swift::greet#1::call@9:12#2|9|9|internal|[(\"callee_name\", \"format\"), (\"lsp_col\", \"11\")]",
+        "CallSite|handle|Sources/App/Demo.swift::useClosures#24::call@91:9#28|91|91|internal|[(\"callee_name\", \"handle\"), (\"lsp_col\", \"8\")]",
+        "CallSite|map|Sources/App/Demo.swift::useClosures#24::call@89:5#29|89|89|internal|[(\"callee_name\", \"map\"), (\"lsp_col\", \"4\")]",
+        "CallSite|parse|Sources/App/Demo.swift::useClosures#24::call@93:5#26|93|93|internal|[(\"callee_name\", \"parse\"), (\"lsp_col\", \"4\")]",
+        "CallSite|render|Sources/App/Demo.swift::Animal::describe#22::call@80:16#23|80|80|internal|[(\"callee_name\", \"render\"), (\"lsp_col\", \"15\")]",
+        "CallSite|reset|Sources/App/Demo.swift::useClosures#24::call@94:5#25|94|94|internal|[(\"callee_name\", \"reset\"), (\"lsp_col\", \"4\")]",
+        "CallSite|sound|Sources/App/Demo.swift::Animal::speak#15::call@52:16#16|52|52|internal|[(\"callee_name\", \"sound\"), (\"lsp_col\", \"15\")]",
+        "CallSite|sqrt|Sources/App/Demo.swift::Point::magnitude::call@32:16#9|32|32|internal|[(\"callee_name\", \"sqrt\"), (\"lsp_col\", \"15\")]",
+        "CallSite|transform|Sources/App/Demo.swift::useClosures#24::call@89:17#30|89|89|internal|[(\"callee_name\", \"transform\"), (\"lsp_col\", \"16\")]",
         "Constant|Handler|Sources/App/Demo.swift::Handler|84|84|internal|[(\"typealias\", \"true\")]",
         "Constant|counter|Sources/App/Demo.swift::counter|6|6|internal|[]",
         "Constant|label|Sources/App/Demo.swift::Point::label|19|19|internal|[]",
@@ -96,6 +96,18 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
 }
 
 pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut v = Vec::new();
+    v.extend(expected_refs_part0());
+    v.extend(expected_refs_part1());
+    v.extend(expected_refs_part2());
+    v.extend(expected_refs_part3());
+    v.extend(expected_refs_part4());
+    v.extend(expected_refs_part5());
+    v.extend(expected_refs_part6());
+    v
+}
+
+fn expected_refs_part0() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         (
             "Calls",
@@ -127,6 +139,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
         ("Calls", "Sources/App/Demo.swift::useClosures#24", "fetch"),
         ("Calls", "Sources/App/Demo.swift::useClosures#24", "handle"),
         ("Calls", "Sources/App/Demo.swift::useClosures#24", "map"),
+    ]
+}
+
+fn expected_refs_part1() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         ("Calls", "Sources/App/Demo.swift::useClosures#24", "parse"),
         ("Calls", "Sources/App/Demo.swift::useClosures#24", "reset"),
         (
@@ -154,6 +171,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "Sources/App/Demo.swift",
             "Sources/App/Demo.swift::Handler",
         ),
+    ]
+}
+
+fn expected_refs_part2() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "Sources/App/Demo.swift",
@@ -184,6 +206,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "Sources/App/Demo.swift",
             "Sources/App/Demo.swift::maxRetries",
         ),
+    ]
+}
+
+fn expected_refs_part3() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "Sources/App/Demo.swift",
@@ -214,6 +241,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "Sources/App/Demo.swift::Point",
             "Sources/App/Demo.swift::Point::magnitude",
         ),
+    ]
+}
+
+fn expected_refs_part4() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "Defines",
             "Sources/App/Demo.swift::Point",
@@ -240,6 +272,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "Sources/App/Demo.swift::Animal",
             "Sources/App/Demo.swift::Animal::init#12",
         ),
+    ]
+}
+
+fn expected_refs_part5() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "Sources/App/Demo.swift::Animal",
@@ -270,6 +307,11 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
             "Sources/App/Demo.swift::Point",
             "Sources/App/Demo.swift::Point::subscript#10",
         ),
+    ]
+}
+
+fn expected_refs_part6() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
         (
             "HasMethod",
             "Sources/App/Demo.swift::Serializable",

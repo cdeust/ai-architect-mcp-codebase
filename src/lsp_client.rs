@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 mod commands;
 mod frames;
 mod protocol;
+mod readiness;
 mod uri;
 
 pub use commands::{
@@ -161,7 +162,12 @@ impl LspClient {
                 "capabilities": {
                     "textDocument": {
                         "definition": { "dynamicRegistration": false }
-                    }
+                    },
+                    // source: LSP 3.17 §Progress — a server may only report
+                    // workDoneProgress for a request or a background job
+                    // (`window/workDoneProgress/create`) when the client
+                    // declares this. `wait_for_indexing_ready` consumes it.
+                    "window": { "workDoneProgress": true }
                 },
                 "workspaceFolders": [{
                     "uri": root_uri,
@@ -189,7 +195,35 @@ impl LspClient {
         });
         self.send_notification(&notif).map_err(classify_probe_err)?;
 
+        // fleet-watch#? / root cause 3: rust-analyzer answers
+        // textDocument/definition with `[]` until its workspace has finished
+        // loading. Wait for its workDoneProgress signal (or the tool's own
+        // timeout, whichever comes first) before returning control to the
+        // caller's first request. Best-effort: a server that never reports
+        // progress is not delayed (see lsp_client::readiness).
+        self.wait_for_indexing_ready();
+
         Ok(())
+    }
+
+    /// Blocks until the server's workDoneProgress tokens have all ended, or
+    /// until this client's own `timeout` budget, whichever is first. See
+    /// `lsp_client::readiness` for the protocol and the non-delay guarantee
+    /// for servers that never report progress.
+    fn wait_for_indexing_ready(&mut self) {
+        let deadline = Instant::now() + self.timeout;
+        let frames = &self.frames;
+        let process = &mut self.process;
+        let _ = readiness::wait_for_ready(
+            frames,
+            |id| {
+                let ack = json!({ "jsonrpc": "2.0", "id": id, "result": Value::Null });
+                let bytes = serde_json::to_vec(&ack).map_err(|e| format!("serialize ack: {e}"))?;
+                let stdin = process.stdin.as_mut().ok_or("LSP stdin unavailable")?;
+                write_lsp_message(stdin, &bytes)
+            },
+            deadline,
+        );
     }
 
     fn read_initialize_response(
