@@ -139,7 +139,7 @@ pub(super) fn index_single_file(
     abs_path: &Path,
     rel_path: &str,
     label_by_qn: &mut HashMap<String, String>,
-    seen_node_ids: &mut std::collections::HashSet<String>,
+    seen_node_ids: &mut std::collections::HashSet<(String, String)>,
     restrict_to_public_api: bool,
 ) -> ParseOutcome {
     // Detect language FIRST (cheap, no I/O). Under all-file indexing the

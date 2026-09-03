@@ -1090,7 +1090,7 @@ fn reparse_modified_file(
     let mut batch = SymbolBatch::default();
     let mut label_by_qn: HashMap<String, String> = HashMap::new();
     label_by_qn.insert(d.rel.clone(), "File".into());
-    let mut seen_node_ids: HashSet<String> = HashSet::new();
+    let mut seen_node_ids: HashSet<(String, String)> = HashSet::new();
     let restrict =
         dependency_scope == DependencyScope::PublicApi && is_dependency_path(codebase, &d.abs);
     let outcome = persist::index_single_file(
@@ -1118,7 +1118,7 @@ fn reparse_new_file(
 ) -> Result<ParseOutcome, String> {
     let mut batch = SymbolBatch::default();
     let mut label_by_qn: HashMap<String, String> = HashMap::new();
-    let mut seen_node_ids: HashSet<String> = HashSet::new();
+    let mut seen_node_ids: HashSet<(String, String)> = HashSet::new();
 
     persist::insert_ancestor_dirs(
         store,

@@ -183,7 +183,7 @@ pub fn index_codebase_with_language(
     // global id set dedups across the whole run so one duplicate id can never
     // abort a flush (it would take the whole batch down, not one file).
     let mut batch = SymbolBatch::default();
-    let mut seen_node_ids = std::collections::HashSet::<String>::new();
+    let mut seen_node_ids = std::collections::HashSet::<(String, String)>::new();
     for file_path in &source_files {
         let rel = relative_path(codebase_path, file_path);
         let rel_str = rel.to_string_lossy();

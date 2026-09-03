@@ -17,7 +17,7 @@ pub(super) fn accumulate_parsed_nodes(
     batch: &mut SymbolBatch,
     nodes: &[parser::ExtractedNode],
     label_by_qn: &mut std::collections::HashMap<String, String>,
-    seen_node_ids: &mut std::collections::HashSet<String>,
+    seen_node_ids: &mut std::collections::HashSet<(String, String)>,
     language: &str,
     restrict_to_public_api: bool,
 ) {
@@ -26,10 +26,21 @@ pub(super) fn accumulate_parsed_nodes(
     // the April 2026 scalability audit further found per-FILE batching still
     // dominated indexing time, so accumulation now spans files.
     //
-    // Defensive dedup: parsers should produce unique ids per node, but a bug
-    // there would abort the whole bulk flush (LadybugDB rejects duplicate
-    // primary keys atomically), taking down every file in the batch, not one.
-    // The id set is global to the run, so cross-file collisions are caught too.
+    // Defensive dedup: parsers should produce unique ids per node OF THE SAME
+    // LABEL, but a bug there would abort the whole bulk flush (LadybugDB
+    // rejects duplicate primary keys atomically), taking down every file in
+    // the batch, not one. The id set is global to the run, so cross-file
+    // collisions are caught too.
+    //
+    // Keyed on (label, qualified_name), not qualified_name alone: distinct
+    // labels are separate tables in the graph schema (NODE_FIELD vs
+    // NODE_METHOD, etc.), so a Field and a Method sharing the same
+    // qualified_name string (e.g. a `len` field and a `len()` method on the
+    // same struct) are two real, non-colliding nodes, not a parser bug — a
+    // label-blind key silently dropped the second one. source: measured
+    // 2026-09-03 on the dy-wcet corpus (get_symbol on `TaskSet::len`
+    // returned symbol_not_found; only the Field node existed in the graph,
+    // the Method was entirely absent).
     //
     // Enum qualified-names dropped by the PublicApi filter within THIS file's
     // node list. A Variant's own `visibility` is always "" — parsers never
@@ -43,7 +54,7 @@ pub(super) fn accumulate_parsed_nodes(
         if restrict_to_public_api && !keep_under_public_api(node, language, &mut dropped_enums) {
             continue;
         }
-        if !seen_node_ids.insert(node.qualified_name.clone()) {
+        if !seen_node_ids.insert((node.label.clone(), node.qualified_name.clone())) {
             eprintln!(
                 "indexer: dropped duplicate-id {} node '{}'",
                 node.label, node.qualified_name
@@ -337,4 +348,84 @@ fn has_visibility_col(label: &str) -> bool {
         label,
         "Function" | "Method" | "Struct" | "Enum" | "Trait" | "Field"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a minimal ExtractedNode for dedup testing — only `label` and
+    /// `qualified_name` matter to `accumulate_parsed_nodes`'s dedup key.
+    fn node(label: &str, qualified_name: &str) -> parser::ExtractedNode {
+        parser::ExtractedNode {
+            label: label.to_string(),
+            name: qualified_name.rsplit("::").next().unwrap_or("").to_string(),
+            qualified_name: qualified_name.to_string(),
+            start_line: 1,
+            end_line: 1,
+            visibility: "pub".to_string(),
+            properties: Vec::new(),
+        }
+    }
+
+    /// Regression test for the label-blind dedup bug: a struct field and a
+    /// method sharing the identical qualified_name string (e.g. Rust's
+    /// `len: usize` field alongside a `pub const fn len(&self)` method) are
+    /// two real, distinct nodes stored in separate schema tables (NODE_FIELD
+    /// vs NODE_METHOD) — not a parser-produced id collision. Fails on the
+    /// pre-fix `HashSet<String>` keyed on qualified_name alone, which drops
+    /// the second node regardless of label.
+    #[test]
+    fn a_field_and_a_method_sharing_a_qualified_name_are_both_kept() {
+        let mut batch = SymbolBatch::default();
+        let mut label_by_qn = std::collections::HashMap::new();
+        let mut seen_node_ids = std::collections::HashSet::new();
+        let nodes = vec![
+            node("Field", "src/lib.rs::TaskSet::len"),
+            node("Method", "src/lib.rs::TaskSet::len"),
+        ];
+
+        accumulate_parsed_nodes(
+            &mut batch,
+            &nodes,
+            &mut label_by_qn,
+            &mut seen_node_ids,
+            "rust",
+            false,
+        );
+
+        assert_eq!(
+            batch.node_row_count, 2,
+            "both the Field and the Method node must be kept — they are \
+             distinct nodes in separate schema tables, not a duplicate id"
+        );
+    }
+
+    /// Two nodes of the SAME label colliding on qualified_name is exactly the
+    /// parser-bug signal this dedup set is meant to catch — must still drop
+    /// the second one, not regress into keeping both.
+    #[test]
+    fn two_nodes_of_the_same_label_and_qualified_name_drop_the_duplicate() {
+        let mut batch = SymbolBatch::default();
+        let mut label_by_qn = std::collections::HashMap::new();
+        let mut seen_node_ids = std::collections::HashSet::new();
+        let nodes = vec![
+            node("Method", "src/lib.rs::TaskSet::len"),
+            node("Method", "src/lib.rs::TaskSet::len"),
+        ];
+
+        accumulate_parsed_nodes(
+            &mut batch,
+            &nodes,
+            &mut label_by_qn,
+            &mut seen_node_ids,
+            "rust",
+            false,
+        );
+
+        assert_eq!(
+            batch.node_row_count, 1,
+            "a genuine same-label id collision must still drop the duplicate"
+        );
+    }
 }
