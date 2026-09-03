@@ -100,6 +100,61 @@ fn lsp_client_waits_for_work_done_progress_end_before_first_definition() {
     );
 }
 
+/// Companion to the workDoneProgress test above, for the PREFERRED
+/// deterministic signal (`lsp_client::readiness` module header, signal 1).
+/// Drives a REAL fake server (`fake_server_status_server.py`) that never
+/// sends a single `$/progress` or `window/workDoneProgress/create` message —
+/// only `experimental/serverStatus` `quiescent: false` then `quiescent:
+/// true`. If `initialize_with_probe` returns at all, it did so via the
+/// serverStatus signal, since the fallback path has nothing to drain. The
+/// assertion is on the log's CONTENT and on the deterministic outcome
+/// (`ServerStatusQuiescent`), not on elapsed time — event-synchronised, no
+/// timing.
+#[test]
+fn lsp_client_resolves_via_server_status_quiescent_not_progress() {
+    if !is_command_available("python3") {
+        eprintln!("skipping: python3 not on PATH (fake LSP server fixture needs it)");
+        return;
+    }
+    let log = tempfile::Builder::new()
+        .prefix("lsp_readiness_status_log")
+        .tempfile()
+        .expect("tempfile");
+    let log_path = log.path().to_path_buf();
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/lsp/fake_server_status_server.py"
+    );
+    let tmp = std::env::temp_dir();
+    let mut client = LspClient::start_unchecked(
+        "python3",
+        &[script, log_path.to_str().expect("utf8 path")],
+        &tmp,
+        Duration::from_secs(10),
+    )
+    .expect("spawn fake server");
+
+    client
+        .initialize_with_probe(&tmp, Duration::from_secs(5))
+        .expect("initialize must succeed once the server sends quiescent: true");
+
+    let events = std::fs::read_to_string(&log_path).expect("read log");
+    let lines: Vec<&str> = events.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "initialize_answered",
+            "received:initialized",
+            "quiescent_false_sent",
+            "quiescent_true_sent",
+        ],
+        "both serverStatus notifications must have been read, in order, \
+         before initialize_with_probe returns — the fixture sends no \
+         workDoneProgress message at all, so there is no fallback path to \
+         race: {events}"
+    );
+}
+
 /// Round-3 finding 5. Both directions of JSON-RPC use `id`, and the two id
 /// spaces are INDEPENDENT: a server-initiated request
 /// (`window/workDoneProgress/create`, `workspace/configuration`) numbers its

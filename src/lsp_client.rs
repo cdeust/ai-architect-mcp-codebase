@@ -147,37 +147,8 @@ impl LspClient {
         workspace_root: &Path,
         probe_timeout: Duration,
     ) -> Result<(), String> {
-        // source: M2 fix — percent-encode the path so spaces, unicode, and
-        // URL-reserved chars in workspace paths don't produce a malformed URI.
-        let root_uri = path_to_file_uri(workspace_root);
         let id = self.next_id();
-
-        let init_req = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "initialize",
-            "params": {
-                "processId": std::process::id(),
-                "rootUri": root_uri,
-                "capabilities": {
-                    "textDocument": {
-                        "definition": { "dynamicRegistration": false }
-                    },
-                    // source: LSP 3.17 §Progress — a server may only report
-                    // workDoneProgress for a request or a background job
-                    // (`window/workDoneProgress/create`) when the client
-                    // declares this. `wait_for_indexing_ready` consumes it.
-                    "window": { "workDoneProgress": true }
-                },
-                "workspaceFolders": [{
-                    "uri": root_uri,
-                    "name": workspace_root.file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default()
-                }]
-            }
-        });
-
+        let init_req = build_initialize_request(id, workspace_root);
         self.send_request(&init_req).map_err(classify_probe_err)?;
 
         // Read the first response under probe_timeout. Any failure here —
@@ -195,35 +166,15 @@ impl LspClient {
         });
         self.send_notification(&notif).map_err(classify_probe_err)?;
 
-        // fleet-watch#? / root cause 3: rust-analyzer answers
+        // root cause 3 (the defect this module fixes): rust-analyzer answers
         // textDocument/definition with `[]` until its workspace has finished
-        // loading. Wait for its workDoneProgress signal (or the tool's own
+        // loading. Wait for its readiness signal (or this client's own
         // timeout, whichever comes first) before returning control to the
-        // caller's first request. Best-effort: a server that never reports
-        // progress is not delayed (see lsp_client::readiness).
-        self.wait_for_indexing_ready();
+        // caller's first request. Best-effort: a server that reports
+        // neither signal is not delayed — see lsp_client::readiness.
+        readiness::client_wait_for_ready(self);
 
         Ok(())
-    }
-
-    /// Blocks until the server's workDoneProgress tokens have all ended, or
-    /// until this client's own `timeout` budget, whichever is first. See
-    /// `lsp_client::readiness` for the protocol and the non-delay guarantee
-    /// for servers that never report progress.
-    fn wait_for_indexing_ready(&mut self) {
-        let deadline = Instant::now() + self.timeout;
-        let frames = &self.frames;
-        let process = &mut self.process;
-        let _ = readiness::wait_for_ready(
-            frames,
-            |id| {
-                let ack = json!({ "jsonrpc": "2.0", "id": id, "result": Value::Null });
-                let bytes = serde_json::to_vec(&ack).map_err(|e| format!("serialize ack: {e}"))?;
-                let stdin = process.stdin.as_mut().ok_or("LSP stdin unavailable")?;
-                write_lsp_message(stdin, &bytes)
-            },
-            deadline,
-        );
     }
 
     fn read_initialize_response(
@@ -398,6 +349,50 @@ impl LspClient {
             // during the handshake) must NOT be taken for our answer.
         }
     }
+}
+
+/// Builds the `initialize` request body. Free function, not a method — kept
+/// out of `impl LspClient` so `initialize_with_probe` reads end-to-end
+/// without this literal taking half the function, and so the impl block
+/// stays under §4.3.
+///
+/// source: M2 fix — percent-encode the path so spaces, unicode, and
+/// URL-reserved chars in workspace paths don't produce a malformed URI.
+fn build_initialize_request(id: i64, workspace_root: &Path) -> Value {
+    let root_uri = path_to_file_uri(workspace_root);
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": {
+            "processId": std::process::id(),
+            "rootUri": root_uri,
+            "capabilities": {
+                "textDocument": {
+                    "definition": { "dynamicRegistration": false }
+                },
+                // source: LSP 3.17 §Progress — a server may only report
+                // workDoneProgress for a request or a background job
+                // (`window/workDoneProgress/create`) when the client
+                // declares this. `readiness::client_wait_for_ready` consumes it as
+                // the readiness fallback signal.
+                "window": { "workDoneProgress": true },
+                // source: rust-analyzer's serverStatus LSP extension — opts
+                // into `experimental/serverStatus`, the readiness module's
+                // PRIMARY signal (lsp_client::readiness header). Ignored by
+                // a server that doesn't implement it (pyright,
+                // typescript-language-server): an unrecognized capability is
+                // not an error per LSP 3.17 §Capabilities.
+                "experimental": { "serverStatusNotification": true }
+            },
+            "workspaceFolders": [{
+                "uri": root_uri,
+                "name": workspace_root.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            }]
+        }
+    })
 }
 
 /// What a read loop does with a frame whose payload would not parse but whose
