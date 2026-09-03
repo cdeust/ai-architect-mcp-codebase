@@ -16,7 +16,7 @@ use crate::parser;
 pub(super) fn accumulate_parsed_nodes(
     batch: &mut SymbolBatch,
     nodes: &[parser::ExtractedNode],
-    label_by_qn: &mut std::collections::HashMap<String, String>,
+    label_by_qn: &mut std::collections::HashMap<String, std::collections::HashSet<String>>,
     seen_node_ids: &mut std::collections::HashSet<(String, String)>,
     language: &str,
     restrict_to_public_api: bool,
@@ -42,6 +42,21 @@ pub(super) fn accumulate_parsed_nodes(
     // returned symbol_not_found; only the Field node existed in the graph,
     // the Method was entirely absent).
     //
+    // label_by_qn (below) records EVERY label ever seen for a qualified_name,
+    // not just the last one written: Rust's namespace rules let a `mod foo {}`
+    // and a `fn foo() {}` legally share one qualified_name (modules live in
+    // the type namespace, functions/consts/statics in the value namespace —
+    // Rust Reference §Namespaces), and `resolve_defines_table`'s to-candidate
+    // list accepts both "Module" and "Function". A single-label map silently
+    // kept whichever label was written last, mis-routing the OTHER structural
+    // edge into the wrong (but schema-valid) rel table. source: verified
+    // 2026-09-03 by parsing `mod foo { pub fn inner() {} }\nfn foo() {}`
+    // through parser::parse_file(RUST_SPEC) — it emits one Module node and
+    // one Function node both at qualified_name "src/lib.rs::foo", plus two
+    // structurally-identical `Defines` refs (same from_qn, same to_qn) from
+    // "src/lib.rs" to "src/lib.rs::foo". See indexer::persist::edges::
+    // lookup_label_among for how the multi-label read side handles this.
+    //
     // Enum qualified-names dropped by the PublicApi filter within THIS file's
     // node list. A Variant's own `visibility` is always "" — parsers never
     // declare it independently (source: src/parser/rust/extract/g2.rs:30) —
@@ -61,7 +76,10 @@ pub(super) fn accumulate_parsed_nodes(
             );
             continue;
         }
-        label_by_qn.insert(node.qualified_name.clone(), node.label.clone());
+        label_by_qn
+            .entry(node.qualified_name.clone())
+            .or_default()
+            .insert(node.label.clone());
         let props = build_node_properties(node, language);
         batch.push_node(&node.label, props);
     }

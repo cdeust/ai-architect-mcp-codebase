@@ -597,11 +597,12 @@ fn manifest_from_discovered(current: &[Discovered]) -> FileManifest {
 /// e.g. a shallow clone). `current` is the working-tree discovery, used to map
 /// git paths to indexed File ids and to fetch (mtime, size) for re-parse.
 ///
-/// Uses `git diff <artifact_sha>` (artifact commit → WORKING TREE, not just
-/// HEAD) so committed AND uncommitted tracked changes are captured; untracked
-/// new files are added via `git ls-files --others`. Rename detection is git's
-/// own `-M`. Paths are made relative to the indexed subtree via `--show-prefix`;
-/// anything outside it is ignored.
+/// Orchestrates the three phases (Fowler "Extract Function", §4.2 — this used
+/// to be one 66-line function): setup/validation below, then
+/// `collect_tracked_changes` for the committed+uncommitted tracked diff, then
+/// `collect_untracked_adds` for new-but-never-`git add`-ed files. Paths are
+/// made relative to the indexed subtree via `--show-prefix`; anything outside
+/// it is ignored (both collectors thread `prefix` through for this).
 fn git_changes(codebase: &Path, artifact_sha: &str, current: &[Discovered]) -> Option<ChangeSet> {
     if !is_hex_sha(artifact_sha) {
         return None;
@@ -617,11 +618,28 @@ fn git_changes(codebase: &Path, artifact_sha: &str, current: &[Discovered]) -> O
     )?;
 
     let by_rel: HashMap<&str, &Discovered> = current.iter().map(|d| (d.rel.as_str(), d)).collect();
-
     let mut cs = ChangeSet::default();
 
-    // Committed + uncommitted tracked changes: artifact commit vs working tree.
-    let diff = git_output(
+    collect_tracked_changes(codebase, artifact_sha, &prefix, &by_rel, &mut cs);
+    collect_untracked_adds(codebase, &prefix, &by_rel, &mut cs);
+
+    Some(cs)
+}
+
+/// Fills `cs` with committed + uncommitted TRACKED changes: artifact commit
+/// vs working tree. Uses `git diff <artifact_sha>` (artifact commit → WORKING
+/// TREE, not just HEAD) so both committed and uncommitted tracked changes are
+/// captured; rename detection is git's own `-M`. A `None` from `git_output`
+/// (git failure) leaves `cs` untouched rather than erroring — `git_changes`
+/// as a whole has already committed to `Some` by this point.
+fn collect_tracked_changes(
+    codebase: &Path,
+    artifact_sha: &str,
+    prefix: &str,
+    by_rel: &HashMap<&str, &Discovered>,
+    cs: &mut ChangeSet,
+) {
+    let Some(diff) = git_output(
         codebase,
         &[
             "-c",
@@ -632,14 +650,26 @@ fn git_changes(codebase: &Path, artifact_sha: &str, current: &[Discovered]) -> O
             artifact_sha,
             "--",
         ],
-    )?;
+    ) else {
+        return;
+    };
     for line in diff.lines() {
-        parse_diff_line(line, &prefix, &by_rel, &mut cs);
+        parse_diff_line(line, prefix, by_rel, cs);
     }
+}
 
-    // Untracked new files (never `git add`-ed) are invisible to `git diff`;
-    // include them as adds so an uncommitted new file is filled too.
-    if let Some(others) = git_output(
+/// Fills `cs` with UNTRACKED new files (never `git add`-ed) — these are
+/// invisible to `git diff`, so they're added here as `cs.added` entries to
+/// make sure an uncommitted new file still gets (re)parsed. Dedups against
+/// what `collect_tracked_changes` already recorded (added/changed) so a file
+/// that appears in both listings — e.g. a rename target — isn't double-added.
+fn collect_untracked_adds(
+    codebase: &Path,
+    prefix: &str,
+    by_rel: &HashMap<&str, &Discovered>,
+    cs: &mut ChangeSet,
+) {
+    let Some(others) = git_output(
         codebase,
         &[
             "-c",
@@ -648,26 +678,26 @@ fn git_changes(codebase: &Path, artifact_sha: &str, current: &[Discovered]) -> O
             "--others",
             "--exclude-standard",
         ],
-    ) {
-        let already: HashSet<String> = cs
-            .added
-            .iter()
-            .map(|d| d.rel.clone())
-            .chain(cs.changed.iter().map(|d| d.rel.clone()))
-            .collect();
-        for line in others.lines() {
-            if let Some(rel) = strip_prefix_path(line.trim(), &prefix) {
-                if already.contains(&rel) {
-                    continue;
-                }
-                if let Some(d) = by_rel.get(rel.as_str()) {
-                    cs.added.push((*d).clone());
-                }
-            }
+    ) else {
+        return;
+    };
+    let already: HashSet<String> = cs
+        .added
+        .iter()
+        .map(|d| d.rel.clone())
+        .chain(cs.changed.iter().map(|d| d.rel.clone()))
+        .collect();
+    for line in others.lines() {
+        let Some(rel) = strip_prefix_path(line.trim(), prefix) else {
+            continue;
+        };
+        if already.contains(&rel) {
+            continue;
+        }
+        if let Some(d) = by_rel.get(rel.as_str()) {
+            cs.added.push((*d).clone());
         }
     }
-
-    Some(cs)
 }
 
 /// Parses one `git diff --name-status -M` line into `cs`. Statuses: `M`/`T`
@@ -826,20 +856,65 @@ fn discover(
 /// deleted file with an added file that carries an identical content hash (the
 /// deleted file's hash comes from the manifest — the file is gone from disk, so
 /// it cannot be re-hashed; the added file's hash is read fresh).
+///
+/// Orchestrates three phases (Fowler "Extract Function", §4.2 — this used to
+/// be one 124-line function): `diff_current_against_prior` (mtime+size, hash
+/// fallback), `index_deleted_by_hash` (indexes prior-only files for the
+/// rename lookup), then `match_renames_and_adds` (matches added candidates
+/// against that index). `next` — the manifest state to persist — accumulates
+/// across all three phases, so it's threaded through and mutated in place
+/// rather than rebuilt at the end.
 fn classify(prior: &FileManifest, current: &[Discovered]) -> Plan {
     let current_ids: HashSet<&str> = current.iter().map(|d| d.rel.as_str()).collect();
+    let mut next = FileManifest::new();
 
+    let (changed, added_candidates, unchanged) =
+        diff_current_against_prior(prior, current, &mut next);
+
+    let (deleted_candidates, mut deleted_by_hash) = index_deleted_by_hash(prior, &current_ids);
+    let (renamed, added, consumed_deleted) =
+        match_renames_and_adds(added_candidates, &mut deleted_by_hash, &mut next);
+
+    // Truly-deleted = deleted candidates not consumed by a rename pairing.
+    let deleted: Vec<String> = deleted_candidates
+        .into_iter()
+        .filter(|rel| !consumed_deleted.contains(rel))
+        .collect();
+
+    Plan {
+        change_set: ChangeSet {
+            changed,
+            added,
+            deleted,
+            renamed,
+        },
+        unchanged,
+        next_manifest: next,
+    }
+}
+
+/// Phase 1: classifies every CURRENT file against `prior` by cheap signal
+/// (mtime+size) with a content-hash fallback when either moved — identical
+/// bytes despite a moved mtime is the correctness fallback the C reference
+/// lacks: a `touch` with no edit is NOT a change. Returns the (changed,
+/// added_candidates, unchanged) partitions; `added_candidates` may still
+/// resolve to a rename's new end in `match_renames_and_adds`. Fills `next`
+/// with every current file's fresh state (a fresh hash for a moved
+/// mtime/size, or the prior state carried forward unchanged).
+fn diff_current_against_prior(
+    prior: &FileManifest,
+    current: &[Discovered],
+    next: &mut FileManifest,
+) -> (Vec<Discovered>, Vec<Discovered>, Vec<Discovered>) {
     let mut changed = Vec::new();
     let mut added_candidates = Vec::new();
     let mut unchanged = Vec::new();
-    // next_manifest accumulates the state to persist for every current file.
-    let mut next = FileManifest::new();
 
     for d in current {
         match prior.files.get(&d.rel) {
             None => {
                 // Not previously known → a new file (may still be a rename's
-                // new end; resolved below).
+                // new end; resolved by match_renames_and_adds).
                 added_candidates.push(d.clone());
             }
             Some(prev) if prev.mtime_ns == d.mtime_ns && prev.size == d.size => {
@@ -848,35 +923,36 @@ fn classify(prior: &FileManifest, current: &[Discovered]) -> Plan {
                 next.files.insert(d.rel.clone(), prev.clone());
             }
             Some(prev) => {
-                // mtime or size moved → hash to confirm. Identical bytes despite
-                // a moved mtime is the correctness fallback the C reference
-                // lacks: a `touch` with no edit is NOT a change.
                 let hash = manifest::hash_file(&d.abs).unwrap_or_default();
-                if !hash.is_empty() && hash == prev.content_hash {
+                let same_content = !hash.is_empty() && hash == prev.content_hash;
+                if same_content {
                     unchanged.push(d.clone());
-                    next.files.insert(
-                        d.rel.clone(),
-                        FileState {
-                            mtime_ns: d.mtime_ns,
-                            size: d.size,
-                            content_hash: hash,
-                        },
-                    );
                 } else {
                     changed.push(d.clone());
-                    next.files.insert(
-                        d.rel.clone(),
-                        FileState {
-                            mtime_ns: d.mtime_ns,
-                            size: d.size,
-                            content_hash: hash,
-                        },
-                    );
                 }
+                next.files.insert(
+                    d.rel.clone(),
+                    FileState {
+                        mtime_ns: d.mtime_ns,
+                        size: d.size,
+                        content_hash: hash,
+                    },
+                );
             }
         }
     }
 
+    (changed, added_candidates, unchanged)
+}
+
+/// Phase 2: indexes prior-only files (present before, absent from `current`)
+/// by their stored content hash — the rename lookup `match_renames_and_adds`
+/// probes against. A deleted file's hash comes from the manifest; the file no
+/// longer exists on disk to re-hash.
+fn index_deleted_by_hash(
+    prior: &FileManifest,
+    current_ids: &HashSet<&str>,
+) -> (Vec<String>, HashMap<String, Vec<String>>) {
     // Deleted candidates: prior files absent from the current discovery.
     let deleted_candidates: Vec<String> = prior
         .files
@@ -885,8 +961,6 @@ fn classify(prior: &FileManifest, current: &[Discovered]) -> Plan {
         .cloned()
         .collect();
 
-    // Rename detection: index deleted candidates by their stored content hash,
-    // then match each added candidate's freshly-read hash against them.
     let mut deleted_by_hash: HashMap<String, Vec<String>> = HashMap::new();
     for rel in &deleted_candidates {
         if let Some(state) = prior.files.get(rel) {
@@ -899,9 +973,25 @@ fn classify(prior: &FileManifest, current: &[Discovered]) -> Plan {
         }
     }
 
+    (deleted_candidates, deleted_by_hash)
+}
+
+/// Phase 3: matches each `added_candidates` entry's freshly-read content hash
+/// against `deleted_by_hash`; an unconsumed match becomes a `Rename` instead
+/// of an add. Every added/renamed-new file gets its fresh state written into
+/// `next` (mirrors `diff_current_against_prior`'s bookkeeping for the
+/// current-file partitions). Returns the renamed pairs, the true adds, and
+/// the set of prior-file rels consumed by a rename — `classify` uses that set
+/// to filter its "truly deleted" list.
+fn match_renames_and_adds(
+    added_candidates: Vec<Discovered>,
+    deleted_by_hash: &mut HashMap<String, Vec<String>>,
+    next: &mut FileManifest,
+) -> (Vec<Rename>, Vec<Discovered>, HashSet<String>) {
     let mut renamed = Vec::new();
     let mut added = Vec::new();
     let mut consumed_deleted: HashSet<String> = HashSet::new();
+
     for d in added_candidates {
         let hash = manifest::hash_file(&d.abs).unwrap_or_default();
         let matched_old = if hash.is_empty() {
@@ -934,22 +1024,7 @@ fn classify(prior: &FileManifest, current: &[Discovered]) -> Plan {
         }
     }
 
-    // Truly-deleted = deleted candidates not consumed by a rename pairing.
-    let deleted: Vec<String> = deleted_candidates
-        .into_iter()
-        .filter(|rel| !consumed_deleted.contains(rel))
-        .collect();
-
-    Plan {
-        change_set: ChangeSet {
-            changed,
-            added,
-            deleted,
-            renamed,
-        },
-        unchanged,
-        next_manifest: next,
-    }
+    (renamed, added, consumed_deleted)
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,8 +1163,11 @@ fn reparse_modified_file(
     store.execute_query(&reset)?;
 
     let mut batch = SymbolBatch::default();
-    let mut label_by_qn: HashMap<String, String> = HashMap::new();
-    label_by_qn.insert(d.rel.clone(), "File".into());
+    let mut label_by_qn: HashMap<String, HashSet<String>> = HashMap::new();
+    label_by_qn
+        .entry(d.rel.clone())
+        .or_default()
+        .insert("File".into());
     let mut seen_node_ids: HashSet<(String, String)> = HashSet::new();
     let restrict =
         dependency_scope == DependencyScope::PublicApi && is_dependency_path(codebase, &d.abs);
@@ -1117,7 +1195,7 @@ fn reparse_new_file(
     dir_nodes_inserted: &mut HashSet<PathBuf>,
 ) -> Result<ParseOutcome, String> {
     let mut batch = SymbolBatch::default();
-    let mut label_by_qn: HashMap<String, String> = HashMap::new();
+    let mut label_by_qn: HashMap<String, HashSet<String>> = HashMap::new();
     let mut seen_node_ids: HashSet<(String, String)> = HashSet::new();
 
     persist::insert_ancestor_dirs(
@@ -1129,7 +1207,10 @@ fn reparse_new_file(
         &mut label_by_qn,
     )?;
     persist::insert_file_node(store, &d.abs, &d.rel)?;
-    label_by_qn.insert(d.rel.clone(), "File".into());
+    label_by_qn
+        .entry(d.rel.clone())
+        .or_default()
+        .insert("File".into());
     let rel_path = relative_path(codebase, &d.abs);
     persist::insert_dir_file_edge(&mut batch, &rel_path);
 
@@ -1296,17 +1377,22 @@ mod tests {
         assert!(!is_resolution_table("Contains_Dir_File"));
     }
 
-    #[test]
-    fn classify_detects_each_class_and_rename() {
+    /// Builds the fixture `classify_detects_each_class_and_rename` exercises
+    /// (Fowler "Extract Function", §4.2 — the test used to be one 75-line
+    /// function): an on-disk current tree — keep.py (unchanged), edit.py
+    /// (modified), new.py (added), moved_to.py (rename target) — plus a prior
+    /// manifest covering every classification category: keep.py unchanged;
+    /// edit.py with a stale hash (edited); old_name.py carrying moved_to.py's
+    /// content hash (the rename); gone.py a plain deletion. Returns the prior
+    /// manifest, the current discovery, and the tempdir guard — the caller
+    /// must hold the guard for the test's duration (drop removes the tree).
+    fn build_classify_fixture() -> (FileManifest, Vec<Discovered>, tempfile::TempDir) {
         let dir = tempfile::Builder::new()
             .prefix("incremental_classify_")
             .tempdir()
             .expect("temp dir");
         let root = dir.path();
 
-        // On-disk current tree: keep.py (unchanged), edit.py (modified),
-        // new.py (added), moved_to.py (rename target). old_name.py and
-        // gone.py exist only in the prior manifest (deleted / renamed-from).
         std::fs::write(root.join("keep.py"), "def keep():\n    return 1\n").unwrap();
         std::fs::write(root.join("edit.py"), "def edit():\n    return 2\n").unwrap();
         std::fs::write(root.join("new.py"), "def fresh():\n    return 3\n").unwrap();
@@ -1317,9 +1403,6 @@ mod tests {
         let (current, _gaps) = discover(root, WalkOptions::default()).expect("discover");
         let hash_of = |rel: &str| manifest::hash_file(&root.join(rel)).unwrap();
 
-        // Prior manifest: keep.py unchanged; edit.py with a stale hash (edited);
-        // old_name.py carries moved_to.py's content hash (the rename); gone.py
-        // is a plain deletion.
         let keep = current.iter().find(|d| d.rel == "keep.py").unwrap();
         let mut prior = FileManifest::new();
         prior.files.insert(
@@ -1354,6 +1437,13 @@ mod tests {
                 content_hash: "whatever".into(),
             },
         );
+
+        (prior, current, dir)
+    }
+
+    #[test]
+    fn classify_detects_each_class_and_rename() {
+        let (prior, current, _dir) = build_classify_fixture();
 
         let plan = classify(&prior, &current);
         let cs = &plan.change_set;

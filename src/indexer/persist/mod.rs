@@ -23,7 +23,7 @@ pub(super) fn insert_ancestor_dirs(
     root: &Path,
     file_path: &Path,
     seen: &mut std::collections::HashSet<std::path::PathBuf>,
-    label_by_qn: &mut HashMap<String, String>,
+    label_by_qn: &mut HashMap<String, std::collections::HashSet<String>>,
 ) -> Result<(), String> {
     let rel = super::relative_path(root, file_path);
     let mut current = std::path::PathBuf::new();
@@ -39,7 +39,10 @@ pub(super) fn insert_ancestor_dirs(
             let dir_id = current.to_string_lossy();
             let dir_name = component.as_os_str().to_string_lossy();
             insert_directory_node(store, &dir_id, &dir_name)?;
-            label_by_qn.insert(dir_id.to_string(), "Directory".into());
+            label_by_qn
+                .entry(dir_id.to_string())
+                .or_default()
+                .insert("Directory".into());
             if !prev.as_os_str().is_empty() {
                 batch.push_edge(
                     "Contains_Dir_Dir",
@@ -138,7 +141,7 @@ pub(super) fn index_single_file(
     batch: &mut SymbolBatch,
     abs_path: &Path,
     rel_path: &str,
-    label_by_qn: &mut HashMap<String, String>,
+    label_by_qn: &mut HashMap<String, std::collections::HashSet<String>>,
     seen_node_ids: &mut std::collections::HashSet<(String, String)>,
     restrict_to_public_api: bool,
 ) -> ParseOutcome {

@@ -175,7 +175,7 @@ pub fn index_codebase_with_language(
     // Used to resolve edge tables without probing the database.
     // source: Fermi audit — probe_node_label was firing up to 9 MATCH queries
     // per edge; the indexer already knows every node's label in memory.
-    let mut label_by_qn: HashMap<String, String> = HashMap::new();
+    let mut label_by_qn: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
     let mut total_bytes: u64 = 0;
     let mut dir_nodes_inserted = std::collections::HashSet::<PathBuf>::new();
 
@@ -206,7 +206,10 @@ pub fn index_codebase_with_language(
             &mut label_by_qn,
         )?;
         insert_file_node(&store, file_path, &rel_str)?;
-        label_by_qn.insert(rel_str.to_string(), "File".into());
+        label_by_qn
+            .entry(rel_str.to_string())
+            .or_default()
+            .insert("File".into());
         insert_dir_file_edge(&mut batch, &rel);
         // PublicApi tier: filter to public-visibility symbols only for files
         // under dependency directories. Project files are never restricted.
