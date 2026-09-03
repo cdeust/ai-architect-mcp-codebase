@@ -36,38 +36,44 @@ pub(super) fn try_add_lsp_edge(
     // LSP line is 0-based, our graph stores 1-based line numbers.
     let target_line = def.start_line + 1;
 
-    // Exact line match only — no nearby-line scan. The node index carries
-    // no column, so an inexact match cannot be told apart from a
-    // coincidental same-line collision; guessing produced a fabricated
-    // `total -> total` self-edge when a bare-argument CallSite (#87)
-    // resolved to a PARAMETER declared on the same line as its enclosing
-    // method (PR #267 follow-up). Failing closed costs recall on a
-    // genuinely multi-line declaration; a wrong edge is worse than a
-    // missing one.
+    // Exact line match only — no nearby-line scan. See `find_node_at_position`
+    // for the fail-closed rationale.
     let target = find_node_at_position(ctx.node_index, &file_path, target_line);
     let target = match target {
         Some(t) => t,
         None => return false,
     };
 
-    // Defense in depth against the SAME-line case above: even an exact
-    // line match can land on the enclosing symbol's own declaration line
-    // (a parameter's targetSelectionRange shares its function signature's
-    // line). The resolved node's own name must equal the identifier the
-    // call site actually asked about, or this is that same collision
-    // wearing an exact-match line instead of a fuzzy one.
-    let target_name = target.id.rsplit("::").next().unwrap_or(&target.id);
-    if target_name != site.identifier_name() {
+    if !resolved_target_matches(target, site) {
         return false;
     }
 
     let Some(rel_type) = call_rel_table(&site.caller_label, &target.label) else {
         return false;
     };
-    // Schema guard: dynamically formatted rel tables can outrun the
-    // schema when a new caller/target label combination appears. Drop
-    // rather than abort.
-    if !is_known_rel_table(&rel_type) {
+    insert_lsp_edge(store, &rel_type, site, target)
+}
+
+/// Schema-guards `rel_type` and inserts the caller -> target edge at
+/// LSP-backed confidence (0.9).
+///
+/// Schema guard: dynamically formatted rel tables can outrun the schema
+/// when a new caller/target label combination appears. Drop rather than
+/// abort.
+///
+/// Idempotent by construction (review finding 3): this pass writes one edge
+/// per call site as it goes and flips `is_resolved` only at end of run, so
+/// an interrupted run would otherwise be replayed into duplicate edges on
+/// the next run — and two sites in one caller reaching the same callee
+/// duplicate within a single run. An edge that is already there counts as
+/// resolved, which is what it is.
+fn insert_lsp_edge(
+    store: &GraphStore,
+    rel_type: &str,
+    site: &UnresolvedCallSite,
+    target: &NodePosition,
+) -> bool {
+    if !is_known_rel_table(rel_type) {
         eprintln!(
             "lsp_resolver: dropped edge with unknown rel table '{rel_type}' \
              ({} -> {}); add it to REL_TABLES in graph_store.rs",
@@ -75,18 +81,9 @@ pub(super) fn try_add_lsp_edge(
         );
         return false;
     }
-
-    // Insert edge with LSP-backed confidence (0.9).
-    //
-    // Idempotent by construction (review finding 3): this pass writes one edge
-    // per call site as it goes and flips `is_resolved` only at end of run, so
-    // an interrupted run would otherwise be replayed into duplicate edges on
-    // the next run — and two sites in one caller reaching the same callee
-    // duplicate within a single run. An edge that is already there counts as
-    // resolved, which is what it is.
     store
         .insert_edge_if_absent(
-            &rel_type,
+            rel_type,
             &site.caller_qn,
             &target.id,
             &[
@@ -116,15 +113,33 @@ fn uri_to_relative_path(uri: &str, canonical_root: &Path) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Exact (file, line) match only. See the fail-closed rationale at the call
-/// site in `try_add_lsp_edge`: the node index carries no column, so an
-/// inexact line cannot be distinguished from a coincidental collision.
+/// Exact (file, line) match only — no nearby-line scan. The node index
+/// carries no column, so an inexact match cannot be told apart from a
+/// coincidental same-line collision; guessing produced a fabricated
+/// `total -> total` self-edge when a bare-argument CallSite (#87) resolved
+/// to a PARAMETER declared on the same line as its enclosing method (PR
+/// #267 follow-up). Failing closed costs recall on a genuinely multi-line
+/// declaration; a wrong edge is worse than a missing one.
 fn find_node_at_position<'a>(
     index: &'a HashMap<(String, u64), NodePosition>,
     file_path: &str,
     line: u64,
 ) -> Option<&'a NodePosition> {
     index.get(&(file_path.to_string(), line))
+}
+
+/// Defense in depth against a same-line collision `find_node_at_position`
+/// cannot rule out on line-only data: even an EXACT line match can land on
+/// the enclosing symbol's own declaration line (a parameter's
+/// `targetSelectionRange` shares its function signature's line — see
+/// `find_node_at_position`'s doc comment for the fabricated `total -> total`
+/// self-edge this closes). The resolved node's own name (the last `::`
+/// segment of its `id`, which the indexer sets equal to `qualified_name`)
+/// must equal the identifier the call site actually asked about, or this is
+/// that same collision wearing an exact-match line instead of a fuzzy one.
+fn resolved_target_matches(target: &NodePosition, site: &UnresolvedCallSite) -> bool {
+    let target_name = target.id.rsplit("::").next().unwrap_or(&target.id);
+    target_name == site.identifier_name()
 }
 
 #[cfg(test)]

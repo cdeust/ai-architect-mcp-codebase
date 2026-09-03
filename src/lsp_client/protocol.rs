@@ -202,25 +202,8 @@ pub(super) fn parse_definition_response(resp: &Value) -> Result<Option<Definitio
         return Ok(None);
     };
 
-    // LocationLink has targetUri + targetRange + (optionally)
-    // targetSelectionRange; Location has only uri + range.
-    //
-    // source: LSP 3.17 §textDocument/definition. `targetSelectionRange` is
-    // "the range that should be selected and revealed when this link is
-    // being followed, e.g. the name of a function" — the PRECISE
-    // identifier-name span. `targetRange`/`range` is the loose declaration
-    // span ("including e.g. comments"). Preferring the precise range when
-    // present is what lets `find_node_at_position` match on an exact line
-    // instead of a fuzzy nearby-line scan (fabricated `total -> total`
-    // self-edge, PR #267 follow-up).
-    let uri = location
-        .get("targetUri")
-        .or_else(|| location.get("uri"))
-        .and_then(|v| v.as_str());
-    let range = location
-        .get("targetSelectionRange")
-        .or_else(|| location.get("targetRange"))
-        .or_else(|| location.get("range"));
+    let uri = preferred_uri(location);
+    let range = preferred_range(location);
 
     match (uri, range) {
         (Some(u), Some(r)) => {
@@ -235,6 +218,34 @@ pub(super) fn parse_definition_response(resp: &Value) -> Result<Option<Definitio
         }
         _ => Ok(None),
     }
+}
+
+/// `location`'s URI: LocationLink has `targetUri`, Location has only `uri`.
+fn preferred_uri(location: &Value) -> Option<&str> {
+    location
+        .get("targetUri")
+        .or_else(|| location.get("uri"))
+        .and_then(|v| v.as_str())
+}
+
+/// `location`'s preferred range, precise before loose.
+///
+/// LocationLink has `targetRange` + (optionally) `targetSelectionRange`;
+/// Location has only `range`.
+///
+/// source: LSP 3.17 §textDocument/definition. `targetSelectionRange` is
+/// "the range that should be selected and revealed when this link is being
+/// followed, e.g. the name of a function" — the PRECISE identifier-name
+/// span. `targetRange`/`range` is the loose declaration span ("including
+/// e.g. comments"). Preferring the precise range when present is what lets
+/// `find_node_at_position` match on an exact line instead of a fuzzy
+/// nearby-line scan (fabricated `total -> total` self-edge, PR #267
+/// follow-up).
+fn preferred_range(location: &Value) -> Option<&Value> {
+    location
+        .get("targetSelectionRange")
+        .or_else(|| location.get("targetRange"))
+        .or_else(|| location.get("range"))
 }
 
 #[cfg(test)]
