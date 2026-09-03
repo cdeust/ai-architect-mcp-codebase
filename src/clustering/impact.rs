@@ -69,15 +69,15 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
     // a code dependency.
     let references = reverse_dependents(store, &esc, "References_");
 
-    let epistemic_reasons = build_epistemic_reasons(
-        store,
-        &esc,
-        &callers,
-        &importers,
-        &users,
-        &implementors,
-        &references,
-    );
+    let target_bare_name = crate::bridge::last_segment(qualified_name);
+    let deps = ReverseDependents {
+        callers: &callers,
+        importers: &importers,
+        users: &users,
+        implementors: &implementors,
+        references: &references,
+    };
+    let epistemic_reasons = build_epistemic_reasons(store, &esc, target_bare_name, &deps);
     let epistemic = if epistemic_reasons.is_empty() {
         Boundary::Exact
     } else {
@@ -118,56 +118,54 @@ fn collect_processes(store: &GraphStore, target: &str) -> Vec<String> {
         .collect()
 }
 
+/// The five reverse-dependency slices `get_impact` collects, grouped into one
+/// handle so downstream epistemic-reason helpers take a parameter object
+/// instead of five positional slices (coding-standards §4.4: >4 parameters is
+/// a missing data type).
+struct ReverseDependents<'a> {
+    callers: &'a [ImpactNode],
+    importers: &'a [ImpactNode],
+    users: &'a [ImpactNode],
+    implementors: &'a [ImpactNode],
+    references: &'a [ImpactNode],
+}
+
 /// Assembles the epistemic-boundary reasons for a `get_impact` result:
-/// dynamic-dispatch surface, heuristically-resolved edges, and (issue #205)
-/// unindexed markdown/shell references. An empty result means `Boundary::Exact`.
-/// `esc` must already be a `cypher_str`-quoted literal.
+/// dynamic-dispatch surface, heuristically-resolved edges, unresolved call
+/// sites naming the target, and (issue #205) unindexed markdown/shell
+/// references. An empty result means `Boundary::Exact`. `esc` must already
+/// be a `cypher_str`-quoted literal; `target_bare_name` is the target's own
+/// (unescaped) unqualified identifier — the last `::`/`.`-segment of
+/// `qualified_name`, e.g. `crate::bridge::last_segment`.
 ///
 /// Epistemic boundary: the dependent set is a LOWER BOUND on true impact when
-/// either (a) the target is a dynamic-dispatch surface (calls through the
+/// (a) the target is a dynamic-dispatch surface (calls through the
 /// interface/trait bind to an implementor at runtime and are not
 /// exhaustively static), (b) any contributing edge was resolved
-/// heuristically (confidence < 1.0), or (c) the target is a File with zero
+/// heuristically (confidence < 1.0), (c) the graph holds unresolved
+/// `CallSite` nodes that name the target by its bare identifier but were
+/// never resolved into a `Calls`/`Uses` edge (resolution failed — static or
+/// LSP — for any reason: dynamic dispatch, a resolver gap, a timeout, an
+/// unsupported language tier), or (d) the target is a File with zero
 /// inbound references in a graph that predates reference-edge indexing.
 /// Otherwise it is exact. source: epistemic module contract.
 fn build_epistemic_reasons(
     store: &GraphStore,
     esc: &str,
-    callers: &[ImpactNode],
-    importers: &[ImpactNode],
-    users: &[ImpactNode],
-    implementors: &[ImpactNode],
-    references: &[ImpactNode],
+    target_bare_name: &str,
+    deps: &ReverseDependents,
 ) -> Vec<String> {
     let mut reasons = Vec::new();
 
-    if let Some(label) = lookup_target_label(store, esc) {
-        if epistemic::is_dynamic_dispatch_surface(&label) {
-            reasons.push(format!(
-                "target is a {label} (dynamic-dispatch surface): call sites that \
-                 invoke it polymorphically are not exhaustively captured by static \
-                 resolution; the {} implementor(s) and direct callers shown are a \
-                 lower bound",
-                implementors.len()
-            ));
-        }
+    if let Some(reason) = dynamic_dispatch_reason(store, esc, deps.implementors) {
+        reasons.push(reason);
     }
-
-    let heuristic_count = callers
-        .iter()
-        .chain(importers.iter())
-        .chain(users.iter())
-        .chain(implementors.iter())
-        .chain(references.iter())
-        .filter(|n| epistemic::is_heuristic_edge(n.confidence))
-        .count();
-    if heuristic_count > 0 {
-        reasons.push(format!(
-            "{heuristic_count} reverse-dependency edge(s) were resolved \
-             heuristically (confidence < 1.0) and may be incomplete or incorrect"
-        ));
+    if let Some(reason) = heuristic_edge_reason(deps) {
+        reasons.push(reason);
     }
-
+    if let Some(reason) = unresolved_callsite_reason(store, target_bare_name) {
+        reasons.push(reason);
+    }
     // File-level fan-in honesty (issue #205): when the target is itself a
     // File and this graph contains markdown/shell files but zero
     // References_File_File edges anywhere, code-only fan-in over it is a
@@ -175,13 +173,105 @@ fn build_epistemic_reasons(
     // (much less likely on a doc/script-heavy repo) these files are
     // genuinely unreferenced. This graph cannot tell those two cases apart,
     // so it is reported rather than silently assumed complete.
-    if references.is_empty() && is_file_node(store, esc) {
+    if deps.references.is_empty() && is_file_node(store, esc) {
         if let Some(reason) = missing_reference_indexing_reason(store) {
             reasons.push(reason);
         }
     }
 
     reasons
+}
+
+/// `Some(reason)` when the target resolves to a dynamic-dispatch surface
+/// (trait/interface) — see `build_epistemic_reasons` doc for the argument.
+fn dynamic_dispatch_reason(
+    store: &GraphStore,
+    esc: &str,
+    implementors: &[ImpactNode],
+) -> Option<String> {
+    let label = lookup_target_label(store, esc)?;
+    if !epistemic::is_dynamic_dispatch_surface(&label) {
+        return None;
+    }
+    Some(format!(
+        "target is a {label} (dynamic-dispatch surface): call sites that \
+         invoke it polymorphically are not exhaustively captured by static \
+         resolution; the {} implementor(s) and direct callers shown are a \
+         lower bound",
+        implementors.len()
+    ))
+}
+
+/// `Some(reason)` when any reverse-dependency edge was resolved below full
+/// confidence — see `build_epistemic_reasons` doc for the argument.
+fn heuristic_edge_reason(deps: &ReverseDependents) -> Option<String> {
+    let heuristic_count = deps
+        .callers
+        .iter()
+        .chain(deps.importers.iter())
+        .chain(deps.users.iter())
+        .chain(deps.implementors.iter())
+        .chain(deps.references.iter())
+        .filter(|n| epistemic::is_heuristic_edge(n.confidence))
+        .count();
+    if heuristic_count == 0 {
+        return None;
+    }
+    Some(format!(
+        "{heuristic_count} reverse-dependency edge(s) were resolved \
+         heuristically (confidence < 1.0) and may be incomplete or incorrect"
+    ))
+}
+
+/// `Some(reason)` when the graph holds unresolved `CallSite` nodes naming the
+/// target — see `build_epistemic_reasons` doc for the argument.
+fn unresolved_callsite_reason(store: &GraphStore, target_bare_name: &str) -> Option<String> {
+    let unresolved_count = unresolved_callsite_count_naming(store, target_bare_name);
+    if unresolved_count == 0 {
+        return None;
+    }
+    Some(format!(
+        "{unresolved_count} unresolved call site(s) name this symbol — {unresolved_count} \
+         `CallSite` node(s) in the graph reference it by name but were never resolved to a \
+         Calls edge; the reported callers are a lower bound"
+    ))
+}
+
+/// Counts unresolved `CallSite` nodes (`is_resolved = false`) whose
+/// `callee_name` names `target_bare_name` — the same evidence
+/// `resolve_calls` (src/resolver/calls.rs) would have consumed had
+/// resolution succeeded, generic across every language and every reason
+/// resolution can fail. `target_bare_name` is the target's own unescaped
+/// unqualified identifier (never a full qualified_name).
+///
+/// A `callee_name` names the target under exactly the three call shapes the
+/// parsers emit: a bare call (`response_of`), a receiver call
+/// (`s.response_of`, `self.response_of`), or a call qualified by a type/path
+/// not yet resolved (`Type::response_of`). All three end in the bare
+/// identifier, so one exact-or-suffix comparison covers every shape without
+/// re-deriving the parser's own callee-spelling grammar.
+fn unresolved_callsite_count_naming(store: &GraphStore, target_bare_name: &str) -> i64 {
+    let esc_bare = cypher_str(target_bare_name);
+    let esc_dot_suffix = cypher_str(&format!(".{target_bare_name}"));
+    let esc_scope_suffix = cypher_str(&format!("::{target_bare_name}"));
+    let cypher = format!(
+        "MATCH (cs:{}) \
+         WHERE cs.is_resolved = false AND \
+         (cs.callee_name = {esc_bare} OR cs.callee_name ENDS WITH {esc_dot_suffix} \
+          OR cs.callee_name ENDS WITH {esc_scope_suffix}) \
+         RETURN count(cs)",
+        crate::graph_store::NODE_CALL_SITE
+    );
+    store
+        .execute_query(&cypher)
+        .ok()
+        .and_then(|qr| {
+            qr.rows
+                .first()
+                .and_then(|r| r.first())
+                .and_then(|c| c.parse::<i64>().ok())
+        })
+        .unwrap_or(0)
 }
 
 /// True when `esc` (already `cypher_str`-escaped) identifies an existing File

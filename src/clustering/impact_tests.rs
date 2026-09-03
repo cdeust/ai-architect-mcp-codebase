@@ -14,7 +14,7 @@
 use super::*;
 use crate::epistemic::Boundary;
 use crate::graph_store::{
-    cypher_str, GraphStore, NODE_COMMUNITY, NODE_FILE, NODE_FUNCTION, NODE_PROCESS,
+    cypher_str, GraphStore, NODE_CALL_SITE, NODE_COMMUNITY, NODE_FILE, NODE_FUNCTION, NODE_PROCESS,
 };
 
 /// Builds a fresh, schema-initialized store in a unique temp dir. The caller
@@ -65,6 +65,25 @@ fn insert_function(store: &GraphStore, qn: &str) {
             ],
         )
         .expect("insert function node");
+}
+
+/// Inserts an unresolved (`is_resolved = false`) `CallSite` node with the
+/// given id/callee spelling — the shape the parser emits before resolution
+/// runs, and the shape resolution leaves behind when it fails.
+fn insert_unresolved_callsite(store: &GraphStore, id: &str, callee_name: &str) {
+    store
+        .insert_node(
+            NODE_CALL_SITE,
+            &[
+                ("id", &cypher_str(id)),
+                ("callee_name", &cypher_str(callee_name)),
+                ("line", "1"),
+                ("col", "1"),
+                ("is_resolved", "false"),
+                ("language", &cypher_str("rust")),
+            ],
+        )
+        .expect("insert unresolved CallSite node");
 }
 
 /// A function that belongs to a community must have that community's id
@@ -333,6 +352,95 @@ fn get_impact_does_not_flag_orphan_file_when_graph_has_reference_indexing() {
         result.epistemic,
         Boundary::Exact,
         "reference-edge indexing ran elsewhere in this graph ⇒ an orphan file is not a coverage gap"
+    );
+    assert!(result.epistemic_reasons.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Unresolved CallSite epistemic honesty
+// ---------------------------------------------------------------------------
+
+/// The regression this PR fixes: a target with zero resolved `Calls` edges
+/// but unresolved `CallSite` nodes visibly naming it (bare-name and
+/// receiver-call shapes, exactly what was observed on the dy-wcet corpus
+/// pre-#267) must be `LowerBound`, never `Exact` — the graph itself holds
+/// evidence the reported (zero) callers are incomplete.
+#[test]
+fn get_impact_flags_unresolved_callsite_naming_the_target_as_lower_bound() {
+    let (_dir, store) = empty_store();
+    let target_qn = "src/tasks.rs::TaskSet::response_of";
+
+    insert_function(&store, target_qn);
+    insert_unresolved_callsite(&store, "cs::1", "response_of"); // bare call
+    insert_unresolved_callsite(&store, "cs::2", "s.response_of"); // receiver call
+
+    let result = get_impact(&store, target_qn).expect("get_impact");
+
+    assert!(
+        result.callers.is_empty(),
+        "no Calls edge exists — the resolver never resolved either call site"
+    );
+    assert_eq!(
+        result.epistemic,
+        Boundary::LowerBound,
+        "unresolved CallSite nodes naming the target must flip the boundary, got {:?}",
+        result.epistemic_reasons
+    );
+    assert!(
+        result
+            .epistemic_reasons
+            .iter()
+            .any(|r| r.contains("unresolved call site") && r.contains('2')),
+        "must name the unresolved-callsite count as the carrier, got {:?}",
+        result.epistemic_reasons
+    );
+}
+
+/// A target with zero matching unresolved `CallSite` nodes (none exist at
+/// all) and no other epistemic carrier must still report `Exact` — pins the
+/// pre-existing guarantee (`get_impact_reports_file_reference_fan_in_as_exact`
+/// -style) against a regression where the new check fires unconditionally.
+#[test]
+fn get_impact_reports_exact_when_no_unresolved_callsite_names_the_target() {
+    let (_dir, store) = empty_store();
+    let target_qn = "src/tasks.rs::TaskSet::response_of";
+
+    insert_function(&store, target_qn);
+
+    let result = get_impact(&store, target_qn).expect("get_impact");
+
+    assert_eq!(
+        result.epistemic,
+        Boundary::Exact,
+        "no unresolved CallSite nodes exist ⇒ nothing to flag, got {:?}",
+        result.epistemic_reasons
+    );
+    assert!(result.epistemic_reasons.is_empty());
+}
+
+/// An unresolved `CallSite` whose `callee_name` names a DIFFERENT symbol
+/// (same graph, unrelated call) must not spuriously flip the target's
+/// boundary — the match is on the target's own bare identifier, not "any
+/// unresolved call site exists anywhere in the graph".
+#[test]
+fn get_impact_ignores_unresolved_callsite_naming_a_different_symbol() {
+    let (_dir, store) = empty_store();
+    let target_qn = "src/tasks.rs::TaskSet::response_of";
+    let other_qn = "src/tasks.rs::TaskSet::deadline_of";
+
+    insert_function(&store, target_qn);
+    insert_function(&store, other_qn);
+    insert_unresolved_callsite(&store, "cs::1", "deadline_of"); // names the OTHER symbol
+    insert_unresolved_callsite(&store, "cs::2", "s.deadline_of");
+
+    let result = get_impact(&store, target_qn).expect("get_impact");
+
+    assert_eq!(
+        result.epistemic,
+        Boundary::Exact,
+        "unresolved call sites naming a different symbol must not flip this target's \
+         boundary, got {:?}",
+        result.epistemic_reasons
     );
     assert!(result.epistemic_reasons.is_empty());
 }
