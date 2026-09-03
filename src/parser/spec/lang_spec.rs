@@ -132,6 +132,14 @@ pub(crate) struct RustFamilySpec {
     /// without re-parsing. Also listed in `call_node_kinds` so the shared call
     /// DFS visits it.
     pub macro_invocation_kind: &'static str,
+    /// The opaque argument-payload kind a `macro_invocation_kind` node's sole
+    /// non-field child takes (`token_tree`) — tree-sitter represents ANY
+    /// balanced-delimiter group inside a macro's arguments this way, including
+    /// a nested call's own parentheses, since it does not parse macro
+    /// arguments as Rust expressions. Read by `rust_macro_calls` to walk down
+    /// into a macro invocation's arguments and reconstruct the method/path
+    /// calls hidden inside it.
+    pub token_tree_kind: &'static str,
     /// Bare-callee kinds a call's `arguments_field` child may take to count as a
     /// function passed **by value** (issue #87) → one extra `CallSite` each
     /// (`identifier`, `scoped_identifier`). Anything else (a nested call, a

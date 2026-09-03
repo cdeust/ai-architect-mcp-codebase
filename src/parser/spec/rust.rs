@@ -21,7 +21,11 @@
 //   4. **A call node can yield several call sites.** The call itself, plus one
 //      per function-value argument (issue #87), and a `macro_invocation` yields
 //      a call site whose callee carries a trailing `!` so the resolver's Layer 4
-//      can tell macros from functions cheaply.
+//      can tell macros from functions cheaply. A `macro_invocation` ALSO yields
+//      one call site per method/path call speculatively reconstructed from its
+//      opaque `token_tree` argument payload (`rust_macro_calls` —
+//      `assert_eq!(s.slack_of(1), None)` never produces a `call_expression`
+//      node for `s.slack_of(1)`, because tree-sitter does not expand macros).
 //
 // Every node-kind string and field name traces to tree-sitter-rust 0.23.3's
 // node-types.json (pinned in Cargo.lock); the spec-validation guard
@@ -133,10 +137,24 @@ impl RustConventions {
     /// span — not the start alone — is what makes the id unique among a caller's
     /// call sites. The column is 0-based, as the pre-migration walker emitted it.
     fn call_site(callee: &str, span_node: Node, caller_qn: &str) -> CallEntry {
-        let line = span_node.start_position().row as u64 + 1;
-        let col = span_node.start_position().column as u64;
-        let start_byte = span_node.start_byte() as u64;
-        let end_byte = span_node.end_byte() as u64;
+        Self::call_site_spanning(callee, span_node, span_node.end_byte() as u64, caller_qn)
+    }
+
+    /// Same shape as `call_site`, but the span's end byte is supplied
+    /// separately from the start node. Needed by the macro-argument scan
+    /// (`rust_macro_calls`): a reconstructed callee like `s.slack_of` spans
+    /// two sibling `identifier` nodes with an anonymous `.`/`::` token between
+    /// them, so no single node covers the whole span the way a
+    /// `call_expression` node does.
+    pub(super) fn call_site_spanning(
+        callee: &str,
+        start_node: Node,
+        end_byte: u64,
+        caller_qn: &str,
+    ) -> CallEntry {
+        let line = start_node.start_position().row as u64 + 1;
+        let col = start_node.start_position().column as u64;
+        let start_byte = start_node.start_byte() as u64;
         let qn = format!("{caller_qn}::call@{line}:{col}#{start_byte}-{end_byte}");
         CallEntry {
             name: callee.to_string(),
@@ -263,6 +281,20 @@ impl LanguageConventions for RustConventions {
         out
     }
 
+    fn macro_argument_call_entries(
+        &self,
+        source: &str,
+        call_node: Node,
+        caller_qn: &str,
+    ) -> Vec<CallEntry> {
+        super::rust_macro_calls::macro_argument_call_entries(
+            source,
+            call_node,
+            caller_qn,
+            &RUST_FAMILY,
+        )
+    }
+
     fn import_ref_kind(&self, import_stmt: Node) -> &'static str {
         // `extern crate foo;` names an external crate — a real `Imports` edge to
         // that crate. A `use` leaf declares a name inside THIS file, so its edge
@@ -375,6 +407,7 @@ static RUST_FAMILY: RustFamilySpec = RustFamilySpec {
     use_as_clause_kind: "use_as_clause",
     use_wildcard_kind: "use_wildcard",
     macro_invocation_kind: "macro_invocation",
+    token_tree_kind: "token_tree",
     fn_value_arg_kinds: &["identifier", "scoped_identifier"],
     visibility_kind: "visibility_modifier",
     function_modifiers_kind: "function_modifiers",

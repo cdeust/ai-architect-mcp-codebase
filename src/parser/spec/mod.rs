@@ -28,6 +28,7 @@ mod python;
 mod registry;
 mod ruby;
 mod rust;
+mod rust_macro_calls;
 mod shallow;
 mod swift;
 mod typescript;

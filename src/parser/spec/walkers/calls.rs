@@ -16,10 +16,14 @@ use crate::parser::{ExtractedNode, ExtractedRef, LABEL_CALL_SITE};
 /// is consumed only when the callee is accepted, so a dropped call (Go's
 /// non-identifier callee) does not perturb the counter.
 ///
-/// One accepted call node yields the `call_entry` site FIRST and then any
-/// `extra_call_entries` in order — the shape Rust's higher-order-argument
-/// capture needs (`run_all(validate, arg)` → the `run_all` site, then one site
-/// per function-value argument), and a no-op for every other language.
+/// One accepted call node yields the `call_entry` site FIRST, then any
+/// `extra_call_entries`, then any `macro_argument_call_entries`, in that
+/// order — the shape Rust's higher-order-argument capture needs
+/// (`run_all(validate, arg)` → the `run_all` site, then one site per
+/// function-value argument), plus Rust's macro-argument scan
+/// (`assert_eq!(s.slack_of(1), None)` → the `assert_eq!` site, then one site
+/// per call reconstructed from its opaque token-tree payload), and a no-op
+/// for every other language.
 pub(super) fn walk_calls(spec: &LangSpec, ctx: &mut WalkCtx, root: Node, caller_qn: &str) {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
@@ -33,6 +37,12 @@ pub(super) fn walk_calls(spec: &LangSpec, ctx: &mut WalkCtx, root: Node, caller_
                 for extra in spec
                     .conventions
                     .extra_call_entries(ctx.source, n, caller_qn)
+                {
+                    push_call(ctx, extra, caller_qn);
+                }
+                for extra in spec
+                    .conventions
+                    .macro_argument_call_entries(ctx.source, n, caller_qn)
                 {
                     push_call(ctx, extra, caller_qn);
                 }

@@ -240,6 +240,28 @@ pub(crate) trait LanguageConventions: Sync {
         Vec::new()
     }
 
+    /// Extra `CallSite`s reconstructed from a call node's OPAQUE argument
+    /// payload — a payload the grammar does not parse as Rust expressions, so
+    /// no `call_node_kinds` node exists inside it for the DFS to find on its
+    /// own. Default: none — this is a distinct gap from `extra_call_entries`
+    /// (which recovers a call the grammar SEES but does not treat as one; this
+    /// recovers a call the grammar never represents as a node AT ALL) and only
+    /// Rust's `macro_invocation` argument scan populates it: a macro's
+    /// argument list is a `token_tree` of raw tokens, so
+    /// `assert_eq!(s.slack_of(1), None)` never produces a `call_expression`
+    /// node for `s.slack_of(1)` — tree-sitter does not expand macros.
+    // mutation note (§12): the `Vec::new()` → `vec![]` mutant here is a proven
+    // EQUIVALENT mutant — both construct the same empty `Vec`, so no test can
+    // observe a difference (same precedent as `extra_call_entries` above).
+    fn macro_argument_call_entries(
+        &self,
+        _source: &str,
+        _call_node: Node,
+        _caller_qn: &str,
+    ) -> Vec<CallEntry> {
+        Vec::new()
+    }
+
     /// Visibility for a declared node, given both its AST node and its name.
     /// Default: the name-based rule (Go uppercase / Python underscore) — the
     /// name is the only signal. Java overrides to read the node's `modifiers`
