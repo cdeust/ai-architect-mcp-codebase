@@ -67,6 +67,23 @@ fn lsp_resolve_binds_receiver_method_calls_via_rust_analyzer() {
         vec!["src/lib.rs::TaskSet::total".to_string()],
         "response_of must gain exactly one caller — TaskSet::total — via the LSP pass"
     );
+
+    // Soundness regression (PR #267 follow-up): `extra_call_entries`
+    // (#87, deliberate) also emits a speculative CallSite for the bare
+    // argument `i` in `self.response_of(i)`. rust-analyzer resolves `i`
+    // to `total`'s own PARAMETER declaration, which sits on the SAME
+    // LINE as `total`'s function signature. A parameter is not itself an
+    // indexed graph node, so an imprecise position match must not fall
+    // back onto `total`'s own declaration and fabricate a `total ->
+    // total` self-call edge. This assertion is the one the original PR's
+    // test was missing — the false edge could be present with the test
+    // above still green.
+    let self_edges = calls_edges_from(&store, "src/lib.rs::TaskSet::total");
+    assert!(
+        self_edges.is_empty(),
+        "the LSP pass must not fabricate a Calls edge from `total` to \
+         itself or to anything but `response_of`: {self_edges:?}"
+    );
 }
 
 /// Writes a minimal but real cargo package under a fresh tempdir: a struct
@@ -119,6 +136,23 @@ fn callers_of_response_of(store: &GraphStore) -> Vec<String> {
              WHERE b.qualified_name = '{RESPONSE_OF_QN}' RETURN a.id"
         ))
         .expect("query callers")
+        .rows
+        .into_iter()
+        .map(|row| row[0].clone())
+        .collect()
+}
+
+/// Every `Calls_Method_Method` edge FROM `caller_id` other than to
+/// `response_of` — i.e. any edge that would be a fabricated target,
+/// including a self-edge.
+fn calls_edges_from(store: &GraphStore, caller_id: &str) -> Vec<String> {
+    store
+        .execute_query(&format!(
+            "MATCH (a:Method)-[:Calls_Method_Method]->(b:Method) \
+             WHERE a.id = '{caller_id}' AND b.qualified_name <> '{RESPONSE_OF_QN}' \
+             RETURN b.id"
+        ))
+        .expect("query edges from caller")
         .rows
         .into_iter()
         .map(|row| row[0].clone())

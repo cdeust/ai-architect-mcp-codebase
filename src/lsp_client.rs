@@ -369,7 +369,20 @@ fn build_initialize_request(id: i64, workspace_root: &Path) -> Value {
             "rootUri": root_uri,
             "capabilities": {
                 "textDocument": {
-                    "definition": { "dynamicRegistration": false }
+                    // source: LSP 3.17 §textDocument/definition — a server
+                    // may only answer with `LocationLink[]` (which carries
+                    // `targetSelectionRange`, the precise identifier-name
+                    // range) when the client declares `linkSupport`;
+                    // otherwise it must answer with plain `Location`/
+                    // `Location[]` (only the loose `range`, "the whole
+                    // declaration"). Declaring it lets
+                    // `parse_definition_response` prefer the precise range
+                    // and lets `find_node_at_position` fail closed on an
+                    // exact line match instead of scanning nearby lines.
+                    "definition": {
+                        "dynamicRegistration": false,
+                        "linkSupport": true
+                    }
                 },
                 // source: LSP 3.17 §Progress — a server may only report
                 // workDoneProgress for a request or a background job

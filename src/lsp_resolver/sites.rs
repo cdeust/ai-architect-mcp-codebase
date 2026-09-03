@@ -48,6 +48,24 @@ impl UnresolvedCallSite {
         let col = self.col + last_segment_offset(&self.callee_name) as u64;
         (line0, col)
     }
+
+    /// The identifier text this call site is actually asking to resolve —
+    /// the same last `.`/`::`-separated segment `lsp_position` points at,
+    /// e.g. `self.response_of` -> `"response_of"`, a bare `helper` ->
+    /// `"helper"`.
+    ///
+    /// Used by `edges::try_add_lsp_edge` to refuse a resolved definition
+    /// whose OWN name does not match this identifier — the defense against
+    /// a same-line collision `find_node_at_position` cannot rule out on
+    /// line-only data (fabricated `total -> total` self-edge, PR #267
+    /// follow-up: `extra_call_entries` (#87) emits a speculative CallSite
+    /// for a bare-identifier argument; rust-analyzer correctly resolves it
+    /// to its own PARAMETER declaration, which sits on the same line as the
+    /// enclosing method's own declaration, and a parameter is not itself an
+    /// indexed graph node).
+    pub(super) fn identifier_name(&self) -> &str {
+        &self.callee_name[last_segment_offset(&self.callee_name)..]
+    }
 }
 
 /// Byte offset, within `callee_name`, of the start of its LAST `.`- or

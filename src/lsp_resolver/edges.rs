@@ -36,12 +36,30 @@ pub(super) fn try_add_lsp_edge(
     // LSP line is 0-based, our graph stores 1-based line numbers.
     let target_line = def.start_line + 1;
 
-    // Try exact line match first, then scan nearby lines (+-2)
+    // Exact line match only — no nearby-line scan. The node index carries
+    // no column, so an inexact match cannot be told apart from a
+    // coincidental same-line collision; guessing produced a fabricated
+    // `total -> total` self-edge when a bare-argument CallSite (#87)
+    // resolved to a PARAMETER declared on the same line as its enclosing
+    // method (PR #267 follow-up). Failing closed costs recall on a
+    // genuinely multi-line declaration; a wrong edge is worse than a
+    // missing one.
     let target = find_node_at_position(ctx.node_index, &file_path, target_line);
     let target = match target {
         Some(t) => t,
         None => return false,
     };
+
+    // Defense in depth against the SAME-line case above: even an exact
+    // line match can land on the enclosing symbol's own declaration line
+    // (a parameter's targetSelectionRange shares its function signature's
+    // line). The resolved node's own name must equal the identifier the
+    // call site actually asked about, or this is that same collision
+    // wearing an exact-match line instead of a fuzzy one.
+    let target_name = target.id.rsplit("::").next().unwrap_or(&target.id);
+    if target_name != site.identifier_name() {
+        return false;
+    }
 
     let Some(rel_type) = call_rel_table(&site.caller_label, &target.label) else {
         return false;
@@ -98,27 +116,15 @@ fn uri_to_relative_path(uri: &str, canonical_root: &Path) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Exact (file, line) match only. See the fail-closed rationale at the call
+/// site in `try_add_lsp_edge`: the node index carries no column, so an
+/// inexact line cannot be distinguished from a coincidental collision.
 fn find_node_at_position<'a>(
     index: &'a HashMap<(String, u64), NodePosition>,
     file_path: &str,
     line: u64,
 ) -> Option<&'a NodePosition> {
-    // Exact match
-    if let Some(node) = index.get(&(file_path.to_string(), line)) {
-        return Some(node);
-    }
-    // Try nearby lines (definition may start a few lines before the name)
-    for offset in 1..=3 {
-        if line >= offset {
-            if let Some(node) = index.get(&(file_path.to_string(), line - offset)) {
-                return Some(node);
-            }
-        }
-        if let Some(node) = index.get(&(file_path.to_string(), line + offset)) {
-            return Some(node);
-        }
-    }
-    None
+    index.get(&(file_path.to_string(), line))
 }
 
 #[cfg(test)]
@@ -326,7 +332,11 @@ mod tests {
     }
 
     #[test]
-    fn find_node_at_position_matches_exactly_then_nearby() {
+    fn find_node_at_position_matches_exactly_and_never_a_nearby_line() {
+        // Soundness regression (PR #267 follow-up): the node index carries
+        // no column, so a nearby-line scan cannot tell a real "definition
+        // starts a few lines above the name" case apart from a coincidental
+        // collision. Fail closed: exact line only.
         let mut index = HashMap::new();
         index.insert(
             ("src/main.rs".to_string(), 10),
@@ -342,7 +352,6 @@ mod tests {
             "fn1"
         );
 
-        // A definition may start a few lines before the name.
         let mut nearby = HashMap::new();
         nearby.insert(
             ("src/main.rs".to_string(), 8),
@@ -351,13 +360,49 @@ mod tests {
                 label: "Method".to_string(),
             },
         );
-        assert_eq!(
-            find_node_at_position(&nearby, "src/main.rs", 10)
-                .expect("nearby match")
-                .id,
-            "fn2"
+        assert!(
+            find_node_at_position(&nearby, "src/main.rs", 10).is_none(),
+            "a node two lines away must NOT match — no fuzzy fallback"
         );
 
         assert!(find_node_at_position(&HashMap::new(), "src/main.rs", 10).is_none());
+    }
+
+    #[test]
+    fn a_definition_landing_on_an_unrelated_same_line_node_is_refused() {
+        // The exact regression this fix closes: `extra_call_entries` (#87)
+        // emits a speculative CallSite for a bare-identifier argument (here
+        // standing in for the `i` in `self.response_of(i)`). rust-analyzer
+        // resolves it to its own PARAMETER declaration — not itself an
+        // indexed node — which happens to share a line with the ENCLOSING
+        // method's own declaration. An exact line match therefore lands on
+        // `caller` even though the call site never asked to resolve
+        // `caller`. The identifier-name check must refuse this edge.
+        let f = edge_fixture("lsp same line collision test");
+        let ctx = SiteContext {
+            node_index: &f.node_index,
+            canonical_root: &f.root,
+        };
+        let arg_site = UnresolvedCallSite {
+            id: "src/a.rs::caller::call@1:9".to_string(),
+            callee_name: "i".to_string(), // not "target" — a bare argument
+            line: 1,                      // same line as `caller`'s own node
+            col: 9,
+            ..f.site
+        };
+        let def_on_callers_own_line = lsp_client::DefinitionResult {
+            uri: lsp_client::path_to_file_uri(&f.root.join("src/a.rs")),
+            start_line: 0, // LSP 0-based line 0 == graph's 1-based line 1
+            start_col: 9,
+        };
+        assert!(
+            !try_add_lsp_edge(&f.store, &arg_site, &def_on_callers_own_line, &ctx),
+            "a definition whose own name does not match the call site's \
+             identifier must never insert an edge"
+        );
+        assert!(
+            calls_edges(&f.store).is_empty(),
+            "no edge — fabricated or otherwise — may be inserted"
+        );
     }
 }

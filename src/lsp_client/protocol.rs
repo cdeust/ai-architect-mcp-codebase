@@ -202,13 +202,24 @@ pub(super) fn parse_definition_response(resp: &Value) -> Result<Option<Definitio
         return Ok(None);
     };
 
-    // LocationLink has targetUri + targetRange; Location has uri + range
+    // LocationLink has targetUri + targetRange + (optionally)
+    // targetSelectionRange; Location has only uri + range.
+    //
+    // source: LSP 3.17 §textDocument/definition. `targetSelectionRange` is
+    // "the range that should be selected and revealed when this link is
+    // being followed, e.g. the name of a function" — the PRECISE
+    // identifier-name span. `targetRange`/`range` is the loose declaration
+    // span ("including e.g. comments"). Preferring the precise range when
+    // present is what lets `find_node_at_position` match on an exact line
+    // instead of a fuzzy nearby-line scan (fabricated `total -> total`
+    // self-edge, PR #267 follow-up).
     let uri = location
         .get("targetUri")
         .or_else(|| location.get("uri"))
         .and_then(|v| v.as_str());
     let range = location
-        .get("targetRange")
+        .get("targetSelectionRange")
+        .or_else(|| location.get("targetRange"))
         .or_else(|| location.get("range"));
 
     match (uri, range) {
@@ -300,6 +311,11 @@ mod tests {
         let def = parse_definition_response(&resp).unwrap().unwrap();
         assert_eq!(def.uri, "file:///src/graph_store.rs");
         assert_eq!(def.start_line, 20);
+        assert_eq!(
+            def.start_col, 11,
+            "targetSelectionRange (the precise identifier span) must be \
+             preferred over the loose targetRange"
+        );
     }
 
     #[test]
