@@ -592,6 +592,20 @@ fn manifest_from_discovered(current: &[Discovered]) -> FileManifest {
     m
 }
 
+/// Shared read-only context `collect_tracked_changes` and
+/// `collect_untracked_adds` both need: the codebase root (to shell out to
+/// git), the indexed-subtree prefix (to relativize git's paths), and the
+/// rel→Discovered lookup (to map a git path to its working-tree metadata).
+/// Bundled per §4.4 (param-object remedy — coding-standards.md, the same
+/// pattern this repo already uses elsewhere for >4-parameter siblings):
+/// `git_changes` builds one and passes it to both collectors instead of
+/// each threading the same three values individually.
+struct DiffContext<'a> {
+    codebase: &'a Path,
+    prefix: &'a str,
+    by_rel: &'a HashMap<&'a str, &'a Discovered>,
+}
+
 /// Classifies the artifact→working-tree diff with git, or `None` when git cannot
 /// be used (not a git working tree, or `artifact_sha` is unknown to this clone —
 /// e.g. a shallow clone). `current` is the working-tree discovery, used to map
@@ -602,7 +616,7 @@ fn manifest_from_discovered(current: &[Discovered]) -> FileManifest {
 /// `collect_tracked_changes` for the committed+uncommitted tracked diff, then
 /// `collect_untracked_adds` for new-but-never-`git add`-ed files. Paths are
 /// made relative to the indexed subtree via `--show-prefix`; anything outside
-/// it is ignored (both collectors thread `prefix` through for this).
+/// it is ignored (both collectors read `ctx.prefix` for this).
 fn git_changes(codebase: &Path, artifact_sha: &str, current: &[Discovered]) -> Option<ChangeSet> {
     if !is_hex_sha(artifact_sha) {
         return None;
@@ -618,10 +632,15 @@ fn git_changes(codebase: &Path, artifact_sha: &str, current: &[Discovered]) -> O
     )?;
 
     let by_rel: HashMap<&str, &Discovered> = current.iter().map(|d| (d.rel.as_str(), d)).collect();
+    let ctx = DiffContext {
+        codebase,
+        prefix: &prefix,
+        by_rel: &by_rel,
+    };
     let mut cs = ChangeSet::default();
 
-    collect_tracked_changes(codebase, artifact_sha, &prefix, &by_rel, &mut cs);
-    collect_untracked_adds(codebase, &prefix, &by_rel, &mut cs);
+    collect_tracked_changes(&ctx, artifact_sha, &mut cs);
+    collect_untracked_adds(&ctx, &mut cs);
 
     Some(cs)
 }
@@ -632,15 +651,9 @@ fn git_changes(codebase: &Path, artifact_sha: &str, current: &[Discovered]) -> O
 /// captured; rename detection is git's own `-M`. A `None` from `git_output`
 /// (git failure) leaves `cs` untouched rather than erroring — `git_changes`
 /// as a whole has already committed to `Some` by this point.
-fn collect_tracked_changes(
-    codebase: &Path,
-    artifact_sha: &str,
-    prefix: &str,
-    by_rel: &HashMap<&str, &Discovered>,
-    cs: &mut ChangeSet,
-) {
+fn collect_tracked_changes(ctx: &DiffContext, artifact_sha: &str, cs: &mut ChangeSet) {
     let Some(diff) = git_output(
-        codebase,
+        ctx.codebase,
         &[
             "-c",
             "core.quotepath=false",
@@ -654,7 +667,7 @@ fn collect_tracked_changes(
         return;
     };
     for line in diff.lines() {
-        parse_diff_line(line, prefix, by_rel, cs);
+        parse_diff_line(line, ctx.prefix, ctx.by_rel, cs);
     }
 }
 
@@ -663,14 +676,9 @@ fn collect_tracked_changes(
 /// make sure an uncommitted new file still gets (re)parsed. Dedups against
 /// what `collect_tracked_changes` already recorded (added/changed) so a file
 /// that appears in both listings — e.g. a rename target — isn't double-added.
-fn collect_untracked_adds(
-    codebase: &Path,
-    prefix: &str,
-    by_rel: &HashMap<&str, &Discovered>,
-    cs: &mut ChangeSet,
-) {
+fn collect_untracked_adds(ctx: &DiffContext, cs: &mut ChangeSet) {
     let Some(others) = git_output(
-        codebase,
+        ctx.codebase,
         &[
             "-c",
             "core.quotepath=false",
@@ -688,13 +696,13 @@ fn collect_untracked_adds(
         .chain(cs.changed.iter().map(|d| d.rel.clone()))
         .collect();
     for line in others.lines() {
-        let Some(rel) = strip_prefix_path(line.trim(), prefix) else {
+        let Some(rel) = strip_prefix_path(line.trim(), ctx.prefix) else {
             continue;
         };
         if already.contains(&rel) {
             continue;
         }
-        if let Some(d) = by_rel.get(rel.as_str()) {
+        if let Some(d) = ctx.by_rel.get(rel.as_str()) {
             cs.added.push((*d).clone());
         }
     }
