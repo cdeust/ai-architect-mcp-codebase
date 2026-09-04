@@ -1,7 +1,7 @@
 # Contributing to ai-architect-mcp-codebase
 
 Thanks for considering a contribution. This is a Rust MCP server with
-**26 tools, 1400+ tests, zero warnings, every constant sourced**. Every
+**26 tools, 1500+ tests, zero warnings, every constant sourced**. Every
 change is held to that bar.
 
 ---
@@ -31,7 +31,7 @@ cargo build --release
 # First build: ~5 minutes (compiles LadybugDB C++ core)
 # Subsequent builds: <1 second incremental
 
-cargo test --release        # full test suite (1400+ tests)
+cargo test --release        # full test suite (1500+ tests)
 cargo clippy --release -- -D warnings   # zero warnings policy
 cargo fmt --check
 ```
