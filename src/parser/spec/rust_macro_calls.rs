@@ -127,14 +127,34 @@ fn direct_child_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
 /// source: tree-sitter-rust 0.24.2 src/node-types.json (`identifier`).
 const IDENTIFIER_KIND: &str = "identifier";
 
+/// True when `first` and `second` are separated in `source` by exactly `.`
+/// or `::` (after trimming whitespace) — the only separators that make two
+/// adjacent identifiers a genuine "X.method" / "X::method" pair.
+///
+/// Two SEPARATE macro arguments where the second happens to be a bare
+/// identifier immediately followed by a call — `assert!(flag,
+/// format_error(ctx))` — present the identical
+/// `[identifier, identifier, token_tree]` shape as a real receiver call, but
+/// the source bytes between them read `, ` (comma), never `.`/`::`. Comma is
+/// just as anonymous in this grammar as `.`/`::` (verified 2026-09-04
+/// alongside the `.`/`::` probe already on file), so the node-kind shape
+/// alone cannot distinguish the two cases — only the literal separator text
+/// can, which is what this check reads.
+fn separated_by_dot_or_colon(source: &str, first: Node, second: Node) -> bool {
+    matches!(
+        source[first.end_byte()..second.start_byte()].trim(),
+        "." | "::"
+    )
+}
+
 /// Scans `token_tree`'s NAMED children left to right for the
-/// `[identifier, identifier, token_tree]` shape, non-overlapping (a matched
-/// triple's three children are consumed together, so the scan resumes just
-/// past the reconstructed call's own arguments rather than re-testing inside
-/// them as a fresh window). Every `token_tree` child — whether it matched as
-/// a reconstructed call's arguments or not — is recursed into, so nested
-/// calls and sibling macro invocations are still scanned for calls of their
-/// own.
+/// `[identifier, identifier, token_tree]` shape joined by `.`/`::`
+/// (`separated_by_dot_or_colon`), non-overlapping (a matched triple's three
+/// children are consumed together, so the scan resumes just past the
+/// reconstructed call's own arguments rather than re-testing inside them as
+/// a fresh window). Every `token_tree` child — whether it matched as a
+/// reconstructed call's arguments or not — is recursed into, so nested calls
+/// and sibling macro invocations are still scanned for calls of their own.
 fn scan_token_tree(
     source: &str,
     token_tree: Node,
@@ -146,11 +166,11 @@ fn scan_token_tree(
     let named: Vec<Node> = token_tree.named_children(&mut cursor).collect();
     let mut i = 0;
     while i < named.len() {
-        let matches_call_shape = i + 2 < named.len()
+        let shaped = i + 2 < named.len()
             && named[i].kind() == IDENTIFIER_KIND
             && named[i + 1].kind() == IDENTIFIER_KIND
             && named[i + 2].kind() == token_tree_kind;
-        if matches_call_shape {
+        if shaped && separated_by_dot_or_colon(source, named[i], named[i + 1]) {
             let callee = source[named[i].start_byte()..named[i + 1].end_byte()].to_string();
             if !callee.is_empty() {
                 out.push(RustConventions::call_site_spanning(

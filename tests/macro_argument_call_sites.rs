@@ -121,6 +121,37 @@ fn bare_function_call_inside_a_macro_argument_is_not_misidentified_as_a_method_c
 }
 
 #[test]
+fn two_separate_macro_arguments_are_not_misidentified_as_a_method_call() {
+    // `assert!(flag, format_error(ctx))` — `flag` is a bare bool condition
+    // and `format_error(ctx)` is a SEPARATE message argument that happens to
+    // be a function call. The two identifiers `flag` and `format_error` are
+    // adjacent named children of the token_tree (comma is anonymous, just
+    // like `.`/`::`), presenting the identical
+    // `[identifier, identifier, token_tree]` shape as a genuine
+    // `flag.format_error(...)` receiver call — but they are joined by `, `
+    // in the source, never `.`/`::`, so the scan must reject the pair rather
+    // than fabricate a callee out of two unrelated arguments.
+    let src = "fn f(flag: bool, ctx: i32) {\n    assert!(flag, format_error(ctx));\n}\n";
+    let r = parse(src, "f.rs");
+    assert!(
+        callsite(&r, "flag, format_error").is_none(),
+        "two comma-separated macro arguments must not be fused into a \
+         fabricated callee; got callees {:?}",
+        callees(&r)
+    );
+    // `format_error(ctx)` is a bare function call (single identifier +
+    // token_tree) — deliberately left unextracted, same as
+    // `bare_function_call_inside_a_macro_argument_is_not_misidentified_as_a_method_call`.
+    // Only the macro's own CallSite (`assert!`) is expected.
+    assert_eq!(
+        r.nodes.iter().filter(|n| n.label == "CallSite").count(),
+        1,
+        "got callees {:?}",
+        callees(&r)
+    );
+}
+
+#[test]
 fn nested_call_inside_a_macro_argument_call_is_also_found() {
     // `assert!(s.method(a.other()))` — the outer call's own reconstructed
     // argument token_tree must itself be scanned, recursively, for the inner
