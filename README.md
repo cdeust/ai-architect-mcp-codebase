@@ -35,11 +35,11 @@
 
 Every AI coding assistant hits the same wall: you ask it to change `handle_tool_call`, and it either hallucinates a function that was renamed last week, edits something in the wrong community of the codebase, or silently breaks a call chain three modules away. Agents operate on strings; codebases have structure. The gap is where bugs live.
 
-**ai-architect-mcp-codebase** is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, or Go codebase into a LadybugDB property graph (Ruby is dispatched on the shallow path — node-kind rows, no deep extraction — for 11 languages in total), resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 26 MCP tools.
+**ai-architect-mcp-codebase** is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, or Go codebase into a LadybugDB property graph (Ruby is dispatched on the shallow path — node-kind rows, no deep extraction — for 11 languages in total), resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces available call-graph paths from detected entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 26 MCP tools.
 
-It is the **codebase intelligence layer** that sits between a finding ("this bug exists") and a PRD ("here is the fix, here is what it affects, here is what it must never break"). It is **read-only intelligence** — it never writes code, opens PRs, or runs CI. It tells the system what is true about the code so the next stage can reason without guessing.
+It is the **codebase intelligence layer** that sits between a finding ("this bug exists") and a PRD ("here is the fix, here is what it affects, here is what it must never break"). It is **read-only intelligence** — it never writes code, opens PRs, or runs CI. It supplies source-linked structural evidence and analysis limitations for the next stage to inspect.
 
-**One pipeline stage = one MCP tool. 10 stages. 26 tools. 12,000+ lines of Rust. 1500+ tests. Zero warnings. Every constant sourced.**
+**One pipeline stage = one MCP tool. 10 stages. 26 tools. 12,000+ lines of Rust. 1500+ tests. Compiler and Clippy checks are part of CI.**
 
 ---
 
@@ -78,8 +78,8 @@ get_context(graph_path, qualified_name: "src/main.rs::handle_tool_call")
   → did-you-mean suggestions when the symbol isn't found exactly
 
 get_impact(graph_path, qualified_name)
-  → blast radius: every process that transits this symbol, every community it touches
-  → the answer to "what breaks if I change this?"
+  → candidate impact: callers, communities and processes in the available graph
+  → evidence for choosing what to inspect and recheck after a change
 
 detect_changes(graph_path, diff_text OR base_ref+head_ref)
   → git diff → affected symbols → impacted communities → touched processes
@@ -98,6 +98,28 @@ verify_semantic_diff(before_graph_path, after_graph_path)
   → what nodes/edges appeared, what disappeared, what dangles,
     new cycles via Tarjan SCC, regression score with verdict
 ```
+
+
+These tools establish different kinds of evidence. Stage 2's `verified` receipt
+means schema checks, clarification completeness and caller acknowledgement passed;
+its transcript digest binds the recorded bytes, not the truth of the finding.
+`gates_passed` means no critical flag was emitted by the available security checks.
+Inspect `report.assessment_complete` as well: it is false for an empty symbol list, skipped
+checks, or changed symbols that could not be resolved. Review those items and warnings even when
+`gates_passed` is true. The unresolved-import gate reports unresolved imports in
+a changed symbol's file; a single graph snapshot cannot establish when they were
+introduced.
+A semantic-diff `clean` verdict requires a structural regression score below
+the configured threshold and no positive unresolved-import delta. Any increase
+in unresolved imports produces at least `concerning`, even below that threshold.
+A clean result does not establish behavioral equivalence. Tests, compiler checks
+or formal proofs must establish that separate property.
+
+Impact and process results depend on the relationships the graph captured.
+Process traversal stops at depth 20; it is graph reachability, not an observed
+runtime trace or an exhaustive account of effects. Preserve coverage and
+resolution qualifiers, and confirm important absence claims against source even
+when the coverage report contains no flagged files.
 
 ---
 
@@ -434,7 +456,7 @@ Every stage is a tool. Stages build on each other but are independently callable
 | **3d** | `search_codebase`, `get_context`, `analyze_codebase`, `detect_changes` | Hybrid BM25 + sparse TF-IDF + RRF search · 360° symbol view · all-in-one analysis · git-diff impact |
 | **4** | `prepare_prd_input` | Bundle verified finding + graph intel → artifact for ai-architect-mcp-spec |
 | **6** | `validate_prd_against_graph` | Symbol hallucination · community consistency · process-impact contradiction |
-| **8** | `check_security_gates` | Auth-critical community · unsafe symbol · public-API change · unresolved-import intro · test-coverage gap |
+| **8** | `check_security_gates` | Auth-critical community · unsafe symbol · public-API change · unresolved-import presence · test-coverage gap |
 | **9** | `verify_semantic_diff` | Before/after graph diff with Tarjan SCC cycle detection and regression scoring |
 
 > Stages 5 (PRD generation), 7 (implementation), 10 (benchmark), 11 (deployment), 12 (PR) belong to other systems in the pipeline: [ai-architect-mcp-spec](https://github.com/cdeust/ai-architect-mcp-spec), the coding agent, CI, and `gh`. This project is the **read-only intelligence** half.
@@ -626,7 +648,7 @@ Inherited from [zetetic-team-subagents](https://github.com/cdeust/zetetic-team-s
 **In this codebase it concretely means:**
 
 1. Every algorithm traces to a source. Louvain → *Blondel et al. 2008*. Leiden C2 repair → *Traag et al. 2019*. RRF → *Cormack, Clarke, Büttcher 2009*. SCC → *Tarjan 1972*. BM25 via Tantivy → *Robertson et al. 1994*.
-2. Every named constant has a `// source:` comment. `RRF_K = 60` cites Cormack 2009. `BULK_BATCH_SIZE = 500` cites Kùzu/LadybugDB tuning. `PARSE_TIMEOUT_MICROS = 5_000_000` is justified in the block above it.
+2. Named constants should record their source or measured rationale. `RRF_K = 60` cites Cormack 2009. `BULK_BATCH_SIZE = 500` cites Kùzu/LadybugDB tuning. `PARSE_TIMEOUT_MICROS = 5_000_000` is justified in the block above it.
 3. No invented numbers. Where a value was chosen by judgment, the comment says so ("heuristic, not paper-backed") and cites its operational justification.
 4. Tool responses cite the spec that governs each error reason. `unsafe finding_id (spec §5.1.4, §9.3 Q4): must match [A-Za-z0-9._-]+` — callers see which rule they violated.
 5. When a capability can't be proved at spec time, the tool degrades gracefully and says so in plain language. Example: `lsp_resolve` on a stub binary returns `lsp_probe_failed: found on PATH but didn't respond as an LSP server (stdout closed immediately; likely a stub, proxy, or non-LSP binary)` — not a cryptic protocol error.
@@ -736,32 +758,43 @@ The bulk-insert path uses UNWIND with a typed struct schema (the engineer who wr
 
 ## Falsifiable evidence — graph tools vs a Grep/Glob/Read baseline
 
-The core proposition — a graph query beats file-by-file exploration — is
-**measured, not asserted**. `benchmarks/eval_headtohead/` is a **pre-registered**
-(`PRE_REGISTRATION.md`, committed before execution), two-condition, head-to-head
-evaluation over a committed 4-language corpus (Python, TypeScript, Go, Rust), 20
-questions across 5 capability dimensions. Every number below is a field in
-`benchmarks/eval_headtohead/results.json`, regenerable by
-`benchmarks/eval_headtohead/reproduce.sh` (no network, no API key). Provenance and
-the honest negative are in that folder's `MANIFEST.md`.
+This offline retrieval evaluation compares graph queries with a fixed
+substring-search/full-file-read protocol on an authored 4-language corpus
+(Python, TypeScript, Go, Rust): 20 questions across five capability dimensions.
+`benchmarks/eval_headtohead/PRE_REGISTRATION.md` records the hypotheses and
+protocol. The current results below are the post-#92 run in
+`benchmarks/eval_headtohead/results.json`; earlier runs remain separately saved.
+See that folder's `MANIFEST.md` for provenance and `reproduce.sh` for the command.
+The deterministic evaluation needs no API key or external corpus; building it
+requires the Rust toolchain and dependencies to be available.
 
-| metric (mean ± stdev, n=20) | AP graph tools | Grep/Glob/Read baseline | source field |
+| metric (mean ± sample stdev, n=20) | AP graph tools | Grep/Glob/Read baseline | source field |
 |---|---:|---:|---|
 | retrieval precision | **1.00 ± 0.00** | 0.65 ± 0.33 | `aggregate.{graph,explorer}.precision` |
-| tokens consumed (est.) | **36.7 ± 19.8** | 550.4 ± 330.3 | `aggregate.*.tokens` |
-| tool calls | **1.0 ± 0.0** | 5.2 ± 1.6 | `aggregate.*.tool_calls` |
-| token ratio (baseline / graph) | **17.4×** | — | `aggregate.token_ratio_explorer_over_graph` |
-| tool-call ratio | **5.2×** | — | `aggregate.toolcall_ratio_explorer_over_graph` |
+| retrieval recall | **1.00 ± 0.00** | 1.00 ± 0.00 | `aggregate.*.recall` |
+| payload token proxy | **43.14 ± 17.26** | 550.36 ± 330.28 | `aggregate.*.tokens` |
+| modeled tool calls | **1.00 ± 0.00** | 5.20 ± 1.64 | `aggregate.*.tool_calls` |
+| mean per-question token ratio (baseline / graph) | **14.26×** | — | `aggregate.token_ratio_explorer_over_graph.mean` |
+| mean per-question tool-call ratio | **5.20×** | — | `aggregate.toolcall_ratio_explorer_over_graph.mean` |
 
-Pre-registered hypotheses H1 (tokens), H2 (tool calls), H3 (precision on impact
-queries) are **SUPPORTED**; H4 (recall no-regression) is **FALSIFIED** and we say
-so: the graph's recall is 0.83 vs the substring baseline's 1.00, because AP misses
-a Go program entry (`get_processes` classification), some cross-language
-type-usage edges, and a Rust higher-order call. Those four lost questions are in
-`raw_results.json` — a sweep that reports only wins is not evidence. The
-blinded LLM-as-a-Judge answer-quality leg is config-gated (`AP_EVAL_JUDGE_CMD`)
-and was budget-gated off for the published run; the deterministic
-precision/recall/token/tool-call numbers above stand on their own.
+All four hypotheses H1–H4 are **SUPPORTED** in the current run under this
+protocol. The original run **FALSIFIED H4**: graph recall was 0.825 against 1.00.
+Its five losses (`go-D3`, `go-D4`, `rs-D2`, `rs-D4`, `ts-D4`) remain in
+`raw_results.2026-07-26-pre-fix-87.json`; fixes #87 and #92 closed these gaps.
+The corpus informed those fixes, so the current result is a regression benchmark,
+not an unseen generalization test.
+
+Costs are modeled, not observed AI-client bills or tool traces. The graph leg
+serializes a benchmark-specific compact envelope of symbol identities; the
+baseline counts its substring-hit transcript plus full matching files. Both use
+a payload-size / 4 token proxy. Graph calls are assigned one per question;
+baseline calls are assigned two plus the number of matching files. Indexing,
+client prompts, actual MCP response envelopes and model reasoning are excluded.
+The 14.26× figure is a mean of per-question ratios; dividing aggregate payload
+volumes gives 12.76×, a different statistic. The optional answer-quality judge
+(`AP_EVAL_JUDGE_CMD`) did not run. These measurements establish file-retrieval
+results and protocol costs, not AI-agent success, hallucination reduction or
+real-world token savings.
 
 ---
 

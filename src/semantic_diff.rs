@@ -106,7 +106,7 @@ pub fn diff(args: &SemanticDiffArgs, verified_at: String) -> Result<SemanticDiff
         new_cycles: new_cycles.len() as u64,
     };
     let score = regression_score(&summary);
-    let verdict = classify_verdict(score);
+    let verdict = verdict_for_summary(&summary, score);
     let report = build_report(&DiffReportInput {
         args,
         verified_at: &verified_at,
@@ -153,9 +153,9 @@ impl Snapshot {
     fn collect(path: &Path) -> Result<Self, String> {
         let store = GraphStore::open_or_create(path)?;
         Ok(Snapshot {
-            nodes: collect_nodes(&store),
-            edges: collect_edges(&store),
-            unresolved: count_unresolved(&store),
+            nodes: collect_nodes(&store)?,
+            edges: collect_edges(&store)?,
+            unresolved: count_unresolved(&store)?,
         })
     }
 }
@@ -166,14 +166,11 @@ impl Snapshot {
 
 type NodeSet = BTreeMap<String, BTreeSet<String>>; // label -> { qualified_name }
 
-fn collect_nodes(store: &GraphStore) -> NodeSet {
+fn collect_nodes(store: &GraphStore) -> Result<NodeSet, String> {
     let mut out: NodeSet = BTreeMap::new();
     for label in DIFFABLE_LABELS {
         let cypher = format!("MATCH (n:{label}) RETURN n.qualified_name");
-        let qr = match store.execute_query(&cypher) {
-            Ok(q) => q,
-            Err(_) => continue,
-        };
+        let qr = store.execute_query(&cypher)?;
         let entry = out.entry((*label).into()).or_default();
         for row in &qr.rows {
             if let Some(qn) = row.first() {
@@ -183,7 +180,7 @@ fn collect_nodes(store: &GraphStore) -> NodeSet {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -193,18 +190,23 @@ fn collect_nodes(store: &GraphStore) -> NodeSet {
 type EdgeTriple = (String, String, String);
 type EdgeSet = HashSet<EdgeTriple>;
 
-fn collect_edges(store: &GraphStore) -> EdgeSet {
+fn collect_edges(store: &GraphStore) -> Result<EdgeSet, String> {
     let mut out: EdgeSet = HashSet::new();
     for &(rel, from_label, to_label) in REL_TABLES {
+        // Preserve the qualified-name projection explicitly. File/process and
+        // other non-symbol tables do not declare this property; their absence
+        // from the projection is intentional, unlike a failed eligible query.
+        if !crate::graph_store::label_declares_column(from_label, "qualified_name")
+            || !crate::graph_store::label_declares_column(to_label, "qualified_name")
+        {
+            continue;
+        }
         let kind = rel_kind(rel);
         let cypher = format!(
             "MATCH (a:{from_label})-[:{rel}]->(b:{to_label}) \
              RETURN a.qualified_name, b.qualified_name"
         );
-        let qr = match store.execute_query(&cypher) {
-            Ok(q) => q,
-            Err(_) => continue,
-        };
+        let qr = store.execute_query(&cypher)?;
         for row in &qr.rows {
             if row.len() < 2 {
                 continue;
@@ -217,7 +219,7 @@ fn collect_edges(store: &GraphStore) -> EdgeSet {
             out.insert((from.clone(), kind.to_string(), to.clone()));
         }
     }
-    out
+    Ok(out)
 }
 
 /// Collapses table-name (e.g. `Calls_Function_Method`) to the semantic kind.
@@ -260,8 +262,12 @@ struct EdgeDiff {
 }
 
 fn diff_edges(before: &EdgeSet, after: &EdgeSet) -> EdgeDiff {
-    let added: Vec<EdgeTriple> = after.difference(before).cloned().collect();
-    let removed: Vec<EdgeTriple> = before.difference(after).cloned().collect();
+    let mut added: Vec<EdgeTriple> = after.difference(before).cloned().collect();
+    let mut removed: Vec<EdgeTriple> = before.difference(after).cloned().collect();
+    // Audit F03: canonicalize before report truncation, so both ordering and
+    // the selected evidence subset depend only on graph identities.
+    added.sort_unstable();
+    removed.sort_unstable();
     EdgeDiff { added, removed }
 }
 
@@ -282,6 +288,7 @@ fn compute_dangling(after_nodes: &NodeSet, after_edges: &EdgeSet) -> Vec<EdgeTri
             dangling.push(edge.clone());
         }
     }
+    dangling.sort_unstable();
     dangling
 }
 
@@ -289,23 +296,22 @@ fn compute_dangling(after_nodes: &NodeSet, after_edges: &EdgeSet) -> Vec<EdgeTri
 // Unresolved count — reads the Import node count as a resolution proxy
 // ---------------------------------------------------------------------------
 
-/// Counts nodes with label "Import" that remain after resolution. An Import
-/// node survives iff the static resolver could not rewrite it into a
-/// concrete edge — so count(Import) is the canonical unresolved metric.
-///
-/// source: stages/stage-3b.md §"Unresolved" — Import nodes are the
-/// post-resolution fallback for references the resolver could not place.
-fn count_unresolved(store: &GraphStore) -> u64 {
-    let cypher = "MATCH (i:Import) RETURN count(i)";
-    match store.execute_query(cypher) {
-        Ok(qr) => qr
-            .rows
-            .first()
-            .and_then(|r| r.first())
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0),
-        Err(_) => 0,
-    }
+/// Resolution retains Import nodes and marks successful targets in
+/// `is_resolved` (resolver/imports.rs). Count false or unattempted NULL flags;
+/// neither successful imports nor failed queries are evidence of a gap.
+/// Source: promise-audit F02, resolved-to-unresolved compiler-backed fixture.
+fn count_unresolved(store: &GraphStore) -> Result<u64, String> {
+    let qr = store.execute_query(
+        "MATCH (i:Import) WHERE i.is_resolved = false OR i.is_resolved IS NULL RETURN count(i)",
+    )?;
+    let count = qr
+        .rows
+        .first()
+        .and_then(|r| r.first())
+        .ok_or("semantic diff: unresolved count query returned no count")?;
+    count
+        .parse::<u64>()
+        .map_err(|e| format!("semantic diff: invalid unresolved count: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +487,16 @@ fn regression_score(s: &DiffSummary) -> f64 {
     let unresolved = WEIGHT_UNRESOLVED_DELTA * s.new_unresolved_delta.max(0) as f64;
     let unresolved = unresolved.min(UNRESOLVED_DELTA_MAX * WEIGHT_UNRESOLVED_DELTA * 10.0);
     (dangling + cycles + unresolved).min(REGRESSION_SCORE_CAP)
+}
+
+/// Audit F02: an observed new unresolved import establishes a verdict floor
+/// even below the heuristic clean threshold. The score itself is unchanged.
+fn verdict_for_summary(summary: &DiffSummary, score: f64) -> &'static str {
+    if summary.new_unresolved_delta > 0 && score < VERDICT_CLEAN_MAX {
+        "concerning"
+    } else {
+        classify_verdict(score)
+    }
 }
 
 fn classify_verdict(score: f64) -> &'static str {

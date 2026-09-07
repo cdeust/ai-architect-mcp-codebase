@@ -673,7 +673,7 @@ fn validate_prd_against_graph_schema() -> Value {
 fn check_security_gates_schema() -> Value {
     json!({
         "name": "check_security_gates",
-        "description": "Stage 8 — Graph-aware security gates. Runs five checks on the changed_symbols list: S1 auth-critical community touch (critical), S2 unsafe-symbol touch (info-skip until parser records is_unsafe), S3 public-API surface change (warning), S4 unresolved-import introduction (warning/critical), S5 test-coverage structural gap (warning). Returns gates_passed=true iff zero critical flags. LLM-free. Read-only. When run_id+finding_id+output_dir are provided, writes stage-8.security.json.",
+        "description": "Stage 8 — Graph-aware security gates. Runs five checks on the changed_symbols list: S1 auth-critical community touch (critical), S2 unsafe-symbol touch (info-skip until parser records is_unsafe), S3 public-API surface change (warning), S4 unresolved-import presence in the changed file (warning/critical), S5 test-coverage structural gap (warning). Returns gates_passed=true iff zero critical flags; report.assessment_complete=false for empty input, skipped checks, or unresolved changed symbols. Neither field certifies security. Import-check query errors fail explicitly. LLM-free. Read-only. When run_id+finding_id+output_dir are provided, writes stage-8.security.json.",
         "annotations": { "readOnlyHint": true },
         "inputSchema": {
             "type": "object",
@@ -693,7 +693,7 @@ fn check_security_gates_schema() -> Value {
 fn verify_semantic_diff_schema() -> Value {
     json!({
         "name": "verify_semantic_diff",
-        "description": "Stage 9 — Compare a post-implementation graph against a pre-implementation graph to flag regressions: nodes added/removed, edges added/removed, dangling references (edges whose target disappeared), new unresolved imports, and new strongly-connected cycles. Returns a heuristic regression_score (cap 10.0, thresholds: <1 clean, <5 concerning, >=5 regression). Read-only against both graphs.",
+        "description": "Stage 9 — Compare a post-implementation graph against a pre-implementation graph to flag regressions: nodes added/removed, edges added/removed, dangling references (edges whose target disappeared), new unresolved imports, and new strongly-connected cycles. Returns a heuristic regression_score (cap 10.0, thresholds: <1 clean, <5 concerning, >=5 regression); any positive unresolved-import delta is at least concerning. Details are sorted before truncation. Clean is a structural policy verdict, not behavioral equivalence or compilation success. Read-only against both graphs.",
         "annotations": { "readOnlyHint": true },
         "inputSchema": {
             "type": "object",

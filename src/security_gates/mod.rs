@@ -7,8 +7,8 @@
 //                              uses a risky JS/Python API.            critical|warning
 //                              INFO-SKIP mode when parser does not record it.
 //   S3 public_api_change      — crate-root `pub` symbol touched.      warning|critical
-//   S4 unresolved_imports     — changed symbol owns new Imports that
-//                              resolved to an :Import fallback node.  warning|critical
+//   S4 unresolved_imports     — unresolved Import status in the changed
+//                              symbol's source file.                   warning|critical
 //   S5 test_coverage_gap      — changed symbol has no ParticipatesIn
 //                              path from any test-entry process.      warning
 //
@@ -55,6 +55,18 @@ pub struct SecurityReport {
     pub summary: SecuritySummary,
 }
 
+impl SecurityReport {
+    /// Completion is separate from the severity policy: no assessed symbols,
+    /// skipped checks or unknown symbols cannot establish a complete assessment.
+    pub fn assessment_complete(&self) -> bool {
+        self.summary.changed_symbols > 0
+            && !self
+                .flags
+                .iter()
+                .any(|flag| flag.gate == "input_unresolved" || flag.details["skipped"] == true)
+    }
+}
+
 pub struct SecurityFlag {
     pub gate: String,
     pub severity: String,
@@ -89,7 +101,7 @@ pub fn check_gates(
         run_s1(store, qn, &auth_communities, &mut flags);
         run_s2(store, qn, &mut flags);
         run_s3(store, qn, &mut flags);
-        run_s4(store, qn, &mut flags);
+        run_s4(store, qn, &mut flags)?;
         run_s5(store, qn, &mut flags);
     }
     for r in &resolved {
@@ -187,6 +199,7 @@ pub fn report_to_json(
         "changed_symbols": changed_symbols,
         "checked_at": checked_at,
         "gates_passed": report.gates_passed,
+        "assessment_complete": report.assessment_complete(),
         "summary": {
             "changed_symbols": report.summary.changed_symbols,
             "critical_count": report.summary.critical_count,

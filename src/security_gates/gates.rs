@@ -256,62 +256,98 @@ fn lookup_file_path(store: &GraphStore, escaped_qn: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// S4 — unresolved import introduction
+// S4 — unresolved import presence
 // ---------------------------------------------------------------------------
 
-pub(super) fn run_s4(store: &GraphStore, qualified_name: &str, flags: &mut Vec<SecurityFlag>) {
-    // An Import node survives post-resolution iff the resolver could not
-    // rewrite it into a concrete edge (source: semantic_diff.rs
-    // count_unresolved — count(:Import) is the canonical unresolved metric).
-    // Since the schema has no File->Import edge, we scope by qualified_name
-    // prefix: Import nodes live under the file's scope (parser/rust.rs §
-    // handle_use_declaration — qualified_name = qual(scope, display_name)).
-    let escaped = cypher_str(qualified_name);
-    let file_path = match lookup_file_path(store, &escaped) {
-        Some(p) => p,
-        None => return,
+pub(super) fn run_s4(
+    store: &GraphStore,
+    qualified_name: &str,
+    flags: &mut Vec<SecurityFlag>,
+) -> Result<(), String> {
+    let Some(file_path) = import_source_file(store, qualified_name)? else {
+        flags.push(SecurityFlag {
+            gate: "unresolved_imports".into(),
+            severity: "info".into(),
+            symbol: qualified_name.into(),
+            message: "unresolved-import check unavailable: source file not identified".into(),
+            details: json!({ "skipped": true, "reason": "source_file_unavailable" }),
+        });
+        return Ok(());
     };
-    // File path matches the scope prefix used by qual() in the parser. Strip
-    // any leading path component the resolver removes (search::strip_leading
-    // mirrors this), then match qualified_name prefix.
-    let scope = file_scope_from_path(&file_path);
-    let escaped_scope_prefix = cypher_str(&format!("{scope}::"));
-    let cypher = format!(
-        "MATCH (i:Import) WHERE i.qualified_name STARTS WITH {escaped_scope_prefix} \
-         RETURN count(i)"
-    );
-    let count: u64 = match store.execute_query(&cypher) {
-        Ok(qr) => qr
-            .rows
-            .first()
-            .and_then(|r| r.first())
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0),
-        Err(_) => 0,
-    };
-    if count == 0 {
-        return;
+    let count = unresolved_import_count(store, &file_path)?;
+    if count > 0 {
+        flags.push(SecurityFlag {
+            gate: "unresolved_imports".into(),
+            severity: if count >= 2 { "critical" } else { "warning" }.into(),
+            symbol: qualified_name.into(),
+            message: format!("{count} unresolved import(s) in the changed symbol's file"),
+            details: json!({ "file_path": file_path, "unresolved_count": count }),
+        });
     }
-    let severity = if count >= 2 { "critical" } else { "warning" };
-    flags.push(SecurityFlag {
-        gate: "unresolved_imports".into(),
-        severity: severity.into(),
-        symbol: qualified_name.into(),
-        message: format!(
-            "{count} unresolved Import node(s) in the changed symbol's file — drift or supply-chain risk"
-        ),
-        details: json!({ "file_path": file_path, "scope": scope, "unresolved_count": count }),
-    });
+    Ok(())
 }
 
-// Strips any leading path component so it matches the parser's qualified_name
-// convention (`main.rs` rather than `src/main.rs`). Mirrors
-// search::strip_leading_path_component.
-fn file_scope_from_path(file_path: &str) -> String {
-    match file_path.find('/') {
-        Some(idx) => file_path[idx + 1..].to_string(),
-        None => file_path.to_string(),
-    }
+fn unresolved_import_count(store: &GraphStore, file_path: &str) -> Result<u64, String> {
+    // Import IDs preserve the whole repository-relative file prefix, including
+    // nested module/method owners. Resolution retains nodes and flips the flag.
+    // Source: resolver/imports.rs + security_import_contract indexed fixtures.
+    let prefix = cypher_str(&format!("{file_path}::"));
+    let exclusions = more_specific_file_exclusions(store, &prefix)?;
+    let query = format!(
+        "MATCH (i:Import) WHERE i.id STARTS WITH {prefix}{exclusions} \
+         AND (i.is_resolved = false OR i.is_resolved IS NULL) RETURN count(i)"
+    );
+    let rows = store
+        .execute_query(&query)
+        .map_err(|error| format!("checking unresolved imports: {error}"))?;
+    let count: u64 = rows
+        .rows
+        .first()
+        .and_then(|r| r.first())
+        .ok_or("checking unresolved imports: missing count")?
+        .parse()
+        .map_err(|error| format!("checking unresolved imports: invalid count: {error}"))?;
+    Ok(count)
+}
+
+/// A filename can itself contain `::` on POSIX. Apply the same longest-file
+/// ownership rule as `import_source_file`, excluding imports of those files.
+/// Source: security_import_contract::delimiter_in_filename_does_not_cross_count_imports.
+fn more_specific_file_exclusions(store: &GraphStore, prefix: &str) -> Result<String, String> {
+    let query = format!("MATCH (f:File) WHERE f.path STARTS WITH {prefix} RETURN f.path");
+    let rows = store.execute_query(&query).map_err(|error| {
+        format!("checking unresolved imports: locating nested file prefixes: {error}")
+    })?;
+    let mut paths: Vec<String> = rows
+        .rows
+        .into_iter()
+        .filter_map(|row| row.into_iter().next())
+        .collect();
+    paths.sort();
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            format!(
+                " AND NOT (i.id STARTS WITH {})",
+                cypher_str(&format!("{path}::"))
+            )
+        })
+        .collect())
+}
+
+fn import_source_file(store: &GraphStore, qualified_name: &str) -> Result<Option<String>, String> {
+    // Match the source-file prefix rather than only top-level Defines edges:
+    // methods and functions inside modules also inherit this file's imports.
+    let name = cypher_str(qualified_name);
+    let query = format!("MATCH (f:File) WHERE {name} STARTS WITH (f.path + '::') RETURN f.path");
+    let rows = store
+        .execute_query(&query)
+        .map_err(|error| format!("checking unresolved imports: locating source file: {error}"))?;
+    Ok(rows
+        .rows
+        .into_iter()
+        .filter_map(|r| r.into_iter().next())
+        .max_by_key(|path| path.len()))
 }
 
 // ---------------------------------------------------------------------------

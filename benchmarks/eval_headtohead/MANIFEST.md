@@ -68,6 +68,17 @@ proxy-independent), matching `benchmarks/token_surface`. All numbers are mean ±
 sample stdev across questions, also broken down per dimension and per language in
 `results.json`.
 
+The graph payload is the benchmark's custom `{tool, count, nodes}` envelope,
+with each node reduced to qualified name, file and label; it is not the complete
+MCP response. GRAPH tool count is assigned one per question, while EXPLORER is
+assigned two plus the number of hit files. These are modeled protocol costs,
+not instrumented client calls or model token bills. Index construction, client
+prompts and reasoning are excluded. The baseline returns every substring-hit
+file without post-read judgment. Consequently these results do not measure a
+competent agent's final answer quality, task success or real-world savings.
+The current run follows fixes informed by this authored corpus and is a
+regression result, not an unseen holdout.
+
 ## Headline results (offline run, judge gated off)
 
 Three runs are on record. The **original** run FALSIFIED H4 (that is the eval
@@ -86,9 +97,10 @@ unchanged across runs (its numbers do not depend on the resolver).
 - **Recall improved 0.825 → 0.90 → 1.00** (mean over 20 questions): #87 fixed
   go-D3 0.0→1.0 and rs-D2 0.5→1.0; #92 fixed the remaining type-usage gap —
   go-D4 0.0→1.0, rs-D4 0.5→1.0, ts-D4 0.5→1.0 (py-D4 stays 1.0). GRAPH now
-  matches the EXPLORER baseline's recall at ~13× fewer tokens.
-- **Token ratio (explorer / graph): ~17× mean.** The graph answer is bounded and
-  paginated; the file-exploring transcript grows with the files grep surfaces.
+  matches the EXPLORER baseline's recall with a 12.76× ratio of aggregate
+  estimated payload volumes under this protocol.
+- **Token ratio (explorer / graph): 14.26× mean per question.** This differs from the 12.76× ratio of aggregate payload volumes; the
+  benchmark's compact graph answer and full-file baseline determine these costs.
 - **Tool-call ratio: 5.2× mean.** One graph tool call vs glob + grep + N reads.
 
 ### Hypotheses (pre-registered thresholds)
