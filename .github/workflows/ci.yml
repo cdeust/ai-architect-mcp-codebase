@@ -280,6 +280,28 @@ jobs:
             cargo install cargo-llvm-cov --locked --version '^0.8' --force
           fi
 
+      # `--no-report` (below) switches off cargo-llvm-cov's default artifact
+      # clean: "This behavior is disabled when --no-clean, --no-report, or
+      # --no-run is passed, and old build artifacts are retained. When using
+      # these flags, it is recommended to first run `cargo llvm-cov clean
+      # --workspace`" (cargo-llvm-cov README, 0.8.7). The cache above restores
+      # `target/` from a restore-key whenever Cargo.lock changed, and a
+      # dependency bump changes the workspace crates' metadata hash, so the
+      # fresh test binaries land NEXT TO the cached ones in
+      # target/llvm-cov-target/debug/deps instead of overwriting them, and
+      # the report walks both. Measured 2026-09-07 on PR #274 (blake3 1.8.6 ->
+      # 1.8.7, Cargo.lock only): 41,924 lines / 89.83% against 30,039 lines /
+      # 91.20% on the PR's own base, main 2cca26c0 (job 101848229453 vs
+      # 101476560941; tool_schemas.rs alone counted 1,242 lines instead of
+      # 571), which failed
+      # the README coverage-claim gate on a change touching no source line.
+      # Same signature on main at 60c70db (2026-08-14, restore-key hit: 29,254
+      # lines against 27,105 on the next exact-key run). `clean --workspace`
+      # runs `cargo clean -p` per workspace member, so only the workspace
+      # crates rebuild; the cached dependency artifacts are kept.
+      - name: Remove stale instrumented artifacts left by a restore-key cache
+        run: cargo llvm-cov clean --workspace
+
       # Split into run / report / gate so the instrumented suite is executed
       # exactly once: --no-report leaves the profraw data in place, and both
       # the machine-readable export and the human summary are generated from
