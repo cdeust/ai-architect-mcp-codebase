@@ -798,6 +798,64 @@ real-world token savings.
 
 ---
 
+## Green software engineering
+
+This server's efficiency argument is **demand reduction**, and it is already
+measured — it just was not named as such until now.
+
+The dominant energy term in an LLM-assisted coding workflow is not this
+binary's CPU. It is the model inference spent re-reading files to answer a
+question a structural query could have answered once. Every token an agent does
+not have to process is compute that is never scheduled. That is the same lever
+the [Green Software Foundation](https://greensoftware.foundation/) calls energy
+proportionality, applied at the layer where the constant is largest.
+
+The head-to-head evaluation above quantifies exactly that, under a
+pre-registered protocol (`benchmarks/eval_headtohead/PRE_REGISTRATION.md`),
+n=20, reproducible offline with no API key:
+
+| Demand term | AP graph tools | Grep/Glob/Read baseline | Reduction |
+|---|---:|---:|---:|
+| payload token proxy | 43.14 ± 17.26 | 550.36 ± 330.28 | **14.26×** (mean of per-question ratios) |
+| modeled tool calls | 1.00 ± 0.00 | 5.20 ± 1.64 | **5.20×** |
+
+**What those numbers are not.** Costs are *modeled*, not observed AI-client
+bills or tool traces; both legs use a payload-size / 4 token proxy; indexing,
+client prompts, real MCP response envelopes and model reasoning are all
+excluded. The corpus informed fixes #87 and #92, so this is a regression
+benchmark rather than an unseen generalization test. Dividing aggregate payload
+volumes instead of averaging per-question ratios gives 12.76×, a different
+statistic. **No energy or CO2 figure is derived from these numbers**, and none
+should be: this repository measures no joules, and a token proxy is not a
+watt-hour.
+
+Server-side, the same discipline applies to work the machine does do — each
+figure sourced to a committed measurement, not an estimate:
+
+- **Bulk graph writes: 0.127 ms/edge** via UNWIND with a typed
+  `LogicalType::Struct`, against 9.658 ms/edge for the naive raw-string path —
+  **76×** less work for identical output (re-measured 2026-07-28, `lbug 0.18`,
+  rustc 1.95.0, macOS 26.5.1 arm64; `cargo test --release --test
+  lbug_bulk_investigation`).
+- **Search index: 30.5× smaller** — sparse TF-IDF at 108 KB replaces a dense
+  `N × V × 4B` matrix at 3.2 MB on this codebase, and scales with non-zero
+  terms rather than vocabulary size.
+- **Prepared statements are cached** in a `RefCell<HashMap<query,
+  PreparedStatement>>`; clustering populates one in-memory `HashMap<id, label>`
+  instead of a per-node Cypher round-trip.
+- **Native parsing, not inference.** Tree-sitter extracts structure
+  deterministically; no model is called to read code. A 500-file Rust fixture
+  indexes end-to-end in **~38 seconds**.
+- **Incremental by default**, with `max_db_size` bounding storage growth — see
+  [Configuration](#configuration--max_db_size).
+
+The rule is the same one the rest of this repository runs under (§ *The zetetic
+standard*): a constant with three or more significant digits carries a
+`// source:` annotation, and an efficiency claim with no measurement behind it
+does not ship.
+
+---
+
 ## Integration with the rest of the stack
 
 ```
