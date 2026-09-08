@@ -34,5 +34,7 @@ Exit 0 requires aggregate ≥0.85 and every language ≥0.75.
 
 ## Etiquette
 
-Conventional commits, staged file-by-file, never `git add -A`. One PR per concern. Do not merge
-your own PR without the owner's go-ahead.
+Conventional commits, staged file-by-file, never `git add -A`. One PR per concern. A pull
+request merges when CI is green and a review verdict is posted on it; the owner does not
+gate merges by hand. CI is the authority: it exists to catch regressions and enforce the
+engineering standards.
