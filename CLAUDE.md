@@ -6,9 +6,6 @@ structural queries. See @CONTRIBUTING.md for the layer rules and coding standard
 Global rules — model behavior, the loop discipline, and the zetetic standards — are imported,
 not restated here:
 
-@~/.claude/rules/model-behavior.md
-@~/.claude/rules/coding-standards.md
-
 ## Environment quirks — these will cost you a session if ignored
 
 - **This clone is live-mounted as the installed plugin.** `~/.claude/plugins/cache/.../0.9.x/target/release/ai-architect-mcp-codebase` symlinks here. Never `checkout`, `pull`, `stash` or build a different branch in it — the running MCP server dies. Work in a worktree: `git worktree add ../automatised-pipeline-wt-<topic> -b <branch> origin/main`.
