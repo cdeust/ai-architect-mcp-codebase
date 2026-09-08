@@ -16,8 +16,9 @@
 </p>
 
 <p align="center">
-  <strong>Cross-platform codebase intelligence for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and any stdio MCP host.</strong><br>
-  One read-only Rust server, host-specific installation packages, and the same evidence-graded graph answers everywhere.
+  <strong>Stop your coding agent from guessing at your codebase.</strong><br>
+  It answers <em>who calls this</em>, <em>what breaks if I change it</em>, and <em>how does execution get here</em> from a real graph of your code — not from grepping and hoping.<br>
+  <strong>Runs entirely on your machine. Read-only: it never writes code, opens PRs, or runs CI.</strong>
 </p>
 
 <p align="center">
@@ -25,21 +26,30 @@
 </p>
 
 <p align="center">
-  <strong>Companion projects:</strong><br>
-  <a href="https://github.com/cdeust/Cortex">Hypermnesia MCP</a> — persistent memory that consolidates and reconsolidates across sessions<br>
-  <a href="https://github.com/cdeust/zetetic-team-subagents">zetetic-team-subagents</a> — 97 genius reasoning agents + 18 team specialists<br>
-  <a href="https://github.com/cdeust/ai-architect-mcp-spec">AI Architect Spec</a> — TypeScript PRD generator that consumes our graph intelligence
+  <sub>One of four projects that each run standalone — memory, code graph, spec verification, reasoning agents. <a href="#integration-with-the-rest-of-the-stack">How they fit together ↓</a></sub>
 </p>
 
 ---
 
 Every AI coding assistant hits the same wall: you ask it to change `handle_tool_call`, and it either hallucinates a function that was renamed last week, edits something in the wrong community of the codebase, or silently breaks a call chain three modules away. Agents operate on strings; codebases have structure. The gap is where bugs live.
 
-**ai-architect-mcp-codebase** is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, or Go codebase into a LadybugDB property graph (Ruby is dispatched on the shallow path — node-kind rows, no deep extraction — for 11 languages in total), resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces available call-graph paths from detected entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 26 MCP tools.
+**This server gives it the structure.** It parses your repository into a real graph of symbols and their relationships, then answers structural questions directly — with source links, and with its own limitations stated alongside the answer.
 
-It is the **codebase intelligence layer** that sits between a finding ("this bug exists") and a PRD ("here is the fix, here is what it affects, here is what it must never break"). It is **read-only intelligence** — it never writes code, opens PRs, or runs CI. It supplies source-linked structural evidence and analysis limitations for the next stage to inspect.
+### What you get
 
-**One pipeline stage = one MCP tool. 10 stages. 26 tools. 12,000+ lines of Rust. 1500+ tests. Compiler and Clippy checks are part of CI.**
+- **Real answers about your code.** Who calls this function, what breaks if I change it, how does execution reach here, what belongs together — resolved across files, not guessed from text matches.
+- **Your agent stops re-reading files.** One graph query replaces the open-five-files-and-scroll loop. On our offline evaluation that is **14.26× fewer payload tokens** and **5.20× fewer tool calls** than a Grep/Glob/Read baseline ([protocol, caveats and what it does *not* prove ↓](#falsifiable-evidence--graph-tools-vs-a-grepglobread-baseline)).
+- **11 languages.** Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, Go get full extraction; Ruby gets a shallow pass (node kinds, no deep extraction).
+- **Read-only by design.** It supplies evidence for the next stage — a fix, a PRD, a review. It never edits your code.
+- **It says what it cannot see.** Every answer carries its analysis limitations, so you can tell a real "no callers" from an unresolved import.
+
+### Sovereign intelligence, eco-responsible by intent
+
+**Sovereign is what it is today.** Native Rust and tree-sitter parse your code on your machine — no model is called to read it, and nothing is uploaded. The graph is a local database file you own.
+
+**Eco-responsible is what we're aiming at.** The dominant energy cost in an AI-assisted workflow is not this binary's CPU; it is inference spent re-reading files to answer a question one query could have settled. Reducing that demand is the lever we work on, and we measure it — while publishing **no energy or CO₂ figure**, because this repository measures no joules and a token proxy is not a watt-hour. [What we measure, and what we refuse to claim ↓](#green-software-engineering)
+
+**One pipeline stage = one MCP tool. 10 stages. 26 tools. 1500+ tests. Zero clippy warnings, enforced in CI.**
 
 ---
 
