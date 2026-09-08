@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <sub>One of four projects that each run standalone — memory, code graph, spec verification, reasoning agents. <a href="#integration-with-the-rest-of-the-stack">How they fit together ↓</a></sub>
+  <sub>One of three MCP servers that each run standalone and keep evolving — <a href="https://github.com/cdeust/Cortex">memory</a>, code graph (this), <a href="https://github.com/cdeust/ai-architect-mcp-spec">spec verification</a> — plus visualization and reasoning-agent companions. <a href="#integration-with-the-rest-of-the-stack">How they fit together ↓</a></sub>
 </p>
 
 ---
