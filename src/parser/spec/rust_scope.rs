@@ -192,6 +192,7 @@ fn simple_identifier_name(source: &str, pattern: Node) -> Option<String> {
 ///   2. `let x = T::assoc(...)` — no `type` field; the initializer's callee
 ///      must be a `scoped_identifier` (`T::assoc`, or `mod::T::assoc`), and
 ///      the type is that path's own last segment.
+///
 /// A bare `let x = make();` (callee has no `::`) or any other initializer
 /// shape (`let x = 5;`, `let x = other_call();` with a non-scoped callee)
 /// returns `None` — "un initialiseur non typable", plan §2.2.

@@ -179,7 +179,15 @@ fn homonymous_types_palier3_prefers_the_callers_own_file() {
         &[("a.rs", HOMONYM_A), ("b.rs", HOMONYM_B)],
     );
     // `caller()` is a top-level free function (not inside `impl`), so its
-    // label is `Function`, not `Method`.
+    // label is `Function`, not `Method`. Filtered to `::m` targets: `caller`
+    // ALSO calls `TaskSet::new()` (a plain associated-function call, not a
+    // receiver call — outside palier 3's scope), which resolves via the
+    // pre-existing general by-name/same-file resolution to its own file's
+    // `new`; that edge is real and correct, and asserting on the full,
+    // unfiltered edge set from `caller` would wrongly count it as a second
+    // palier-3 resolution. This mirrors how `calls_edges` (the paliers 1-2
+    // sibling suite and test 4 below) filters by callee to isolate the
+    // resolution under test.
     let qr = store
         .execute_query(
             "MATCH (caller:Function)-[r:Calls_Function_Method]->(target:Method) \
@@ -187,14 +195,20 @@ fn homonymous_types_palier3_prefers_the_callers_own_file() {
              RETURN target.qualified_name, r.resolution_method",
         )
         .expect("query a.rs caller edges");
+    let m_rows: Vec<_> = qr
+        .rows
+        .iter()
+        .filter(|row| row[0].ends_with("::m"))
+        .collect();
     assert_eq!(
-        qr.rows.len(),
+        m_rows.len(),
         1,
-        "a.rs::caller must resolve to exactly one target; unresolved={:?}",
-        res.unresolved.iter().map(|u| &u.reason).collect::<Vec<_>>()
+        "a.rs::caller must resolve to exactly one m() target; unresolved={:?}, all edges={:?}",
+        res.unresolved.iter().map(|u| &u.reason).collect::<Vec<_>>(),
+        qr.rows
     );
-    assert_eq!(qr.rows[0][0], "a.rs::TaskSet::m");
-    assert_eq!(qr.rows[0][1], "receiver-local-binding");
+    assert_eq!(m_rows[0][0], "a.rs::TaskSet::m");
+    assert_eq!(m_rows[0][1], "receiver-local-binding");
 }
 
 #[test]
@@ -207,6 +221,14 @@ fn homonymous_types_palier3_caller_in_neither_file_is_ambiguous() {
             ("c.rs", HOMONYM_C),
         ],
     );
+    // Filtered to `::m` targets for the same reason as the sibling test
+    // above: `c.rs::caller` also calls `TaskSet::new()`, which HOMONYM_C
+    // defines locally (needed so the constructor pattern gives
+    // `typed_local_bindings` a hint type at all) and which correctly
+    // resolves, via the pre-existing general same-file preference, to
+    // `c.rs::TaskSet::new` — that edge is real and outside palier 3's scope;
+    // only the `m()` receiver call is this test's subject, and it must stay
+    // unresolved (Ambiguous) since c.rs is neither a.rs nor b.rs.
     let qr = store
         .execute_query(
             "MATCH (caller:Function)-[r:Calls_Function_Method]->(target:Method) \
@@ -214,10 +236,16 @@ fn homonymous_types_palier3_caller_in_neither_file_is_ambiguous() {
              RETURN target.qualified_name",
         )
         .expect("query c.rs caller edges");
+    let m_rows: Vec<_> = qr
+        .rows
+        .iter()
+        .filter(|row| row[0].ends_with("::m"))
+        .collect();
     assert!(
-        qr.rows.is_empty(),
-        "c.rs::caller must NOT resolve — two homonymous m() candidates in a.rs/b.rs, \
-         c.rs is neither: {:?}",
+        m_rows.is_empty(),
+        "c.rs::caller must NOT resolve m() — two homonymous m() candidates in a.rs/b.rs, \
+         c.rs is neither: {:?} (all edges={:?})",
+        m_rows,
         qr.rows
     );
     let ambiguous = res.unresolved.iter().find(|u| {
