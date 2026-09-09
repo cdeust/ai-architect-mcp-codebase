@@ -247,15 +247,11 @@ impl LanguageConventions for RustConventions {
     fn extra_call_entries(&self, source: &str, call_node: Node, caller_qn: &str) -> Vec<CallEntry> {
         // A function passed *by value* (`queue.iter().map(process_order)`) is a
         // real reference to that function, but the argument identifier is not
-        // itself a call node, so the DFS never emits a call site for it and the
-        // resolver never records the `Calls` edge. Emit one per bare
-        // `identifier` / `scoped_identifier` argument. Speculative by design: the
-        // resolver drops the reference when the name is a local binding rather
-        // than a known function or type, exactly as it drops any other
-        // unresolved callee (`len`, `HashMap::new`, …).
-        // source: issue #87 gap 3 (rs-D2) — the #64 head-to-head eval showed
-        //   worker.rs::drain, which passes `process_order` to `.map`, absent from
-        //   the callers of `process_order` (recall 0.5 vs the Grep baseline).
+        // itself a call node, so the DFS never emits a call site for it. Emit
+        // one per bare `identifier` / `scoped_identifier` argument that is NOT
+        // bound in the enclosing scope; `rust_scope` owns that rule, the defect
+        // it fixes, and the measurement behind it.
+        // source: issue #87 gap 3 (rs-D2).
         //
         // No node-kind guard is needed to keep this off macro invocations: a
         // `macro_invocation` has no `arguments` field in the grammar (its payload
@@ -266,6 +262,9 @@ impl LanguageConventions for RustConventions {
             Some(a) => a,
             None => return Vec::new(),
         };
+        // A name bound in the enclosing scope is a value, not a function
+        // reference. source: ADR-9836.
+        let bound = super::rust_scope::bound_names_in_scope(source, call_node);
         let mut cursor = args.walk();
         let mut out = Vec::new();
         for arg in args.children(&mut cursor) {
@@ -273,7 +272,7 @@ impl LanguageConventions for RustConventions {
                 continue;
             }
             let callee = node_text(source, arg);
-            if callee.is_empty() {
+            if callee.is_empty() || bound.contains(&callee) {
                 continue;
             }
             out.push(Self::call_site(&callee, arg, caller_qn));

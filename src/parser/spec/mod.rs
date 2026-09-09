@@ -29,6 +29,7 @@ mod registry;
 mod ruby;
 mod rust;
 mod rust_macro_calls;
+mod rust_scope;
 mod shallow;
 mod swift;
 mod typescript;
@@ -88,6 +89,8 @@ mod objc_parity_tests;
 mod parity_tests;
 #[cfg(test)]
 mod python_parity_tests;
+#[cfg(test)]
+mod rust_call_shape_tests;
 #[cfg(test)]
 mod rust_parity_corpus;
 #[cfg(test)]

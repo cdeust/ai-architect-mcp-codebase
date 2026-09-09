@@ -181,10 +181,12 @@ fn expected_node_records_part1() -> Vec<&'static str> {
         "CallSite|validate|src/lib.rs::Config::reload::call@58:8#1109-1129|58|58||[(\"callee_name\", \"validate\"), (\"caller_qn\", \"src/lib.rs::Config::reload\"), (\"lsp_col\", \"8\")]",
         "Method|handle|src/lib.rs::Config::handle|63|68||[(\"is_async\", \"false\"), (\"receiver_type\", \"src/lib.rs::Config\"), (\"trait_name\", \"Handler\"), (\"return_type\", \"bool\")]",
         "CallSite|run_all|src/lib.rs::Config::handle::call@67:8#1313-1337|67|67||[(\"callee_name\", \"run_all\"), (\"caller_qn\", \"src/lib.rs::Config::handle\"), (\"lsp_col\", \"8\")]",
+        // Three parameter-as-argument records were removed here on 2026-09-09:
+        // `input` twice under Config::handle and `arg` under run_all. They were
+        // the #87 speculative scan emitting a bound name as a call.
+        // source: ADR-9836.
         "CallSite|validate|src/lib.rs::Config::handle::call@67:16#1321-1329|67|67||[(\"callee_name\", \"validate\"), (\"caller_qn\", \"src/lib.rs::Config::handle\"), (\"lsp_col\", \"16\")]",
-        "CallSite|input|src/lib.rs::Config::handle::call@67:26#1331-1336|67|67||[(\"callee_name\", \"input\"), (\"caller_qn\", \"src/lib.rs::Config::handle\"), (\"lsp_col\", \"26\")]",
         "CallSite|helpers::normalize|src/lib.rs::Config::handle::call@66:8#1278-1303|66|66||[(\"callee_name\", \"helpers::normalize\"), (\"caller_qn\", \"src/lib.rs::Config::handle\"), (\"lsp_col\", \"8\")]",
-        "CallSite|input|src/lib.rs::Config::handle::call@66:27#1297-1302|66|66||[(\"callee_name\", \"input\"), (\"caller_qn\", \"src/lib.rs::Config::handle\"), (\"lsp_col\", \"27\")]",
         "CallSite|shout!|src/lib.rs::Config::handle::call@65:8#1252-1268|65|65||[(\"callee_name\", \"shout!\"), (\"caller_qn\", \"src/lib.rs::Config::handle\"), (\"lsp_col\", \"8\")]",
         "CallSite|s.len|src/lib.rs::Config::handle::call@64:26#1235-1242|64|64||[(\"callee_name\", \"s.len\"), (\"caller_qn\", \"src/lib.rs::Config::handle\"), (\"lsp_col\", \"26\")]",
         "Method|get|src/lib.rs::Wrapper<T>::get|72|74||[(\"is_async\", \"false\"), (\"receiver_type\", \"src/lib.rs::Wrapper<T>\"), (\"return_type\", \"&T\")]",
@@ -192,7 +194,6 @@ fn expected_node_records_part1() -> Vec<&'static str> {
         "CallSite|name.is_empty|src/lib.rs::validate::call@78:5#1468-1483|78|78||[(\"callee_name\", \"name.is_empty\"), (\"caller_qn\", \"src/lib.rs::validate\"), (\"lsp_col\", \"5\")]",
         "Function|run_all|src/lib.rs::run_all|81|83||[(\"is_async\", \"false\"), (\"return_type\", \"bool\")]",
         "CallSite|check|src/lib.rs::run_all::call@82:4#1548-1558|82|82||[(\"callee_name\", \"check\"), (\"caller_qn\", \"src/lib.rs::run_all\"), (\"lsp_col\", \"4\")]",
-        "CallSite|arg|src/lib.rs::run_all::call@82:10#1554-1557|82|82||[(\"callee_name\", \"arg\"), (\"caller_qn\", \"src/lib.rs::run_all\"), (\"lsp_col\", \"10\")]",
         "Module|helpers|src/lib.rs::helpers|85|103|pub(super)|[]",
         "Import|super::Config|src/lib.rs::helpers::super::Config|86|86||[(\"path\", \"super::Config\"), (\"alias\", \"\"), (\"is_glob\", \"false\")]",
         "Constant|LIMIT|src/lib.rs::helpers::LIMIT|88|88|pub|[(\"type_annotation\", \"u8\")]",
@@ -357,11 +358,6 @@ fn expected_refs_part3() -> Vec<(&'static str, &'static str, &'static str)> {
             "src/lib.rs::Config::handle",
             "src/lib.rs::Config::handle::call@67:16#1321-1329",
         ),
-        (
-            "Defines",
-            "src/lib.rs::Config::handle",
-            "src/lib.rs::Config::handle::call@67:26#1331-1336",
-        ),
     ]
 }
 
@@ -371,11 +367,6 @@ fn expected_refs_part4() -> Vec<(&'static str, &'static str, &'static str)> {
             "Defines",
             "src/lib.rs::Config::handle",
             "src/lib.rs::Config::handle::call@66:8#1278-1303",
-        ),
-        (
-            "Defines",
-            "src/lib.rs::Config::handle",
-            "src/lib.rs::Config::handle::call@66:27#1297-1302",
         ),
         (
             "Defines",
@@ -408,11 +399,6 @@ fn expected_refs_part5() -> Vec<(&'static str, &'static str, &'static str)> {
             "Defines",
             "src/lib.rs::run_all",
             "src/lib.rs::run_all::call@82:4#1548-1558",
-        ),
-        (
-            "Defines",
-            "src/lib.rs::run_all",
-            "src/lib.rs::run_all::call@82:10#1554-1557",
         ),
         ("Defines", "src/lib.rs", "src/lib.rs::helpers"),
         (
