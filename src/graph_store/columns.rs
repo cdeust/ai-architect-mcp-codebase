@@ -139,8 +139,9 @@ pub(crate) const COLS_CALL_SITE: ColTypes = &[
     ("col", LogicalType::Int64),
     ("is_resolved", LogicalType::Bool),
     ("language", LogicalType::String),
-    // Issue #284 (lot 5) — must mirror the NODE_CALL_SITE DDL (ddl.rs).
+    // Both must mirror the NODE_CALL_SITE DDL (ddl.rs), in its order.
     ("unresolved_reason", LogicalType::String),
+    ("receiver_hint", LogicalType::String),
 ];
 pub(crate) const COLS_COMMUNITY: ColTypes = &[
     ("id", LogicalType::String),

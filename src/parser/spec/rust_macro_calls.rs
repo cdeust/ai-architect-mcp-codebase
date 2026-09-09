@@ -204,6 +204,12 @@ fn scan_token_tree(
 /// postcondition: the name is a CONTIGUOUS slice of `source` ending on the
 /// method identifier, which `lsp_resolver::sites::lsp_position` relies on to
 /// aim at the right column. source: ADR-9836.
+///
+/// `receiver` is ALREADY the isolated receiver `identifier` node (this
+/// scan's own match, not a `field_expression`-wrapped one), so it is exactly
+/// the node shape `rust_receiver::receiver_hint`'s `identifier` arm expects
+/// — issue #283 palier 3 (lot 6) reuses it directly rather than re-deriving
+/// it from the reconstructed call's (nonexistent) `call_expression`.
 fn push_reconstructed(
     source: &str,
     receiver: Node,
@@ -215,10 +221,12 @@ fn push_reconstructed(
     if callee.is_empty() {
         return;
     }
+    let hint = super::rust_receiver::receiver_hint(source, receiver);
     out.push(RustConventions::call_site_spanning(
         &callee,
         receiver,
         method.end_byte() as u64,
         caller_qn,
+        hint,
     ));
 }

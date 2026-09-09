@@ -1,5 +1,8 @@
 // rust_receiver_static_resolution — end-to-end regression for issue #283
-// lot 4: static binding of Rust `self.<m>` / `Self::<m>` receiver calls.
+// lot 4: static binding of Rust `self.<m>` / `Self::<m>` receiver calls
+// (paliers 1-2). Palier 3 (local receivers, lot 6) has its own integration
+// suite, `tests/rust_local_receiver_static_resolution.rs` — kept separate so
+// this file stays under the §4.1 500-line cap rather than growing past it.
 //
 // Drives the REAL indexer + resolver pipeline (no LSP) to prove:
 //   1. `self.<m>` on a Method caller binds to the enclosing impl's method

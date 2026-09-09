@@ -38,6 +38,20 @@ pub enum Evidence {
     /// scope at the call site, and exactly one candidate's qualified name
     /// has that import path as a suffix.
     ImportMatch,
+    /// A Rust local-variable receiver (`s.<m>`, `s` NOT `self`/`Self`)
+    /// bound EXACTLY ONCE in the caller's own scope by a typed parameter or
+    /// `let` — the parser's `receiver_hint` (issue #283 palier 3, lot 6) —
+    /// resolved against exactly one `idx.by_name[m]` candidate whose parent
+    /// type matches the hint (same-file-preferred when 2+ match). Weaker
+    /// than `ReceiverBound` (that tier additionally knows the caller IS an
+    /// instance of the receiver type, via its own enclosing `impl`; this
+    /// tier only knows a local variable's DECLARED type, one syntactic hop
+    /// further from the call). Produced only by
+    /// `resolver::receiver::resolve_local_receiver_bound`.
+    /// source: tasks/plan-issues-282-283-284.md §2.2/§9-3 (issue #283, lot
+    /// 6). source: ADR-<pending> carries the rationale (coordinator note
+    /// 2026-09-09: wiki_adr unavailable this session, content in PR body).
+    ReceiverLocalBinding,
     /// Exactly one candidate's qualified name is defined in the caller's
     /// own file.
     SameFileUnique,
@@ -57,6 +71,7 @@ pub fn confidence_for(evidence: Evidence) -> f64 {
         Evidence::UniqueGlobal => 0.95,
         Evidence::ReceiverBound => 0.93,
         Evidence::ImportMatch => 0.9,
+        Evidence::ReceiverLocalBinding => 0.87,
         Evidence::SameFileUnique => 0.85,
         Evidence::PackageProximity => 0.7,
     }
@@ -146,6 +161,7 @@ pub fn resolution_label(evidence: Evidence) -> &'static str {
         Evidence::UniqueGlobal => "unique-match",
         Evidence::ReceiverBound => "receiver-type",
         Evidence::ImportMatch => "import-scope-lookup",
+        Evidence::ReceiverLocalBinding => "receiver-local-binding",
         Evidence::SameFileUnique => "same-file-unique",
         Evidence::PackageProximity => "package-proximity",
     }
@@ -303,6 +319,7 @@ mod tests {
             Evidence::UniqueGlobal,
             Evidence::ReceiverBound,
             Evidence::ImportMatch,
+            Evidence::ReceiverLocalBinding,
             Evidence::SameFileUnique,
             Evidence::PackageProximity,
         ];

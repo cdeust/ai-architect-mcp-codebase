@@ -18,8 +18,15 @@ pub(super) fn resolve_calls(
     file_imports: &HashMap<String, Vec<String>>,
     buf: &mut EdgeBuffer,
 ) -> PhaseResult {
-    let qr =
-        store.execute_query("MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.language")?;
+    // source: tasks/plan-issues-282-283-284.md §2.3 (lot 6, issue #283
+    // palier 3) — a graph indexed by an older build has no such column; the
+    // DEFAULT backfills existing rows to "" (rust_local_receiver_gate reads
+    // that as "no hint"), same precedent as `lsp_resolver/sites.rs:113`'s
+    // `is_resolved` column.
+    store.ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
+    let qr = store.execute_query(
+        "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.language, cs.receiver_hint",
+    )?;
     let mut resolved = 0u64;
     let mut total = 0u64;
     let mut unresolved = Vec::new();
@@ -27,7 +34,7 @@ pub(super) fn resolve_calls(
     let mut resolved_ids: Vec<String> = Vec::new();
 
     for row in &qr.rows {
-        if row.len() < 3 {
+        if row.len() < 4 {
             continue;
         }
         let callee = &row[1];
@@ -50,6 +57,7 @@ pub(super) fn resolve_calls(
             cs_id: &row[0],
             callee,
             language: &row[2],
+            receiver_hint: &row[3],
         };
         if resolve_one_call_site(&graph, buf, &row_input, &mut tally) {
             resolved_ids.push(row[0].clone());
@@ -90,6 +98,7 @@ fn resolve_one_call_site(
         callee: row.callee,
         caller_qn: &caller_qn,
         caller_label: &caller_label,
+        receiver_hint: row.receiver_hint,
     };
     let ctx = ResolveContext {
         idx: graph.idx,
@@ -146,6 +155,8 @@ struct CallSite<'a> {
     callee: &'a str,
     caller_qn: &'a str,
     caller_label: &'a str,
+    /// The parser-attached issue #283 palier 3 (lot 6) hint; "" means none.
+    receiver_hint: &'a str,
 }
 
 /// Read-only lookup context shared by one `resolve_single_call` invocation
@@ -172,6 +183,8 @@ struct RowInput<'a> {
     cs_id: &'a str,
     callee: &'a str,
     language: &'a str,
+    /// The parser-attached issue #283 palier 3 (lot 6) hint; "" means none.
+    receiver_hint: &'a str,
 }
 
 /// A resolved callee plus the evidence/confidence the policy attached to it.
@@ -261,6 +274,43 @@ fn rust_receiver_gate(
     receiver::resolve_receiver_bound(ctx.idx, &form, receiver::impl_qn_of(site.caller_qn))
 }
 
+/// Rust `<local>.<m>` on ANY caller (not gated to `Method`, unlike the
+/// `self`/`Self` gate above — a free function's local variable qualifies
+/// exactly as well as a method's): resolved against the parser-attached
+/// `CallSite.receiver_hint` BEFORE `resolve_single_call`'s by-name lookup,
+/// which would otherwise try (and always fail) to find a symbol literally
+/// named "<local>.<m>" — see receiver.rs's module doc and issue #283 palier
+/// 3 (lot 6).
+///
+/// precondition: `site.callee`/`site.receiver_hint` come from the same
+/// `CallSite` row `resolve_single_call` was called with; `file_id` is the
+/// caller's own file id.
+/// postcondition: `None` when the gate does not apply (non-Rust caller,
+/// callee isn't `<ident>.<m>`-shaped, or `receiver_hint` is empty — no hint
+/// attached, meaning the parser found no once-bound-and-typed local) — the
+/// caller must fall through to the pre-existing by-name path. `Some(_)` is a
+/// final answer for a hinted local receiver and is NEVER a bare-name-lookup
+/// fallback, mirroring `rust_receiver_gate`'s zero-false-callers discipline.
+fn rust_local_receiver_gate(
+    ctx: &ResolveContext,
+    site: &CallSite,
+    file_id: &str,
+) -> Option<PolicyResolution<SymbolEntry>> {
+    if ctx.provider.language() != "rust" || site.receiver_hint.is_empty() {
+        return None;
+    }
+    let form = receiver::classify(site.callee);
+    let receiver::ReceiverForm::Local { m, .. } = form else {
+        return None;
+    };
+    Some(receiver::resolve_local_receiver_bound(
+        ctx.idx,
+        site.receiver_hint,
+        &m,
+        file_id,
+    ))
+}
+
 /// Resolves one callee reference via the shared ambiguity policy (issue
 /// #30), through `call_evidence::resolve_two_pass` (issue #29). Both the
 /// qualified/import-matched path and the unqualified path build the
@@ -294,11 +344,14 @@ fn rust_receiver_gate(
 /// value-receiver, which the parser strips back to a bare name before it
 /// reaches here); `file_id` is the caller's file path; `site.caller_qn`/
 /// `site.caller_label` identify the calling symbol (used only by the Rust
-/// `self`/`Self` receiver gate below).
+/// `self`/`Self` receiver gate below); `site.receiver_hint` is the
+/// parser-attached issue #283 palier 3 hint (used only by the local-receiver
+/// gate below).
 /// postcondition: the returned `Resolution` depends only on the candidate
 /// set and the evidence context — never directly on whether the callee was
-/// spelled qualified or unqualified — EXCEPT for the Rust receiver gate,
-/// which is itself evidence (the callee's own receiver spelling), not a
+/// spelled qualified or unqualified — EXCEPT for the two Rust receiver
+/// gates, each of which is itself evidence (the callee's own receiver
+/// spelling, or the parser's derived local-binding type), not a
 /// spelling-dependent shortcut around the policy.
 fn resolve_single_call(
     ctx: &ResolveContext,
@@ -307,6 +360,9 @@ fn resolve_single_call(
 ) -> PolicyResolution<SymbolEntry> {
     let callee = site.callee;
     if let Some(res) = rust_receiver_gate(ctx, site) {
+        return res;
+    }
+    if let Some(res) = rust_local_receiver_gate(ctx, site, file_id) {
         return res;
     }
 

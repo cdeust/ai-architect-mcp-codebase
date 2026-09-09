@@ -87,9 +87,14 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
              start_line INT64, end_line INT64, is_resolved BOOLEAN, language STRING"),
         // unresolved_reason: issue #284 (lot 5) — '' means "not attributed";
         // see graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS.
+        // receiver_hint: issue #283 (lot 6, palier 3) — the simple-local-receiver
+        // type the Rust parser derived, empty when none, read by the resolver's
+        // palier-3 gate after paliers 1 and 2 have declined the callee.
+        // The two are independent: a site can carry either, both, or neither.
         (NODE_CALL_SITE,
             "id STRING, callee_name STRING, line INT64, col INT64, \
-             is_resolved BOOLEAN, language STRING, unresolved_reason STRING"),
+             is_resolved BOOLEAN, language STRING, unresolved_reason STRING, \
+             receiver_hint STRING"),
         // 3c Community + Process — source: stages/stage-3c.md §4.1
         (NODE_COMMUNITY,
             "id STRING, name STRING, algorithm STRING, \

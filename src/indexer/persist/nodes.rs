@@ -327,6 +327,13 @@ fn append_callsite_properties(props: &mut Vec<(String, String)>, node: &parser::
     // rows with it too). The LSP pass is the only writer that ever sets this
     // to a non-empty value (`graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS`).
     props.push(("unresolved_reason".to_string(), cypher_str("")));
+    // Issue #283 (lot 6, palier 3): empty when the Rust spec found no
+    // single-typed local receiver, and for any non-Rust CallSite, which never
+    // sets the property; the palier-3 gate treats "" as "no hint".
+    props.push((
+        "receiver_hint".to_string(),
+        cypher_str(&find_property(node, "receiver_hint")),
+    ));
 }
 
 // Schema awareness — source: graph_store.rs node_table_ddl().
