@@ -164,6 +164,10 @@ fn impact_response(
     out["next_steps"] = impact_next_steps(&impact, &target.key);
 
     attach_foreign_callers(&mut out, arguments, graph_path, &target.key);
+    // `exact` is a completeness claim, and every other surface of this server
+    // disclaims completeness. It must rest on a positive coverage signal rather
+    // than on the absence of a negative one. source: ADR-9839.
+    super::coverage_evidence::require_coverage_evidence(&mut out, graph_path);
     out
 }
 
