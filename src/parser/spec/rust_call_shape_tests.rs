@@ -136,3 +136,43 @@ fn a_function_passed_by_value_is_still_a_call_site() {
         "the #87 by-value reference was dropped; got {sites:?}"
     );
 }
+
+/// A destructuring `let` binds every name in its pattern, not only a simple
+/// one. Without this the tuple names stay speculative call sites and collide
+/// with any function sharing their name.
+#[test]
+fn a_destructured_let_binds_every_name_in_its_pattern() {
+    let sites = call_sites("fn probe() {\n    let (first, second) = pair();\n    consume(first, second);\n}\n");
+    for name in ["first", "second"] {
+        assert!(
+            !sites.iter().any(|s| s == name),
+            "destructured binding `{name}` emitted as a call site; got {sites:?}"
+        );
+    }
+}
+
+/// The same for a struct pattern in PARAMETER position, which binds its field
+/// names into the function scope.
+#[test]
+fn a_struct_pattern_parameter_binds_its_field_names() {
+    let sites = call_sites("fn probe(Point { x, y }: Point) {\n    consume(x, y);\n}\n");
+    for name in ["x", "y"] {
+        assert!(
+            !sites.iter().any(|s| s == name),
+            "pattern-bound field `{name}` emitted as a call site; got {sites:?}"
+        );
+    }
+}
+
+/// A module-level constant initializer is not scanned for calls at all, so the
+/// binding question never arises there. Measured rather than assumed: the
+/// fixture below yields an empty set, not a call site for `compute`. Pinned
+/// because it is the boundary of what the speculative scan can reach.
+#[test]
+fn a_module_level_initializer_yields_no_call_sites() {
+    let sites = call_sites("const N: usize = compute(SEED);\n");
+    assert!(
+        sites.is_empty(),
+        "module-level initializers are outside the call walk; got {sites:?}"
+    );
+}

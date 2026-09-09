@@ -21,9 +21,11 @@ const BINDING_KINDS: [&str; 2] = ["parameter", "let_declaration"];
 /// The `pattern` field name shared by both binding kinds.
 const PATTERN_FIELD: &str = "pattern";
 
-/// The tree-sitter-rust leaf kind for a bare name, matching the constant the
-/// macro scan already relies on.
-const IDENTIFIER_KIND: &str = "identifier";
+/// Leaf kinds that NAME a binding inside a pattern. A struct pattern's
+/// shorthand field (`Point { x, y }`) is its own kind, not an `identifier`,
+/// so collecting only the latter silently misses it.
+/// source: tree-sitter-rust 0.24.2 src/node-types.json.
+const BINDING_LEAF_KINDS: [&str; 2] = ["identifier", "shorthand_field_identifier"];
 
 /// Every name bound by the function or closure enclosing `call_node`: its
 /// parameters and its `let` declarations.
@@ -69,7 +71,7 @@ fn enclosing_scope(call_node: Node) -> Option<Node> {
 fn collect_identifiers(source: &str, pattern: Node, out: &mut HashSet<String>) {
     let mut stack = vec![pattern];
     while let Some(node) = stack.pop() {
-        if node.kind() == IDENTIFIER_KIND {
+        if BINDING_LEAF_KINDS.contains(&node.kind()) {
             let text = node_text(source, node);
             if !text.is_empty() {
                 out.insert(text);

@@ -222,6 +222,18 @@ impl MyTrait for S { fn do_it(&self) {} }
     assert!(method.qualified_name.contains("S"));
 }
 
+/// A trait carrying a bodiless async requirement, an async defaulted method
+/// whose body calls out, and a non-async control.
+const ASYNC_TRAIT: &str = r#"
+pub trait Flusher {
+    async fn flush(&self);
+    async fn drain(&self) {
+        cleanup();
+    }
+    fn plain(&self) {}
+}
+"#;
+
 /// The trait-requirement `is_async` split: a bodiless requirement is reported
 /// NON-async unconditionally, while a defaulted `fn` has its modifiers read.
 ///
@@ -246,18 +258,6 @@ impl MyTrait for S { fn do_it(&self) {} }
 ///   - `drain` is an `async` DEFAULTED fn — the original reports `true`; the
 ///     mutant would report `false`.
 ///   - `plain` is a non-async defaulted fn — `false` either way, the control.
-/// A trait carrying a bodiless async requirement, an async defaulted method
-/// whose body calls out, and a non-async control.
-const ASYNC_TRAIT: &str = r#"
-pub trait Flusher {
-    async fn flush(&self);
-    async fn drain(&self) {
-        cleanup();
-    }
-    fn plain(&self) {}
-}
-"#;
-
 #[test]
 fn rust_trait_requirement_async_flag_splits_signature_from_default() {
     let result = parse_file(ASYNC_TRAIT, "t.rs", Language::Rust).expect("parse");
