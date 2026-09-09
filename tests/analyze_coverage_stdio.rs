@@ -150,6 +150,50 @@ fn analyze_persists_and_refreshes_coverage_over_stdio() {
 }
 
 #[test]
+fn analyze_flags_a_kani_harness_outside_cargo_targets_in_missed() {
+    // Issue #284: a file the walker indexes but that sits outside every
+    // compiled Cargo target (a Kani proof harness) must show up in
+    // query_graph(graph="missed").coverage.outside_build_targets — the
+    // regression this repo measured on DYResearch/dy-wcet
+    // (tasks/plan-issues-282-283-284.md §3.1).
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::create_dir_all(repo.join("kani")).unwrap();
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("src/lib.rs"), "pub fn lib_fn() {}\n").unwrap();
+    std::fs::write(
+        repo.join("kani/h.rs"),
+        "#[kani::proof]\nfn harness() {\n    let _ = lib_fn();\n}\n",
+    )
+    .unwrap();
+
+    let mut server = Server::spawn();
+    let response = analyze(&mut server, &repo, &out, false);
+    assert_eq!(response["status"], "ok", "{response}");
+    assert_eq!(
+        response["coverage"]["outside_build_targets"]["count"], 1,
+        "{response}"
+    );
+    assert_eq!(
+        response["coverage"]["outside_build_targets"]["files"],
+        json!(["kani/h.rs"]),
+        "{response}"
+    );
+
+    let missed_response = missed(&mut server, &out);
+    assert_eq!(
+        missed_response["coverage"], response["coverage"],
+        "{missed_response}"
+    );
+}
+
+#[test]
 fn analyze_surfaces_a_coverage_save_failure_over_stdio() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let repo = tmp.path().join("repo");

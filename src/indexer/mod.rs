@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 mod batch;
+pub mod cargo_targets;
 pub mod coverage;
 mod iac;
 mod incremental;
@@ -257,6 +258,14 @@ pub fn index_codebase_with_language(
     // graph is already complete.
     record_iac_gaps(&mut collector, &store, codebase_path, &source_files);
 
+    // Cargo-target attribution pass (issue #284): flags every indexed `.rs`
+    // file that sits outside every compiled Cargo target (a Kani proof
+    // harness, a `fuzz/` dir excluded from the workspace, …). Runs last so a
+    // stronger existing gap (parse_partial/skipped/quarantined, including one
+    // the IaC pass just added) is never downgraded — `record_outside_targets`
+    // is `or_insert`, see `coverage.rs`.
+    record_outside_target_files(&mut collector, codebase_path, &source_files);
+
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -293,6 +302,43 @@ fn record_iac_gaps(
     match iac::run_iac_pass(store, codebase_path, source_files) {
         Ok(gaps) => fold_iac_gaps(collector, gaps),
         Err(e) => eprintln!("indexer: IaC pass skipped: {e}"),
+    }
+}
+
+/// Flags each indexed `.rs` file that sits outside every compiled Cargo
+/// target (issue #284): a proof harness under `kani/`, a `fuzz/` directory
+/// excluded from the workspace, or any directory Cargo's target discovery
+/// does not walk. Runs once per full index, and only when the codebase has a
+/// root `Cargo.toml` AND at least one `.rs` file was walked — every other
+/// corpus (Python/TypeScript-only, or a Rust corpus with no manifest) pays
+/// nothing (no subprocess spawned). `TargetMap::Unknown` (no `Cargo.toml` /
+/// no `cargo` / a failed `cargo metadata`, including the #282
+/// "workspace failed to load" case) attributes NOTHING — absence of the map
+/// is never evidence a file is uncompiled.
+fn record_outside_target_files(
+    collector: &mut CoverageCollector,
+    codebase_path: &Path,
+    source_files: &[PathBuf],
+) {
+    let has_rust_file = source_files
+        .iter()
+        .any(|f| f.extension().and_then(|e| e.to_str()) == Some("rs"));
+    if !has_rust_file || !codebase_path.join("Cargo.toml").is_file() {
+        return;
+    }
+    let map = cargo_targets::discover(codebase_path);
+    if matches!(map, cargo_targets::TargetMap::Unknown) {
+        return;
+    }
+    for file_path in source_files {
+        if file_path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let rel = relative_path(codebase_path, file_path);
+        if map.is_outside_targets(&rel) {
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            collector.record_outside_targets(&rel_str, cargo_targets::OUTSIDE_TARGETS_DETAIL);
+        }
     }
 }
 

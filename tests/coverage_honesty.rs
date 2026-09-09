@@ -71,7 +71,11 @@ fn corrupt_file_is_reported_and_the_rest_indexes_cleanly() {
     );
     // The coverage sidecar was written and is loadable.
     let loaded = coverage::load(&coverage::coverage_path(&out)).expect("sidecar loads");
-    assert_eq!(loaded.counts().0, 1, "exactly one parse_incomplete file");
+    assert_eq!(
+        loaded.counts().parse_partial,
+        1,
+        "exactly one parse_incomplete file"
+    );
 }
 
 #[test]
@@ -164,5 +168,101 @@ fn incremental_clears_a_parse_incomplete_flag_once_fixed() {
     assert!(
         !q.rows.is_empty(),
         "the fixed file must now be fully indexed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #284 — outside-build-targets coverage gap
+// ---------------------------------------------------------------------------
+
+/// A minimal single-crate manifest with one declared target (`src/lib.rs`).
+const FIXTURE_CARGO_TOML: &str =
+    "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+const FIXTURE_LIB_RS: &str = "pub fn lib_fn() {}\n";
+const FIXTURE_KANI_RS: &str = "#[kani::proof]\nfn harness() {\n    let _ = lib_fn();\n}\n";
+
+#[test]
+fn kani_harness_outside_cargo_targets_is_flagged_and_lib_rs_is_not() {
+    let tmp = tempfile::Builder::new()
+        .prefix("coverage_outside_targets_")
+        .tempdir()
+        .expect("temp dir");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join("src")).expect("mk src");
+    fs::create_dir_all(repo.join("kani")).expect("mk kani");
+    fs::write(repo.join("Cargo.toml"), FIXTURE_CARGO_TOML).expect("write manifest");
+    fs::write(repo.join("src/lib.rs"), FIXTURE_LIB_RS).expect("write lib.rs");
+    fs::write(repo.join("kani/h.rs"), FIXTURE_KANI_RS).expect("write kani harness");
+
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).expect("mk out");
+    let result = full_index(&repo, &out);
+
+    let flagged = result
+        .coverage
+        .files
+        .get("kani/h.rs")
+        .expect("kani/h.rs must be reported as outside every compiled Cargo target");
+    assert_eq!(flagged.kind, CoverageKind::OutsideBuildTargets);
+    assert!(
+        !result.coverage.files.contains_key("src/lib.rs"),
+        "src/lib.rs IS a compiled target and must not be flagged"
+    );
+}
+
+#[test]
+fn adding_a_test_target_for_the_harness_clears_the_flag_on_incremental_reindex() {
+    let tmp = tempfile::Builder::new()
+        .prefix("coverage_outside_targets_clears_")
+        .tempdir()
+        .expect("temp dir");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(repo.join("src")).expect("mk src");
+    fs::create_dir_all(repo.join("kani")).expect("mk kani");
+    fs::write(repo.join("Cargo.toml"), FIXTURE_CARGO_TOML).expect("write manifest");
+    fs::write(repo.join("src/lib.rs"), FIXTURE_LIB_RS).expect("write lib.rs");
+    fs::write(repo.join("kani/h.rs"), FIXTURE_KANI_RS).expect("write kani harness");
+
+    let out = tmp.path().join("out");
+    fs::create_dir_all(&out).expect("mk out");
+    let graph = out.join("graph");
+    let manifest_path = manifest::manifest_path(&out);
+    let baseline = full_index(&repo, &out);
+    indexer::write_full_manifest(&repo, &manifest_path, &IndexOptions::default())
+        .expect("manifest");
+    assert!(
+        baseline.coverage.files.contains_key("kani/h.rs"),
+        "baseline: kani/h.rs starts flagged outside targets"
+    );
+
+    // No `.rs` file changes — only Cargo.toml declares the harness as a
+    // compiled `[[test]]` target now. The manifest tracks `.rs` files only, so
+    // `kani/h.rs` classifies as unchanged; the flag must still clear, proving
+    // it is recomputed every pass rather than carried forward (issue #284's
+    // "the map can change with zero .rs files touched" rule).
+    fs::write(
+        repo.join("Cargo.toml"),
+        format!(
+            "{FIXTURE_CARGO_TOML}\n[[test]]\nname = \"h\"\npath = \"kani/h.rs\"\nharness = false\n"
+        ),
+    )
+    .expect("declare the harness as a test target");
+
+    let prior = manifest::load(&manifest_path).expect("load manifest");
+    indexer::index_incremental(
+        &repo,
+        &graph,
+        &manifest_path,
+        &IndexOptions::default(),
+        &prior,
+    )
+    .expect("incremental");
+
+    let cov = coverage::load(&coverage::coverage_path(&out)).expect("coverage sidecar");
+    assert!(
+        !cov.files.contains_key("kani/h.rs"),
+        "kani/h.rs must clear its outside-build-targets flag once Cargo.toml \
+         declares it as a compiled target, even though the .rs file itself \
+         never changed"
     );
 }

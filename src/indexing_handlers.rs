@@ -310,54 +310,90 @@ pub(crate) const COVERAGE_CAVEAT: &str = "Best-effort signal, NOT a completeness
     subtly wrong grammar can still parse 'clean'). 'parse_incomplete' files WERE \
     indexed but constructs inside the flagged line ranges MAY be missing from the \
     graph — prefer grep there. 'skipped'/'quarantined' files are NOT in the graph \
-    at all. source: DeusData/codebase-memory-mcp coverage wording.";
+    at all. 'outside_build_targets' files (issue #284) WERE indexed — declarations \
+    are in the graph — but sit outside every compiled Cargo target, so calls out of \
+    them cannot be resolved by the language server. \
+    source: DeusData/codebase-memory-mcp coverage wording.";
 
-/// Renders a `CoverageReport` into an honest, budget-bounded JSON block: exact
-/// counts per kind, capped example lists (parse_incomplete carries error ranges;
-/// skipped/quarantined carry reasons), and the completeness caveat.
-pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Value {
+/// The capped example-file lists `coverage_summary` renders, one per kind —
+/// split out of `coverage_summary` (Fowler "Extract Function", §4.2: adding
+/// the `outside_build_targets` bucket, issue #284, pushed the single-function
+/// version past the 50-line cap) so the JSON-shaping function stays a plain
+/// assembly of already-computed pieces.
+struct CoverageFileBuckets {
+    partial_files: Vec<Value>,
+    skipped_files: Vec<Value>,
+    quarantined_files: Vec<Value>,
+    outside_build_target_files: Vec<Value>,
+    user_excluded_count: u64,
+}
+
+/// Walks `report.files` once, sorting each entry into its kind's
+/// budget-capped example list (issue #249's `user_excluded_count` is tallied
+/// in the same pass since it is itself a `Skipped`-kind sub-count).
+fn bucket_coverage_files(report: &indexer::coverage::CoverageReport) -> CoverageFileBuckets {
     use indexer::coverage::CoverageKind;
-    let (partial, skipped, quarantined) = report.counts();
-    let mut partial_files = Vec::new();
-    let mut skipped_files = Vec::new();
-    let mut quarantined_files = Vec::new();
-    // Issue #249: directories pruned by an explicit `exclude_dirs` match carry
-    // a distinct count in the receipt, nested under `skipped` (they share its
-    // "not indexed at all" kind) rather than a bespoke top-level bucket — the
-    // `detail` field already carries the reason string per-file.
-    let mut user_excluded_count: u64 = 0;
+    let mut b = CoverageFileBuckets {
+        partial_files: Vec::new(),
+        skipped_files: Vec::new(),
+        quarantined_files: Vec::new(),
+        outside_build_target_files: Vec::new(),
+        user_excluded_count: 0,
+    };
     for (rel, cov) in &report.files {
         match cov.kind {
             CoverageKind::ParsePartial => {
-                if partial_files.len() < COVERAGE_LIST_CAP {
-                    partial_files.push(json!({"path": rel, "error_ranges": cov.error_ranges}));
+                if b.partial_files.len() < COVERAGE_LIST_CAP {
+                    b.partial_files
+                        .push(json!({"path": rel, "error_ranges": cov.error_ranges}));
                 }
             }
             CoverageKind::Skipped => {
                 if cov.detail == "user_excluded" {
-                    user_excluded_count += 1;
+                    b.user_excluded_count += 1;
                 }
-                if skipped_files.len() < COVERAGE_LIST_CAP {
-                    skipped_files.push(json!({"path": rel, "reason": cov.detail}));
+                if b.skipped_files.len() < COVERAGE_LIST_CAP {
+                    b.skipped_files
+                        .push(json!({"path": rel, "reason": cov.detail}));
                 }
             }
             CoverageKind::Quarantined => {
-                if quarantined_files.len() < COVERAGE_LIST_CAP {
-                    quarantined_files.push(json!({"path": rel, "reason": cov.detail}));
+                if b.quarantined_files.len() < COVERAGE_LIST_CAP {
+                    b.quarantined_files
+                        .push(json!({"path": rel, "reason": cov.detail}));
+                }
+            }
+            CoverageKind::OutsideBuildTargets => {
+                if b.outside_build_target_files.len() < COVERAGE_LIST_CAP {
+                    b.outside_build_target_files.push(json!(rel));
                 }
             }
         }
     }
+    b
+}
+
+/// Renders a `CoverageReport` into an honest, budget-bounded JSON block: exact
+/// counts per kind, capped example lists (parse_incomplete carries error ranges;
+/// skipped/quarantined/outside_build_targets carry reasons), and the
+/// completeness caveat.
+pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Value {
+    let counts = report.counts();
+    let b = bucket_coverage_files(report);
     json!({
         "index_mode": report.index_mode,
         "files_indexed": report.files_indexed,
-        "parse_incomplete": { "count": partial, "files": partial_files },
+        "parse_incomplete": { "count": counts.parse_partial, "files": b.partial_files },
         "skipped": {
-            "count": skipped,
-            "user_excluded_count": user_excluded_count,
-            "files": skipped_files
+            "count": counts.skipped,
+            "user_excluded_count": b.user_excluded_count,
+            "files": b.skipped_files
         },
-        "quarantined": { "count": quarantined, "files": quarantined_files },
+        "quarantined": { "count": counts.quarantined, "files": b.quarantined_files },
+        "outside_build_targets": {
+            "count": counts.outside_build_targets,
+            "files": b.outside_build_target_files
+        },
         "caveat": COVERAGE_CAVEAT,
     })
 }

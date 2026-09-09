@@ -2,7 +2,7 @@
 //
 // Layer: shared/persistence within the indexer. Records, per indexing run, which
 // files the indexer could NOT fully cover — so an agent never overtrusts the
-// graph. Three kinds of gap:
+// graph. Four kinds of gap:
 //   * ParsePartial — the file WAS indexed, but its parse tree had ERROR/MISSING
 //     regions (1-based line ranges); constructs inside those lines may be absent
 //     from the graph.
@@ -10,6 +10,22 @@
 //     parse timed out); its File node exists but carries no symbols.
 //   * Quarantined — the parser PANICKED on the file; the panic was isolated
 //     (caught) so it could not kill the index, and the file was left uncovered.
+//   * OutsideBuildTargets (issue #284) — the file WAS indexed (declarations are
+//     in the graph) but it is not part of any compiled Cargo target (a Kani
+//     proof harness, a `fuzz/` directory excluded from the workspace, a module
+//     gated behind a disabled feature the coarse directory-level check misses):
+//     calls out of it cannot be resolved by the language server, because
+//     rust-analyzer's crate graph never contains it. See `cargo_targets.rs`.
+//
+// Schema note (issue #284, arbitrage #5 — not bumping `COVERAGE_SCHEMA_VERSION`
+// for this addition): the change is purely additive (a new enum variant with a
+// snake_case serde tag), and `load()` already treats "schema I don't recognize"
+// as `None` via `serde_json::from_slice` failing on an unknown enum tag. An
+// OLDER binary reading a sidecar that carries `outside_build_targets` entries
+// therefore fails to deserialize the whole report and reports "coverage
+// unavailable" rather than mis-parsing it — which is the same honest failure
+// mode a version bump would produce, without forcing every consumer through a
+// migration for an addition nothing existing depended on.
 //
 // Storage decision (documented per the issue's "decide from what exists"):
 // coverage lives in a DEDICATED `index_coverage.json` sidecar beside the graph,
@@ -49,6 +65,10 @@ pub enum CoverageKind {
     Skipped,
     /// The parser panicked; isolated and left uncovered.
     Quarantined,
+    /// Indexed, but not part of any compiled Cargo target (issue #284):
+    /// declarations are in the graph, calls out of it cannot be resolved by
+    /// the language server.
+    OutsideBuildTargets,
 }
 
 /// One uncovered file's record.
@@ -85,20 +105,30 @@ impl CoverageReport {
         }
     }
 
-    /// Count of files by kind: (parse_partial, skipped, quarantined).
-    pub fn counts(&self) -> (u64, u64, u64) {
-        let mut partial = 0;
-        let mut skipped = 0;
-        let mut quarantined = 0;
+    /// Count of files by kind. A struct rather than a tuple — issue #284 added
+    /// a 4th kind, and a 4-tuple return type is where positional confusion
+    /// starts to cost more than a named field does.
+    pub fn counts(&self) -> CoverageCounts {
+        let mut counts = CoverageCounts::default();
         for c in self.files.values() {
             match c.kind {
-                CoverageKind::ParsePartial => partial += 1,
-                CoverageKind::Skipped => skipped += 1,
-                CoverageKind::Quarantined => quarantined += 1,
+                CoverageKind::ParsePartial => counts.parse_partial += 1,
+                CoverageKind::Skipped => counts.skipped += 1,
+                CoverageKind::Quarantined => counts.quarantined += 1,
+                CoverageKind::OutsideBuildTargets => counts.outside_build_targets += 1,
             }
         }
-        (partial, skipped, quarantined)
+        counts
     }
+}
+
+/// Per-kind file counts returned by `CoverageReport::counts`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CoverageCounts {
+    pub parse_partial: u64,
+    pub skipped: u64,
+    pub quarantined: u64,
+    pub outside_build_targets: u64,
 }
 
 /// The coverage sidecar path for a given tool `output_dir` (sibling of `graph/`).
@@ -182,6 +212,22 @@ impl CoverageCollector {
         );
     }
 
+    /// Records a file outside every compiled Cargo target (issue #284).
+    /// Deliberately `or_insert`, NOT an unconditional overwrite like the other
+    /// three `record_*` methods: this sidecar stores at most one gap per file,
+    /// and a file that is ALSO parse-incomplete/skipped/quarantined already
+    /// carries the stronger signal (its declarations may be missing outright,
+    /// which subsumes "declarations present but unresolved calls"). Called
+    /// after the main walk (`mod.rs`'s `record_outside_target_files`) and
+    /// after `record_iac_gaps`, so any prior record for the same file wins.
+    pub fn record_outside_targets(&mut self, rel: &str, detail: &str) {
+        self.files.entry(rel.to_string()).or_insert(FileCoverage {
+            kind: CoverageKind::OutsideBuildTargets,
+            detail: detail.to_string(),
+            error_ranges: Vec::new(),
+        });
+    }
+
     pub fn files_indexed(&self) -> u64 {
         self.files_indexed
     }
@@ -230,11 +276,28 @@ mod tests {
                 error_ranges: vec![],
             },
         );
+        report.files.insert(
+            "kani/h.rs".into(),
+            FileCoverage {
+                kind: CoverageKind::OutsideBuildTargets,
+                detail: "not in any Cargo target".into(),
+                error_ranges: vec![],
+            },
+        );
         save(&path, &report).expect("save");
 
         let loaded = load(&path).expect("load");
-        assert_eq!(loaded.files.len(), 3);
-        assert_eq!(loaded.counts(), (1, 1, 1));
+        assert_eq!(loaded.files.len(), 4);
+        let counts = loaded.counts();
+        assert_eq!(
+            (
+                counts.parse_partial,
+                counts.skipped,
+                counts.quarantined,
+                counts.outside_build_targets
+            ),
+            (1, 1, 1, 1)
+        );
         assert_eq!(loaded.files["src/a.rs"].error_ranges, vec![(3, 5)]);
         assert_eq!(loaded.files["src/big.rs"].kind, CoverageKind::Skipped);
     }
@@ -269,4 +332,21 @@ mod tests {
         assert_eq!(files["a.rs"].kind, CoverageKind::ParsePartial);
         assert_eq!(files["c.rs"].kind, CoverageKind::Quarantined);
     }
+
+    #[test]
+    fn record_outside_targets_never_overwrites_a_stronger_existing_gap() {
+        let mut c = CoverageCollector::default();
+        c.record_skipped("oversized_and_outside.rs", "oversized".into());
+        c.record_outside_targets("oversized_and_outside.rs", OUTSIDE_TARGETS_DETAIL_FOR_TEST);
+        c.record_outside_targets("kani/h.rs", OUTSIDE_TARGETS_DETAIL_FOR_TEST);
+        let files = c.into_files();
+        assert_eq!(
+            files["oversized_and_outside.rs"].kind,
+            CoverageKind::Skipped,
+            "a pre-existing skipped/quarantined/partial gap must win over outside-targets"
+        );
+        assert_eq!(files["kani/h.rs"].kind, CoverageKind::OutsideBuildTargets);
+    }
+
+    const OUTSIDE_TARGETS_DETAIL_FOR_TEST: &str = "not in any Cargo target (test fixture)";
 }

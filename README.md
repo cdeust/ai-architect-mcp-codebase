@@ -69,6 +69,16 @@ returns the same summary. Rust processes use explicit `#[test]` and
 These are source declarations, not evidence of execution or successful proof.
 ([Rust testing attributes](https://doc.rust-lang.org/reference/attributes/testing.html),
 [Kani proof attributes](https://model-checking.github.io/kani/reference/attributes.html).)
+For a Rust codebase, the coverage report also carries `outside_build_targets`
+(issue #284): `.rs` files the walker indexed — their declarations, including
+`#[kani::proof]` harnesses, are in the graph — that sit outside every
+compiled Cargo target per `cargo metadata --no-deps` (a proof harness under
+`kani/`, a `fuzz/` directory excluded from the workspace, …). Calls out of
+these files cannot be resolved by the language server, whose crate graph
+never contains them. The bucket is populated only when a root `Cargo.toml`
+is readable and `cargo metadata` succeeds; anything else (no manifest,
+`cargo` missing, or a workspace that fails to load) leaves it empty rather
+than guessing.
 Graphs created before entry metadata was stored require a full reindex:
 `analyze_codebase` rebuilds them, and `index_codebase` automatically falls back
 to a full index when its incremental compatibility check detects the old schema.
