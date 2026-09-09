@@ -249,16 +249,27 @@ fn test_get_impact_reports_exact_for_concrete_leaf() {
 // issue #283 (a) — get_impact MCP envelope carries the structured count
 // ---------------------------------------------------------------------------
 
-/// A receiver call (`self.response_of(...)`) is exactly the shape #283
-/// documents the static resolver as never binding: the parser extracts the
-/// `CallSite` naming `response_of`, but `resolve_single_call` cannot resolve
-/// a callee spelling containing `.`, so it stays unresolved. Pre-#283(a),
+/// A receiver call is exactly the shape #283 documents the static resolver
+/// as never binding: the parser extracts the `CallSite` naming
+/// `response_of`, but pre-#283(b1) `resolve_single_call` could not resolve
+/// any callee spelling containing `.`, so it stayed unresolved. Pre-#283(a),
 /// the `get_impact` MCP response for `response_of` showed `callers: []`
 /// with no way to tell that apart from a genuinely uncalled method. This
 /// test drives the real stdio wire (not the library struct — the other
 /// tests in this file already cover that) and pins that the envelope now
 /// carries `unresolved_callsites_naming_target` and a matching `next_steps`
 /// hint.
+///
+/// Issue #283 lot 4: `self.response_of(0)` from a `Method` caller inside
+/// `impl TaskSet` is now bound statically (`resolver::receiver`,
+/// `Evidence::ReceiverBound`), so it no longer reproduces the gap this test
+/// exists to pin. The caller was changed to a free function reaching
+/// `response_of` through an index-expression receiver
+/// (`sets[0].response_of(0)`), which `resolver::receiver::classify` still
+/// returns `ReceiverForm::None` for — unresolvable by any palier this repo
+/// implements today — so the fixture keeps reproducing the #283 gap the
+/// way `tests/lsp_resolve_receiver_calls.rs` and `tests/analyze_lsp_status.
+/// rs` fixtures were changed for the same reason.
 const RECEIVER_CALL_FIXTURE: &str = r#"
 pub struct TaskSet;
 
@@ -266,24 +277,24 @@ impl TaskSet {
     pub fn response_of(&self, i: i32) -> i32 {
         i
     }
+}
 
-    pub fn is_schedulable(&self) -> bool {
-        self.response_of(0) >= 0
-    }
+pub fn is_schedulable(sets: &[TaskSet]) -> bool {
+    sets[0].response_of(0) >= 0
 }
 "#;
 
 /// Confirms the fixture reproduces the documented gap (belt-and-braces: if
-/// a future resolver change starts binding `self.` receiver calls, this
-/// fails loudly instead of the envelope assertion below silently passing a
-/// count of 0 for the wrong reason).
+/// a future resolver change starts binding this fixture's receiver call
+/// too, this fails loudly instead of the envelope assertion below silently
+/// passing a count of 0 for the wrong reason).
 fn assert_fixture_reproduces_the_283_gap(store: &GraphStore) {
     let target = clustering::get_impact(store, "src/lib.rs::TaskSet::response_of")
         .expect("get_impact(response_of)");
     assert!(
         target.callers.is_empty(),
-        "fixture assumption violated: static resolver now binds self.response_of(); \
-         got callers {:?}",
+        "fixture assumption violated: static resolver now binds \
+         sets[0].response_of(0); got callers {:?}",
         target
             .callers
             .iter()
@@ -292,7 +303,7 @@ fn assert_fixture_reproduces_the_283_gap(store: &GraphStore) {
     );
     assert_eq!(
         target.unresolved_callsites_naming_target, 1,
-        "exactly one CallSite (self.response_of) names the target and stays unresolved"
+        "exactly one CallSite (sets[0].response_of) names the target and stays unresolved"
     );
 }
 
