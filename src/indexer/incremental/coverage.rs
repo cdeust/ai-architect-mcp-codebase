@@ -113,6 +113,7 @@ pub(super) fn save_incremental_coverage(
     current: &[Discovered],
     changes: &ChangeSet,
     reparsed_gaps: BTreeMap<String, FileCoverage>,
+    pruned_dirs: BTreeMap<String, String>,
     index_mode: &str,
 ) {
     let output_dir = match graph_dir.parent() {
@@ -140,6 +141,11 @@ pub(super) fn save_incremental_coverage(
         index_mode,
         current.len() as u64,
     );
+    // The prunes this pass observed, so the incremental sidecar names what the
+    // walk refused exactly as the full index does. Recomputed every pass rather
+    // than carried forward: the pruned set changes the moment a directory is
+    // added or removed. source: ADR-9841.
+    report.pruned_dirs = pruned_dirs;
     overlay_outside_targets(&mut report, codebase, current);
     if let Err(e) = coverage::save(&cov_path, &report) {
         eprintln!("[ap] coverage sidecar write failed: {e}");

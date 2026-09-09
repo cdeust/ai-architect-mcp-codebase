@@ -93,6 +93,14 @@ pub struct CoverageReport {
     pub files_indexed: u64,
     /// Sparse map: rel_path → gap. Only NOT-fully-covered files appear.
     pub files: BTreeMap<String, FileCoverage>,
+    /// Directories the BUILT-IN policy pruned, rel_path → reason. These are a
+    /// declared policy rather than a gap, so they are reported separately and
+    /// are NOT counted in `counts()`: a reader can see what the walk refused
+    /// to enter without `.git` and `target/` making every graph incomplete.
+    /// Before this existed a pruned tree left no trace at all.
+    /// source: ADR-9841.
+    #[serde(default)]
+    pub pruned_dirs: BTreeMap<String, String>,
 }
 
 impl CoverageReport {
@@ -102,6 +110,7 @@ impl CoverageReport {
             index_mode: index_mode.to_string(),
             files_indexed,
             files: BTreeMap::new(),
+            pruned_dirs: BTreeMap::new(),
         }
     }
 
@@ -167,6 +176,7 @@ pub fn save(path: &Path, report: &CoverageReport) -> Result<(), String> {
 pub struct CoverageCollector {
     files: BTreeMap<String, FileCoverage>,
     files_indexed: u64,
+    pruned_dirs: BTreeMap<String, String>,
 }
 
 impl CoverageCollector {
@@ -201,6 +211,12 @@ impl CoverageCollector {
     }
 
     /// Records a file quarantined after its parser panicked.
+    /// Records one directory pruned by the built-in policy. Directory-level,
+    /// not file-level: a pruned tree is one entry, not one per file under it.
+    pub fn record_pruned(&mut self, rel: &str, reason: &str) {
+        self.pruned_dirs.insert(rel.to_string(), reason.to_string());
+    }
+
     pub fn record_quarantined(&mut self, rel: &str, reason: String) {
         self.files.insert(
             rel.to_string(),
@@ -236,6 +252,11 @@ impl CoverageCollector {
     /// incremental merge to know which files were freshly classified).
     pub fn into_files(self) -> BTreeMap<String, FileCoverage> {
         self.files
+    }
+
+    /// The directories this pass pruned by built-in policy, rel_path → reason.
+    pub fn pruned_dirs(&self) -> &BTreeMap<String, String> {
+        &self.pruned_dirs
     }
 }
 

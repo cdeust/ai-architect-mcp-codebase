@@ -159,6 +159,13 @@ pub(super) struct WalkOutcome {
     /// because `read_dir` returned `PermissionDenied` — the walk continues
     /// past it instead of aborting (issue #249).
     pub unreadable_dirs: Vec<String>,
+    /// Every directory pruned by the BUILT-IN policy, with the reason, so an
+    /// exclusion the caller never asked for is still nameable. Without this a
+    /// pruned tree left no trace anywhere: not indexed, not flagged, not
+    /// counted, while the run reported `status: ok`.
+    /// source: ADR-9841, measured on this repo 2026-09-09 (270 tracked files
+    /// absent from the manifest, 10 gaps reported).
+    pub pruned_dirs: Vec<(String, String)>,
 }
 
 /// Recursively collects source files, skipping hidden dirs, target/, node_modules/.
@@ -180,11 +187,13 @@ pub(super) fn collect_source_files(root: &Path, opts: WalkOptions) -> Result<Wal
     let mut files = Vec::new();
     let mut excluded_dirs = Vec::new();
     let mut unreadable_dirs = Vec::new();
+    let mut pruned_dirs = Vec::new();
     let ctx = WalkContext { root, opts: &opts };
     let mut collectors = WalkCollectors {
         files: &mut files,
         excluded_dirs: &mut excluded_dirs,
         unreadable_dirs: &mut unreadable_dirs,
+        pruned_dirs: &mut pruned_dirs,
     };
     walk_dir_recursive(root, &ctx, &mut collectors, 0)?;
     if files.len() > super::MAX_FILES {
@@ -195,10 +204,12 @@ pub(super) fn collect_source_files(root: &Path, opts: WalkOptions) -> Result<Wal
         ));
     }
     files.sort();
+    pruned_dirs.sort();
     Ok(WalkOutcome {
         files,
         excluded_dirs,
         unreadable_dirs,
+        pruned_dirs,
     })
 }
 
@@ -217,6 +228,7 @@ struct WalkCollectors<'a> {
     files: &'a mut Vec<PathBuf>,
     excluded_dirs: &'a mut Vec<String>,
     unreadable_dirs: &'a mut Vec<String>,
+    pruned_dirs: &'a mut Vec<(String, String)>,
 }
 
 fn walk_dir_recursive(
@@ -270,7 +282,27 @@ fn visit_entry(
     let path = entry.path();
     let name = entry.file_name();
     let name_str = name.to_string_lossy();
+    // A directory carrying its own `.git` is a NESTED REPOSITORY: a submodule,
+    // a vendored clone, or a git worktree. Descending into one indexes another
+    // project's whole tree as if it were this one. This repository keeps its
+    // agent worktrees under `.claude/worktrees/`, twelve full copies of itself
+    // at the time of writing, so walking `.claude` without this guard would
+    // index the codebase thirteen times over. Checked before the name list so
+    // it holds whatever the directory is called. source: ADR-9841.
+    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) && path.join(".git").exists() {
+        collectors
+            .pruned_dirs
+            .push((dir_rel(ctx.root, &path), "nested_repository".to_string()));
+        return Ok(());
+    }
     if should_skip(&name_str, ctx.opts.dependency_scope) {
+        // Files are pruned by the same rule as directories (a dot-prefixed
+        // name), so both are recorded. Recording only directories left the
+        // dot-FILES invisible, which is the same defect one level down.
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        collectors
+            .pruned_dirs
+            .push((dir_rel(ctx.root, &path), prune_reason(&name_str, is_dir)));
         return Ok(());
     }
     // Use symlink_metadata (lstat) instead of metadata (stat) so symlinks are
@@ -380,108 +412,9 @@ fn dir_rel(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// Returns true for directories that should be skipped during walk.
-///
-/// Covers build / dependency / cache directories across the languages
-/// the indexer supports. source: empirical — without ``build`` and
-/// ``Pods`` excluded, an Android repo's ``app/build/intermediates/``
-/// alone produces tens of thousands of stat() calls and many hundred
-/// MB of *.dex / *.aar / *.jar files that the indexer rejects per-file
-/// after walking into them. Filtering at the directory level avoids
-/// the descent entirely.
-fn should_skip(name: &str, dependency_scope: DependencyScope) -> bool {
-    // `.git` is never source — its object store is large and binary — so it is
-    // skipped even in full-dependency mode. source: checkpoint 2026-07-04.
-    if name == ".git" {
-        return true;
-    }
-    // The tool's own artifact directory (issue #55 committed graph snapshot +
-    // sidecar) is generated data, never source. Skipping it in EVERY dependency
-    // scope keeps a full index and an artifact-bootstrap fill identical: the
-    // committed `graph.zst`/`file_manifest.json` never become File nodes, so the
-    // artifact's presence in the tree can't perturb graph parity (issue #62/#55).
-    // The pre-rename directory name is skipped too (issue #195) — a repo that
-    // has not yet had its artifact touched (so `artifact::migrate_legacy_dir`
-    // has not fired) must not have its stale snapshot walked as source.
-    if name == crate::artifact::ARTIFACT_DIR || name == crate::artifact::LEGACY_ARTIFACT_DIR {
-        return true;
-    }
-    // PublicApi/Full both descend into vendored/build/cache dirs so the graph
-    // covers node_modules, .venv, vendor, target, etc. They differ at the
-    // persistence filter (indexer::persist), not here.
-    if dependency_scope.descends_into_dependencies() {
-        return false;
-    }
-    // Other VCS dirs are filtered by ``starts_with('.')``; ``.git`` itself is
-    // handled explicitly above so it is excluded in full-dependency mode too.
-    name.starts_with('.') || DEPENDENCY_DIR_NAMES.contains(&name)
-}
-
-/// Build-output / fetched-dependency / cache directory names pruned by the
-/// default walk (`DependencyScope::None`); `PublicApi`/`Full` descend into
-/// them instead. Dot-prefixed entries are redundant with `should_skip`'s
-/// ``starts_with('.')`` filter and kept for documentation completeness.
-const DEPENDENCY_DIR_NAMES: &[&str] = &[
-    // Rust
-    "target",
-    // JS / TS / Node
-    "node_modules",
-    // Python
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".tox",
-    ".eggs",
-    // JVM / Android (Gradle / Maven / Eclipse / IntelliJ)
-    "build",
-    "out",
-    ".gradle",
-    ".idea",
-    // Apple (Xcode / SPM / CocoaPods / Carthage)
-    "Pods",
-    "DerivedData",
-    ".build",
-    "Carthage",
-    ".swiftpm",
-    // Go
-    "vendor",
-    // Elixir / Mix and Erlang / rebar3 — `deps` is the standard fetched-
-    // dependency directory for both build tools, and is also used in the
-    // wild as an ad hoc vendored-packages dir. source: measured
-    // 2026-08-06 — indexing the Cortex repo without this entry walked
-    // into its gitignored deps/ (1.1 GB vendored Python site-packages,
-    // including numpy C headers), flooding the log with duplicate-id
-    // warnings and timing out the Cortex->AP MCP client.
-    "deps",
-    // General build output
-    "dist",
-    "bin",
-    "obj",
-    // Test / coverage
-    "coverage",
-    ".nyc_output",
-];
-
-/// True when `file_path` lives under a directory that `should_skip` would
-/// prune in `DependencyScope::None` mode — i.e. it is a vendored/build
-/// dependency file, not a project file. Pure function of the path; reuses
-/// `should_skip` as the single source of truth for the dependency-directory
-/// name list instead of duplicating it.
-///
-/// Used by the indexer to scope the `PublicApi` visibility filter to
-/// dependency-tree symbols only: project files stay fully indexed regardless
-/// of `dependency_scope`. Note: a user-excluded directory (issue #249) never
-/// reaches this function at all — it is pruned at the walk, so no File node
-/// (and therefore no call to `is_dependency_path`) is ever produced for it.
-pub(super) fn is_dependency_path(root: &Path, file_path: &Path) -> bool {
-    let rel = file_path.strip_prefix(root).unwrap_or(file_path);
-    rel.parent()
-        .into_iter()
-        .flat_map(|p| p.components())
-        .any(|c| should_skip(&c.as_os_str().to_string_lossy(), DependencyScope::None))
-}
+mod policy;
+pub(in crate::indexer) use policy::is_dependency_path;
+use policy::{prune_reason, should_skip};
 
 #[cfg(test)]
 mod tests;

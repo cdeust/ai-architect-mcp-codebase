@@ -71,7 +71,7 @@ pub fn fill_after_bootstrap(
         dependency_scope,
         exclude_dirs: options.exclude_dirs.clone(),
     };
-    let (current, walk_gaps) = discover(codebase, walk_opts)?;
+    let (current, walk_gaps, walk_pruned) = discover(codebase, walk_opts)?;
 
     // Choose the classification signal. git diff is precise and cheap on a fresh
     // clone (no mtimes to trust); the manifest hash fallback is correct but scans
@@ -124,6 +124,7 @@ pub fn fill_after_bootstrap(
         &current,
         &changes,
         merged_gaps,
+        walk_pruned,
         "bootstrap_fill",
     );
 

@@ -160,6 +160,7 @@ mod finding_refine;
 mod handler_util;
 mod history_handlers;
 mod indexing_handlers;
+mod indexing_handlers_coverage;
 mod prd_handlers;
 mod process_impact_handlers;
 mod query_handlers;

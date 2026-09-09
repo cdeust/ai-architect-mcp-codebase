@@ -170,6 +170,13 @@ pub fn index_codebase_with_language(
     for rel in &walk_outcome.unreadable_dirs {
         collector.record_skipped(rel, "unreadable".to_string());
     }
+    // A directory the built-in policy refused to enter is recorded, not
+    // forgotten. It is NOT a gap: `.git` and `target/` are declared policy, and
+    // counting them would make every graph incomplete forever. It IS reported,
+    // so a reader can see what the walk never read. source: ADR-9841.
+    for (rel, reason) in &walk_outcome.pruned_dirs {
+        collector.record_pruned(rel, reason);
+    }
     let source_files = walk_outcome.files;
     let dependency_scope = options.dependency_scope;
     // label_by_qn: qualified_name/id -> label, populated as nodes are created.
@@ -271,6 +278,7 @@ pub fn index_codebase_with_language(
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     let mut coverage = CoverageReport::new("full", files_indexed);
+    coverage.pruned_dirs = collector.pruned_dirs().clone();
     coverage.files = collector.into_files();
 
     Ok(IndexResult {

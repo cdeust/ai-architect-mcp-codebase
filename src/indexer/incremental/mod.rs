@@ -169,7 +169,7 @@ pub fn index_incremental(
         dependency_scope,
         exclude_dirs: options.exclude_dirs.clone(),
     };
-    let (current, walk_gaps) = discover(codebase, walk_opts)?;
+    let (current, walk_gaps, walk_pruned) = discover(codebase, walk_opts)?;
     let plan = classify(prior, &current);
 
     let (reparsed, reparsed_gaps) = apply_changes(
@@ -195,6 +195,7 @@ pub fn index_incremental(
         &current,
         &plan.change_set,
         merged_gaps,
+        walk_pruned,
         "incremental",
     );
 
@@ -397,7 +398,7 @@ pub fn write_full_manifest(
         dependency_scope: options.dependency_scope,
         exclude_dirs: options.exclude_dirs.clone(),
     };
-    let (current, _walk_gaps) = discover(codebase, walk_opts)?;
+    let (current, _walk_gaps, _walk_pruned) = discover(codebase, walk_opts)?;
     let mut m = FileManifest::new();
     for d in &current {
         m.files.insert(
