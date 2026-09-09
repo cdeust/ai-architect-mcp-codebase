@@ -10,6 +10,7 @@ use crate::clustering;
 use crate::graph_cache;
 use crate::response_budget;
 
+mod coverage_evidence;
 mod impact;
 pub(crate) use impact::*;
 
