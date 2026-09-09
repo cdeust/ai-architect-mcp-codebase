@@ -467,3 +467,76 @@ pub(crate) fn impact_next_steps(impact: &clustering::ImpactResult, qn: &str) -> 
     }
     json!(steps)
 }
+
+#[cfg(test)]
+mod impact_next_steps_tests {
+    use super::*;
+    use crate::clustering::{ImpactNode, ImpactResult};
+
+    fn caller_node(qualified_name: &str) -> ImpactNode {
+        ImpactNode {
+            id: qualified_name.to_string(),
+            qualified_name: qualified_name.to_string(),
+            label: "Function".to_string(),
+            confidence: 1.0,
+        }
+    }
+
+    fn base_impact() -> ImpactResult {
+        ImpactResult {
+            communities: Vec::new(),
+            processes: Vec::new(),
+            callers: Vec::new(),
+            importers: Vec::new(),
+            users: Vec::new(),
+            implementors: Vec::new(),
+            references: Vec::new(),
+            epistemic: epistemic::Boundary::Exact,
+            epistemic_reasons: Vec::new(),
+            unresolved_callsites_naming_target: 0,
+        }
+    }
+
+    fn has_unresolved_callsite_hint(steps: &Value) -> bool {
+        steps
+            .as_array()
+            .expect("next_steps is a JSON array")
+            .iter()
+            .any(|s| s.as_str().unwrap_or_default().contains("name this symbol"))
+    }
+
+    /// Positive branch of the `callers.is_empty() && unresolved_count > 0`
+    /// guard (issue #283 (a)): no callers, but unresolved call sites name the
+    /// target -> the hint must appear.
+    #[test]
+    fn hints_unresolved_callsites_when_callers_empty() {
+        let mut impact = base_impact();
+        impact.unresolved_callsites_naming_target = 3;
+
+        let steps = impact_next_steps(&impact, "crate::foo::bar");
+
+        assert!(
+            has_unresolved_callsite_hint(&steps),
+            "expected the unresolved-callsite hint, got: {steps}"
+        );
+    }
+
+    /// Negative branch of the same guard, previously untested: `callers` is
+    /// non-empty even though unresolved call sites also name the target. A
+    /// mutant that deletes the `impact.callers.is_empty()` conjunct (or the
+    /// guard entirely) would surface the hint here too; this test fails
+    /// against that mutant and passes only with the guard intact.
+    #[test]
+    fn omits_unresolved_callsites_hint_when_callers_non_empty() {
+        let mut impact = base_impact();
+        impact.callers = vec![caller_node("crate::foo::caller")];
+        impact.unresolved_callsites_naming_target = 3;
+
+        let steps = impact_next_steps(&impact, "crate::foo::bar");
+
+        assert!(
+            !has_unresolved_callsite_hint(&steps),
+            "unresolved-callsite hint must not fire while callers is non-empty, got: {steps}"
+        );
+    }
+}

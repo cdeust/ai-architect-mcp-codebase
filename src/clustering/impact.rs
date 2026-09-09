@@ -87,19 +87,8 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         implementors: &implementors,
         references: &references,
     };
-    // Computed once here and threaded into both the prose reason and the
-    // structured field below — `unresolved_callsite_reason` used to run this
-    // same query a second time; a single count is now the source both
-    // surfaces read, so they can never disagree on N.
-    let unresolved_callsites_naming_target =
-        unresolved_callsite_count_naming(store, target_bare_name);
-    let epistemic_reasons =
-        build_epistemic_reasons(store, &esc, unresolved_callsites_naming_target, &deps);
-    let epistemic = if epistemic_reasons.is_empty() {
-        Boundary::Exact
-    } else {
-        Boundary::LowerBound
-    };
+    let (unresolved_callsites_naming_target, epistemic_reasons, epistemic) =
+        resolve_epistemic(store, &esc, target_bare_name, &deps);
 
     Ok(ImpactResult {
         communities,
@@ -134,6 +123,39 @@ fn collect_processes(store: &GraphStore, target: &str) -> Vec<String> {
         .iter()
         .flat_map(|label| process_names(store, label, symbol))
         .collect()
+}
+
+/// Resolves the epistemic boundary of a `get_impact` result: the count of
+/// unresolved call sites naming the target, the prose reasons built from it
+/// (plus dynamic-dispatch / heuristic-edge / file-fan-in carriers), and the
+/// resulting `Boundary`. `esc` must already be a `cypher_str`-quoted literal;
+/// `target_bare_name` is the target's own unescaped unqualified identifier
+/// (see `get_impact`).
+///
+/// Computed once here and threaded into both the prose reason and the
+/// structured count returned to the caller — `unresolved_callsite_reason`
+/// used to run this same query a second time; a single count is now the
+/// source both surfaces read, so they can never disagree on N.
+fn resolve_epistemic(
+    store: &GraphStore,
+    esc: &str,
+    target_bare_name: &str,
+    deps: &ReverseDependents,
+) -> (u64, Vec<String>, Boundary) {
+    let unresolved_callsites_naming_target =
+        unresolved_callsite_count_naming(store, target_bare_name);
+    let epistemic_reasons =
+        build_epistemic_reasons(store, esc, unresolved_callsites_naming_target, deps);
+    let epistemic = if epistemic_reasons.is_empty() {
+        Boundary::Exact
+    } else {
+        Boundary::LowerBound
+    };
+    (
+        unresolved_callsites_naming_target,
+        epistemic_reasons,
+        epistemic,
+    )
 }
 
 /// The five reverse-dependency slices `get_impact` collects, grouped into one
