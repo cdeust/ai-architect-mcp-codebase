@@ -29,3 +29,25 @@ pub(super) fn include_dependencies_param() -> Value {
         "description": "Deprecated — use 'dependency_scope' instead ('true' maps to 'full', 'false' maps to 'none'). Kept as a compatibility alias for one release; emits a deprecation warning."
     })
 }
+
+/// The `detail` token-surface parameter (issue #56), shared by list-returning
+/// tools. `full` (default) is unchanged behavior; `ids` returns bare identifiers.
+pub(super) fn detail_param() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["full", "ids"],
+        "default": "full",
+        "description": "Token surface (issue #56). 'full' (default): each result as a complete object. 'ids': return ONLY the bare identifiers (qualified names) plus the total — a cheap wide sweep to enumerate what exists before drilling into specific symbols with get_symbol/get_context. Overrides 'format' (an id list needs no table)."
+    })
+}
+
+/// The `format` token-surface parameter (issue #56), shared by list-returning
+/// tools. `json` (default) is objects; `tabular` streams rows as arrays.
+pub(super) fn format_param() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["json", "tabular"],
+        "default": "json",
+        "description": "Token surface (issue #56). 'json' (default): results as objects. 'tabular': declare the columns ONCE (in the response's 'columns' header) and stream each result as an array of cells in that column order — homogeneous result sets stop repeating field names, cutting tokens. Read each row positionally against 'columns'. Ignored when detail='ids'."
+    })
+}
