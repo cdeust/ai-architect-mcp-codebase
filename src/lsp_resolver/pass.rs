@@ -11,8 +11,9 @@ use crate::lsp_client::{self, LspResolutionResult, ServerHealth};
 
 /// Running tally of one LSP resolution pass.
 ///
-/// `skipped` is DERIVED — `total - resolved - failed` — rather than
-/// accumulated. Why (review finding 7): the previous accounting added, on
+/// `skipped` is DERIVED — `total - resolved - failed - outside_targets`
+/// (`outside_targets` added by issue #284, lot 5) — rather than accumulated.
+/// Why (review finding 7): the previous accounting added, on
 /// budget exhaustion, `sites.len() - (resolved_count + failed_count)`, mixing
 /// the CURRENT file's site count with counters accumulated across ALL files.
 /// Once a second file was reached the subtraction saturated to zero, so a
@@ -25,10 +26,16 @@ pub(super) struct LspPass {
     total: u64,
     resolved: u64,
     failed: u64,
+    /// Issue #284 (lot 5): sites whose file the pass proved sits outside
+    /// every compiled Cargo target — see `mark_outside_targets`.
+    outside_targets: u64,
     /// §10.4 invariant: `is_resolved` flips when the callee resolved to a
     /// graph target, whichever pass found it — mirrors `resolver::calls`.
     /// Without this a rerun re-queries every LSP-resolved site.
     newly_resolved: Vec<String>,
+    /// Ids to write `unresolved_reason` on at the end of the pass — see
+    /// `mark_outside_targets` / `mark_resolved`.
+    outside_target_ids: Vec<String>,
 }
 
 impl LspPass {
@@ -37,8 +44,23 @@ impl LspPass {
             total: total_sites as u64,
             resolved: 0,
             failed: 0,
+            outside_targets: 0,
             newly_resolved: Vec::new(),
+            outside_target_ids: Vec::new(),
         }
+    }
+
+    /// Attributes every site in `sites` to "outside every compiled Cargo
+    /// target" (issue #284) instead of attempting to resolve it. Counted
+    /// separately from `failed` (no `textDocument/definition` request was
+    /// ever issued — there is no server answer to call negative) and from
+    /// `skipped` (that means "the budget ran out", not "an answer was never
+    /// obtainable"); the four counters partition `total` by construction
+    /// (`into_result`).
+    pub(super) fn mark_outside_targets(&mut self, sites: &[&UnresolvedCallSite]) {
+        self.outside_targets += sites.len() as u64;
+        self.outside_target_ids
+            .extend(sites.iter().map(|s| s.id.clone()));
     }
 
     /// Folds one `textDocument/definition` outcome into the tally, inserting
@@ -73,7 +95,16 @@ impl LspPass {
 
     pub(super) fn mark_resolved(&self, store: &GraphStore) -> Result<(), String> {
         let ids: Vec<&str> = self.newly_resolved.iter().map(|s| s.as_str()).collect();
-        store.mark_nodes_resolved("CallSite", &ids)
+        store.mark_nodes_resolved("CallSite", &ids)?;
+        if !self.outside_target_ids.is_empty() {
+            let outside_ids: Vec<&str> =
+                self.outside_target_ids.iter().map(|s| s.as_str()).collect();
+            store.set_callsite_unresolved_reason(
+                &outside_ids,
+                crate::graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS,
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn into_result(
@@ -84,7 +115,10 @@ impl LspPass {
         LspResolutionResult {
             resolved_count: self.resolved,
             failed_count: self.failed,
-            skipped_count: self.total.saturating_sub(self.resolved + self.failed),
+            skipped_count: self
+                .total
+                .saturating_sub(self.resolved + self.failed + self.outside_targets),
+            outside_targets_count: self.outside_targets,
             elapsed_ms,
             server_health,
         }
@@ -161,6 +195,55 @@ mod tests {
             out.resolved_count + out.failed_count + out.skipped_count,
             10,
             "the three counters must partition the pass"
+        );
+    }
+
+    /// Issue #284 (lot 5), plan `tasks/plan-issues-282-283-284.md` line 238:
+    /// ten sites, three of which sit in a file outside every compiled Cargo
+    /// target. Those three must never touch `failed` — no
+    /// `textDocument/definition` request was ever issued for them, so "the
+    /// server said no" would misdescribe it — and the four-way partition
+    /// must still account for the whole pass.
+    #[test]
+    fn outside_target_sites_are_excluded_from_failed_and_covered_by_the_identity() {
+        let dir = tempfile::Builder::new()
+            .prefix("lsp_pass_outside_targets")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        store.create_schema().expect("schema");
+        let index = HashMap::new();
+        let root = dir.path().to_path_buf();
+        let ctx = SiteContext {
+            node_index: &index,
+            canonical_root: &root,
+        };
+
+        let mut pass = LspPass::new(10);
+        // Three sites, one file, attributed without ever calling `record`.
+        let outside_sites = [site("o1"), site("o2"), site("o3")];
+        let outside_refs: Vec<&UnresolvedCallSite> = outside_sites.iter().collect();
+        pass.mark_outside_targets(&outside_refs);
+
+        // The other seven are actually attempted: four negative answers
+        // (failed), three that never get an answer at all (skipped).
+        for i in 0..4 {
+            pass.record(&store, &site(&format!("f{i}")), Ok(None), &ctx);
+        }
+        // The remaining three sites are simply never `record`ed — the
+        // identity below accounts for them as skipped without a counter.
+
+        let out = pass.into_result(0, ServerHealth::not_probed());
+        assert_eq!(out.outside_targets_count, 3);
+        assert_eq!(
+            out.failed_count, 4,
+            "outside-target sites must not inflate failed_count"
+        );
+        assert_eq!(out.skipped_count, 3);
+        assert_eq!(
+            out.resolved_count + out.failed_count + out.skipped_count + out.outside_targets_count,
+            10,
+            "the four counters must partition the pass"
         );
     }
 

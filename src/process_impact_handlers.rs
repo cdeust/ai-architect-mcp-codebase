@@ -12,6 +12,7 @@ use crate::response_budget;
 
 mod coverage_evidence;
 mod impact;
+mod impact_followups;
 pub(crate) use impact::*;
 
 // ---------------------------------------------------------------------------

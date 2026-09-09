@@ -136,6 +136,7 @@ fn lsp_resolve_envelope(result: &lsp_client::LspResolutionResult) -> Value {
         "resolved_count": result.resolved_count,
         "failed_count": result.failed_count,
         "skipped_count": result.skipped_count,
+        "outside_targets_count": result.outside_targets_count,
         "elapsed_ms": result.elapsed_ms,
         "state": lsp_outcome::completed_state(result),
         "server_health": lsp_outcome::server_health_json(&result.server_health),

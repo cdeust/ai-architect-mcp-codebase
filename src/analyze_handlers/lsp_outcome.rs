@@ -33,6 +33,7 @@ impl LspOutcome {
                 "resolved_count": r.resolved_count,
                 "failed_count": r.failed_count,
                 "skipped_count": r.skipped_count,
+                "outside_targets_count": r.outside_targets_count,
                 "elapsed_ms": r.elapsed_ms,
             }),
             Self::Disabled | Self::Failed(_) => Value::Null,
@@ -47,6 +48,12 @@ impl LspOutcome {
 /// `completed_unresolved`; `resolved == 0` with nothing attempted at all
 /// (`failed == 0 && skipped == 0`) stays `completed` — there was nothing to
 /// resolve, which is not a failure.
+/// Issue #284 (lot 5): `outside_targets` deliberately does NOT feed this
+/// check -- a site skipped because its file sits outside every compiled
+/// Cargo target was never "attempted" in the sense this state
+/// distinguishes (no request was ever issued, so there is no answer to
+/// call negative); it surfaces as its own structured count
+/// (`outside_targets_count`), not as a variant of failure.
 pub(super) fn completed_state(result: &LspResolutionResult) -> &'static str {
     if result.resolved_count == 0 && (result.failed_count > 0 || result.skipped_count > 0) {
         "completed_unresolved"
@@ -77,6 +84,7 @@ mod tests {
             resolved_count: resolved,
             failed_count: failed,
             skipped_count: skipped,
+            outside_targets_count: 0,
             elapsed_ms: 0,
             server_health: ServerHealth {
                 level: crate::lsp_client::ServerHealthLevel::Ok,
@@ -108,6 +116,19 @@ mod tests {
         // none `failed`) is just as much "ran and resolved nothing" as one
         // where every site came back a hard failure.
         assert_eq!(completed_state(&result(0, 0, 4)), "completed_unresolved");
+    }
+
+    /// Issue #284 (lot 5): a pass whose every unresolved site sits outside
+    /// the compiled Cargo targets attempted nothing in the §1.2 sense (no
+    /// `textDocument/definition` request was ever issued) and must stay
+    /// `completed`, not flip to `completed_unresolved` — a mutant that folds
+    /// `outside_targets_count` into the `failed || skipped` check would fail
+    /// this test.
+    #[test]
+    fn outside_targets_alone_does_not_flip_to_completed_unresolved() {
+        let mut r = result(0, 0, 0);
+        r.outside_targets_count = 5;
+        assert_eq!(completed_state(&r), "completed");
     }
 
     #[test]

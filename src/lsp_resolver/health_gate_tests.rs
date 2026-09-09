@@ -92,6 +92,7 @@ fn plan_for<'a>(
     fixture: &'a GateFixture,
     node_index: &'a std::collections::HashMap<(String, u64), sites::NodePosition>,
     deadline: Duration,
+    target_map: &'a TargetMap,
 ) -> PassPlan<'a> {
     PassPlan {
         codebase_path: &fixture.root,
@@ -102,6 +103,7 @@ fn plan_for<'a>(
             node_index,
             canonical_root: &fixture.root,
         },
+        target_map,
     }
 }
 
@@ -126,7 +128,7 @@ fn resolve_with_client_fails_before_issuing_a_definition_request() {
     let mut client = spawn_fake(script, log.path(), &fixture.root);
 
     let node_index = build_node_position_index(&fixture.store).expect("index");
-    let plan = plan_for(&fixture, &node_index, Duration::from_secs(5));
+    let plan = plan_for(&fixture, &node_index, Duration::from_secs(5), &TargetMap::Unknown);
 
     // `LspPass` carries no `Debug` impl (nothing else needs one), so drop the
     // `Ok` payload before `expect_err` — its bound is on `T`, not on `E`.
@@ -175,7 +177,7 @@ fn a_healthy_server_is_not_gated() {
     let mut client = spawn_fake(script, log.path(), &fixture.root);
 
     let node_index = build_node_position_index(&fixture.store).expect("index");
-    let plan = plan_for(&fixture, &node_index, Duration::from_secs(2));
+    let plan = plan_for(&fixture, &node_index, Duration::from_secs(2), &TargetMap::Unknown);
 
     resolve_with_client(&fixture.store, &mut client, &plan, &unresolved)
         .expect("a healthy server must not be gated");

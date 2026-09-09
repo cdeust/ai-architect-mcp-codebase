@@ -111,6 +111,11 @@ pub(super) fn collect_unresolved_callsites(
     store: &GraphStore,
 ) -> Result<Vec<UnresolvedCallSite>, String> {
     store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
+    // Issue #284 (lot 5): `LspPass::mark_resolved` writes this column for
+    // outside-target sites; a graph indexed before it existed must be
+    // migrated here too, on the same no-op-when-present terms as
+    // `is_resolved` above.
+    store.ensure_node_column("CallSite", "unresolved_reason", "STRING DEFAULT ''")?;
     let qr = store.execute_query(
         "MATCH (cs:CallSite) WHERE cs.is_resolved IS NULL OR cs.is_resolved = false \
          RETURN cs.id, cs.callee_name, cs.line, cs.col",
@@ -337,6 +342,37 @@ mod tests {
         // The migration ran once and is idempotent.
         assert!(!store
             .ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")
+            .expect("second call"));
+    }
+
+    /// Issue #284 (lot 5) sibling of the test above: a graph indexed before
+    /// `unresolved_reason` existed must also be migrated, not rejected —
+    /// `collect_unresolved_callsites` is the read path `LspPass::mark_resolved`
+    /// later writes through, so both columns must survive the same legacy
+    /// table.
+    #[test]
+    fn a_graph_without_unresolved_reason_is_migrated_not_rejected() {
+        let dir = tempfile::Builder::new()
+            .prefix("lsp_pre_unresolved_reason")
+            .tempdir()
+            .expect("tempdir");
+        let store = GraphStore::open_or_create(&dir.path().join("db")).expect("open");
+        // A CallSite table as a build before this lot wrote it: `is_resolved`
+        // present, `unresolved_reason` absent.
+        store
+            .execute_query(
+                "CREATE NODE TABLE CallSite(id STRING, callee_name STRING, \
+                 line INT64, col INT64, is_resolved BOOLEAN, language STRING, \
+                 PRIMARY KEY(id))",
+            )
+            .expect("legacy CallSite table");
+        insert_site(&store, "src/a.rs::caller::call@3:1", None);
+
+        let sites = collect_unresolved_callsites(&store)
+            .expect("a pre-unresolved_reason graph must be migrated, not rejected");
+        assert_eq!(sites.len(), 1, "the legacy site must be collected");
+        assert!(!store
+            .ensure_node_column("CallSite", "unresolved_reason", "STRING DEFAULT ''")
             .expect("second call"));
     }
 

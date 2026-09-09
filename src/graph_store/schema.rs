@@ -28,6 +28,19 @@ pub const NODE_COMMUNITY: &str = "Community"; // source: stages/stage-3c.md §4.
 pub const NODE_PROCESS: &str = "Process"; // source: stages/stage-3c.md §4.1
 pub const NODE_STDLIB_SYMBOL: &str = "StdlibSymbol"; // source: stages/stage-3b-v2.md §5 Layer 5
 
+// Issue #284 (lot 5) — attribution of an unresolvable `CallSite`. The value
+// `CallSite.unresolved_reason` carries when the LSP pass proves the site's
+// file sits outside every compiled Cargo target
+// (`indexer::cargo_targets::TargetMap::is_outside_targets`): the language
+// server's crate graph never includes that file, so a
+// `textDocument/definition` request would always answer `[]`, indistinguishable
+// from a genuine "not found" (probe C, `tasks/plan-issues-282-283-284.md`
+// §0.2). `''` (the column's own DEFAULT) means "not attributed", not
+// "resolved" — `CallSite.is_resolved` still carries that flag on its own.
+// Shared by the writer (`lsp_resolver::pass`) and the reader
+// (`clustering::impact_reasons`) so the string can never drift between them.
+pub const CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS: &str = "outside_compiled_targets";
+
 // History layer — temporal axis over the structural snapshot.
 // source: second-brain history requirement — the graph must track not just
 // the current state of an entity but its evolution: which commits touched it,

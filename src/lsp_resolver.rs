@@ -7,6 +7,7 @@
 // source: stages/stage-3b.md §7 — "method calls on inferred types" deferred to LSP
 
 use crate::graph_store::GraphStore;
+use crate::indexer::cargo_targets::{self, TargetMap};
 use crate::lsp_client::{self, LspClient, LspResolutionResult, ServerHealth, ServerHealthLevel};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -25,6 +26,10 @@ use sites::{
 #[cfg(test)]
 #[path = "lsp_resolver/health_gate_tests.rs"]
 mod health_gate_tests;
+
+#[cfg(test)]
+#[path = "lsp_resolver/outside_targets_tests.rs"]
+mod outside_targets_tests;
 
 /// Budget reserved for the in-flight request when deciding whether another one
 /// still fits inside `timeout`.
@@ -60,6 +65,7 @@ pub fn resolve_with_lsp(
             resolved_count: 0,
             failed_count: 0,
             skipped_count: 0,
+            outside_targets_count: 0,
             elapsed_ms: start.elapsed().as_millis() as u64,
             // No client was ever started — there is nothing to resolve, so
             // there is no server opinion to report either.
@@ -75,6 +81,12 @@ pub fn resolve_with_lsp(
     let canonical_root =
         std::fs::canonicalize(codebase_path).unwrap_or_else(|_| codebase_path.to_path_buf());
     let node_index = build_node_position_index(store)?;
+    // Issue #284 (lot 5): discovered once per pass, never per file — the
+    // same map every file's outside-target check reads. `TargetMap::Unknown`
+    // (no Cargo.toml, `cargo` missing, or a workspace that fails to load —
+    // issue #282's own case) attributes nothing, so this never turns a
+    // resolver quirk into a false "outside" claim.
+    let target_map = cargo_targets::discover(codebase_path);
     let plan = PassPlan {
         codebase_path,
         language,
@@ -84,6 +96,7 @@ pub fn resolve_with_lsp(
             node_index: &node_index,
             canonical_root: &canonical_root,
         },
+        target_map: &target_map,
     };
 
     let mut client = LspClient::start(cmd, default_args, codebase_path, timeout)?;
@@ -112,6 +125,9 @@ struct PassPlan<'a> {
     /// first).
     start: Instant,
     ctx: SiteContext<'a>,
+    /// Issue #284 (lot 5): the compiled-target surface `drive_pass` consults
+    /// per file, before ever issuing a `didOpen`/`definition` request for it.
+    target_map: &'a TargetMap,
 }
 
 /// Issue #282. Initializes `client` against `plan.codebase_path`, gates on
@@ -179,6 +195,17 @@ fn drive_pass(
     let mut pass = LspPass::new(unresolved.len());
     // Grouped by file so one `didOpen` serves every site in it.
     'files: for (file_path, sites) in &group_by_file(unresolved) {
+        // Issue #284 (lot 5): a file outside every compiled Cargo target is
+        // never in rust-analyzer's crate graph — every `textDocument/definition`
+        // request against it would answer `[]` (probe C,
+        // `tasks/plan-issues-282-283-284.md` §0.2), indistinguishable from a
+        // real "not found". Attribute and move on without issuing the
+        // `didOpen`/`definition` round trip that would only confirm the same
+        // thing 634 times over on the dy-wcet corpus.
+        if plan.target_map.is_outside_targets(Path::new(file_path)) {
+            pass.mark_outside_targets(sites);
+            continue;
+        }
         let abs_path = plan.codebase_path.join(file_path);
         let file_uri = lsp_client::path_to_file_uri(&abs_path);
         let Ok(content) = std::fs::read_to_string(&abs_path) else {

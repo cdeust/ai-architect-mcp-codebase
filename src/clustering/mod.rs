@@ -11,6 +11,7 @@
 
 mod community;
 mod impact;
+mod impact_reasons;
 mod process;
 
 // ---------------------------------------------------------------------------

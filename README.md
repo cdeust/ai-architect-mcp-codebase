@@ -88,7 +88,12 @@ these files cannot be resolved by the language server, whose crate graph
 never contains them. The bucket is populated only when a root `Cargo.toml`
 is readable and `cargo metadata` succeeds; anything else (no manifest,
 `cargo` missing, or a workspace that fails to load) leaves it empty rather
-than guessing.
+than guessing. When `lsp: true` runs against such a graph, `lsp_resolve`'s
+`outside_targets_count` reports how many unresolved call sites the pass
+skipped for exactly this reason — no `textDocument/definition` request is
+ever issued for them, so they never count as `failed` — and `get_impact`'s
+`unresolved_callsites_outside_targets` names the same attribution (plus the
+file it came from) for any target those sites call.
 Graphs created before entry metadata was stored require a full reindex:
 `analyze_codebase` rebuilds them, and `index_codebase` automatically falls back
 to a full index when its incremental compatibility check detects the old schema.

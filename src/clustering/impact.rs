@@ -1,6 +1,8 @@
 use crate::epistemic::{self, Boundary};
 use crate::graph_store::{community_ids, cypher_str, process_names, GraphStore, SymbolMatch};
 
+use super::impact_reasons;
+
 /// A reverse-dependency edge endpoint, carried as a re-queryable handle
 /// (id + qualified_name + label) rather than a flattened name string, so a
 /// consumer can keep traversing the graph through MCP from this node instead
@@ -51,6 +53,15 @@ pub struct ImpactResult {
     /// == 0) — the two were indistinguishable to a caller before this field
     /// existed. source: issue #283 (a).
     pub unresolved_callsites_naming_target: u64,
+    /// Of `unresolved_callsites_naming_target`, how many are attributed
+    /// "outside the compiled Cargo targets" — a file the LSP pass proved sits
+    /// outside every target `cargo metadata` reports, so the language server
+    /// never had a chance to resolve them (`lsp_resolver::pass`,
+    /// `indexer::cargo_targets::TargetMap`). 0 on a graph indexed before this
+    /// lot (no `CallSite.unresolved_reason` column) — see
+    /// `impact_reasons::unresolved_callsite_attribution`. source: issue #284
+    /// (lot 5, the `get_impact` half — the LSP-pass half is `lsp_resolve`).
+    pub unresolved_callsites_outside_targets: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +98,7 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         implementors: &implementors,
         references: &references,
     };
-    let (unresolved_callsites_naming_target, epistemic_reasons, epistemic) =
+    let (attribution, epistemic_reasons, epistemic) =
         resolve_epistemic(store, &esc, target_bare_name, &deps);
 
     Ok(ImpactResult {
@@ -100,7 +111,8 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         references,
         epistemic,
         epistemic_reasons,
-        unresolved_callsites_naming_target,
+        unresolved_callsites_naming_target: attribution.total,
+        unresolved_callsites_outside_targets: attribution.outside_targets,
     })
 }
 
@@ -125,270 +137,45 @@ fn collect_processes(store: &GraphStore, target: &str) -> Vec<String> {
         .collect()
 }
 
-/// Resolves the epistemic boundary of a `get_impact` result: the count of
-/// unresolved call sites naming the target, the prose reasons built from it
-/// (plus dynamic-dispatch / heuristic-edge / file-fan-in carriers), and the
-/// resulting `Boundary`. `esc` must already be a `cypher_str`-quoted literal;
-/// `target_bare_name` is the target's own unescaped unqualified identifier
-/// (see `get_impact`).
+/// Resolves the epistemic boundary of a `get_impact` result: the unresolved
+/// call-site attribution (issue #283 (a)/#284 (lot 5), see
+/// `impact_reasons::unresolved_callsite_attribution`), the prose reasons
+/// built from it (plus dynamic-dispatch / heuristic-edge / file-fan-in
+/// carriers), and the resulting `Boundary`. `esc` must already be a
+/// `cypher_str`-quoted literal; `target_bare_name` is the target's own
+/// unescaped unqualified identifier (see `get_impact`).
 ///
-/// Computed once here and threaded into both the prose reason and the
-/// structured count returned to the caller — `unresolved_callsite_reason`
-/// used to run this same query a second time; a single count is now the
-/// source both surfaces read, so they can never disagree on N.
+/// The attribution is computed once here and threaded into both the prose
+/// reason and the structured counts returned to the caller — the query used
+/// to run twice before this field existed; a single result is now the source
+/// every surface reads, so they can never disagree on N.
 fn resolve_epistemic(
     store: &GraphStore,
     esc: &str,
     target_bare_name: &str,
     deps: &ReverseDependents,
-) -> (u64, Vec<String>, Boundary) {
-    let unresolved_callsites_naming_target =
-        unresolved_callsite_count_naming(store, target_bare_name);
-    let epistemic_reasons =
-        build_epistemic_reasons(store, esc, unresolved_callsites_naming_target, deps);
+) -> (impact_reasons::UnresolvedCallsiteAttribution, Vec<String>, Boundary) {
+    let attribution = impact_reasons::unresolved_callsite_attribution(store, target_bare_name);
+    let epistemic_reasons = impact_reasons::build_epistemic_reasons(store, esc, &attribution, deps);
     let epistemic = if epistemic_reasons.is_empty() {
         Boundary::Exact
     } else {
         Boundary::LowerBound
     };
-    (
-        unresolved_callsites_naming_target,
-        epistemic_reasons,
-        epistemic,
-    )
+    (attribution, epistemic_reasons, epistemic)
 }
 
 /// The five reverse-dependency slices `get_impact` collects, grouped into one
 /// handle so downstream epistemic-reason helpers take a parameter object
 /// instead of five positional slices (coding-standards §4.4: >4 parameters is
-/// a missing data type).
-struct ReverseDependents<'a> {
-    callers: &'a [ImpactNode],
-    importers: &'a [ImpactNode],
-    users: &'a [ImpactNode],
-    implementors: &'a [ImpactNode],
-    references: &'a [ImpactNode],
-}
-
-/// Assembles the epistemic-boundary reasons for a `get_impact` result:
-/// dynamic-dispatch surface, heuristically-resolved edges, unresolved call
-/// sites naming the target, and (issue #205) unindexed markdown/shell
-/// references. An empty result means `Boundary::Exact`. `esc` must already
-/// be a `cypher_str`-quoted literal; `target_bare_name` is the target's own
-/// (unescaped) unqualified identifier — the last `::`/`.`-segment of
-/// `qualified_name`, e.g. `crate::bridge::last_segment`.
-///
-/// Epistemic boundary: the dependent set is a LOWER BOUND on true impact when
-/// (a) the target is a dynamic-dispatch surface (calls through the
-/// interface/trait bind to an implementor at runtime and are not
-/// exhaustively static), (b) any contributing edge was resolved
-/// heuristically (confidence < 1.0), (c) the graph holds unresolved
-/// `CallSite` nodes that name the target by its bare identifier but were
-/// never resolved into a `Calls`/`Uses` edge (resolution failed — static or
-/// LSP — for any reason: dynamic dispatch, a resolver gap, a timeout, an
-/// unsupported language tier), or (d) the target is a File with zero
-/// inbound references in a graph that predates reference-edge indexing.
-/// Otherwise it is exact. source: epistemic module contract.
-///
-/// `unresolved_callsites_naming_target` is the count `get_impact` already
-/// computed (via `unresolved_callsite_count_naming`) for the structured
-/// `ImpactResult` field — passed in rather than requeried, so the prose
-/// reason and the structured count can never drift apart.
-fn build_epistemic_reasons(
-    store: &GraphStore,
-    esc: &str,
-    unresolved_callsites_naming_target: u64,
-    deps: &ReverseDependents,
-) -> Vec<String> {
-    let mut reasons = Vec::new();
-
-    if let Some(reason) = dynamic_dispatch_reason(store, esc, deps.implementors) {
-        reasons.push(reason);
-    }
-    if let Some(reason) = heuristic_edge_reason(deps) {
-        reasons.push(reason);
-    }
-    if let Some(reason) = unresolved_callsite_reason(unresolved_callsites_naming_target) {
-        reasons.push(reason);
-    }
-    // File-level fan-in honesty (issue #205): when the target is itself a
-    // File and this graph contains markdown/shell files but zero
-    // References_File_File edges anywhere, code-only fan-in over it is a
-    // lower bound — either the graph predates reference-edge indexing, or
-    // (much less likely on a doc/script-heavy repo) these files are
-    // genuinely unreferenced. This graph cannot tell those two cases apart,
-    // so it is reported rather than silently assumed complete.
-    if deps.references.is_empty() && is_file_node(store, esc) {
-        if let Some(reason) = missing_reference_indexing_reason(store) {
-            reasons.push(reason);
-        }
-    }
-
-    reasons
-}
-
-/// `Some(reason)` when the target resolves to a dynamic-dispatch surface
-/// (trait/interface) — see `build_epistemic_reasons` doc for the argument.
-fn dynamic_dispatch_reason(
-    store: &GraphStore,
-    esc: &str,
-    implementors: &[ImpactNode],
-) -> Option<String> {
-    let label = lookup_target_label(store, esc)?;
-    if !epistemic::is_dynamic_dispatch_surface(&label) {
-        return None;
-    }
-    Some(format!(
-        "target is a {label} (dynamic-dispatch surface): call sites that \
-         invoke it polymorphically are not exhaustively captured by static \
-         resolution; the {} implementor(s) and direct callers shown are a \
-         lower bound",
-        implementors.len()
-    ))
-}
-
-/// `Some(reason)` when any reverse-dependency edge was resolved below full
-/// confidence — see `build_epistemic_reasons` doc for the argument.
-fn heuristic_edge_reason(deps: &ReverseDependents) -> Option<String> {
-    let heuristic_count = deps
-        .callers
-        .iter()
-        .chain(deps.importers.iter())
-        .chain(deps.users.iter())
-        .chain(deps.implementors.iter())
-        .chain(deps.references.iter())
-        .filter(|n| epistemic::is_heuristic_edge(n.confidence))
-        .count();
-    if heuristic_count == 0 {
-        return None;
-    }
-    Some(format!(
-        "{heuristic_count} reverse-dependency edge(s) were resolved \
-         heuristically (confidence < 1.0) and may be incomplete or incorrect"
-    ))
-}
-
-/// `Some(reason)` when the graph holds unresolved `CallSite` nodes naming the
-/// target — see `build_epistemic_reasons` doc for the argument. Takes the
-/// already-computed count (see that function's doc); does not query.
-fn unresolved_callsite_reason(unresolved_count: u64) -> Option<String> {
-    if unresolved_count == 0 {
-        return None;
-    }
-    Some(format!(
-        "{unresolved_count} unresolved call site(s) name this symbol — {unresolved_count} \
-         `CallSite` node(s) in the graph reference it by name but were never resolved to a \
-         Calls edge; the reported callers are a lower bound"
-    ))
-}
-
-/// Counts unresolved `CallSite` nodes (`is_resolved = false`) whose
-/// `callee_name` names `target_bare_name` — the same evidence
-/// `resolve_calls` (src/resolver/calls.rs) would have consumed had
-/// resolution succeeded, generic across every language and every reason
-/// resolution can fail. `target_bare_name` is the target's own unescaped
-/// unqualified identifier (never a full qualified_name).
-///
-/// A `callee_name` names the target under exactly the three call shapes the
-/// parsers emit: a bare call (`response_of`), a receiver call
-/// (`s.response_of`, `self.response_of`), or a call qualified by a type/path
-/// not yet resolved (`Type::response_of`). All three end in the bare
-/// identifier, so one exact-or-suffix comparison covers every shape without
-/// re-deriving the parser's own callee-spelling grammar.
-///
-/// Postcondition: return value is never negative — `COUNT(cs)` in Cypher is
-/// bounded below by 0 by construction, so the u64 return type is exact, not
-/// a truncating cast of a signed count.
-fn unresolved_callsite_count_naming(store: &GraphStore, target_bare_name: &str) -> u64 {
-    let esc_bare = cypher_str(target_bare_name);
-    let esc_dot_suffix = cypher_str(&format!(".{target_bare_name}"));
-    let esc_scope_suffix = cypher_str(&format!("::{target_bare_name}"));
-    let cypher = format!(
-        "MATCH (cs:{}) \
-         WHERE cs.is_resolved = false AND \
-         (cs.callee_name = {esc_bare} OR cs.callee_name ENDS WITH {esc_dot_suffix} \
-          OR cs.callee_name ENDS WITH {esc_scope_suffix}) \
-         RETURN count(cs)",
-        crate::graph_store::NODE_CALL_SITE
-    );
-    store
-        .execute_query(&cypher)
-        .ok()
-        .and_then(|qr| {
-            qr.rows
-                .first()
-                .and_then(|r| r.first())
-                .and_then(|c| c.parse::<u64>().ok())
-        })
-        .unwrap_or(0)
-}
-
-/// True when `esc` (already `cypher_str`-escaped) identifies an existing File
-/// node by id. Distinguishes "target is a File" (where the reference-fan-in
-/// honesty check below applies) from "target is a symbol or does not exist"
-/// (where it does not).
-fn is_file_node(store: &GraphStore, esc: &str) -> bool {
-    let cypher = format!("MATCH (f:File) WHERE f.id = {esc} RETURN f.id LIMIT 1");
-    matches!(store.execute_query(&cypher), Ok(qr) if qr.rows.iter().any(|r| !r.is_empty()))
-}
-
-/// See the call site in `get_impact` for the honesty argument. Returns `None`
-/// when there are no markdown/shell files in the graph at all (nothing to be
-/// blind to) or when at least one `References_File_File` edge exists anywhere
-/// (this graph WAS built with reference-edge indexing).
-fn missing_reference_indexing_reason(store: &GraphStore) -> Option<String> {
-    let doc_script_count = store
-        .execute_query(
-            "MATCH (f:File) WHERE f.id ENDS WITH '.md' OR f.id ENDS WITH '.markdown' \
-             OR f.id ENDS WITH '.mdx' OR f.id ENDS WITH '.sh' OR f.id ENDS WITH '.bash' \
-             RETURN count(f)",
-        )
-        .ok()
-        .and_then(|qr| {
-            qr.rows
-                .first()
-                .and_then(|r| r.first())
-                .and_then(|c| c.parse::<i64>().ok())
-        })
-        .unwrap_or(0);
-    if doc_script_count == 0 {
-        return None;
-    }
-    let has_reference_edges = store
-        .execute_query("MATCH (:File)-[r:References_File_File]->(:File) RETURN r LIMIT 1")
-        .map(|qr| !qr.rows.is_empty())
-        .unwrap_or(false);
-    if has_reference_edges {
-        return None;
-    }
-    Some(format!(
-        "{doc_script_count} markdown/shell file(s) exist in this graph but it \
-         contains zero References_File_File edges — either this graph predates \
-         reference-edge indexing (issue #205) or these files are genuinely \
-         unreferenced; code-only fan-in over a File target is a lower bound"
-    ))
-}
-
-/// Looks up the symbol label of the impact target by qualified_name or id.
-/// Returns the first matching `SYMBOL_LABELS` label, or `None` when the target
-/// is not a resolvable symbol node (e.g. a File). `esc` must already be a
-/// `cypher_str`-quoted literal (see `get_impact`).
-fn lookup_target_label(store: &GraphStore, esc: &str) -> Option<String> {
-    for label in super::SYMBOL_LABELS {
-        let cypher = format!(
-            "MATCH (n:{label}) \
-             WHERE n.id = {esc} OR n.qualified_name = {esc} \
-             RETURN n.id LIMIT 1"
-        );
-        let found = store
-            .execute_query(&cypher)
-            .map(|qr| qr.rows.iter().any(|r| !r.is_empty()))
-            .unwrap_or(false);
-        if found {
-            return Some((*label).to_string());
-        }
-    }
-    None
+/// a missing data type). `pub(super)` — `impact_reasons` (a sibling module
+/// under `clustering`) reads it too.
+pub(super) struct ReverseDependents<'a> {
+    pub(super) callers: &'a [ImpactNode],
+    pub(super) importers: &'a [ImpactNode],
+    pub(super) users: &'a [ImpactNode],
+    pub(super) implementors: &'a [ImpactNode],
+    pub(super) references: &'a [ImpactNode],
 }
 
 /// Reverse-traverses every `REL_TABLES` edge whose name starts with `prefix`,
@@ -475,3 +262,7 @@ fn dependent_node(row: &[String], from_label: &str, floor: f64) -> ImpactNode {
 #[cfg(test)]
 #[path = "impact_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "impact_outside_targets_tests.rs"]
+mod outside_targets_tests;

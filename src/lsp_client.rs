@@ -83,6 +83,14 @@ pub struct LspResolutionResult {
     pub resolved_count: u64,
     pub failed_count: u64,
     pub skipped_count: u64,
+    /// Issue #284 (lot 5): sites the pass proved sit outside every compiled
+    /// Cargo target and therefore never issued a `textDocument/definition`
+    /// request for — counted OUTSIDE `failed_count` (no answer was ever
+    /// sought, so "the server said no" would misdescribe it) and OUTSIDE
+    /// `skipped_count` (that count means "budget ran out before an answer",
+    /// not "an answer was never possible"). The four counters partition
+    /// every unresolved site (`lsp_resolver::pass::LspPass::into_result`).
+    pub outside_targets_count: u64,
     pub elapsed_ms: u64,
     /// The server's health as last observed by this pass's `initialize`
     /// call. `ServerHealth::not_probed` when no client was ever started

@@ -85,9 +85,11 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         (NODE_IMPORT,
             "id STRING, path STRING, alias STRING, is_glob BOOLEAN, \
              start_line INT64, end_line INT64, is_resolved BOOLEAN, language STRING"),
+        // unresolved_reason: issue #284 (lot 5) — '' means "not attributed";
+        // see graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS.
         (NODE_CALL_SITE,
             "id STRING, callee_name STRING, line INT64, col INT64, \
-             is_resolved BOOLEAN, language STRING"),
+             is_resolved BOOLEAN, language STRING, unresolved_reason STRING"),
         // 3c Community + Process — source: stages/stage-3c.md §4.1
         (NODE_COMMUNITY,
             "id STRING, name STRING, algorithm STRING, \

@@ -201,18 +201,33 @@ impl GraphStore {
         column: &str,
         definition: &str,
     ) -> Result<bool, String> {
-        let info =
-            self.execute_query(&format!("CALL table_info({}) RETURN *", cypher_str(label)))?;
-        // table_info columns are (property id, name, type, default, primary key).
-        let present = info
-            .rows
-            .iter()
-            .any(|row| row.get(1).is_some_and(|name| name == column));
-        if present {
+        if self.node_column_exists(label, column)? {
             return Ok(false);
         }
         self.run(&format!("ALTER TABLE {label} ADD {column} {definition}"))?;
         Ok(true)
+    }
+
+    /// True when node table `label` already declares `column` — the
+    /// read-only half of `ensure_node_column`'s presence check, split out so
+    /// a caller that must NEVER mutate (e.g. `get_impact`, which runs against
+    /// `graph_cache::open_cached`'s shared, `readOnlyHint`-advertised handle)
+    /// can gate a query on a column's presence without an `ALTER` anywhere on
+    /// its path.
+    ///
+    /// Why this matters (review finding 4, restated for reads): referencing a
+    /// property the table does not carry is a hard Binder exception, not an
+    /// empty result (measured 2026-08-24, lbug 0.19.1) — so a query built
+    /// without this gate takes the whole tool down on a graph indexed before
+    /// the column existed, rather than degrading to "attribution unavailable".
+    pub fn node_column_exists(&self, label: &str, column: &str) -> Result<bool, String> {
+        let info =
+            self.execute_query(&format!("CALL table_info({}) RETURN *", cypher_str(label)))?;
+        // table_info columns are (property id, name, type, default, primary key).
+        Ok(info
+            .rows
+            .iter()
+            .any(|row| row.get(1).is_some_and(|name| name == column)))
     }
 
     /// Inserts one `FileContent` row: the file's zstd-compressed source
@@ -265,6 +280,41 @@ impl GraphStore {
         // (O(rows·N)) on large graphs. Same fix class as the edge queries.
         let cypher =
             format!("UNWIND $rows AS rid MATCH (n:{label} {{id: rid}}) SET n.is_resolved = true");
+        for chunk in ids.chunks(BULK_BATCH_SIZE) {
+            let values: Vec<Value> = chunk
+                .iter()
+                .map(|id| Value::String((*id).to_string()))
+                .collect();
+            let list = Value::List(LogicalType::String, values);
+            self.run_prepared(&cypher, list)?;
+        }
+        Ok(())
+    }
+
+    /// Writes `unresolved_reason = reason` on every `CallSite` whose id is in
+    /// `ids`. Issue #284 (lot 5): the attribution the LSP pass makes when it
+    /// proves a call site's file sits outside every compiled Cargo target
+    /// (`indexer::cargo_targets::TargetMap::is_outside_targets`) — never a
+    /// resolution, so it does not touch `is_resolved`.
+    ///
+    /// Same prepared-UNWIND convention as `mark_nodes_resolved`. `reason` is
+    /// always one of this crate's own constants
+    /// (`CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS`), never caller input, so
+    /// interpolating it through `cypher_str` into the (cached) statement text
+    /// — rather than binding it as a second `$param` — is safe by the same
+    /// argument as `mark_nodes_resolved`'s `label`.
+    pub(crate) fn set_callsite_unresolved_reason(
+        &self,
+        ids: &[&str],
+        reason: &str,
+    ) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let cypher = format!(
+            "UNWIND $rows AS rid MATCH (n:CallSite {{id: rid}}) SET n.unresolved_reason = {}",
+            cypher_str(reason)
+        );
         for chunk in ids.chunks(BULK_BATCH_SIZE) {
             let values: Vec<Value> = chunk
                 .iter()

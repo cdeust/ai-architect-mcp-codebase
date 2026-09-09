@@ -322,6 +322,11 @@ fn append_callsite_properties(props: &mut Vec<(String, String)>, node: &parser::
     // §10.4 is_resolved starts false; the resolver flips it to true when it
     // emits the resolved Calls edge for this site.
     props.push(("is_resolved".to_string(), "false".to_string()));
+    // Issue #284 (lot 5): freshly indexed sites carry no attribution yet —
+    // '' is the column's own DEFAULT (ensure_node_column backfills existing
+    // rows with it too). The LSP pass is the only writer that ever sets this
+    // to a non-empty value (`graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS`).
+    props.push(("unresolved_reason".to_string(), cypher_str("")));
 }
 
 // Schema awareness — source: graph_store.rs node_table_ddl().
