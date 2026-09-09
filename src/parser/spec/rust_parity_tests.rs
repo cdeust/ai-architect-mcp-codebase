@@ -133,9 +133,19 @@ fn rust_spec_output_is_exact_parity() {
 fn rust_parity_floor_counts_hold() {
     let r = parse();
     // 61/66 pre-migration + 1 node/1 ref from #131 (the `describe` default body's
-    // one call site and its `Defines` edge); #130 re-scoped a QN in place (0 net).
-    assert_eq!(r.nodes.len(), 62, "floor: 62 nodes (61 + #131 call site)");
-    assert_eq!(r.refs.len(), 67, "floor: 67 refs (66 + #131 Defines edge)");
+    // one call site and its `Defines` edge); #130 re-scoped a QN in place (0 net);
+    // then -3 nodes when the #87 speculative scan stopped emitting a bound name
+    // as a call. source: ADR-9836.
+    assert_eq!(
+        r.nodes.len(),
+        59,
+        "floor: 59 nodes (62 - 3 bound-name call sites)"
+    );
+    assert_eq!(
+        r.refs.len(),
+        64,
+        "floor: 64 refs (67 - 3 bound-name call edges)"
+    );
 }
 
 /// Negative assertions: behaviors the ground truth does NOT contain. Without

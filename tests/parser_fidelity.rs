@@ -366,11 +366,14 @@ fn issue87_rust_plain_value_arg_does_not_suppress_the_direct_call() {
         has_callsite(&r, "process_order"),
         "the direct call `process_order(order)` must still be captured"
     );
-    // `order` is a local binding, not a function — it is emitted speculatively
-    // and the resolver drops it, exactly as it drops `len` / `HashMap::new`.
+    // `order` is a PARAMETER of `f`, so it is a value, not a function
+    // reference. The claim this assertion used to make, that the resolver
+    // drops such a name, is false: the resolver tests the symbol index, which
+    // a bound name matches whenever it collides with a real function.
+    // source: ADR-9836.
     assert!(
-        has_callsite(&r, "order"),
-        "the value argument is emitted speculatively for the resolver to bind"
+        !has_callsite(&r, "order"),
+        "a name bound in the enclosing scope must not be emitted as a call"
     );
 }
 

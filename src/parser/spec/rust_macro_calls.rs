@@ -166,27 +166,59 @@ fn scan_token_tree(
     let named: Vec<Node> = token_tree.named_children(&mut cursor).collect();
     let mut i = 0;
     while i < named.len() {
-        let shaped = i + 2 < named.len()
-            && named[i].kind() == IDENTIFIER_KIND
+        let trailing_args = i + 2 < named.len() && named[i + 2].kind() == token_tree_kind;
+        let joined = trailing_args
             && named[i + 1].kind() == IDENTIFIER_KIND
-            && named[i + 2].kind() == token_tree_kind;
-        if shaped && separated_by_dot_or_colon(source, named[i], named[i + 1]) {
-            let callee = source[named[i].start_byte()..named[i + 1].end_byte()].to_string();
-            if !callee.is_empty() {
-                out.push(RustConventions::call_site_spanning(
-                    &callee,
-                    named[i],
-                    named[i + 1].end_byte() as u64,
-                    caller_qn,
-                ));
-            }
-            scan_token_tree(source, named[i + 2], caller_qn, token_tree_kind, out);
-            i += 3;
+            && separated_by_dot_or_colon(source, named[i], named[i + 1]);
+
+        // `X.method(...)` / `X::method(...)`: the receiver is a plain name.
+        if joined && named[i].kind() == IDENTIFIER_KIND {
+            push_reconstructed(source, named[i], named[i + 1], caller_qn, out);
+            // Advance ONTO the reconstructed call's own argument token_tree
+            // rather than past it, so a method chained on this call's RESULT
+            // can still match below. That token_tree is recursed into exactly
+            // once, by whichever arm consumes it next.
+            i += 2;
             continue;
         }
+
+        // `f(...).method(...)`: the receiver is a CALL RESULT, so it is a
+        // token_tree rather than an identifier.
+        // source: ADR-9836.
+        if joined && named[i].kind() == token_tree_kind {
+            scan_token_tree(source, named[i], caller_qn, token_tree_kind, out);
+            push_reconstructed(source, named[i], named[i + 1], caller_qn, out);
+            i += 2;
+            continue;
+        }
+
         if named[i].kind() == token_tree_kind {
             scan_token_tree(source, named[i], caller_qn, token_tree_kind, out);
         }
         i += 1;
     }
+}
+
+/// Emits one reconstructed call spanning `receiver` through `method`.
+///
+/// postcondition: the name is a CONTIGUOUS slice of `source` ending on the
+/// method identifier, which `lsp_resolver::sites::lsp_position` relies on to
+/// aim at the right column. source: ADR-9836.
+fn push_reconstructed(
+    source: &str,
+    receiver: Node,
+    method: Node,
+    caller_qn: &str,
+    out: &mut Vec<CallEntry>,
+) {
+    let callee = source[receiver.start_byte()..method.end_byte()].to_string();
+    if callee.is_empty() {
+        return;
+    }
+    out.push(RustConventions::call_site_spanning(
+        &callee,
+        receiver,
+        method.end_byte() as u64,
+        caller_qn,
+    ));
 }

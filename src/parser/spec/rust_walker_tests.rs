@@ -11,7 +11,7 @@
 // file, which is what catches a walker that works on a curated corpus and not on
 // production Rust.
 
-use crate::parser::{parse_file, Language};
+use crate::parser::{parse_file, Language, ParseResult};
 
 /// The walker must read AP's own largest source file without dropping items.
 #[test]
@@ -55,9 +55,9 @@ fn rust_parses_own_source() {
     );
 }
 
-#[test]
-fn rust_all_construct_types_are_labelled() {
-    let src = r#"
+/// One corpus naming every construct kind the Rust walker labels, read by the
+/// labelling test and by the property/edge test below.
+const ALL_CONSTRUCTS: &str = r#"
 pub async fn top_fn() {}
 pub struct MyStruct { pub x: i32, y: String }
 pub enum MyEnum { A, B }
@@ -69,7 +69,10 @@ type Alias = Vec<String>;
 use std::collections::HashMap;
 mod inner;
 "#;
-    let result = parse_file(src, "test.rs", Language::Rust).expect("parse");
+
+#[test]
+fn rust_all_construct_types_are_labelled() {
+    let result = parse_file(ALL_CONSTRUCTS, "test.rs", Language::Rust).expect("parse");
     let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
 
     for expected in [
@@ -87,7 +90,14 @@ mod inner;
     ] {
         assert!(labels.contains(&expected), "missing {expected}");
     }
+}
 
+/// The same corpus, asserted on the PROPERTIES and edges rather than the label
+/// set. Split from the labelling assertion so a failure names which of the two
+/// broke. source: coding-standards section 4.2.
+#[test]
+fn rust_construct_properties_and_edges_are_carried() {
+    let result = parse_file(ALL_CONSTRUCTS, "test.rs", Language::Rust).expect("parse");
     let top_fn = result.nodes.iter().find(|n| n.name == "top_fn").unwrap();
     assert_eq!(
         top_fn
@@ -212,6 +222,18 @@ impl MyTrait for S { fn do_it(&self) {} }
     assert!(method.qualified_name.contains("S"));
 }
 
+/// A trait carrying a bodiless async requirement, an async defaulted method
+/// whose body calls out, and a non-async control.
+const ASYNC_TRAIT: &str = r#"
+pub trait Flusher {
+    async fn flush(&self);
+    async fn drain(&self) {
+        cleanup();
+    }
+    fn plain(&self) {}
+}
+"#;
+
 /// The trait-requirement `is_async` split: a bodiless requirement is reported
 /// NON-async unconditionally, while a defaulted `fn` has its modifiers read.
 ///
@@ -238,16 +260,7 @@ impl MyTrait for S { fn do_it(&self) {} }
 ///   - `plain` is a non-async defaulted fn — `false` either way, the control.
 #[test]
 fn rust_trait_requirement_async_flag_splits_signature_from_default() {
-    let src = r#"
-pub trait Flusher {
-    async fn flush(&self);
-    async fn drain(&self) {
-        cleanup();
-    }
-    fn plain(&self) {}
-}
-"#;
-    let result = parse_file(src, "t.rs", Language::Rust).expect("parse");
+    let result = parse_file(ASYNC_TRAIT, "t.rs", Language::Rust).expect("parse");
     assert_eq!(
         result.parse_errors, 0,
         "the async-trait-method corpus must parse clean, got {} errors at {:?}",
@@ -282,9 +295,15 @@ pub trait Flusher {
         "false",
         "control: a non-async defaulted trait method"
     );
-    // #131: the defaulted `drain` body IS now scanned, so `cleanup()` yields a
-    // call site keyed by `drain`'s own QN; the bodiless `flush` requirement yields
-    // none. The pin is inverted here, not deleted.
+}
+
+/// #131: the defaulted `drain` body IS scanned, so `cleanup()` yields a call
+/// site keyed by `drain`'s own QN, while the bodiless `flush` requirement
+/// yields none. Split from the async-flag assertions above so a failure names
+/// which of the two broke. source: coding-standards section 4.2.
+#[test]
+fn rust_defaulted_trait_body_is_scanned_for_calls() {
+    let result = parse_file(ASYNC_TRAIT, "t.rs", Language::Rust).expect("parse");
     let cleanup = result
         .nodes
         .iter()
@@ -314,9 +333,8 @@ pub trait Flusher {
 /// criterion 4). A file-level impl is unchanged (criterion 2), and a nested
 /// GENERIC impl composes the module prefix with the verbatim generic type text
 /// (criterion 3).
-#[test]
-fn rust_module_nested_impl_scopes_to_the_module_qn() {
-    let src = r#"
+/// A file-level impl plus a module holding a plain impl and a generic one.
+const NESTED_IMPLS: &str = r#"
 struct Config;
 impl Config {
     fn new() -> Self { Config }
@@ -332,59 +350,77 @@ pub mod helpers {
     }
 }
 "#;
-    let result = parse_file(src, "src/lib.rs", Language::Rust).expect("parse");
+
+/// The owning type's QN, read off its own definition node.
+fn type_qn(result: &ParseResult, name: &str) -> String {
+    result
+        .nodes
+        .iter()
+        .find(|n| (n.label == "Struct" || n.label == "Enum") && n.name == name)
+        .unwrap_or_else(|| panic!("no type named {name}"))
+        .qualified_name
+        .clone()
+}
+
+/// Asserts a method's QN, its `receiver_type`, and its `HasMethod` source are
+/// all the owner QN, so the three can never drift apart.
+fn assert_owned(result: &ParseResult, method: &str, owner_qn: &str, expect_method_qn: &str) {
+    let m = result
+        .nodes
+        .iter()
+        .find(|n| n.label == "Method" && n.name == method)
+        .unwrap_or_else(|| panic!("no method named {method}"));
+    assert_eq!(m.qualified_name, expect_method_qn, "{method} QN");
+    let receiver = m
+        .properties
+        .iter()
+        .find(|(k, _)| k == "receiver_type")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        receiver,
+        Some(owner_qn),
+        "{method} receiver_type == owner QN"
+    );
+    assert!(
+        result.refs.iter().any(|r| r.kind == "HasMethod"
+            && r.from_qualified_name == owner_qn
+            && r.to_qualified_name == expect_method_qn),
+        "HasMethod edge from the owner QN {owner_qn} to {expect_method_qn}"
+    );
+}
+
+/// #130 criterion 2: a FILE-level impl is unchanged by the module-scoping
+/// rule. Split from the nested cases so a failure names which scope broke.
+/// source: coding-standards section 4.2.
+#[test]
+fn rust_file_level_impl_keeps_the_file_qn() {
+    let result = parse_file(NESTED_IMPLS, "src/lib.rs", Language::Rust).expect("parse");
+    assert_eq!(type_qn(&result, "Config"), "src/lib.rs::Config");
+    assert_owned(
+        &result,
+        "new",
+        "src/lib.rs::Config",
+        "src/lib.rs::Config::new",
+    );
+}
+
+#[test]
+fn rust_module_nested_impl_scopes_to_the_module_qn() {
+    let result = parse_file(NESTED_IMPLS, "src/lib.rs", Language::Rust).expect("parse");
     assert_eq!(result.parse_errors, 0, "corpus must parse clean");
 
-    // The owning type's QN is read off its own definition node, then every one of
-    // its members' receiver QN and its `HasMethod` source are asserted EQUAL to it
-    // — the two can no longer drift.
-    let type_qn = |name: &str| -> String {
-        result
-            .nodes
-            .iter()
-            .find(|n| (n.label == "Struct" || n.label == "Enum") && n.name == name)
-            .unwrap_or_else(|| panic!("no type named {name}"))
-            .qualified_name
-            .clone()
-    };
-    let assert_owned = |method: &str, owner_qn: &str, expect_method_qn: &str| {
-        let m = result
-            .nodes
-            .iter()
-            .find(|n| n.label == "Method" && n.name == method)
-            .unwrap_or_else(|| panic!("no method named {method}"));
-        assert_eq!(m.qualified_name, expect_method_qn, "{method} QN");
-        let receiver = m
-            .properties
-            .iter()
-            .find(|(k, _)| k == "receiver_type")
-            .map(|(_, v)| v.as_str());
-        assert_eq!(
-            receiver,
-            Some(owner_qn),
-            "{method} receiver_type == owner QN"
-        );
-        assert!(
-            result.refs.iter().any(|r| r.kind == "HasMethod"
-                && r.from_qualified_name == owner_qn
-                && r.to_qualified_name == expect_method_qn),
-            "HasMethod edge from the owner QN {owner_qn} to {expect_method_qn}"
-        );
-    };
-
-    // File-level impl: unchanged.
-    assert_eq!(type_qn("Config"), "src/lib.rs::Config");
-    assert_owned("new", "src/lib.rs::Config", "src/lib.rs::Config::new");
     // Module-nested plain impl: scoped to the module, equal to the Struct's QN.
-    assert_eq!(type_qn("Inner"), "src/lib.rs::helpers::Inner");
+    assert_eq!(type_qn(&result, "Inner"), "src/lib.rs::helpers::Inner");
     assert_owned(
+        &result,
         "toggle",
         "src/lib.rs::helpers::Inner",
         "src/lib.rs::helpers::Inner::toggle",
     );
     // Module-nested generic impl: module prefix + verbatim generic type text.
-    assert_eq!(type_qn("Wrapper"), "src/lib.rs::helpers::Wrapper");
+    assert_eq!(type_qn(&result, "Wrapper"), "src/lib.rs::helpers::Wrapper");
     assert_owned(
+        &result,
         "get",
         "src/lib.rs::helpers::Wrapper<T>",
         "src/lib.rs::helpers::Wrapper<T>::get",
@@ -428,9 +464,10 @@ pub trait Handler {
             .collect()
     };
     let calls = callee_under("src/lib.rs::Handler::describe");
-    // Closure body call, macro invocation (callee keeps `!`), and the two
-    // function-value-argument sites of `run_all(validate, input)` (#87).
-    for expected in ["s.len", "shout!", "run_all", "validate", "input"] {
+    // Closure body call, macro invocation (callee keeps `!`), and the ONE
+    // genuine function-value-argument site of `run_all(validate, input)` (#87);
+    // `input` is a parameter, so it is a value. source: ADR-9836.
+    for expected in ["s.len", "shout!", "run_all", "validate"] {
         assert!(
             calls.contains(&expected),
             "defaulted body must reach {expected}, got {calls:?}"
