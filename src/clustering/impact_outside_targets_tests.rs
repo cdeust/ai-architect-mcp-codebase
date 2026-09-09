@@ -39,7 +39,12 @@ fn insert_function(store: &GraphStore, qn: &str) {
 /// `LspPass::mark_resolved` leaves behind for a site attributed outside every
 /// compiled Cargo target (empty string when `reason` is `None`, matching
 /// what the indexer itself writes for a freshly parsed site).
-fn insert_unresolved_callsite(store: &GraphStore, id: &str, callee_name: &str, reason: Option<&str>) {
+fn insert_unresolved_callsite(
+    store: &GraphStore,
+    id: &str,
+    callee_name: &str,
+    reason: Option<&str>,
+) {
     store
         .insert_node(
             NODE_CALL_SITE,

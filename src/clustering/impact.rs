@@ -154,7 +154,11 @@ fn resolve_epistemic(
     esc: &str,
     target_bare_name: &str,
     deps: &ReverseDependents,
-) -> (impact_reasons::UnresolvedCallsiteAttribution, Vec<String>, Boundary) {
+) -> (
+    impact_reasons::UnresolvedCallsiteAttribution,
+    Vec<String>,
+    Boundary,
+) {
     let attribution = impact_reasons::unresolved_callsite_attribution(store, target_bare_name);
     let epistemic_reasons = impact_reasons::build_epistemic_reasons(store, esc, &attribution, deps);
     let epistemic = if epistemic_reasons.is_empty() {

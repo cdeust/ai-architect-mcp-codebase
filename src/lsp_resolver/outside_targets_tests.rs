@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::graph_store::{GraphStore, NODE_CALL_SITE, NODE_FUNCTION};
-use crate::indexer::cargo_targets;
+use crate::indexer::cargo_targets::{self, TargetMap};
 use crate::lsp_client::{self, LspClient};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -127,6 +127,42 @@ fn assert_normally_processed(events: &str, uri: &str) {
     );
 }
 
+/// Spawns the fake server, builds the pass plan, drives `resolve_with_client`
+/// to completion, and returns the resulting counts plus the fake server's
+/// request log — the full "run one LSP pass" sequence, extracted so the test
+/// itself stays under the §4.2 function-length cap.
+fn run_pass_and_capture_log(
+    fx: &OutsideTargetsFixture,
+    unresolved: &[UnresolvedCallSite],
+    target_map: &TargetMap,
+) -> (lsp_client::LspResolutionResult, String) {
+    let log = tempfile::Builder::new()
+        .prefix("lsp_outside_targets_log")
+        .tempfile()
+        .expect("tempfile");
+    let mut client = spawn_fake_definition_logger(&fx.root, log.path());
+
+    let node_index = build_node_position_index(&fx.store).expect("index");
+    let plan = PassPlan {
+        codebase_path: &fx.root,
+        language: "rust",
+        deadline: Duration::from_secs(5),
+        start: Instant::now(),
+        ctx: edges::SiteContext {
+            node_index: &node_index,
+            canonical_root: &fx.root,
+        },
+        target_map,
+    };
+
+    let pass = resolve_with_client(&fx.store, &mut client, &plan, unresolved)
+        .expect("a healthy server must not be gated");
+    let result = pass.into_result(0, client.server_health().clone());
+    let _ = client.shutdown();
+    let events = std::fs::read_to_string(log.path()).expect("read log");
+    (result, events)
+}
+
 #[test]
 fn a_site_outside_the_compiled_targets_never_gets_a_definition_request() {
     if !lsp_client::is_command_available("python3") {
@@ -151,36 +187,18 @@ fn a_site_outside_the_compiled_targets_never_gets_a_definition_request() {
         "the fixture's own Cargo.toml must compile src/lib.rs — got {target_map:?}"
     );
 
-    let log = tempfile::Builder::new()
-        .prefix("lsp_outside_targets_log")
-        .tempfile()
-        .expect("tempfile");
-    let mut client = spawn_fake_definition_logger(&fx.root, log.path());
-
-    let node_index = build_node_position_index(&fx.store).expect("index");
-    let plan = PassPlan {
-        codebase_path: &fx.root,
-        language: "rust",
-        deadline: Duration::from_secs(5),
-        start: Instant::now(),
-        ctx: edges::SiteContext {
-            node_index: &node_index,
-            canonical_root: &fx.root,
-        },
-        target_map: &target_map,
-    };
-
-    let pass = resolve_with_client(&fx.store, &mut client, &plan, &unresolved)
-        .expect("a healthy server must not be gated");
-    let result = pass.into_result(0, client.server_health().clone());
-    let _ = client.shutdown();
+    let (result, events) = run_pass_and_capture_log(&fx, &unresolved, &target_map);
 
     assert_eq!(
         result.outside_targets_count, 1,
         "exactly the kani/h.rs site must be attributed outside targets"
     );
-
-    let events = std::fs::read_to_string(log.path()).expect("read log");
-    assert_never_touched(&events, &lsp_client::path_to_file_uri(&fx.root.join("kani/h.rs")));
-    assert_normally_processed(&events, &lsp_client::path_to_file_uri(&fx.root.join("src/lib.rs")));
+    assert_never_touched(
+        &events,
+        &lsp_client::path_to_file_uri(&fx.root.join("kani/h.rs")),
+    );
+    assert_normally_processed(
+        &events,
+        &lsp_client::path_to_file_uri(&fx.root.join("src/lib.rs")),
+    );
 }

@@ -95,7 +95,12 @@ pub(super) fn attach_cochange_section(
 /// Cross-repo edges are name-matched without a shared linker, so any foreign
 /// caller makes the blast radius a lower bound (and stays one even if the
 /// local set was exact). source: epistemic module contract.
-pub(super) fn attach_foreign_callers(out: &mut Value, arguments: &Value, graph_path: &Path, qn: &str) {
+pub(super) fn attach_foreign_callers(
+    out: &mut Value,
+    arguments: &Value,
+    graph_path: &Path,
+    qn: &str,
+) {
     let siblings = bridge::SiblingGraphs::from_arg(arguments, graph_path);
     if siblings.is_empty() {
         return;

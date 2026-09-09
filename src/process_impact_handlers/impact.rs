@@ -328,4 +328,3 @@ impl SectionViews {
             || sections.references.truncated
     }
 }
-
