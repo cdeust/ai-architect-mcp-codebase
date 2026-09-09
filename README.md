@@ -57,11 +57,21 @@ Every AI coding assistant hits the same wall: you ask it to change `handle_tool_
 
 For inferred Rust receiver calls, pass `lsp: true` to `analyze_codebase` and
 install rust-analyzer. The response's `lsp_status.state` distinguishes
-`disabled`, `completed`, and `failed`; failures retain their error and analysis
-continues on the available graph, which may contain partial LSP results.
-`lsp_resolve` retains the pass's counts; `resolve.phase = "static"` identifies
-the separate static-resolution receipt. Completion does not mean every call
-was resolved.
+`disabled`, `completed`, `completed_unresolved`, and `failed`; failures retain
+their error and analysis continues on the available graph, which may contain
+partial LSP results. `lsp_resolve` retains the pass's counts;
+`resolve.phase = "static"` identifies the separate static-resolution receipt.
+Completion does not mean every call was resolved — `completed_unresolved`
+(issue #282) is the explicit signal for "the pass ran and resolved nothing"
+(at least one site was attempted), as opposed to `completed`, which also
+covers "there was nothing to resolve." A target that sits under a parent
+Cargo workspace which does not list it as a member — or any other condition
+the language server itself reports as `health: "error"` — fails the phase
+outright as `lsp_workspace_load_failed` before a single resolution request
+is sent, naming the cargo-level fix (add the package to the parent's
+`workspace.members`, or analyze the workspace root). `lsp_status.server_health`
+and `lsp_resolve`'s own `server_health` field carry the server's
+last-reported health, message, and readiness signal even on success.
 
 Analysis persists its coverage report for `query_graph(graph="missed")` and
 returns the same summary. Rust processes use explicit `#[test]` and

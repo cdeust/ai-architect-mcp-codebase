@@ -7,7 +7,7 @@
 use super::edges::{try_add_lsp_edge, SiteContext};
 use super::sites::UnresolvedCallSite;
 use crate::graph_store::GraphStore;
-use crate::lsp_client::{self, LspResolutionResult};
+use crate::lsp_client::{self, LspResolutionResult, ServerHealth};
 
 /// Running tally of one LSP resolution pass.
 ///
@@ -76,12 +76,17 @@ impl LspPass {
         store.mark_nodes_resolved("CallSite", &ids)
     }
 
-    pub(super) fn into_result(self, elapsed_ms: u64) -> LspResolutionResult {
+    pub(super) fn into_result(
+        self,
+        elapsed_ms: u64,
+        server_health: ServerHealth,
+    ) -> LspResolutionResult {
         LspResolutionResult {
             resolved_count: self.resolved,
             failed_count: self.failed,
             skipped_count: self.total.saturating_sub(self.resolved + self.failed),
             elapsed_ms,
+            server_health,
         }
     }
 }
@@ -145,7 +150,7 @@ mod tests {
             &ctx,
         );
 
-        let out = pass.into_result(0);
+        let out = pass.into_result(0, ServerHealth::not_probed());
         assert_eq!(out.resolved_count, 0);
         assert_eq!(out.failed_count, 3, "three sites were answered negatively");
         assert_eq!(
@@ -274,7 +279,7 @@ mod tests {
             &ctx,
         );
 
-        let out = pass.into_result(0);
+        let out = pass.into_result(0, ServerHealth::not_probed());
         assert_eq!(
             out.failed_count, 1,
             "an error that merely mentions the word must stay a failure"

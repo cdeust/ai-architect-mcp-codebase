@@ -90,13 +90,52 @@ fn successful_requested_lsp_retains_counts_and_reports_completion() {
     let repo = fixture(tmp.path());
     let result = analyze(&repo, &tmp.path().join("out"), true, None);
     assert_eq!(result["status"], "ok", "{result}");
+    // Issue #282: `lsp_status` now also carries `server_health` — adapted
+    // from the previous strict-equality assertion, which pinned the exact
+    // wire shape before that field existed.
+    assert_eq!(result["lsp_status"]["requested"], true, "{result}");
+    assert_eq!(result["lsp_status"]["state"], "completed", "{result}");
     assert_eq!(
-        result["lsp_status"],
-        json!({"requested": true, "state": "completed"})
+        result["lsp_status"]["server_health"]["health"], "ok",
+        "{result}"
     );
     assert!(
         result["lsp_resolve"]["resolved_count"].as_u64().unwrap() > 0,
         "{result}"
     );
     assert_eq!(result["resolve"]["phase"], "static");
+}
+
+/// Issue #282, the measured symptom: a crate that sits under a parent Cargo
+/// workspace which does not list it as a member. `cargo metadata` refuses
+/// the target ("current package believes it's in a workspace when it's
+/// not"), rust-analyzer never loads a crate graph, and every
+/// `textDocument/definition` request would answer `[]` — indistinguishable,
+/// pre-fix, from 634 individually "not found" call sites. The phase must now
+/// fail loudly instead of reporting `state: "completed"`.
+#[test]
+#[ignore = "requires rust-analyzer; run explicitly with --ignored"]
+fn nested_under_a_parent_workspace_fails_the_lsp_phase_loudly() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+    let repo = fixture(tmp.path());
+    let out = tmp.path().join("out");
+    let result = analyze(&repo, &out, true, None);
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(result["lsp_status"]["requested"], true, "{result}");
+    assert_eq!(result["lsp_status"]["state"], "failed", "{result}");
+    assert!(
+        result["lsp_status"]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("lsp_workspace_load_failed"),
+        "{result}"
+    );
+    assert!(result["lsp_resolve"].is_null(), "{result}");
+    assert_eq!(result["resolve"]["phase"], "static");
+    assert!(out.join("graph").exists());
 }

@@ -594,7 +594,7 @@ fn get_context_schema() -> Value {
 fn lsp_resolve_schema() -> Value {
     json!({
         "name": "lsp_resolve",
-        "description": "Stage 3b-v2 — LSP-enhanced resolution. Queries a Language Server Protocol server (rust-analyzer, pyright, typescript-language-server) to resolve method calls on inferred types that the static resolver cannot handle. Runs AFTER resolve_graph. Requires the LSP server to be installed; gracefully fails if not found.",
+        "description": "Stage 3b-v2 — LSP-enhanced resolution. Queries a Language Server Protocol server (rust-analyzer, pyright, typescript-language-server) to resolve method calls on inferred types that the static resolver cannot handle. Runs AFTER resolve_graph. Requires the LSP server to be installed; gracefully fails if not found. Issue #282: if the target sits under a parent workspace that does not list it as a member (or another condition the server reports as `health: \"error\"`), the phase fails loudly as an `lsp_workspace_load_failed` error instead of silently answering every request `[]`. On success, the response's `state` distinguishes `completed` (at least one site resolved, or nothing needed resolving) from `completed_unresolved` (the pass ran but resolved nothing); `server_health` carries the language server's own last-reported health.",
         "annotations": { "destructiveHint": true },
         "inputSchema": {
             "type": "object",
