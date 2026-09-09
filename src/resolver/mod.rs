@@ -18,6 +18,7 @@ mod extends;
 mod implements;
 mod imports;
 mod phases;
+mod receiver;
 mod uses;
 #[cfg(test)]
 use extends::{resolve_one_extends_base, ExtendsCandidate, ExtendsContext};
@@ -137,7 +138,10 @@ pub struct UnresolvedRef {
 // source: stages/stage-3b.md §9 Q5 — HashMap index for O(1) lookups
 // ---------------------------------------------------------------------------
 
-#[derive(Clone)]
+// Debug + PartialEq: needed by resolver::receiver's tests, which assert_eq!
+// on ambiguity_policy::Resolution<SymbolEntry> (that enum's own derive
+// requires its type parameter to implement both).
+#[derive(Clone, Debug, PartialEq)]
 struct SymbolEntry {
     id: String,
     label: String,

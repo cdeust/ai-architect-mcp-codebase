@@ -32,6 +32,15 @@ fn analyze(repo: &Path, output: &Path, lsp: bool, path: Option<&Path>) -> Value 
     serde_json::from_str(envelope["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// Issue #283 lot 4: `self.response_of()` inside `impl TaskSet` is now
+/// bound by the static resolver itself (`resolver::receiver`,
+/// `Evidence::ReceiverBound`), which would leave nothing for
+/// `successful_requested_lsp_retains_counts_and_reports_completion`'s LSP
+/// pass to resolve. `total` is a free function calling through an
+/// index-expression receiver (`sets[0].response_of()`,
+/// `ReceiverForm::None`) so the static resolver still cannot bind it and
+/// the LSP-path assertions below keep exercising the LSP pass, not the
+/// static one (tasks/plan-issues-282-283-284.md §2.3).
 fn fixture(root: &Path) -> std::path::PathBuf {
     let repo = root.join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
@@ -41,7 +50,7 @@ fn fixture(root: &Path) -> std::path::PathBuf {
     )
     .unwrap();
     std::fs::write(repo.join("src/lib.rs"),
-        "pub struct TaskSet;\nimpl TaskSet {\n pub fn response_of(&self) -> u64 { 1 }\n pub fn total(&self) -> u64 { self.response_of() }\n}\n").unwrap();
+        "pub struct TaskSet;\nimpl TaskSet {\n pub fn response_of(&self) -> u64 { 1 }\n}\npub fn total(sets: &[TaskSet]) -> u64 { sets[0].response_of() }\n").unwrap();
     repo
 }
 

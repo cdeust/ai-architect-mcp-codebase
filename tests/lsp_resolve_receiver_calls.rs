@@ -7,6 +7,15 @@
 // workDoneProgress before issuing the first request. `#[ignore]`d when
 // `rust-analyzer` is not on PATH — the reason is in the ignore string, per
 // CONTRIBUTING.md's testing policy.
+//
+// Issue #283 lot 4: the fixture's receiver call was originally
+// `self.response_of(i)` inside `impl TaskSet`, which the static resolver
+// now binds itself (`resolver::receiver`, `Evidence::ReceiverBound`) —
+// leaving nothing for this test's LSP path to exercise. The fixture was
+// changed to an index-expression receiver (`sets[0].response_of(i)`,
+// `ReceiverForm::None`, tasks/plan-issues-282-283-284.md §2.3), which the
+// static resolver still cannot bind, so this test still proves the LSP
+// path.
 
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::lsp_client::is_command_available;
@@ -64,13 +73,13 @@ fn lsp_resolve_binds_receiver_method_calls_via_rust_analyzer() {
     let after = callers_of_response_of(&store);
     assert_eq!(
         after,
-        vec!["src/lib.rs::TaskSet::total".to_string()],
-        "response_of must gain exactly one caller — TaskSet::total — via the LSP pass"
+        vec!["src/lib.rs::total".to_string()],
+        "response_of must gain exactly one caller — total — via the LSP pass"
     );
 
     // Soundness regression (PR #267 follow-up): `extra_call_entries`
     // (#87, deliberate) also emits a speculative CallSite for the bare
-    // argument `i` in `self.response_of(i)`. rust-analyzer resolves `i`
+    // argument `i` in `sets[0].response_of(i)`. rust-analyzer resolves `i`
     // to `total`'s own PARAMETER declaration, which sits on the SAME
     // LINE as `total`'s function signature. A parameter is not itself an
     // indexed graph node, so an imprecise position match must not fall
@@ -78,7 +87,7 @@ fn lsp_resolve_binds_receiver_method_calls_via_rust_analyzer() {
     // total` self-call edge. This assertion is the one the original PR's
     // test was missing — the false edge could be present with the test
     // above still green.
-    let self_edges = calls_edges_from(&store, "src/lib.rs::TaskSet::total");
+    let self_edges = calls_edges_from(&store, "src/lib.rs::total");
     assert!(
         self_edges.is_empty(),
         "the LSP pass must not fabricate a Calls edge from `total` to \
@@ -87,9 +96,13 @@ fn lsp_resolve_binds_receiver_method_calls_via_rust_analyzer() {
 }
 
 /// Writes a minimal but real cargo package under a fresh tempdir: a struct
-/// with a value-receiver method call the static resolver cannot bind
-/// (`src/resolver/calls.rs` ~line 245). rust-analyzer needs the Cargo.toml
-/// to load the workspace and answer `textDocument/definition` at all.
+/// with an index-expression-receiver method call the static resolver
+/// cannot bind (`sets[0].response_of(i)` classifies as
+/// `resolver::receiver::ReceiverForm::None` — issue #283 lot 4). `total` is
+/// a free function, not a method, so that `self.`/`Self::` binding (which
+/// the static resolver now performs, `Evidence::ReceiverBound`) never
+/// applies here either. rust-analyzer needs the Cargo.toml to load the
+/// workspace and answer `textDocument/definition` at all.
 ///
 /// Returns the tempdir GUARD alongside the fixture's crate root — the guard
 /// must be kept alive by the caller for as long as the path is used; see the
@@ -118,21 +131,23 @@ fn write_receiver_call_fixture() -> (TestTempDir, PathBuf) {
          \n\
          impl TaskSet {\n\
          \x20\x20\x20\x20pub fn response_of(&self, i: i32) -> i32 { i }\n\
+         }\n\
          \n\
-         \x20\x20\x20\x20pub fn total(&self, i: i32) -> i32 {\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20self.response_of(i)\n\
-         \x20\x20\x20\x20}\n\
+         pub fn total(sets: &[TaskSet], i: i32) -> i32 {\n\
+         \x20\x20\x20\x20sets[0].response_of(i)\n\
          }\n",
     )
     .expect("write lib.rs");
     (tmp_root, fixture)
 }
 
-/// Every caller `id` with a `Calls_Method_Method` edge into `response_of`.
+/// Every caller `id` with a `Calls_Function_Method` edge into
+/// `response_of` — `total` is a free `Function`, the only label the
+/// fixture's caller can have.
 fn callers_of_response_of(store: &GraphStore) -> Vec<String> {
     store
         .execute_query(&format!(
-            "MATCH (a)-[:Calls_Method_Method]->(b:Method) \
+            "MATCH (a:Function)-[:Calls_Function_Method]->(b:Method) \
              WHERE b.qualified_name = '{RESPONSE_OF_QN}' RETURN a.id"
         ))
         .expect("query callers")
@@ -142,13 +157,13 @@ fn callers_of_response_of(store: &GraphStore) -> Vec<String> {
         .collect()
 }
 
-/// Every `Calls_Method_Method` edge FROM `caller_id` other than to
+/// Every `Calls_Function_Method` edge FROM `caller_id` other than to
 /// `response_of` — i.e. any edge that would be a fabricated target,
 /// including a self-edge.
 fn calls_edges_from(store: &GraphStore, caller_id: &str) -> Vec<String> {
     store
         .execute_query(&format!(
-            "MATCH (a:Method)-[:Calls_Method_Method]->(b:Method) \
+            "MATCH (a:Function)-[:Calls_Function_Method]->(b:Method) \
              WHERE a.id = '{caller_id}' AND b.qualified_name <> '{RESPONSE_OF_QN}' \
              RETURN b.id"
         ))

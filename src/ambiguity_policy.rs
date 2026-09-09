@@ -24,6 +24,17 @@ pub enum Evidence {
     /// Exactly one candidate exists for the callee's name in the whole
     /// symbol index — no ambiguity to resolve.
     UniqueGlobal,
+    /// A Rust `self.<m>` / `Self::<m>` callee bound to a method on the
+    /// caller's own enclosing `impl` type — either the exact
+    /// `{impl_qn}::{m}` key, or the single `idx.by_name[m]` candidate whose
+    /// parent type matches that `impl`. Produced only by
+    /// `resolver::receiver::resolve_receiver_bound`, gated to
+    /// `language == "rust"` and a `Method` caller.
+    /// source: tasks/plan-issues-282-283-284.md §2.2/§9-3 (issue #283, lot
+    /// 4). Rationale and the arbitrated confidence value are recorded as
+    /// Cortex memory 4360985 (ADR content; `wiki_adr` was unavailable in
+    /// the authoring session — pending promotion to a numbered wiki ADR).
+    ReceiverBound,
     /// The callee (or its qualified spelling) matches an import path in
     /// scope at the call site, and exactly one candidate's qualified name
     /// has that import path as a suffix.
@@ -45,6 +56,7 @@ pub enum Evidence {
 pub fn confidence_for(evidence: Evidence) -> f64 {
     match evidence {
         Evidence::UniqueGlobal => 0.95,
+        Evidence::ReceiverBound => 0.93,
         Evidence::ImportMatch => 0.9,
         Evidence::SameFileUnique => 0.85,
         Evidence::PackageProximity => 0.7,
@@ -133,6 +145,7 @@ pub fn resolve<T: Candidate>(candidates: &[T], ctx: &Context) -> Resolution<T> {
 pub fn resolution_label(evidence: Evidence) -> &'static str {
     match evidence {
         Evidence::UniqueGlobal => "unique-match",
+        Evidence::ReceiverBound => "receiver-type",
         Evidence::ImportMatch => "import-scope-lookup",
         Evidence::SameFileUnique => "same-file-unique",
         Evidence::PackageProximity => "package-proximity",
@@ -289,6 +302,7 @@ mod tests {
     fn confidence_is_monotone_in_evidence_strength() {
         let tiers = [
             Evidence::UniqueGlobal,
+            Evidence::ReceiverBound,
             Evidence::ImportMatch,
             Evidence::SameFileUnique,
             Evidence::PackageProximity,
