@@ -155,6 +155,56 @@ fn lsp_client_resolves_via_server_status_quiescent_not_progress() {
     );
 }
 
+/// Issue #282. Drives the fake `error` server (§1.4 of the fix plan):
+/// `initialize_with_probe` must still succeed (the server DID answer, it
+/// just reports it loaded nothing) but `client.server_health().level` must
+/// come back `Error` carrying the server's own message — this is what
+/// `lsp_resolver::resolve_with_client` gates on before issuing any
+/// `textDocument/definition` request.
+#[test]
+fn initialize_with_probe_reports_server_health_error() {
+    if !is_command_available("python3") {
+        eprintln!("skipping: python3 not on PATH (fake LSP server fixture needs it)");
+        return;
+    }
+    let log = tempfile::Builder::new()
+        .prefix("lsp_health_error_log")
+        .tempfile()
+        .expect("tempfile");
+    let log_path = log.path().to_path_buf();
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/lsp/fake_server_status_error_server.py"
+    );
+    let tmp = std::env::temp_dir();
+    let mut client = LspClient::start_unchecked(
+        "python3",
+        &[script, log_path.to_str().expect("utf8 path")],
+        &tmp,
+        Duration::from_secs(10),
+    )
+    .expect("spawn fake server");
+
+    client
+        .initialize_with_probe(&tmp, Duration::from_secs(5))
+        .expect(
+        "initialize itself must succeed — the server answered, it just reports it failed to load",
+    );
+
+    assert_eq!(client.server_health().level, ServerHealthLevel::Error);
+    assert_eq!(
+        client.server_health().message.as_deref(),
+        Some("Failed to load workspaces."),
+        "the LAST health observed (error) must win over the earlier warning"
+    );
+
+    let events = std::fs::read_to_string(&log_path).expect("read log");
+    assert!(
+        !events.contains("definition_requested"),
+        "initialize alone must never issue a definition request: {events}"
+    );
+}
+
 /// Round-3 finding 5. Both directions of JSON-RPC use `id`, and the two id
 /// spaces are INDEPENDENT: a server-initiated request
 /// (`window/workDoneProgress/create`, `workspace/configuration`) numbers its
@@ -214,6 +264,7 @@ fn shutdown_returns_against_a_server_that_never_exits() {
         // Short, because the shutdown handshake will never be answered:
         // the assertion is that the call RETURNS, never on how long it took.
         timeout: Duration::from_millis(50),
+        server_health: ServerHealth::not_probed(),
     };
 
     client.shutdown().expect("shutdown must return, not hang");
@@ -291,6 +342,7 @@ fn client_replaying(frames: &[Value]) -> LspClient {
         frames: spawn_frame_reader(stdout),
         request_id: AtomicI64::new(2),
         timeout: Duration::from_secs(5),
+        server_health: ServerHealth::not_probed(),
     }
 }
 

@@ -60,6 +60,7 @@
 // ended".
 
 use super::frames::next_frame;
+use super::health::{parse_server_status, ServerHealth, ServerHealthLevel, ServerStatus};
 use super::protocol::{write_lsp_message, FrameError};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -92,9 +93,12 @@ use std::time::{Duration, Instant};
 /// `AllProgressEnded` returned while a later phase was still about to start.
 const PROGRESS_QUIET_WINDOW: Duration = Duration::from_millis(500);
 
-/// Why `wait_for_ready` returned.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum ReadinessOutcome {
+/// Why `wait_for_ready` returned. `pub` (not `pub(super)`): it rides on
+/// `ServerHealth::readiness`, which is a field of a `pub` struct reachable
+/// through `LspResolutionResult` — a private-in-public-interface error
+/// otherwise (E0446).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadinessOutcome {
     /// The server sent `experimental/serverStatus` with `quiescent: true` —
     /// its own authoritative "caught up" answer (signal 1, module header).
     ServerReportedQuiescent,
@@ -111,6 +115,17 @@ pub(super) enum ReadinessOutcome {
     /// best-effort synchronisation, not a hard gate — but a definition query
     /// issued now may still race the server's own indexing.
     DeadlineExpired,
+}
+
+impl ReadinessOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReadinessOutcome::ServerReportedQuiescent => "server_reported_quiescent",
+            ReadinessOutcome::NoProgressReported => "no_progress_reported",
+            ReadinessOutcome::AllProgressEnded => "all_progress_ended",
+            ReadinessOutcome::DeadlineExpired => "deadline_expired",
+        }
+    }
 }
 
 /// The workDoneProgress bookkeeping `wait_for_ready` needs between frames —
@@ -220,6 +235,40 @@ impl ProgressState {
     }
 }
 
+/// Tracks the LAST `experimental/serverStatus.health`/`.message` observed
+/// during one `wait_for_ready` call, independent of the progress/quiescent
+/// bookkeeping `ProgressState` owns — a server can report `health` on every
+/// serverStatus message, not only the final `quiescent: true` one (sonde D,
+/// `health.rs` module header: `warning` arrives before `error` on the same
+/// wait). "Last wins" is deliberate: it is the server's most recent verdict,
+/// not its first.
+struct HealthTrack {
+    level: ServerHealthLevel,
+    message: Option<String>,
+}
+
+impl HealthTrack {
+    fn new() -> Self {
+        HealthTrack {
+            level: ServerHealthLevel::Unknown,
+            message: None,
+        }
+    }
+
+    fn record(&mut self, status: &ServerStatus) {
+        self.level = status.health;
+        self.message = status.message.clone();
+    }
+
+    fn finish(self, readiness: ReadinessOutcome) -> ServerHealth {
+        ServerHealth {
+            level: self.level,
+            message: self.message,
+            readiness,
+        }
+    }
+}
+
 /// Blocks until the server reports quiescence (signal 1, module header), or
 /// its workDoneProgress tokens have all ended (signal 2, fallback), or until
 /// `deadline`, whichever comes first. Acknowledges every
@@ -227,6 +276,10 @@ impl ProgressState {
 /// emit `$/progress` for a token it never got acknowledged — LSP 3.17
 /// §Progress) and swallows a failure to do so: an unanswered `create`
 /// degrades this to a best-effort wait, not a broken handshake.
+///
+/// Returns the server's health as last observed during the wait (`Unknown`
+/// with no message for a server that never sends `experimental/serverStatus`
+/// at all), paired with why the wait ended — see `ServerHealth`.
 ///
 /// Any frame that is neither signal — another notification, a stray
 /// response — is set aside and left for `read_response_for_id` to find, so
@@ -241,13 +294,14 @@ pub(super) fn wait_for_ready(
     frames: &Receiver<Result<Value, FrameError>>,
     mut respond_to_create: impl FnMut(i64) -> Result<(), String>,
     deadline: Instant,
-) -> ReadinessOutcome {
+) -> ServerHealth {
     let mut state = ProgressState::new();
+    let mut health = HealthTrack::new();
     loop {
         let now = Instant::now();
         let checkpoint = state.checkpoint(deadline);
         if now >= checkpoint {
-            return state.give_up();
+            return health.finish(state.give_up());
         }
         let msg = match next_frame(frames, checkpoint - now) {
             Ok(msg) => msg,
@@ -265,19 +319,25 @@ pub(super) fn wait_for_ready(
             // returns this WITHOUT waiting, so continuing here would busy-
             // spin until `deadline` with nothing left to ever read. Give up
             // now instead.
-            Err(_) => return state.give_up(),
+            Err(_) => return health.finish(state.give_up()),
         };
 
         // Signal 1 wins outright, even over a still-outstanding progress
         // token — it is the server's own authoritative answer, not another
         // heuristic to reconcile with the drain below.
-        match server_status_quiescent(&msg) {
-            Some(true) => return ReadinessOutcome::ServerReportedQuiescent,
-            // `quiescent: false` is proof the server WILL eventually report
-            // `true` — stop applying the workDoneProgress onset/quiet-window
-            // heuristics, which exist only for a server that might report
-            // nothing at all (see `server_status_seen`).
-            Some(false) => state.note_server_status_activity(),
+        match parse_server_status(&msg) {
+            Some(status) => {
+                health.record(&status);
+                if status.quiescent {
+                    return health.finish(ReadinessOutcome::ServerReportedQuiescent);
+                }
+                // `quiescent: false` is proof the server WILL eventually
+                // report `true` — stop applying the workDoneProgress
+                // onset/quiet-window heuristics, which exist only for a
+                // server that might report nothing at all (see
+                // `server_status_seen`).
+                state.note_server_status_activity();
+            }
             None => state.apply(&msg, &mut respond_to_create),
         }
     }
@@ -310,7 +370,7 @@ pub(super) fn client_wait_for_ready(client: &mut super::LspClient) {
     let deadline = Instant::now() + client.timeout;
     let frames = &client.frames;
     let process = &mut client.process;
-    let _ = wait_for_ready(
+    let health = wait_for_ready(
         frames,
         |id| {
             let ack = json!({ "jsonrpc": "2.0", "id": id, "result": Value::Null });
@@ -320,24 +380,13 @@ pub(super) fn client_wait_for_ready(client: &mut super::LspClient) {
         },
         deadline,
     );
+    client.server_health = health;
 }
 
 enum ProgressKind {
     Begin,
     Report,
     End,
-}
-
-/// `Some(quiescent)` when `msg` is an `experimental/serverStatus`
-/// notification (rust-analyzer's LSP extension, opted into via the
-/// `experimental.serverStatusNotification` client capability — module
-/// header, signal 1). `None` for any other message, including from a server
-/// that never sends this at all.
-fn server_status_quiescent(msg: &Value) -> Option<bool> {
-    if msg.get("method").and_then(Value::as_str) != Some("experimental/serverStatus") {
-        return None;
-    }
-    msg.get("params")?.get("quiescent")?.as_bool()
 }
 
 /// `id` when `msg` is a server-initiated `window/workDoneProgress/create`
@@ -374,219 +423,5 @@ fn progress_kind(msg: &Value) -> Option<(String, ProgressKind)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::sync::mpsc;
-
-    fn queue(frames: &[Value]) -> Receiver<Result<Value, FrameError>> {
-        let (tx, rx) = mpsc::sync_channel(64);
-        for f in frames {
-            tx.try_send(Ok(f.clone())).expect("queue frame");
-        }
-        rx
-    }
-
-    #[test]
-    fn no_progress_activity_returns_immediately_not_at_the_full_deadline() {
-        let rx = queue(&[]);
-        let start = Instant::now();
-        // A deadline far longer than the onset budget: if this returns only
-        // once the WHOLE deadline elapses, the onset budget did nothing.
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let outcome = wait_for_ready(&rx, |_id| Ok(()), deadline);
-        assert_eq!(outcome, ReadinessOutcome::NoProgressReported);
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "a non-reporting server must not be held to the full timeout: {:?}",
-            start.elapsed()
-        );
-    }
-
-    #[test]
-    fn create_is_acknowledged_and_begin_then_end_resolves_ready() {
-        let mut acked = Vec::new();
-        let rx = queue(&[
-            json!({"jsonrpc":"2.0","id":7,"method":"window/workDoneProgress/create",
-                   "params":{"token":"rustAnalyzer/Indexing"}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"rustAnalyzer/Indexing","value":{"kind":"begin","title":"Indexing"}}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"rustAnalyzer/Indexing","value":{"kind":"report","percentage":50}}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"rustAnalyzer/Indexing","value":{"kind":"end"}}}),
-        ]);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let outcome = wait_for_ready(
-            &rx,
-            |id| {
-                acked.push(id);
-                Ok(())
-            },
-            deadline,
-        );
-        assert_eq!(outcome, ReadinessOutcome::AllProgressEnded);
-        assert_eq!(acked, vec![7], "the create request must be acknowledged");
-    }
-
-    #[test]
-    fn two_outstanding_tokens_both_must_end() {
-        let rx = queue(&[
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"a","value":{"kind":"begin"}}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"b","value":{"kind":"begin"}}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"a","value":{"kind":"end"}}}),
-        ]);
-        // Only "a" ended; "b" never does, so the wait must run to its
-        // deadline rather than declaring victory early.
-        let deadline = Instant::now() + Duration::from_millis(200);
-        let outcome = wait_for_ready(&rx, |_id| Ok(()), deadline);
-        assert_eq!(outcome, ReadinessOutcome::DeadlineExpired);
-    }
-
-    /// Regression for the bug this quiet-window redesign fixed: the FIRST
-    /// version of this detector returned the instant one token's begin/end
-    /// pair completed. rust-analyzer reports loading as a SEQUENCE of
-    /// distinct tokens (`Fetching` -> `Building CrateGraph` ->
-    /// `Roots Scanned` -> ... -> `cachePriming`, measured 2026-09-03), so
-    /// declaring victory the moment the first pair completed — even though
-    /// its SECOND token (`create` + begin + end) was already sitting in the
-    /// channel, ready to read with zero latency. Measured directly against a
-    /// real fixture: `resolved_count: 0` in 1.3s wall time, because the old
-    /// code `return`ed the instant `Fetching` ended and never read
-    /// `Building CrateGraph`'s messages at all — this test proves the second
-    /// token's `create` gets acknowledged, which only happens if the loop
-    /// kept running past the first pair's end.
-    #[test]
-    fn a_second_tokens_pair_already_queued_is_not_skipped() {
-        let mut acked = Vec::new();
-        let rx = queue(&[
-            json!({"jsonrpc":"2.0","id":1,"method":"window/workDoneProgress/create",
-                   "params":{"token":"Fetching"}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"Fetching","value":{"kind":"begin"}}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"Fetching","value":{"kind":"end"}}}),
-            json!({"jsonrpc":"2.0","id":2,"method":"window/workDoneProgress/create",
-                   "params":{"token":"Building CrateGraph"}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"Building CrateGraph","value":{"kind":"begin"}}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"Building CrateGraph","value":{"kind":"end"}}}),
-        ]);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let outcome = wait_for_ready(
-            &rx,
-            |id| {
-                acked.push(id);
-                Ok(())
-            },
-            deadline,
-        );
-        assert_eq!(outcome, ReadinessOutcome::AllProgressEnded);
-        assert_eq!(
-            acked,
-            vec![1, 2],
-            "both tokens' create requests must be acknowledged — a loop \
-             that returns the instant the first token's pair ends would \
-             never read the second token's messages at all"
-        );
-    }
-
-    /// Signal 1 (module header) must win even while a workDoneProgress token
-    /// is still technically outstanding — `quiescent: true` is the server's
-    /// own authoritative answer, not another vote to reconcile against the
-    /// drain-and-debounce fallback.
-    #[test]
-    fn quiescent_status_short_circuits_before_progress_has_settled() {
-        let rx = queue(&[
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"still-going","value":{"kind":"begin"}}}),
-            json!({"jsonrpc":"2.0","method":"experimental/serverStatus",
-                   "params":{"health":"ok","quiescent":true}}),
-        ]);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let start = Instant::now();
-        let outcome = wait_for_ready(&rx, |_id| Ok(()), deadline);
-        assert_eq!(outcome, ReadinessOutcome::ServerReportedQuiescent);
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "quiescent must resolve immediately, not wait on the still-open \
-             token or the 30s deadline: {:?}",
-            start.elapsed()
-        );
-    }
-
-    /// `quiescent: false` is activity, not readiness — it must not be
-    /// mistaken for the `true` case. With nothing else ever arriving, the
-    /// wait still gives up as `NoProgressReported` (there is nothing to be
-    /// ready FOR), but only once the CALLER's deadline passes, not the
-    /// short workDoneProgress onset window — see the next test for why that
-    /// distinction is load-bearing.
-    #[test]
-    fn quiescent_false_falls_through_to_the_progress_fallback() {
-        let rx = queue(
-            &[json!({"jsonrpc":"2.0","method":"experimental/serverStatus",
-                   "params":{"health":"ok","quiescent":false}})],
-        );
-        let deadline = Instant::now() + Duration::from_millis(700);
-        let outcome = wait_for_ready(&rx, |_id| Ok(()), deadline);
-        assert_eq!(outcome, ReadinessOutcome::NoProgressReported);
-    }
-
-    /// Regression: a `quiescent: false` used to be a no-op in `apply` — it
-    /// matched neither `server_workdone_progress_create` nor
-    /// `progress_kind`, so `ever_began` stayed false and `checkpoint` kept
-    /// returning the FIXED 500ms `onset_deadline` from construction. A
-    /// `quiescent: true` arriving in the (event-driven) mocked channel
-    /// AFTER that window — as it legitimately can under real load, where
-    /// rust-analyzer's own indexing is what quiescence is waiting on — was
-    /// therefore missed: the loop gave up with `NoProgressReported` and the
-    /// deterministic signal was never read. Measured directly:
-    /// `cargo test --lib` under ~495 tests of contention flaked
-    /// `lsp_client::tests::lsp_client_resolves_via_server_status_quiescent_not_progress`
-    /// this exact way. `note_server_status_activity` fixes it: any
-    /// serverStatus message, `true` or `false`, is proof the server offers
-    /// signal 1 and the onset heuristic no longer applies.
-    #[test]
-    fn a_quiescent_false_extends_the_wait_past_the_onset_window() {
-        let rx = queue(&[
-            json!({"jsonrpc":"2.0","method":"experimental/serverStatus",
-                   "params":{"health":"ok","quiescent":false}}),
-            // If `note_server_status_activity` did not extend the
-            // checkpoint, the loop would have already given up (onset
-            // window is 500ms) before this message is even queued at
-            // "delivery time" in a real channel — here it is available
-            // immediately, so a pre-fix implementation would still miss it
-            // by exiting on its FIRST spin without ever reading it, since
-            // its checkpoint decision does not depend on what is in the
-            // channel.
-            json!({"jsonrpc":"2.0","method":"experimental/serverStatus",
-                   "params":{"health":"ok","quiescent":true}}),
-        ]);
-        // A deadline well past the 500ms onset window: the ONLY way this
-        // resolves as quiescent is if the false->true pair both got read.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let outcome = wait_for_ready(&rx, |_id| Ok(()), deadline);
-        assert_eq!(outcome, ReadinessOutcome::ServerReportedQuiescent);
-    }
-
-    #[test]
-    fn a_numeric_token_and_a_string_token_are_the_same_key_space() {
-        let rx = queue(&[
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":42,"value":{"kind":"begin"}}}),
-            json!({"jsonrpc":"2.0","method":"$/progress",
-                   "params":{"token":"42","value":{"kind":"end"}}}),
-        ]);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let outcome = wait_for_ready(&rx, |_id| Ok(()), deadline);
-        assert_eq!(
-            outcome,
-            ReadinessOutcome::AllProgressEnded,
-            "a token begun as a number and ended as its string form is one token"
-        );
-    }
-}
+#[path = "readiness_tests.rs"]
+mod tests;

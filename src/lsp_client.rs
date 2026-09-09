@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 mod commands;
 mod frames;
+mod health;
 mod protocol;
 mod readiness;
 mod uri;
@@ -23,8 +24,18 @@ pub use commands::{
     detect_lsp_command, is_command_available, validate_lsp_command, LSP_COMMAND_ALLOWLIST,
 };
 use frames::{drain_pending, next_frame, spawn_frame_reader};
+pub use health::{ServerHealth, ServerHealthLevel};
 use protocol::FrameError;
 pub(crate) use protocol::{is_lsp_timeout, LSP_TIMEOUT_PREFIX};
+// Named directly only by test code that constructs a `ServerHealth` fixture
+// (`analyze_handlers/lsp_outcome.rs` tests) — the binary crate's own
+// production paths only ever call `.readiness.as_str()`, never match on the
+// variant. Same "per-binary unused re-export" shape `clustering/mod.rs`
+// documents: this file compiles into both the lib crate and the bin crate's
+// own inlined module tree (`main.rs`'s `mod lsp_client`), and clippy's
+// non-test build of the LATTER never reaches the test-only usage.
+#[allow(unused_imports)]
+pub use readiness::ReadinessOutcome;
 pub use uri::{file_uri_to_path, path_to_file_uri};
 
 use protocol::{
@@ -55,6 +66,10 @@ pub struct LspClient {
     frames: Receiver<Result<Value, FrameError>>,
     request_id: AtomicI64,
     timeout: Duration,
+    /// The server's own health, as last observed by `initialize`'s readiness
+    /// wait (`readiness::client_wait_for_ready`). `ServerHealth::not_probed`
+    /// until then — there is no server opinion before the handshake runs.
+    server_health: ServerHealth,
 }
 
 pub struct DefinitionResult {
@@ -69,6 +84,10 @@ pub struct LspResolutionResult {
     pub failed_count: u64,
     pub skipped_count: u64,
     pub elapsed_ms: u64,
+    /// The server's health as last observed by this pass's `initialize`
+    /// call. `ServerHealth::not_probed` when no client was ever started
+    /// (nothing was unresolved, so `resolve_with_lsp` returned early).
+    pub server_health: ServerHealth,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +142,16 @@ impl LspClient {
             frames,
             request_id: AtomicI64::new(1),
             timeout,
+            server_health: ServerHealth::not_probed(),
         })
+    }
+
+    /// The server's health as last observed during `initialize`. Callers
+    /// gate resolution requests on this — see `lsp_resolver::resolve_with_client`
+    /// — rather than issuing requests a server that never loaded the
+    /// project can only answer `[]` to.
+    pub fn server_health(&self) -> &ServerHealth {
+        &self.server_health
     }
 
     /// Send `initialize` and `initialized` to the LSP server.

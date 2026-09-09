@@ -7,7 +7,7 @@
 // source: stages/stage-3b.md §7 — "method calls on inferred types" deferred to LSP
 
 use crate::graph_store::GraphStore;
-use crate::lsp_client::{self, LspClient, LspResolutionResult};
+use crate::lsp_client::{self, LspClient, LspResolutionResult, ServerHealth, ServerHealthLevel};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,10 @@ use sites::{
     build_node_position_index, collect_unresolved_callsites, group_by_file, language_id_for,
     UnresolvedCallSite,
 };
+
+#[cfg(test)]
+#[path = "lsp_resolver/health_gate_tests.rs"]
+mod health_gate_tests;
 
 /// Budget reserved for the in-flight request when deciding whether another one
 /// still fits inside `timeout`.
@@ -57,11 +61,11 @@ pub fn resolve_with_lsp(
             failed_count: 0,
             skipped_count: 0,
             elapsed_ms: start.elapsed().as_millis() as u64,
+            // No client was ever started — there is nothing to resolve, so
+            // there is no server opinion to report either.
+            server_health: ServerHealth::not_probed(),
         });
     }
-
-    let mut client = LspClient::start(cmd, default_args, codebase_path, timeout)?;
-    client.initialize(codebase_path)?;
 
     // fleet-watch#18: definition URIs come back absolute (and on macOS the
     // server may answer under /private/var while the caller passed /var, or
@@ -75,26 +79,92 @@ pub fn resolve_with_lsp(
         codebase_path,
         language,
         deadline: timeout.saturating_sub(PER_REQUEST_TIMEOUT),
+        start,
         ctx: SiteContext {
             node_index: &node_index,
             canonical_root: &canonical_root,
         },
     };
 
-    let pass = drive_pass(store, &mut client, &plan, &unresolved, start);
+    let mut client = LspClient::start(cmd, default_args, codebase_path, timeout)?;
+    let outcome = resolve_with_client(store, &mut client, &plan, &unresolved);
+    // Capture the server's own verdict, and shut it down, regardless of
+    // whether the health gate stopped the pass early — `Drop for LspClient`
+    // is a safety net, not a substitute for the cooperative handshake.
+    let server_health = client.server_health().clone();
     let _ = client.shutdown();
+    let pass = outcome?;
     pass.mark_resolved(store)?;
-    Ok(pass.into_result(start.elapsed().as_millis() as u64))
+    Ok(pass.into_result(start.elapsed().as_millis() as u64, server_health))
 }
 
 /// Everything the per-file loop needs that is fixed for the whole pass,
-/// grouped so `drive_pass` stays within the §4.4 parameter cap.
+/// grouped so `drive_pass`/`resolve_with_client` stay within the §4.4
+/// parameter cap.
 struct PassPlan<'a> {
     codebase_path: &'a Path,
     language: &'a str,
     /// Elapsed time after which no further request is issued.
     deadline: Duration,
+    /// When the pass began — `drive_pass`'s per-site budget check measures
+    /// elapsed time against this, not against when `resolve_with_client`
+    /// itself was entered (the caller may have spent time on `LspClient::start`
+    /// first).
+    start: Instant,
     ctx: SiteContext<'a>,
+}
+
+/// Issue #282. Initializes `client` against `plan.codebase_path`, gates on
+/// the server's own reported health, and — only if the gate passes — drives
+/// the resolution pass.
+///
+/// Extracted from `resolve_with_lsp` so the health gate is testable against
+/// an already-STARTED (but not yet initialized) client, without going
+/// through `LspClient::start`'s command allowlist — see
+/// `lsp_resolver/health_gate_tests.rs`.
+///
+/// `Err` here means: the server itself reported it could not load the
+/// project (`health: "error"`, sonde B — `lsp_client::health` module
+/// header). No `textDocument/definition` request is ever issued in that
+/// case — every one of them would answer `[]`, indistinguishable from 634
+/// individually "not found" call sites (issue #282's measured symptom).
+fn resolve_with_client(
+    store: &GraphStore,
+    client: &mut LspClient,
+    plan: &PassPlan<'_>,
+    unresolved: &[UnresolvedCallSite],
+) -> Result<LspPass, String> {
+    client.initialize(plan.codebase_path)?;
+    if let Some(err) = health_gate_error(client.server_health()) {
+        return Err(err);
+    }
+    Ok(drive_pass(store, client, plan, unresolved, plan.start))
+}
+
+/// `Some(error)` when the server's last-observed health is `Error` — the
+/// §1.2 arbitrated decision: `error` fails the phase outright before any
+/// resolution request, `warning` does not (rust-analyzer emits `warning` for
+/// causes that still resolve nothing but are not this specific failure —
+/// sonde E, `lsp_client::health` module header — and is instead surfaced via
+/// `completed_unresolved`, `lsp_outcome::completed_state`).
+///
+/// The remedy text names the fix directly (§1.2 decision (b) rationale):
+/// there is nothing for this tool to correct — a crate excluded from its
+/// parent workspace's `members` is a state of the analyzed repo, and the
+/// honest response is to say so loudly and name the cargo-level fix.
+fn health_gate_error(health: &ServerHealth) -> Option<String> {
+    if health.level != ServerHealthLevel::Error {
+        return None;
+    }
+    let message = health
+        .message
+        .clone()
+        .unwrap_or_else(|| "no message from server".to_string());
+    Some(format!(
+        "lsp_workspace_load_failed: {message}; the language server loaded no crate graph, so \
+         every definition request would answer []. Fix: add the package to the parent \
+         workspace's members, or analyze the workspace root"
+    ))
 }
 
 /// Asks the server about every unresolved site, file by file, until the sites
