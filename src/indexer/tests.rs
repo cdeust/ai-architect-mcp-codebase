@@ -497,3 +497,93 @@ fn dir_size(path: &std::path::Path) -> u64 {
     }
     total
 }
+
+/// `src/bin` is a Cargo SOURCE directory: every `src/bin/*.rs` is compiled as
+/// its own binary target. It was pruned by the build-output name list, which
+/// hid this repository's own `src/bin/automatised-pipeline.rs` from its own
+/// index and recorded nothing in the coverage report.
+/// source: ADR-9841, measured on this repo 2026-09-09.
+#[test]
+fn src_bin_is_source_and_a_top_level_bin_is_still_build_output() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("src/bin")).unwrap();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn lib_fn() {}\n").unwrap();
+    std::fs::write(root.join("src/bin/tool.rs"), "fn tool_main() {}\n").unwrap();
+    std::fs::write(root.join("bin/generated.rs"), "fn generated() {}\n").unwrap();
+
+    let outcome = super::walk::collect_source_files(root, Default::default()).expect("walk");
+    let rels: Vec<String> = outcome
+        .files
+        .iter()
+        .map(|f| {
+            f.strip_prefix(root)
+                .unwrap_or(f)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+
+    assert!(
+        rels.iter().any(|r| r == "src/bin/tool.rs"),
+        "src/bin is a Cargo target directory and must be walked; got {rels:?}"
+    );
+    assert!(
+        !rels.iter().any(|r| r == "bin/generated.rs"),
+        "a top-level bin/ stays build output; got {rels:?}"
+    );
+}
+
+/// Every path the built-in policy refuses to enter is NAMED, with its reason.
+/// Before this, a pruned tree left no trace anywhere: not indexed, not
+/// flagged, not counted, while the run reported `status: ok`. Measured on this
+/// repository on 2026-09-09: 270 tracked files absent from the manifest and 10
+/// gaps reported. source: ADR-9841.
+#[test]
+fn every_built_in_prune_is_recorded_with_its_reason() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::create_dir_all(root.join("node_modules")).unwrap();
+    std::fs::create_dir_all(root.join(".hidden")).unwrap();
+    std::fs::write(root.join(".git/config"), "x\n").unwrap();
+    std::fs::write(root.join("node_modules/dep.rs"), "fn dep() {}\n").unwrap();
+    std::fs::write(root.join(".hidden/secret.rs"), "fn s() {}\n").unwrap();
+    std::fs::write(root.join(".gitignore"), "target\n").unwrap();
+    std::fs::write(root.join("lib.rs"), "pub fn kept() {}\n").unwrap();
+
+    let outcome = super::walk::collect_source_files(root, Default::default()).expect("walk");
+    let reasons: std::collections::BTreeMap<&str, &str> = outcome
+        .pruned_dirs
+        .iter()
+        .map(|(p, r)| (p.as_str(), r.as_str()))
+        .collect();
+
+    assert_eq!(reasons.get(".git"), Some(&"vcs"), "got {reasons:?}");
+    assert_eq!(
+        reasons.get("node_modules"),
+        Some(&"dependency_or_build_dir"),
+        "got {reasons:?}"
+    );
+    assert_eq!(
+        reasons.get(".hidden"),
+        Some(&"dot_directory"),
+        "got {reasons:?}"
+    );
+    // A pruned FILE is recorded too. Recording only directories left the
+    // dot-files invisible, which is the same defect one level down.
+    assert_eq!(
+        reasons.get(".gitignore"),
+        Some(&"dot_file"),
+        "a pruned file must be named as well; got {reasons:?}"
+    );
+    // The prune record is not a substitute for indexing: what IS source is
+    // still walked.
+    let rels: Vec<String> = outcome
+        .files
+        .iter()
+        .map(|f| f.strip_prefix(root).unwrap_or(f).to_string_lossy().into())
+        .collect();
+    assert!(rels.iter().any(|r| r == "lib.rs"), "got {rels:?}");
+}

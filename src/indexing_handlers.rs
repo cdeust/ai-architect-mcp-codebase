@@ -377,6 +377,19 @@ fn bucket_coverage_files(report: &indexer::coverage::CoverageReport) -> Coverage
 /// counts per kind, capped example lists (parse_incomplete carries error ranges;
 /// skipped/quarantined/outside_build_targets carry reasons), and the
 /// completeness caveat.
+/// A capped, deterministic sample of the pruned directories, newest-sorted by
+/// path so the list is stable across runs. The full map lives in the sidecar.
+fn pruned_dir_sample(report: &indexer::coverage::CoverageReport) -> Value {
+    const MAX: usize = 25;
+    let sample: Vec<Value> = report
+        .pruned_dirs
+        .iter()
+        .take(MAX)
+        .map(|(rel, reason)| json!({ "path": rel, "reason": reason }))
+        .collect();
+    json!(sample)
+}
+
 pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Value {
     let counts = report.counts();
     let b = bucket_coverage_files(report);
@@ -393,6 +406,14 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
         "outside_build_targets": {
             "count": counts.outside_build_targets,
             "files": b.outside_build_target_files
+        },
+        // Declared policy, NOT a gap: reported so a reader can see what the
+        // walk refused to enter, and deliberately outside the four gap buckets
+        // so `.git`/`target` do not make every graph incomplete.
+        // source: ADR-9841.
+        "pruned_dirs": {
+            "count": report.pruned_dirs.len(),
+            "dirs": pruned_dir_sample(report),
         },
         "caveat": COVERAGE_CAVEAT,
     })

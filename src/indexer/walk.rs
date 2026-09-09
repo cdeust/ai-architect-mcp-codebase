@@ -159,6 +159,13 @@ pub(super) struct WalkOutcome {
     /// because `read_dir` returned `PermissionDenied` — the walk continues
     /// past it instead of aborting (issue #249).
     pub unreadable_dirs: Vec<String>,
+    /// Every directory pruned by the BUILT-IN policy, with the reason, so an
+    /// exclusion the caller never asked for is still nameable. Without this a
+    /// pruned tree left no trace anywhere: not indexed, not flagged, not
+    /// counted, while the run reported `status: ok`.
+    /// source: ADR-9841, measured on this repo 2026-09-09 (270 tracked files
+    /// absent from the manifest, 10 gaps reported).
+    pub pruned_dirs: Vec<(String, String)>,
 }
 
 /// Recursively collects source files, skipping hidden dirs, target/, node_modules/.
@@ -180,11 +187,13 @@ pub(super) fn collect_source_files(root: &Path, opts: WalkOptions) -> Result<Wal
     let mut files = Vec::new();
     let mut excluded_dirs = Vec::new();
     let mut unreadable_dirs = Vec::new();
+    let mut pruned_dirs = Vec::new();
     let ctx = WalkContext { root, opts: &opts };
     let mut collectors = WalkCollectors {
         files: &mut files,
         excluded_dirs: &mut excluded_dirs,
         unreadable_dirs: &mut unreadable_dirs,
+        pruned_dirs: &mut pruned_dirs,
     };
     walk_dir_recursive(root, &ctx, &mut collectors, 0)?;
     if files.len() > super::MAX_FILES {
@@ -195,10 +204,12 @@ pub(super) fn collect_source_files(root: &Path, opts: WalkOptions) -> Result<Wal
         ));
     }
     files.sort();
+    pruned_dirs.sort();
     Ok(WalkOutcome {
         files,
         excluded_dirs,
         unreadable_dirs,
+        pruned_dirs,
     })
 }
 
@@ -217,6 +228,7 @@ struct WalkCollectors<'a> {
     files: &'a mut Vec<PathBuf>,
     excluded_dirs: &'a mut Vec<String>,
     unreadable_dirs: &'a mut Vec<String>,
+    pruned_dirs: &'a mut Vec<(String, String)>,
 }
 
 fn walk_dir_recursive(
@@ -270,7 +282,18 @@ fn visit_entry(
     let path = entry.path();
     let name = entry.file_name();
     let name_str = name.to_string_lossy();
-    if should_skip(&name_str, ctx.opts.dependency_scope) {
+    let parent_name = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned());
+    if should_skip(&name_str, parent_name.as_deref(), ctx.opts.dependency_scope) {
+        // Files are pruned by the same rule as directories (a dot-prefixed
+        // name), so both are recorded. Recording only directories left the
+        // dot-FILES invisible, which is the same defect one level down.
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        collectors
+            .pruned_dirs
+            .push((dir_rel(ctx.root, &path), prune_reason(&name_str, is_dir)));
         return Ok(());
     }
     // Use symlink_metadata (lstat) instead of metadata (stat) so symlinks are
@@ -380,6 +403,21 @@ fn dir_rel(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// Why the built-in policy pruned a directory. One of a closed set, so a
+/// reader can tell a declared policy apart from a gap. source: ADR-9841.
+fn prune_reason(name: &str, is_dir: bool) -> String {
+    if name == ".git" {
+        return "vcs".to_string();
+    }
+    if name == crate::artifact::ARTIFACT_DIR || name == crate::artifact::LEGACY_ARTIFACT_DIR {
+        return "tool_artifact".to_string();
+    }
+    if name.starts_with('.') {
+        return if is_dir { "dot_directory" } else { "dot_file" }.to_string();
+    }
+    "dependency_or_build_dir".to_string()
+}
+
 /// Returns true for directories that should be skipped during walk.
 ///
 /// Covers build / dependency / cache directories across the languages
@@ -389,7 +427,7 @@ fn dir_rel(root: &Path, path: &Path) -> String {
 /// MB of *.dex / *.aar / *.jar files that the indexer rejects per-file
 /// after walking into them. Filtering at the directory level avoids
 /// the descent entirely.
-fn should_skip(name: &str, dependency_scope: DependencyScope) -> bool {
+fn should_skip(name: &str, parent: Option<&str>, dependency_scope: DependencyScope) -> bool {
     // `.git` is never source — its object store is large and binary — so it is
     // skipped even in full-dependency mode. source: checkpoint 2026-07-04.
     if name == ".git" {
@@ -410,6 +448,14 @@ fn should_skip(name: &str, dependency_scope: DependencyScope) -> bool {
     // covers node_modules, .venv, vendor, target, etc. They differ at the
     // persistence filter (indexer::persist), not here.
     if dependency_scope.descends_into_dependencies() {
+        return false;
+    }
+    // `bin` is in the build-output list, but `src/bin` is a SOURCE directory:
+    // Cargo compiles every `src/bin/*.rs` as its own binary target. Pruning it
+    // by name alone hid this repository's own `src/bin/automatised-pipeline.rs`
+    // from its own index, with no entry in the coverage report.
+    // source: ADR-9841, measured 2026-09-09.
+    if name == "bin" && parent == Some("src") {
         return false;
     }
     // Other VCS dirs are filtered by ``starts_with('.')``; ``.git`` itself is
@@ -477,10 +523,18 @@ const DEPENDENCY_DIR_NAMES: &[&str] = &[
 /// (and therefore no call to `is_dependency_path`) is ever produced for it.
 pub(super) fn is_dependency_path(root: &Path, file_path: &Path) -> bool {
     let rel = file_path.strip_prefix(root).unwrap_or(file_path);
-    rel.parent()
+    let names: Vec<String> = rel
+        .parent()
         .into_iter()
         .flat_map(|p| p.components())
-        .any(|c| should_skip(&c.as_os_str().to_string_lossy(), DependencyScope::None))
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    // Each component is judged WITH its predecessor, so `src/bin` is read the
+    // same way here as at the walk. source: ADR-9841.
+    names.iter().enumerate().any(|(i, name)| {
+        let parent = i.checked_sub(1).map(|j| names[j].as_str());
+        should_skip(name, parent, DependencyScope::None)
+    })
 }
 
 #[cfg(test)]
