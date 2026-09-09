@@ -142,7 +142,9 @@ fn a_function_passed_by_value_is_still_a_call_site() {
 /// with any function sharing their name.
 #[test]
 fn a_destructured_let_binds_every_name_in_its_pattern() {
-    let sites = call_sites("fn probe() {\n    let (first, second) = pair();\n    consume(first, second);\n}\n");
+    let sites = call_sites(
+        "fn probe() {\n    let (first, second) = pair();\n    consume(first, second);\n}\n",
+    );
     for name in ["first", "second"] {
         assert!(
             !sites.iter().any(|s| s == name),

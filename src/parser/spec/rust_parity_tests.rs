@@ -136,8 +136,16 @@ fn rust_parity_floor_counts_hold() {
     // one call site and its `Defines` edge); #130 re-scoped a QN in place (0 net);
     // then -3 nodes when the #87 speculative scan stopped emitting a bound name
     // as a call. source: ADR-9836.
-    assert_eq!(r.nodes.len(), 59, "floor: 59 nodes (62 - 3 bound-name call sites)");
-    assert_eq!(r.refs.len(), 64, "floor: 64 refs (67 - 3 bound-name call edges)");
+    assert_eq!(
+        r.nodes.len(),
+        59,
+        "floor: 59 nodes (62 - 3 bound-name call sites)"
+    );
+    assert_eq!(
+        r.refs.len(),
+        64,
+        "floor: 64 refs (67 - 3 bound-name call edges)"
+    );
 }
 
 /// Negative assertions: behaviors the ground truth does NOT contain. Without
