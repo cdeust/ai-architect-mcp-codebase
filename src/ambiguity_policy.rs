@@ -31,9 +31,8 @@ pub enum Evidence {
     /// `resolver::receiver::resolve_receiver_bound`, gated to
     /// `language == "rust"` and a `Method` caller.
     /// source: tasks/plan-issues-282-283-284.md §2.2/§9-3 (issue #283, lot
-    /// 4). Rationale and the arbitrated confidence value are recorded as
-    /// Cortex memory 4360985 (ADR content; `wiki_adr` was unavailable in
-    /// the authoring session — pending promotion to a numbered wiki ADR).
+    /// 4). source: ADR-9840 carries the rationale and the arbitrated
+    /// confidence value.
     ReceiverBound,
     /// The callee (or its qualified spelling) matches an import path in
     /// scope at the call site, and exactly one candidate's qualified name

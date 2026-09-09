@@ -1,9 +1,7 @@
 // resolver::receiver — Rust `self`/`Self` receiver-call static binding.
 //
-// source: tasks/plan-issues-282-283-284.md §2.2/§2.3 (lot 4); rationale and
-// arbitrated confidences recorded in Cortex memory 4360985 (ADR content;
-// referenced from ambiguity_policy.rs's `Evidence::ReceiverBound` doc
-// comment).
+// source: tasks/plan-issues-282-283-284.md §2.2/§2.3 (lot 4) and ADR-9840,
+// which carries the rationale and the arbitrated confidences.
 //
 // Implements paliers 1-2 only: `self.<m>` / `Self::<m>` receivers on a
 // `Method` caller. Local-binding receivers (`s.<m>` where `s` is a
