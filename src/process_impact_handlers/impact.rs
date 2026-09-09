@@ -308,6 +308,7 @@ fn impact_envelope(
         "truncated": views.any_truncated(sections),
         "epistemic": impact.epistemic.as_str(),
         "epistemic_reasons": impact.epistemic_reasons,
+        "unresolved_callsites_naming_target": impact.unresolved_callsites_naming_target,
     });
     if views.callers.columns.is_some() {
         // One header covers all homogeneous sections.
@@ -439,6 +440,18 @@ pub(crate) fn impact_next_steps(impact: &clustering::ImpactResult, qn: &str) -> 
             "inspect a caller's own blast radius: get_impact on a `callers[].qualified_name`"
                 .to_string(),
         );
+    }
+    // issue #283 (a): an empty `callers` list reads as "no callers" unless a
+    // caller also sees `unresolved_callsites_naming_target > 0` — this hint
+    // makes the distinguishing action explicit instead of leaving the caller
+    // to notice the structured field on their own.
+    if impact.callers.is_empty() && impact.unresolved_callsites_naming_target > 0 {
+        steps.push(format!(
+            "{} call site(s) name this symbol but none resolved — run analyze_codebase \
+             with lsp: true (Rust receiver calls need it) or check \
+             query_graph(graph=\"missed\") for files the language server cannot see",
+            impact.unresolved_callsites_naming_target
+        ));
     }
     if impact.epistemic == epistemic::Boundary::LowerBound {
         steps.push(format!(

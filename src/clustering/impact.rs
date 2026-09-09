@@ -41,6 +41,16 @@ pub struct ImpactResult {
     pub epistemic: Boundary,
     /// Human-readable carriers of epistemic uncertainty (empty when `Exact`).
     pub epistemic_reasons: Vec<String>,
+    /// Count of unresolved `CallSite` nodes (`is_resolved = false`) whose
+    /// `callee_name` names this target by its bare identifier but were never
+    /// linked to a `Calls` edge. Structured twin of the prose carrier
+    /// `unresolved_callsite_reason` folds into `epistemic_reasons`: an empty
+    /// `callers` list with this field > 0 means "N call sites name the
+    /// target and none resolved", which is a materially different finding
+    /// from "this symbol has no callers" (`callers` empty AND this field
+    /// == 0) — the two were indistinguishable to a caller before this field
+    /// existed. source: issue #283 (a).
+    pub unresolved_callsites_naming_target: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +87,14 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         implementors: &implementors,
         references: &references,
     };
-    let epistemic_reasons = build_epistemic_reasons(store, &esc, target_bare_name, &deps);
+    // Computed once here and threaded into both the prose reason and the
+    // structured field below — `unresolved_callsite_reason` used to run this
+    // same query a second time; a single count is now the source both
+    // surfaces read, so they can never disagree on N.
+    let unresolved_callsites_naming_target =
+        unresolved_callsite_count_naming(store, target_bare_name);
+    let epistemic_reasons =
+        build_epistemic_reasons(store, &esc, unresolved_callsites_naming_target, &deps);
     let epistemic = if epistemic_reasons.is_empty() {
         Boundary::Exact
     } else {
@@ -94,6 +111,7 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         references,
         epistemic,
         epistemic_reasons,
+        unresolved_callsites_naming_target,
     })
 }
 
@@ -149,10 +167,15 @@ struct ReverseDependents<'a> {
 /// unsupported language tier), or (d) the target is a File with zero
 /// inbound references in a graph that predates reference-edge indexing.
 /// Otherwise it is exact. source: epistemic module contract.
+///
+/// `unresolved_callsites_naming_target` is the count `get_impact` already
+/// computed (via `unresolved_callsite_count_naming`) for the structured
+/// `ImpactResult` field — passed in rather than requeried, so the prose
+/// reason and the structured count can never drift apart.
 fn build_epistemic_reasons(
     store: &GraphStore,
     esc: &str,
-    target_bare_name: &str,
+    unresolved_callsites_naming_target: u64,
     deps: &ReverseDependents,
 ) -> Vec<String> {
     let mut reasons = Vec::new();
@@ -163,7 +186,7 @@ fn build_epistemic_reasons(
     if let Some(reason) = heuristic_edge_reason(deps) {
         reasons.push(reason);
     }
-    if let Some(reason) = unresolved_callsite_reason(store, target_bare_name) {
+    if let Some(reason) = unresolved_callsite_reason(unresolved_callsites_naming_target) {
         reasons.push(reason);
     }
     // File-level fan-in honesty (issue #205): when the target is itself a
@@ -224,9 +247,9 @@ fn heuristic_edge_reason(deps: &ReverseDependents) -> Option<String> {
 }
 
 /// `Some(reason)` when the graph holds unresolved `CallSite` nodes naming the
-/// target — see `build_epistemic_reasons` doc for the argument.
-fn unresolved_callsite_reason(store: &GraphStore, target_bare_name: &str) -> Option<String> {
-    let unresolved_count = unresolved_callsite_count_naming(store, target_bare_name);
+/// target — see `build_epistemic_reasons` doc for the argument. Takes the
+/// already-computed count (see that function's doc); does not query.
+fn unresolved_callsite_reason(unresolved_count: u64) -> Option<String> {
     if unresolved_count == 0 {
         return None;
     }
@@ -250,7 +273,11 @@ fn unresolved_callsite_reason(store: &GraphStore, target_bare_name: &str) -> Opt
 /// not yet resolved (`Type::response_of`). All three end in the bare
 /// identifier, so one exact-or-suffix comparison covers every shape without
 /// re-deriving the parser's own callee-spelling grammar.
-fn unresolved_callsite_count_naming(store: &GraphStore, target_bare_name: &str) -> i64 {
+///
+/// Postcondition: return value is never negative — `COUNT(cs)` in Cypher is
+/// bounded below by 0 by construction, so the u64 return type is exact, not
+/// a truncating cast of a signed count.
+fn unresolved_callsite_count_naming(store: &GraphStore, target_bare_name: &str) -> u64 {
     let esc_bare = cypher_str(target_bare_name);
     let esc_dot_suffix = cypher_str(&format!(".{target_bare_name}"));
     let esc_scope_suffix = cypher_str(&format!("::{target_bare_name}"));
@@ -269,7 +296,7 @@ fn unresolved_callsite_count_naming(store: &GraphStore, target_bare_name: &str) 
             qr.rows
                 .first()
                 .and_then(|r| r.first())
-                .and_then(|c| c.parse::<i64>().ok())
+                .and_then(|c| c.parse::<u64>().ok())
         })
         .unwrap_or(0)
 }

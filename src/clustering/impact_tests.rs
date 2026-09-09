@@ -394,6 +394,11 @@ fn get_impact_flags_unresolved_callsite_naming_the_target_as_lower_bound() {
         "must name the unresolved-callsite count as the carrier, got {:?}",
         result.epistemic_reasons
     );
+    assert_eq!(
+        result.unresolved_callsites_naming_target, 2,
+        "structured count must match the prose reason's count, got {:?}",
+        result.epistemic_reasons
+    );
 }
 
 /// A target with zero matching unresolved `CallSite` nodes (none exist at
@@ -416,6 +421,38 @@ fn get_impact_reports_exact_when_no_unresolved_callsite_names_the_target() {
         result.epistemic_reasons
     );
     assert!(result.epistemic_reasons.is_empty());
+    assert_eq!(
+        result.unresolved_callsites_naming_target, 0,
+        "no unresolved CallSite nodes exist ⇒ the structured count must be zero, not just \
+         the prose reason absent"
+    );
+}
+
+/// issue #283 (a): the whole point of the structured field is to distinguish
+/// "no callers" from "N call sites name this symbol and none resolved" —
+/// this pins that distinction at a count large enough (52, the dy-wcet
+/// `response_of` measurement) that an off-by-a-fixed-amount mutation would
+/// be caught by neither of the two tests above (both use 0 or 2).
+#[test]
+fn get_impact_unresolved_callsites_naming_target_counts_every_matching_site() {
+    let (_dir, store) = empty_store();
+    let target_qn = "src/lib.rs::TaskSet::response_of";
+
+    insert_function(&store, target_qn);
+    for i in 0..52 {
+        insert_unresolved_callsite(&store, &format!("cs::{i}"), "s.response_of");
+    }
+    // A callsite naming a different symbol must not be counted.
+    insert_unresolved_callsite(&store, "cs::other", "s.deadline_of");
+
+    let result = get_impact(&store, target_qn).expect("get_impact");
+
+    assert!(result.callers.is_empty());
+    assert_eq!(
+        result.unresolved_callsites_naming_target, 52,
+        "must count exactly the 52 unresolved sites naming the target, excluding the one \
+         naming a different symbol"
+    );
 }
 
 /// An unresolved `CallSite` whose `callee_name` names a DIFFERENT symbol
