@@ -217,10 +217,17 @@ fn assert_fill_partition_via_git_diff(fill: &FillResult) {
         "clone is a git tree → git diff"
     );
     assert_eq!(fill.result.changed, 1, "mod000.py edited");
-    assert_eq!(fill.result.added, 1, "mod_added.py");
+    // Two: `mod_added.py` and the `.gitattributes` that `export_artifact`
+    // writes to mark the artifact `merge=ours`. That file was invisible while
+    // the walk skipped every dot-prefixed name, the same rule that hid
+    // `.github` and `.claude`. source: ADR-9841.
+    assert_eq!(fill.result.added, 2, "mod_added.py and .gitattributes");
     assert_eq!(fill.result.deleted, 1, "mod001.py removed");
     assert_eq!(fill.result.renamed, 1, "mod002.py -> mod002_renamed.py");
-    assert_eq!(fill.result.files_reparsed, 3, "changed+added+renamed-new");
+    assert_eq!(
+        fill.result.files_reparsed, 4,
+        "changed+added+renamed-new, with .gitattributes among the added"
+    );
 }
 
 /// -- 6. Parity: filled graph == a from-scratch full index of HEAD -------
@@ -332,7 +339,9 @@ fn fill_falls_back_to_content_hash_when_not_a_git_tree() {
         "no git tree → content-hash classification"
     );
     assert_eq!(fill.result.changed, 1);
-    assert_eq!(fill.result.added, 1);
+    // The added source file plus the `.gitattributes` the export writes; see
+    // the git-diff case above. source: ADR-9841.
+    assert_eq!(fill.result.added, 2);
     assert_eq!(fill.result.deleted, 1);
 
     // Parity with a full index of the current tree.

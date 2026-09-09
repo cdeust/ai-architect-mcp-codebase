@@ -282,11 +282,20 @@ fn visit_entry(
     let path = entry.path();
     let name = entry.file_name();
     let name_str = name.to_string_lossy();
-    let parent_name = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().into_owned());
-    if should_skip(&name_str, parent_name.as_deref(), ctx.opts.dependency_scope) {
+    // A directory carrying its own `.git` is a NESTED REPOSITORY: a submodule,
+    // a vendored clone, or a git worktree. Descending into one indexes another
+    // project's whole tree as if it were this one. This repository keeps its
+    // agent worktrees under `.claude/worktrees/`, twelve full copies of itself
+    // at the time of writing, so walking `.claude` without this guard would
+    // index the codebase thirteen times over. Checked before the name list so
+    // it holds whatever the directory is called. source: ADR-9841.
+    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) && path.join(".git").exists() {
+        collectors
+            .pruned_dirs
+            .push((dir_rel(ctx.root, &path), "nested_repository".to_string()));
+        return Ok(());
+    }
+    if should_skip(&name_str, ctx.opts.dependency_scope) {
         // Files are pruned by the same rule as directories (a dot-prefixed
         // name), so both are recorded. Recording only directories left the
         // dot-FILES invisible, which is the same defect one level down.
@@ -412,9 +421,7 @@ fn prune_reason(name: &str, is_dir: bool) -> String {
     if name == crate::artifact::ARTIFACT_DIR || name == crate::artifact::LEGACY_ARTIFACT_DIR {
         return "tool_artifact".to_string();
     }
-    if name.starts_with('.') {
-        return if is_dir { "dot_directory" } else { "dot_file" }.to_string();
-    }
+    let _ = is_dir;
     "dependency_or_build_dir".to_string()
 }
 
@@ -427,7 +434,7 @@ fn prune_reason(name: &str, is_dir: bool) -> String {
 /// MB of *.dex / *.aar / *.jar files that the indexer rejects per-file
 /// after walking into them. Filtering at the directory level avoids
 /// the descent entirely.
-fn should_skip(name: &str, parent: Option<&str>, dependency_scope: DependencyScope) -> bool {
+fn should_skip(name: &str, dependency_scope: DependencyScope) -> bool {
     // `.git` is never source — its object store is large and binary — so it is
     // skipped even in full-dependency mode. source: checkpoint 2026-07-04.
     if name == ".git" {
@@ -450,17 +457,14 @@ fn should_skip(name: &str, parent: Option<&str>, dependency_scope: DependencySco
     if dependency_scope.descends_into_dependencies() {
         return false;
     }
-    // `bin` is in the build-output list, but `src/bin` is a SOURCE directory:
-    // Cargo compiles every `src/bin/*.rs` as its own binary target. Pruning it
-    // by name alone hid this repository's own `src/bin/automatised-pipeline.rs`
-    // from its own index, with no entry in the coverage report.
-    // source: ADR-9841, measured 2026-09-09.
-    if name == "bin" && parent == Some("src") {
-        return false;
-    }
-    // Other VCS dirs are filtered by ``starts_with('.')``; ``.git`` itself is
-    // handled explicitly above so it is excluded in full-dependency mode too.
-    name.starts_with('.') || DEPENDENCY_DIR_NAMES.contains(&name)
+    // No blanket dot rule. `.github` holds the CI that decides what merges and
+    // `.claude` holds the hooks and agents that run on this repo; excluding
+    // them by name shape meant the graph could not answer what breaks when
+    // either changes. Machine state that happens to start with a dot is named
+    // in DEPENDENCY_DIR_NAMES instead. Measured on this repository: the rule
+    // hid 238 files under `.claude` and 15 under `.github`.
+    // source: ADR-9841.
+    DEPENDENCY_DIR_NAMES.contains(&name)
 }
 
 /// Build-output / fetched-dependency / cache directory names pruned by the
@@ -501,13 +505,33 @@ const DEPENDENCY_DIR_NAMES: &[&str] = &[
     // including numpy C headers), flooding the log with duplicate-id
     // warnings and timing out the Cortex->AP MCP client.
     "deps",
-    // General build output
+    // General build output. `bin` is NOT here: it holds first-class project
+    // scripts as often as it holds artifacts (this repository's own
+    // `bin/ensure-binary.sh` pins the release SHA-256), and a compiled binary
+    // has no recognised source extension, so the file-level filter already
+    // rejects it. Pruning the directory by name only hid the scripts.
+    // source: ADR-9841, measured 2026-09-09.
     "dist",
-    "bin",
     "obj",
     // Test / coverage
     "coverage",
     ".nyc_output",
+    // Other VCS stores. These used to be caught by a blanket
+    // `name.starts_with('.')` rule that also swallowed `.github` and
+    // `.claude`, so they are named explicitly now. source: ADR-9841.
+    ".hg",
+    ".svn",
+    ".bzr",
+    // JS / infra tool caches, same reason.
+    ".cache",
+    ".next",
+    ".nuxt",
+    ".turbo",
+    ".parcel-cache",
+    ".terraform",
+    ".serverless",
+    ".dart_tool",
+    ".stack-work",
 ];
 
 /// True when `file_path` lives under a directory that `should_skip` would
@@ -523,18 +547,10 @@ const DEPENDENCY_DIR_NAMES: &[&str] = &[
 /// (and therefore no call to `is_dependency_path`) is ever produced for it.
 pub(super) fn is_dependency_path(root: &Path, file_path: &Path) -> bool {
     let rel = file_path.strip_prefix(root).unwrap_or(file_path);
-    let names: Vec<String> = rel
-        .parent()
+    rel.parent()
         .into_iter()
         .flat_map(|p| p.components())
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    // Each component is judged WITH its predecessor, so `src/bin` is read the
-    // same way here as at the walk. source: ADR-9841.
-    names.iter().enumerate().any(|(i, name)| {
-        let parent = i.checked_sub(1).map(|j| names[j].as_str());
-        should_skip(name, parent, DependencyScope::None)
-    })
+        .any(|c| should_skip(&c.as_os_str().to_string_lossy(), DependencyScope::None))
 }
 
 #[cfg(test)]

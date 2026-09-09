@@ -106,10 +106,16 @@ fn stale_artifact_default_imports_and_fills() {
             assert_eq!(resp["source"], json!("artifact_bootstrap_fill"));
             assert_eq!(resp["graph_state"], json!("filled_to_working_tree"));
             assert_eq!(resp["fill_method"], json!("git_diff"));
+            // Two, not one: the commit added `src/extra.rs`, and
+            // `export_artifact` wrote a `.gitattributes` alongside the
+            // artifact. That file used to be invisible because the walk
+            // skipped every dot-prefixed name, which also hid `.github` and
+            // `.claude`. It is a tracked project file and is now indexed.
+            // source: ADR-9841.
             assert_eq!(
                 resp["added"],
-                json!(1),
-                "the one commit added src/extra.rs → fill must add exactly one file"
+                json!(2),
+                "the commit added src/extra.rs and the export added .gitattributes"
             );
             assert_eq!(resp["artifact_commits_behind"], json!(1));
         }

@@ -498,13 +498,15 @@ fn dir_size(path: &std::path::Path) -> u64 {
     total
 }
 
-/// `src/bin` is a Cargo SOURCE directory: every `src/bin/*.rs` is compiled as
-/// its own binary target. It was pruned by the build-output name list, which
-/// hid this repository's own `src/bin/automatised-pipeline.rs` from its own
-/// index and recorded nothing in the coverage report.
+/// A directory named `bin` is walked wherever it sits. `src/bin` is a Cargo
+/// source directory whose files are compiled as binary targets, and a
+/// top-level `bin/` holds project scripts as often as artifacts (this
+/// repository's own `bin/ensure-binary.sh` pins the release SHA-256). A
+/// compiled binary has no recognised source extension, so the file-level
+/// filter already rejects it and the name-based prune only hid the scripts.
 /// source: ADR-9841, measured on this repo 2026-09-09.
 #[test]
-fn src_bin_is_source_and_a_top_level_bin_is_still_build_output() {
+fn a_bin_directory_is_walked_wherever_it_sits() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path();
     std::fs::create_dir_all(root.join("src/bin")).unwrap();
@@ -530,27 +532,108 @@ fn src_bin_is_source_and_a_top_level_bin_is_still_build_output() {
         "src/bin is a Cargo target directory and must be walked; got {rels:?}"
     );
     assert!(
-        !rels.iter().any(|r| r == "bin/generated.rs"),
-        "a top-level bin/ stays build output; got {rels:?}"
+        rels.iter().any(|r| r == "bin/generated.rs"),
+        "a top-level bin/ is walked too; artifacts are rejected by extension, \
+         not by directory name; got {rels:?}"
     );
 }
 
-/// Every path the built-in policy refuses to enter is NAMED, with its reason.
+/// A dot-prefixed name is no longer a reason to skip anything. `.github` holds
+/// the CI that decides what merges and `.claude` holds the hooks that run on
+/// this repo; excluding them by name shape meant the graph could not answer
+/// what breaks when either changes. Machine state that happens to start with a
+/// dot is named in DEPENDENCY_DIR_NAMES instead.
+/// source: ADR-9841, measured on this repo 2026-09-09 (238 files under
+/// `.claude` and 15 under `.github` were absent from its own index).
+#[test]
+fn dot_prefixed_project_directories_are_indexed() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+    std::fs::create_dir_all(root.join(".claude/hooks")).unwrap();
+    std::fs::create_dir_all(root.join(".mypy_cache")).unwrap();
+    std::fs::write(root.join(".github/workflows/ci.yml"), "on: push\n").unwrap();
+    std::fs::write(root.join(".claude/hooks/gate.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(root.join(".gitignore"), "target\n").unwrap();
+    std::fs::write(root.join(".mypy_cache/cached.py"), "x = 1\n").unwrap();
+
+    let outcome = super::walk::collect_source_files(root, Default::default()).expect("walk");
+    let rels: Vec<String> = outcome
+        .files
+        .iter()
+        .map(|f| {
+            f.strip_prefix(root)
+                .unwrap_or(f)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+
+    for expected in [
+        ".github/workflows/ci.yml",
+        ".claude/hooks/gate.sh",
+        ".gitignore",
+    ] {
+        assert!(
+            rels.iter().any(|r| r == expected),
+            "{expected} must be indexed; got {rels:?}"
+        );
+    }
+    assert!(
+        !rels.iter().any(|r| r.starts_with(".mypy_cache/")),
+        "named machine state is still pruned; got {rels:?}"
+    );
+}
+
+/// A directory carrying its own `.git` is a nested repository: a submodule, a
+/// vendored clone, or a git worktree. Descending into one indexes another
+/// project's tree as if it were this one. This repository keeps thirteen
+/// worktrees under `.claude/worktrees/`, so removing the dot rule without this
+/// guard would have indexed the codebase fourteen times over.
+/// source: ADR-9841.
+#[test]
+fn a_nested_repository_is_pruned_and_named() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("vendored/.git")).unwrap();
+    std::fs::write(root.join("vendored/other.rs"), "fn other() {}\n").unwrap();
+    std::fs::write(root.join("own.rs"), "fn own() {}\n").unwrap();
+
+    let outcome = super::walk::collect_source_files(root, Default::default()).expect("walk");
+    let rels: Vec<String> = outcome
+        .files
+        .iter()
+        .map(|f| f.strip_prefix(root).unwrap_or(f).to_string_lossy().into())
+        .collect();
+    assert!(
+        !rels.iter().any(|r| r.contains("other.rs")),
+        "a nested repository must not be walked; got {rels:?}"
+    );
+    assert!(rels.iter().any(|r| r == "own.rs"), "got {rels:?}");
+    let reasons: std::collections::BTreeMap<&str, &str> = outcome
+        .pruned_dirs
+        .iter()
+        .map(|(p, r)| (p.as_str(), r.as_str()))
+        .collect();
+    assert_eq!(
+        reasons.get("vendored"),
+        Some(&"nested_repository"),
+        "the prune must be named, not silent; got {reasons:?}"
+    );
+}
+
+/// Every path the built-in policy refuses is NAMED with the rule that fired.
 /// Before this, a pruned tree left no trace anywhere: not indexed, not
-/// flagged, not counted, while the run reported `status: ok`. Measured on this
-/// repository on 2026-09-09: 270 tracked files absent from the manifest and 10
-/// gaps reported. source: ADR-9841.
+/// flagged, not counted, while the run reported `status: ok`.
+/// source: ADR-9841.
 #[test]
 fn every_built_in_prune_is_recorded_with_its_reason() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path();
     std::fs::create_dir_all(root.join(".git")).unwrap();
     std::fs::create_dir_all(root.join("node_modules")).unwrap();
-    std::fs::create_dir_all(root.join(".hidden")).unwrap();
     std::fs::write(root.join(".git/config"), "x\n").unwrap();
     std::fs::write(root.join("node_modules/dep.rs"), "fn dep() {}\n").unwrap();
-    std::fs::write(root.join(".hidden/secret.rs"), "fn s() {}\n").unwrap();
-    std::fs::write(root.join(".gitignore"), "target\n").unwrap();
     std::fs::write(root.join("lib.rs"), "pub fn kept() {}\n").unwrap();
 
     let outcome = super::walk::collect_source_files(root, Default::default()).expect("walk");
@@ -559,27 +642,12 @@ fn every_built_in_prune_is_recorded_with_its_reason() {
         .iter()
         .map(|(p, r)| (p.as_str(), r.as_str()))
         .collect();
-
     assert_eq!(reasons.get(".git"), Some(&"vcs"), "got {reasons:?}");
     assert_eq!(
         reasons.get("node_modules"),
         Some(&"dependency_or_build_dir"),
         "got {reasons:?}"
     );
-    assert_eq!(
-        reasons.get(".hidden"),
-        Some(&"dot_directory"),
-        "got {reasons:?}"
-    );
-    // A pruned FILE is recorded too. Recording only directories left the
-    // dot-files invisible, which is the same defect one level down.
-    assert_eq!(
-        reasons.get(".gitignore"),
-        Some(&"dot_file"),
-        "a pruned file must be named as well; got {reasons:?}"
-    );
-    // The prune record is not a substitute for indexing: what IS source is
-    // still walked.
     let rels: Vec<String> = outcome
         .files
         .iter()

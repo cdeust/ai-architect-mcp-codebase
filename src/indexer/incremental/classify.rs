@@ -21,14 +21,24 @@ use std::collections::BTreeMap;
 /// source file the full index would visit, with `rel` equal to the File node
 /// id the indexer assigns; the returned map holds one `FileCoverage` entry per
 /// pruned directory, keyed by its walk-root-relative path.
-pub(super) fn discover(
-    codebase: &Path,
-    walk_opts: WalkOptions,
-) -> Result<(Vec<Discovered>, BTreeMap<String, FileCoverage>), String> {
+/// What one discovery pass observed: the files to index, the per-file gaps it
+/// recorded, and the directories the built-in policy pruned with their reason.
+/// A named alias rather than a bare triple, which clippy rejects as a complex
+/// type and which reads worse at three call sites. source: ADR-9841.
+pub(super) type Discovery = (
+    Vec<Discovered>,
+    BTreeMap<String, FileCoverage>,
+    BTreeMap<String, String>,
+);
+
+pub(super) fn discover(codebase: &Path, walk_opts: WalkOptions) -> Result<Discovery, String> {
     let outcome = collect_source_files(codebase, walk_opts)?;
     let mut collector = CoverageCollector::default();
     for rel in &outcome.excluded_dirs {
         collector.record_skipped(rel, "user_excluded".to_string());
+    }
+    for (rel, reason) in &outcome.pruned_dirs {
+        collector.record_pruned(rel, reason);
     }
     for rel in &outcome.unreadable_dirs {
         collector.record_skipped(rel, "unreadable".to_string());
@@ -47,7 +57,8 @@ pub(super) fn discover(
             size,
         });
     }
-    Ok((out, collector.into_files()))
+    let pruned = collector.pruned_dirs().clone();
+    Ok((out, collector.into_files(), pruned))
 }
 
 /// Classifies `current` against `prior`. See `Plan`. Rename detection pairs a
@@ -252,7 +263,7 @@ mod tests {
         let moved_body = "def moved():\n    return 4\n";
         std::fs::write(root.join("moved_to.py"), moved_body).unwrap();
 
-        let (current, _gaps) = discover(root, WalkOptions::default()).expect("discover");
+        let (current, _gaps, _pruned) = discover(root, WalkOptions::default()).expect("discover");
         let hash_of = |rel: &str| manifest::hash_file(&root.join(rel)).unwrap();
 
         let keep = current.iter().find(|d| d.rel == "keep.py").unwrap();
