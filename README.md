@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-26-orange" alt="26 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-1600+_passing-brightgreen" alt="1600+ tests">
+  <img src="https://img.shields.io/badge/Tests-1700+_passing-brightgreen" alt="1700+ tests">
   <img src="https://img.shields.io/badge/Coverage-91%25-brightgreen" alt="91% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
@@ -49,7 +49,7 @@ Every AI coding assistant hits the same wall: you ask it to change `handle_tool_
 
 **Eco-responsible is what we're aiming at.** The dominant energy cost in an AI-assisted workflow is not this binary's CPU; it is inference spent re-reading files to answer a question one query could have settled. Reducing that demand is the lever we work on, and we measure it — while publishing **no energy or CO₂ figure**, because this repository measures no joules and a token proxy is not a watt-hour. [What we measure, and what we refuse to claim ↓](#green-software-engineering)
 
-**One pipeline stage = one MCP tool. 10 stages. 26 tools. 1600+ tests. Zero clippy warnings, enforced in CI.**
+**One pipeline stage = one MCP tool. 10 stages. 26 tools. 1700+ tests. Zero clippy warnings, enforced in CI.**
 
 ---
 
@@ -705,7 +705,7 @@ Four CRITICAL, four HIGH, three MEDIUM findings were surfaced by a `security-aud
 - LSP `rootUri` → RFC 3986 percent-encoding
 - Diff line overflow → `DIFF_LINE_MAX = u64::MAX / 2` guard
 
-Each fix has a test that asserts the exploit is now rejected. Run `cargo test` to see 1600+ tests pass including the exploit-regression suite.
+Each fix has a test that asserts the exploit is now rejected. Run `cargo test` to see 1700+ tests pass including the exploit-regression suite.
 
 ### How `query_graph` is kept read-only
 
@@ -934,7 +934,7 @@ does not ship.
 ## Testing
 
 ```bash
-cargo test                                          # 1600+ tests, full suite
+cargo test                                          # 1700+ tests, full suite
 cargo test --release --test scalability_bench       # 500-file synthetic fixture
 cargo test --release --test lbug_bulk_investigation # dba's 9 UNWIND probes
 cargo test --release --test stage3a_integration     # end-to-end per sub-stage
