@@ -59,6 +59,9 @@ and the non-interactive-shell gotcha (`~/.zshenv`, not `~/.zshrc`).
   same commit.
 - Conventional commit messages preferred. Reference issue numbers in the
   body when applicable.
+- Sign off every commit: `git commit -s`. The `DCO` check fails a PR with an
+  unsigned commit; `git rebase --signoff main` fixes a branch. See
+  [GOVERNANCE.md](GOVERNANCE.md#contribution-licensing).
 
 ---
 
@@ -264,6 +267,7 @@ high-priority.
 
 ## License
 
-MIT. Contributions are licensed under the same. See [`LICENSE`](LICENSE).
+MIT. Contributions are licensed under the same and signed off under the
+[DCO](https://developercertificate.org/). See [`LICENSE`](LICENSE).
 The graph-theoretic and IR algorithms used remain attributable to their
 original authors; the MIT license covers this implementation.

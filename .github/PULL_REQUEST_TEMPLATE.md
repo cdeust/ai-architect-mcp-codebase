@@ -33,6 +33,7 @@ Closes #
 - [ ] New tests added for new behavior.
 - [ ] Mutation survival check: I considered what mutations would NOT be caught.
 - [ ] Manual verification of any UI / CLI / MCP-tool behavior changes.
+- [ ] Every commit is signed off (`git commit -s`), per GOVERNANCE.md.
 
 ## Audit notes
 
