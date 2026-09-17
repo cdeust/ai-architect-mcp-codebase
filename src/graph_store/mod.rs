@@ -123,8 +123,6 @@ pub struct QueryResult {
 // ---------------------------------------------------------------------------
 
 pub struct GraphStore {
-    _db: Database,
-    conn: Connection<'static>,
     // Cache of prepared UNWIND statements keyed by the exact Cypher text.
     // A fresh prepare() is ~0.5-2 ms; with one bulk call per file per label
     // the 500-file fixture produces ~4000 bulk calls so uncached prepare
@@ -139,6 +137,7 @@ pub struct GraphStore {
     // which regressed the bulk-insert loop this cache exists for from zero
     // allocations after the first chunk to one alloc/dealloc pair per chunk.
     stmt_cache: RefCell<HashMap<String, Option<PreparedStatement>>>,
+    conn: Connection<'static>,
     // Safety: `_db` is heap-allocated via lbug's C++ bridge (UniquePtr).
     // `Connection` borrows `Database` through a raw pointer on the C++ side,
     // not through Rust's borrow checker. Moving the Rust struct does not
@@ -147,7 +146,10 @@ pub struct GraphStore {
     // as Send+Sync. This self-referential pattern is safe here because:
     //   (a) `_db` is never moved out or dropped before `conn`,
     //   (b) lbug's own test suite uses the same stack-lifetime pattern,
-    //   (c) struct fields drop in declaration order (conn drops before _db).
+    //   (c) struct fields drop in declaration order, so `_db` is declared LAST:
+    //       the cached statements and `conn` are destroyed while the database
+    //       they point into is still alive (issue #311).
+    _db: Database,
 }
 
 impl GraphStore {
@@ -193,16 +195,16 @@ impl GraphStore {
             }
         };
         // Safety: see comment on the struct. The Database is heap-stable and
-        // outlives the Connection because struct fields drop in declaration order.
+        // outlives the Connection because `_db` is the last field, so it drops last.
         let conn: Connection<'static> = unsafe {
             std::mem::transmute::<Connection<'_>, Connection<'static>>(
                 Connection::new(&db).map_err(|e| format!("lbug connection failed: {e}"))?,
             )
         };
         Ok(GraphStore {
-            _db: db,
-            conn,
             stmt_cache: RefCell::new(HashMap::new()),
+            conn,
+            _db: db,
         })
     }
 
