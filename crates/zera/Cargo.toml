@@ -30,7 +30,7 @@ serde_json = "1"
 # Source: ZERA-spec §4.1 — "All payloads are zstd-compressed." The
 # zstd crate is the canonical Rust binding to Facebook's zstd
 # (BSD-3-Clause), used by tantivy already in the parent workspace.
-zstd = "0.13"
+zstd = "0.14"
 
 [lib]
 path = "src/lib.rs"

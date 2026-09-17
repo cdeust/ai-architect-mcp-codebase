@@ -98,7 +98,7 @@ tantivy = "0.26"
 # snapshot with zstd (two tiers: best/9 on explicit index, fast/3 for the
 # watcher). Rust bindings for zstd 1.5.7 (facebook/zstd, BSD-licensed); already
 # in the tree transitively via tantivy, promoted to a direct dep here.
-zstd = "0.13"
+zstd = "0.14"
 # source: issue #55 — AP's graph store is a directory (lbug 0.15 database
 # layout), so the snapshot is a tar archive before zstd (the C reference used
 # SQLite's single-file VACUUM INTO; we archive the dir instead). tar-rs
