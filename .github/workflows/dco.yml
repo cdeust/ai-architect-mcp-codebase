@@ -21,20 +21,30 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -euo pipefail
-          # Bot authors that cannot sign off. An explicit list, not a pattern.
-          exempt_authors="dependabot[bot]"
+          # Bots that cannot sign off. The exemption keys on the GitHub login
+          # that opened the PR, which a contributor cannot forge; a git author
+          # name is free text and is only a second condition.
+          exempt_logins="dependabot[bot]"
+          pr_exempt=0
+          if printf '%s\n' "$exempt_logins" | grep -Fxq -- "$PR_AUTHOR"; then
+            pr_exempt=1
+          fi
+          # Assigned first so a rev-list failure stops the job under `set -e`;
+          # inside a `for` word list it would yield an empty, passing loop.
+          shas=$(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA")
           fail=0
-          for sha in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
+          for sha in $shas; do
             name=$(git show -s --format='%an' "$sha")
             email=$(git show -s --format='%ae' "$sha")
-            if printf '%s\n' "$exempt_authors" | grep -Fxq "$name"; then
-              echo "exempt  $sha  $name"
+            if [ "$pr_exempt" -eq 1 ] && [ "$name" = "$PR_AUTHOR" ]; then
+              echo "exempt  $sha  $name (PR opened by $PR_AUTHOR)"
               continue
             fi
             if git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" \
-                | grep -Fxq "$name <$email>"; then
+                | grep -Fxq -- "$name <$email>"; then
               echo "ok      $sha  $name <$email>"
             else
               echo "::error::commit $sha by $name <$email> has no matching Signed-off-by trailer"
