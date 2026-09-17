@@ -107,8 +107,8 @@ keeps the copyright on their contribution. There is no CLA.
 The `DCO` workflow checks every commit of a pull request for a `Signed-off-by:`
 trailer matching the commit author. The only exemption is for pull requests
 opened by a GitHub login listed in `.github/workflows/dco.yml`, which today
-holds `dependabot[bot]`. It keys on the login that opened the pull request,
-not on a git author name, which anyone can set.
+holds `dependabot[bot]`. It keys on the login that opened the pull request;
+the git author name, which anyone can set, is only a second condition.
 The requirement applies from the change that introduced it; earlier history is
 the maintainer's own work and is not rewritten.
 
