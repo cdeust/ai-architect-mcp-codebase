@@ -21,6 +21,10 @@ on:
       - "scripts/marketplace_pins_manifests.py"
       - "scripts/marketplace_pins_registry.py"
       - "scripts/tests/test_check_marketplace_pins.py"
+      - "scripts/tests/test_check_marketplace_pins_dispatch.py"
+      - "scripts/tests/test_check_marketplace_pins_sha_manifest.py"
+      - "scripts/tests/_marketplace_pins_test_loader.py"
+      - "scripts/tests/_marketplace_pins_legacy_replay.py"
       - ".github/workflows/marketplace-pins.yml"
   push:
     branches: [main]
@@ -40,7 +44,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Unit tests (gate logic, all arms incl. offline)
-        run: python3 -m unittest scripts/tests/test_check_marketplace_pins.py -v 2>&1 | tail -5
+        run: |
+          python3 -m unittest \
+            scripts.tests.test_check_marketplace_pins \
+            scripts.tests.test_check_marketplace_pins_dispatch \
+            scripts.tests.test_check_marketplace_pins_sha_manifest \
+            -v 2>&1 | tail -5
       - name: Check marketplace pins
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
