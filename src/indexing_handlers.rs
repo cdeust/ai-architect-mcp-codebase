@@ -315,7 +315,9 @@ pub(crate) const COVERAGE_CAVEAT: &str = "Best-effort signal, NOT a completeness
     graph — prefer grep there. 'skipped'/'quarantined' files are NOT in the graph \
     at all. 'outside_build_targets' files (issue #284) WERE indexed — declarations \
     are in the graph — but sit outside every compiled Cargo target, so calls out of \
-    them cannot be resolved by the language server. \
+    them cannot be resolved by the language server. 'unlinked_file' files (issue \
+    #292) are ones rust-analyzer itself reported as in no crate, checked only for \
+    files an LSP pass opened. \
     source: DeusData/codebase-memory-mcp coverage wording.";
 
 // ---------------------------------------------------------------------------

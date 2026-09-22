@@ -94,6 +94,16 @@ skipped for exactly this reason — no `textDocument/definition` request is
 ever issued for them, so they never count as `failed` — and `get_impact`'s
 `unresolved_callsites_outside_targets` names the same attribution (plus the
 file it came from) for any target those sites call.
+With `lsp: true`, the pass also asks rust-analyzer for its own verdict
+(issue #292): for each file it opens, `textDocument/diagnostic` returns
+rust-analyzer's `unlinked-file` diagnostic when the file is in no crate of its
+crate graph (measured with rust-analyzer 1.95.0: the code arrived only on this
+pull request; `publishDiagnostics` for the same files carried an empty list). Such files enter the
+coverage report as `unlinked_file`, and `lsp_resolve.unlinked_file_check`
+sets the verdict beside the `cargo metadata` attribution, reporting
+disagreement in both directions rather than picking one. Only files holding
+an unresolved call site are opened, so absence of the flag is not a
+completeness claim.
 Graphs created before entry metadata was stored require a full reindex:
 `analyze_codebase` rebuilds them, and `index_codebase` automatically falls back
 to a full index when its incremental compatibility check detects the old schema.
