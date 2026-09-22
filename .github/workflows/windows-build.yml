@@ -44,17 +44,23 @@ jobs:
           restore-keys: |
             windows-x86_64-cargo-
 
-      # lbug 0.18's Kuzu core asks the linker for `ssl` and `crypto`. Those are
-      # Unix-style names: MSVC turns them into ssl.lib / crypto.lib, and no
-      # OpenSSL distribution for Windows ships those filenames — the runner
-      # image provides libssl.lib / libcrypto.lib. lbug 0.15, which v0.8.2 built
-      # against, did not link OpenSSL at all, which is why the break arrived
-      # with the 0.15 → 0.18 upgrade rather than with any workflow change (#176).
+      # lbug's build.rs has asked for OpenSSL under two different names on
+      # Windows, and switched once already: lbug 0.15 (v0.8.2's build) did not
+      # link OpenSSL at all; 0.18 asked the linker for the bare `ssl` and
+      # `crypto` (MSVC turns those into ssl.lib / crypto.lib, a filename no
+      # Windows OpenSSL distribution ships — #176). 0.20 reversed that and
+      # asks for `libssl` / `libcrypto` instead, matching vcpkg's own naming
+      # (lbug's build.rs now calls vcpkg::find_package("openssl") first).
+      # The runner image's OpenSSL install ships libssl.lib / libcrypto.lib
+      # either way, so the shim copies both name pairs rather than betting on
+      # whichever convention the pinned lbug version currently wants — a
+      # future lbug bump can move between them without a workflow edit.
       #
-      # Copies under the expected names into a scratch dir and puts that dir on
-      # rustc's native search path. `-L native=` is additive, unlike overwriting
-      # LIB, which would clobber the MSVC library paths cc-rs discovers.
-      - name: Provide ssl.lib / crypto.lib to the MSVC linker
+      # Copies under both expected names into a scratch dir and puts that dir
+      # on rustc's native search path. `-L native=` is additive, unlike
+      # overwriting LIB, which would clobber the MSVC library paths cc-rs
+      # discovers.
+      - name: Provide ssl.lib/crypto.lib and libssl.lib/libcrypto.lib to the MSVC linker
         run: |
           set -euo pipefail
           SHIM="$RUNNER_TEMP/openssl-shim"
@@ -68,7 +74,9 @@ jobs:
             if [ -f "$d/libssl.lib" ] && [ -f "$d/libcrypto.lib" ]; then
               cp "$d/libssl.lib" "$SHIM/ssl.lib"
               cp "$d/libcrypto.lib" "$SHIM/crypto.lib"
-              echo "shimmed OpenSSL import libs from: $d"
+              cp "$d/libssl.lib" "$SHIM/libssl.lib"
+              cp "$d/libcrypto.lib" "$SHIM/libcrypto.lib"
+              echo "shimmed OpenSSL import libs (both naming conventions) from: $d"
               ls -la "$SHIM"
               echo "RUSTFLAGS=-L native=$(cygpath -w "$SHIM")" >> "$GITHUB_ENV"
               exit 0
