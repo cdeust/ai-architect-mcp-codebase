@@ -24,7 +24,7 @@ struct OutsideTargetsFixture {
     store: GraphStore,
 }
 
-fn insert_caller_and_site(store: &GraphStore, file: &str, name: &str) {
+pub(super) fn insert_caller_and_site(store: &GraphStore, file: &str, name: &str) {
     let fn_id = format!("{file}::{name}");
     store
         .insert_node(

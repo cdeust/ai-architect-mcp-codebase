@@ -115,6 +115,52 @@ fn successful_requested_lsp_retains_counts_and_reports_completion() {
     assert_eq!(result["resolve"]["phase"], "static");
 }
 
+/// Issue #292: `src/orphan.rs` is under a compiled target's directory (cargo's
+/// check calls it inside) but no `mod` declares it, so rust-analyzer's
+/// `textDocument/diagnostic` answers `unlinked-file` for it. Both files carry
+/// a receiver call the static resolver cannot bind, so the LSP pass opens both.
+#[test]
+#[ignore = "requires rust-analyzer; run explicitly with --ignored"]
+fn rust_analyzer_unlinked_file_verdict_reaches_the_coverage_report() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = fixture(tmp.path());
+    std::fs::write(
+        repo.join("src/orphan.rs"),
+        "use crate::TaskSet;\npub fn orphan_total(sets: &[TaskSet]) -> u64 { sets[0].response_of() }\n",
+    )
+    .unwrap();
+    let out = tmp.path().join("out");
+    let result = analyze(&repo, &out, true, None);
+    assert_eq!(result["lsp_status"]["state"], "completed", "{result}");
+    let check = &result["lsp_resolve"]["unlinked_file_check"];
+    assert_eq!(check["pull_supported"], true, "{result}");
+    assert_eq!(check["unlinked_count"], 1, "{result}");
+    assert_eq!(
+        check["unlinked_files"][0]["path"], "src/orphan.rs",
+        "{result}"
+    );
+    assert_eq!(
+        check["unlinked_files"][0]["cargo_attribution"], "inside_build_targets",
+        "cargo's directory-level check disagrees with rust-analyzer here: {result}"
+    );
+    assert_eq!(result["coverage"]["unlinked_file"]["count"], 1, "{result}");
+    assert_eq!(
+        result["coverage"]["unlinked_file"]["files"],
+        json!(["src/orphan.rs"]),
+        "{result}"
+    );
+    let sidecar: Value =
+        serde_json::from_slice(&std::fs::read(out.join("index_coverage.json")).unwrap()).unwrap();
+    assert_eq!(
+        sidecar["files"]["src/orphan.rs"]["kind"], "unlinked_file",
+        "the persisted sidecar must carry it too, for query_graph(graph=\"missed\"): {sidecar}"
+    );
+    assert!(
+        sidecar["files"].get("src/lib.rs").is_none(),
+        "the linked file must not be flagged: {sidecar}"
+    );
+}
+
 /// Issue #282, the measured symptom: a crate that sits under a parent Cargo
 /// workspace which does not list it as a member. `cargo metadata` refuses
 /// the target ("current package believes it's in a workspace when it's

@@ -18,6 +18,7 @@ use crate::lsp_resolver;
 use crate::query_handlers::*;
 use crate::resolver;
 
+mod lsp_coverage;
 mod lsp_outcome;
 use lsp_outcome::LspOutcome;
 
@@ -175,13 +176,14 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let total_start = std::time::Instant::now();
 
     // Phase 1: index, then coverage + manifest before the metadata commit point.
-    let index_result =
+    let mut index_result =
         indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
     let sidecar_err = persist_analyze_sidecars(&req, &index_result.coverage)?;
     // Phase 2: resolve, then optionally refine with an LSP.
     let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
     let resolve_result = resolver::resolve_graph(&store)?;
     let lsp_result = lsp_phase(&req, &store);
+    fold_lsp_coverage(&req, &mut index_result.coverage, &lsp_result)?;
     // Phase 3: cluster. Phase 4: build the BM25 + TF-IDF search index.
     let cluster_result = clustering::cluster_graph(&store, req.gamma)?;
     let search_index_result = search::build_search_index(&store, &req.output_dir, &req.codebase)?;
@@ -232,6 +234,23 @@ fn persist_analyze_sidecars(
         .inspect(|e| {
             eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}");
         }))
+}
+
+/// Issue #292: the sidecar was written before the LSP phase, so fold its
+/// `unlinked-file` verdicts in and write it again — with the same "a failed
+/// coverage write fails the analysis" rule as `persist_analyze_sidecars`.
+fn fold_lsp_coverage(
+    req: &AnalyzeRequest,
+    coverage: &mut indexer::coverage::CoverageReport,
+    lsp_result: &LspOutcome,
+) -> Result<(), String> {
+    let LspOutcome::Completed(result) = lsp_result else {
+        return Ok(());
+    };
+    if lsp_coverage::merge_unlinked(coverage, &result.unlinked_check) {
+        indexer::coverage::save(&indexer::coverage::coverage_path(&req.output_dir), coverage)?;
+    }
+    Ok(())
 }
 
 /// Surfaces a failed sidecar write on the response rather than leaving the

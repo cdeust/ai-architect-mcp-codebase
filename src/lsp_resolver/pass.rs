@@ -7,7 +7,7 @@
 use super::edges::{try_add_lsp_edge, SiteContext};
 use super::sites::UnresolvedCallSite;
 use crate::graph_store::GraphStore;
-use crate::lsp_client::{self, LspResolutionResult, ServerHealth};
+use crate::lsp_client::{self, LspResolutionResult, ServerHealth, UnlinkedFileCheck};
 
 /// Running tally of one LSP resolution pass.
 ///
@@ -36,10 +36,12 @@ pub(super) struct LspPass {
     /// Ids to write `unresolved_reason` on at the end of the pass — see
     /// `mark_outside_targets` / `mark_resolved`.
     outside_target_ids: Vec<String>,
+    /// Issue #292: rust-analyzer's `unlinked-file` cross-check (ADR-9845).
+    pub(super) unlinked: UnlinkedFileCheck,
 }
 
 impl LspPass {
-    pub(super) fn new(total_sites: usize) -> Self {
+    pub(super) fn new(total_sites: usize, pull_supported: bool) -> Self {
         LspPass {
             total: total_sites as u64,
             resolved: 0,
@@ -47,6 +49,10 @@ impl LspPass {
             outside_targets: 0,
             newly_resolved: Vec::new(),
             outside_target_ids: Vec::new(),
+            unlinked: UnlinkedFileCheck {
+                pull_supported,
+                ..UnlinkedFileCheck::default()
+            },
         }
     }
 
@@ -108,10 +114,15 @@ impl LspPass {
     }
 
     pub(super) fn into_result(
-        self,
+        mut self,
         elapsed_ms: u64,
         server_health: ServerHealth,
     ) -> LspResolutionResult {
+        // Files arrive in `group_by_file`'s HashMap order; sort for a stable report.
+        self.unlinked
+            .unlinked
+            .sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+        self.unlinked.linked_despite_outside_targets.sort();
         LspResolutionResult {
             resolved_count: self.resolved,
             failed_count: self.failed,
@@ -121,6 +132,7 @@ impl LspPass {
             outside_targets_count: self.outside_targets,
             elapsed_ms,
             server_health,
+            unlinked_check: self.unlinked,
         }
     }
 }
@@ -166,7 +178,7 @@ mod tests {
         };
 
         // Ten sites in the pass; only four ever get an answer.
-        let mut pass = LspPass::new(10);
+        let mut pass = LspPass::new(10, false);
         pass.record(&store, &site("s1"), Ok(None), &ctx);
         pass.record(&store, &site("s2"), Ok(None), &ctx);
         pass.record(&store, &site("s3"), Err("broken pipe".to_string()), &ctx);
@@ -219,7 +231,7 @@ mod tests {
             canonical_root: &root,
         };
 
-        let mut pass = LspPass::new(10);
+        let mut pass = LspPass::new(10, false);
         // Three sites, one file, attributed without ever calling `record`.
         let outside_sites = [site("o1"), site("o2"), site("o3")];
         let outside_refs: Vec<&UnresolvedCallSite> = outside_sites.iter().collect();
@@ -300,7 +312,7 @@ mod tests {
             node_index: &index,
             canonical_root: &root,
         };
-        let mut pass = LspPass::new(1);
+        let mut pass = LspPass::new(1, false);
         let def = lsp_client::DefinitionResult {
             uri: lsp_client::path_to_file_uri(&root.join("src/b.rs")),
             start_line: 0,
@@ -343,7 +355,7 @@ mod tests {
             canonical_root: &root,
         };
 
-        let mut pass = LspPass::new(2);
+        let mut pass = LspPass::new(2, false);
         // Mentions the word, is NOT a timeout: a genuine failure.
         pass.record(
             &store,

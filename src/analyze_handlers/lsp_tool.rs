@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-use super::lsp_outcome;
+use super::{lsp_coverage, lsp_outcome};
 
 pub(crate) fn run_lsp_resolve(arguments: &Value) -> Value {
     match do_lsp_resolve(arguments) {
@@ -128,7 +128,7 @@ impl<'a> LspResolveRequest<'a> {
 /// Issue #282: the same `state`/`server_health` vocabulary `analyze_codebase`'s
 /// `lsp_status` carries (`lsp_outcome`), so a caller of this standalone tool
 /// gets the same "ran but resolved nothing" signal.
-fn lsp_resolve_envelope(result: &lsp_client::LspResolutionResult) -> Value {
+fn lsp_resolve_envelope(result: &lsp_client::LspResolutionResult, coverage_merge: Value) -> Value {
     json!({
         "stage": 3,
         "status": "ok",
@@ -137,6 +137,8 @@ fn lsp_resolve_envelope(result: &lsp_client::LspResolutionResult) -> Value {
         "failed_count": result.failed_count,
         "skipped_count": result.skipped_count,
         "outside_targets_count": result.outside_targets_count,
+        "unlinked_file_check": lsp_coverage::unlinked_check_json(&result.unlinked_check),
+        "coverage_merge": coverage_merge,
         "elapsed_ms": result.elapsed_ms,
         "state": lsp_outcome::completed_state(result),
         "server_health": lsp_outcome::server_health_json(&result.server_health),
@@ -154,7 +156,8 @@ pub(crate) fn do_lsp_resolve(arguments: &Value) -> Result<Value, String> {
         req.lsp_command,
         req.timeout,
     )?;
-    Ok(lsp_resolve_envelope(&result))
+    let coverage_merge = lsp_coverage::merge_into_sidecar(req.graph_path, &result.unlinked_check);
+    Ok(lsp_resolve_envelope(&result, coverage_merge))
 }
 
 /// Detect the dominant language from file extensions in a codebase.

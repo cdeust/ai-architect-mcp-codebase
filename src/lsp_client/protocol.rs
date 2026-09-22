@@ -7,9 +7,10 @@
 //
 // source: LSP Specification 3.17 §Base Protocol.
 
-use super::DefinitionResult;
-use serde_json::Value;
+use super::{path_to_file_uri, DefinitionResult};
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Content-Length framing — LSP wire protocol
@@ -173,6 +174,67 @@ pub(super) fn validate_probe_response(resp: &Value) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+/// Builds the `initialize` request body. Free function, not a method — kept
+/// out of `impl LspClient` so `initialize_with_probe` reads end-to-end
+/// without this literal taking half the function; moved here from
+/// `lsp_client.rs` (issue #292) to keep that file under the §4.1 cap.
+///
+/// source: M2 fix — percent-encode the path so spaces, unicode, and
+/// URL-reserved chars in workspace paths don't produce a malformed URI.
+pub(super) fn build_initialize_request(id: i64, workspace_root: &Path) -> Value {
+    let root_uri = path_to_file_uri(workspace_root);
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": {
+            "processId": std::process::id(),
+            "rootUri": root_uri,
+            "capabilities": {
+                "textDocument": {
+                    // source: LSP 3.17 §textDocument/definition — a server
+                    // may only answer with `LocationLink[]` (which carries
+                    // `targetSelectionRange`, the precise identifier-name
+                    // range) when the client declares `linkSupport`;
+                    // otherwise it must answer with plain `Location`/
+                    // `Location[]` (only the loose `range`, "the whole
+                    // declaration"). Declaring it lets
+                    // `parse_definition_response` prefer the precise range
+                    // and lets `find_node_at_position` fail closed on an
+                    // exact line match instead of scanning nearby lines.
+                    "definition": {
+                        "dynamicRegistration": false,
+                        "linkSupport": true
+                    },
+                    // source: LSP 3.17 §Pull Diagnostics — declares
+                    // `textDocument/diagnostic`, which
+                    // `LspClient::pull_diagnostics` issues (ADR-9845).
+                    "diagnostic": { "dynamicRegistration": false }
+                },
+                // source: LSP 3.17 §Progress — a server may only report
+                // workDoneProgress for a request or a background job
+                // (`window/workDoneProgress/create`) when the client
+                // declares this. `readiness::client_wait_for_ready` consumes it as
+                // the readiness fallback signal.
+                "window": { "workDoneProgress": true },
+                // source: rust-analyzer's serverStatus LSP extension — opts
+                // into `experimental/serverStatus`, the readiness module's
+                // PRIMARY signal (lsp_client::readiness header). Ignored by
+                // a server that doesn't implement it (pyright,
+                // typescript-language-server): an unrecognized capability is
+                // not an error per LSP 3.17 §Capabilities.
+                "experimental": { "serverStatusNotification": true }
+            },
+            "workspaceFolders": [{
+                "uri": root_uri,
+                "name": workspace_root.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            }]
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------

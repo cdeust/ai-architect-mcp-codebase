@@ -2,7 +2,7 @@
 //
 // Layer: shared/persistence within the indexer. Records, per indexing run, which
 // files the indexer could NOT fully cover — so an agent never overtrusts the
-// graph. Four kinds of gap:
+// graph. Five kinds of gap:
 //   * ParsePartial — the file WAS indexed, but its parse tree had ERROR/MISSING
 //     regions (1-based line ranges); constructs inside those lines may be absent
 //     from the graph.
@@ -16,6 +16,9 @@
 //     gated behind a disabled feature the coarse directory-level check misses):
 //     calls out of it cannot be resolved by the language server, because
 //     rust-analyzer's crate graph never contains it. See `cargo_targets.rs`.
+//   * UnlinkedFile (issue #292) — rust-analyzer's own `unlinked-file` verdict,
+//     recorded by the LSP pass (only for files it opened), never by the walk.
+//     source: ADR-9845.
 //
 // Schema note (issue #284, arbitrage #5 — not bumping `COVERAGE_SCHEMA_VERSION`
 // for this addition): the change is purely additive (a new enum variant with a
@@ -69,6 +72,9 @@ pub enum CoverageKind {
     /// declarations are in the graph, calls out of it cannot be resolved by
     /// the language server.
     OutsideBuildTargets,
+    /// rust-analyzer answered `unlinked-file` for it (issue #292): the file is
+    /// in no crate of the server's crate graph. source: ADR-9845.
+    UnlinkedFile,
 }
 
 /// One uncovered file's record.
@@ -125,9 +131,21 @@ impl CoverageReport {
                 CoverageKind::Skipped => counts.skipped += 1,
                 CoverageKind::Quarantined => counts.quarantined += 1,
                 CoverageKind::OutsideBuildTargets => counts.outside_build_targets += 1,
+                CoverageKind::UnlinkedFile => counts.unlinked_file += 1,
             }
         }
         counts
+    }
+
+    /// Records rust-analyzer's `unlinked-file` verdict for `rel` (issue #292).
+    /// `or_insert`, like `CoverageCollector::record_outside_targets`: any gap
+    /// already recorded for the file is the stronger or equal signal and wins.
+    pub fn record_unlinked_file(&mut self, rel: &str, detail: String) {
+        self.files.entry(rel.to_string()).or_insert(FileCoverage {
+            kind: CoverageKind::UnlinkedFile,
+            detail,
+            error_ranges: Vec::new(),
+        });
     }
 }
 
@@ -138,6 +156,7 @@ pub struct CoverageCounts {
     pub skipped: u64,
     pub quarantined: u64,
     pub outside_build_targets: u64,
+    pub unlinked_file: u64,
 }
 
 /// The coverage sidecar path for a given tool `output_dir` (sibling of `graph/`).
@@ -370,4 +389,43 @@ mod tests {
     }
 
     const OUTSIDE_TARGETS_DETAIL_FOR_TEST: &str = "not in any Cargo target (test fixture)";
+
+    #[test]
+    fn unlinked_file_round_trips_and_never_overwrites_an_existing_gap() {
+        let dir = tempfile::Builder::new()
+            .prefix("coverage_unlinked_")
+            .tempdir()
+            .expect("temp dir");
+        let path = coverage_path(dir.path());
+        let mut report = CoverageReport::new("full", 3);
+        report.files.insert(
+            "kani/h.rs".into(),
+            FileCoverage {
+                kind: CoverageKind::OutsideBuildTargets,
+                detail: OUTSIDE_TARGETS_DETAIL_FOR_TEST.into(),
+                error_ranges: vec![],
+            },
+        );
+        report.record_unlinked_file("kani/h.rs", "unlinked".into());
+        report.record_unlinked_file("src/orphan.rs", "unlinked".into());
+        save(&path, &report).expect("save");
+
+        let loaded = load(&path).expect("load");
+        assert_eq!(
+            loaded.files["kani/h.rs"].kind,
+            CoverageKind::OutsideBuildTargets,
+            "an existing gap must win over the LSP verdict"
+        );
+        assert_eq!(
+            loaded.files["src/orphan.rs"].kind,
+            CoverageKind::UnlinkedFile
+        );
+        let counts = loaded.counts();
+        assert_eq!((counts.outside_build_targets, counts.unlinked_file), (1, 1));
+        let raw = fs::read_to_string(&path).expect("read");
+        assert!(
+            raw.contains("\"unlinked_file\""),
+            "snake_case wire tag: {raw}"
+        );
+    }
 }

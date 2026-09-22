@@ -24,6 +24,7 @@ struct CoverageFileBuckets {
     skipped_files: Vec<Value>,
     quarantined_files: Vec<Value>,
     outside_build_target_files: Vec<Value>,
+    unlinked_files: Vec<Value>,
     user_excluded_count: u64,
 }
 
@@ -37,6 +38,7 @@ fn bucket_coverage_files(report: &indexer::coverage::CoverageReport) -> Coverage
         skipped_files: Vec::new(),
         quarantined_files: Vec::new(),
         outside_build_target_files: Vec::new(),
+        unlinked_files: Vec::new(),
         user_excluded_count: 0,
     };
     for (rel, cov) in &report.files {
@@ -65,6 +67,11 @@ fn bucket_coverage_files(report: &indexer::coverage::CoverageReport) -> Coverage
             CoverageKind::OutsideBuildTargets => {
                 if b.outside_build_target_files.len() < COVERAGE_LIST_CAP {
                     b.outside_build_target_files.push(json!(rel));
+                }
+            }
+            CoverageKind::UnlinkedFile => {
+                if b.unlinked_files.len() < COVERAGE_LIST_CAP {
+                    b.unlinked_files.push(json!(rel));
                 }
             }
         }
@@ -106,8 +113,9 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
             "count": counts.outside_build_targets,
             "files": b.outside_build_target_files
         },
+        "unlinked_file": { "count": counts.unlinked_file, "files": b.unlinked_files },
         // Declared policy, NOT a gap: reported so a reader can see what the
-        // walk refused to enter, and deliberately outside the four gap buckets
+        // walk refused to enter, and deliberately outside the five gap buckets
         // so `.git`/`target` do not make every graph incomplete.
         // source: ADR-9841.
         "pruned_dirs": {

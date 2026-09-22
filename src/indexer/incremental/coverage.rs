@@ -26,7 +26,9 @@ use std::collections::BTreeMap;
 /// touched (a `[[test]]` added to `Cargo.toml`), so carrying a prior file's
 /// verdict forward would let it go stale silently. The caller
 /// (`save_incremental_coverage`) recomputes them fresh every pass via
-/// `overlay_outside_targets`.
+/// `overlay_outside_targets`. `UnlinkedFile` entries (issue #292) are
+/// excluded for the same reason — a `mod` added in another file links an
+/// untouched one — but only the next LSP pass can recompute them (ADR-9845).
 fn merge_coverage(
     prior: Option<&coverage::CoverageReport>,
     reparsed_gaps: BTreeMap<String, FileCoverage>,
@@ -37,12 +39,13 @@ fn merge_coverage(
 ) -> coverage::CoverageReport {
     let mut report = coverage::CoverageReport::new(index_mode, files_indexed);
     // Carry forward prior gaps for files that still exist and were not
-    // reparsed — except OutsideBuildTargets, recomputed every pass (see doc).
+    // reparsed — except OutsideBuildTargets and UnlinkedFile (see doc).
     if let Some(prior) = prior {
         for (rel, cov) in &prior.files {
             if current_rels.contains(rel)
                 && !reparsed_rels.contains(rel)
                 && cov.kind != coverage::CoverageKind::OutsideBuildTargets
+                && cov.kind != coverage::CoverageKind::UnlinkedFile
             {
                 report.files.insert(rel.clone(), cov.clone());
             }

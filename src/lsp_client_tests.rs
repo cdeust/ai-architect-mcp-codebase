@@ -265,6 +265,7 @@ fn shutdown_returns_against_a_server_that_never_exits() {
         // the assertion is that the call RETURNS, never on how long it took.
         timeout: Duration::from_millis(50),
         server_health: ServerHealth::not_probed(),
+        pull_diagnostics: false,
     };
 
     client.shutdown().expect("shutdown must return, not hang");
@@ -343,6 +344,7 @@ fn client_replaying(frames: &[Value]) -> LspClient {
         request_id: AtomicI64::new(2),
         timeout: Duration::from_secs(5),
         server_health: ServerHealth::not_probed(),
+        pull_diagnostics: false,
     }
 }
 
