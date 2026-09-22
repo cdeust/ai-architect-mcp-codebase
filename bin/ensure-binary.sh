@@ -29,7 +29,7 @@ EXPECTED_SIGNER_WORKFLOW="${EXPECTED_REPO}/.github/workflows/release.yml"
 # requires it to match Cargo.toml and every public manifest before merge.
 EXPECTED_VERSION="0.11.1"
 EXPECTED_PLUGIN_MANIFEST_SHA256="433e541771ab5e498fa38f6ddc4bb32806a9d118a737caa9a4953039571805ab"
-EXPECTED_CARGO_MANIFEST_SHA256="9ff34b557b38539e9b8ba725a6e163ede831628c3de552b89f501b81f9cfdeed"
+EXPECTED_CARGO_MANIFEST_SHA256="632d18d203db72a7230e531991aa39755c1215ec970f74628ad10d8ef2297c99"
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BIN="$ROOT/target/release/ai-architect-mcp-codebase"
