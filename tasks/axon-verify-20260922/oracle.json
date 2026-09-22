@@ -1,0 +1,1812 @@
+{
+  "schema_version": 1,
+  "corpus": {
+    "repository": "https://github.com/DYResearch/dy-wcet",
+    "commit": "1e93ccd462af2b2531c32e4ac9eae5bd8e95fb2b",
+    "path": "/private/tmp/axon-eval-20260906-corpus",
+    "files": [
+      {
+        "file": "kani/response_bounds.rs",
+        "sha256": "2c523b76313ecd672d686e30261812eda30e816cf6efc42e735c8171dfb0ccbb",
+        "lines": 105
+      },
+      {
+        "file": "src/lib.rs",
+        "sha256": "a77baefdcbc415a77c8051eb8d71038a4405958851ea3a82027edd0ef4481e75",
+        "lines": 931
+      },
+      {
+        "file": "tests/on_paper.rs",
+        "sha256": "402e111890b4091bd756c05770bef26452be787597b7f09bc6dfcbf2d9af902f",
+        "lines": 258
+      },
+      {
+        "file": "tests/properties.rs",
+        "sha256": "296f801a9e8d8356dd1417919a48a2bae9149e1ea21a7bc8bf1ff73b5ee21a5b",
+        "lines": 262
+      }
+    ]
+  },
+  "method": "Independent line-anchored lexical fn inventory plus direct source review; source definitions only, no generated functions, closures, or doctest-generated main. All direct .response_of calls are reviewed TaskSet receivers. No ai-architect graph output used.",
+  "schema": {
+    "functions": "Explicit fn definitions: file is repository-relative; line is 1-based declaration line; qualified_name includes manually reviewed impl/module; id combines file, line and qualified_name; attributes are contiguous immediately preceding attributes.",
+    "response_of_callsites": "Lexical direct method expressions within named functions; column is 1-based receiver position; caller_id joins functions.id. Calls inside macros/closures are included in containing named function; inside_macro_on_same_line only denotes a same-line lexical macro prefix and is not a complete macro-context classifier.",
+    "response_of_callers": "Distinct containing functions, keyed by source function id; joins functions.id.",
+    "counts": "Source denominators, not execution or coverage results."
+  },
+  "counts": {
+    "rust_files": 4,
+    "function_definitions": 89,
+    "test_definitions": 49,
+    "kani_harness_definitions": 5,
+    "response_of_callsites": 52,
+    "response_of_distinct_callers": 38,
+    "functions_by_file": {
+      "kani/response_bounds.rs": 6,
+      "src/lib.rs": 57,
+      "tests/on_paper.rs": 15,
+      "tests/properties.rs": 11
+    },
+    "tests_by_file": {
+      "src/lib.rs": 26,
+      "tests/on_paper.rs": 15,
+      "tests/properties.rs": 8
+    },
+    "callsites_by_file": {
+      "kani/response_bounds.rs": 5,
+      "src/lib.rs": 20,
+      "tests/on_paper.rs": 16,
+      "tests/properties.rs": 11
+    },
+    "distinct_callers_by_file": {
+      "kani/response_bounds.rs": 4,
+      "src/lib.rs": 17,
+      "tests/on_paper.rs": 12,
+      "tests/properties.rs": 5
+    }
+  },
+  "functions": [
+    {
+      "id": "kani/response_bounds.rs:18:task",
+      "file": "kani/response_bounds.rs",
+      "name": "task",
+      "qualified_name": "task",
+      "line": 18,
+      "kind": "function",
+      "attributes": [],
+      "source": "fn task(c: u64, t: u64, d: u64, b: u64, j: u64) -> Task {"
+    },
+    {
+      "id": "kani/response_bounds.rs:27:a_bounded_response_never_exceeds_its_deadline",
+      "file": "kani/response_bounds.rs",
+      "name": "a_bounded_response_never_exceeds_its_deadline",
+      "qualified_name": "a_bounded_response_never_exceeds_its_deadline",
+      "line": 27,
+      "kind": "kani_harness",
+      "attributes": [
+        "#[kani::proof]",
+        "#[kani::unwind(5)]"
+      ],
+      "source": "fn a_bounded_response_never_exceeds_its_deadline() {"
+    },
+    {
+      "id": "kani/response_bounds.rs:48:every_unbounded_variant_fails_every_deadline",
+      "file": "kani/response_bounds.rs",
+      "name": "every_unbounded_variant_fails_every_deadline",
+      "qualified_name": "every_unbounded_variant_fails_every_deadline",
+      "line": 48,
+      "kind": "kani_harness",
+      "attributes": [
+        "#[kani::proof]"
+      ],
+      "source": "fn every_unbounded_variant_fails_every_deadline() {"
+    },
+    {
+      "id": "kani/response_bounds.rs:61:the_recurrence_terminates_without_panicking",
+      "file": "kani/response_bounds.rs",
+      "name": "the_recurrence_terminates_without_panicking",
+      "qualified_name": "the_recurrence_terminates_without_panicking",
+      "line": 61,
+      "kind": "kani_harness",
+      "attributes": [
+        "#[kani::proof]",
+        "#[kani::unwind(5)]"
+      ],
+      "source": "fn the_recurrence_terminates_without_panicking() {"
+    },
+    {
+      "id": "kani/response_bounds.rs:81:a_lone_task_pays_only_for_itself",
+      "file": "kani/response_bounds.rs",
+      "name": "a_lone_task_pays_only_for_itself",
+      "qualified_name": "a_lone_task_pays_only_for_itself",
+      "line": 81,
+      "kind": "kani_harness",
+      "attributes": [
+        "#[kani::proof]",
+        "#[kani::unwind(3)]"
+      ],
+      "source": "fn a_lone_task_pays_only_for_itself() {"
+    },
+    {
+      "id": "kani/response_bounds.rs:100:an_index_past_the_end_is_named",
+      "file": "kani/response_bounds.rs",
+      "name": "an_index_past_the_end_is_named",
+      "qualified_name": "an_index_past_the_end_is_named",
+      "line": 100,
+      "kind": "kani_harness",
+      "attributes": [
+        "#[kani::proof]"
+      ],
+      "source": "fn an_index_past_the_end_is_named() {"
+    },
+    {
+      "id": "src/lib.rs:152:Task::new",
+      "file": "src/lib.rs",
+      "name": "new",
+      "qualified_name": "Task::new",
+      "line": 152,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn new(wcet_us: u64, period_us: u64) -> Self {"
+    },
+    {
+      "id": "src/lib.rs:165:Task::deadline",
+      "file": "src/lib.rs",
+      "name": "deadline",
+      "qualified_name": "Task::deadline",
+      "line": 165,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn deadline(mut self, deadline_us: u64) -> Self {"
+    },
+    {
+      "id": "src/lib.rs:172:Task::blocking",
+      "file": "src/lib.rs",
+      "name": "blocking",
+      "qualified_name": "Task::blocking",
+      "line": 172,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn blocking(mut self, blocking_us: u64) -> Self {"
+    },
+    {
+      "id": "src/lib.rs:179:Task::jitter",
+      "file": "src/lib.rs",
+      "name": "jitter",
+      "qualified_name": "Task::jitter",
+      "line": 179,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn jitter(mut self, jitter_us: u64) -> Self {"
+    },
+    {
+      "id": "src/lib.rs:186:Task::named",
+      "file": "src/lib.rs",
+      "name": "named",
+      "qualified_name": "Task::named",
+      "line": 186,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn named(mut self, name: &'static str) -> Self {"
+    },
+    {
+      "id": "src/lib.rs:194:Task::utilisation_ppm",
+      "file": "src/lib.rs",
+      "name": "utilisation_ppm",
+      "qualified_name": "Task::utilisation_ppm",
+      "line": 194,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn utilisation_ppm(&self) -> Option<u64> {"
+    },
+    {
+      "id": "src/lib.rs:230:Unbounded::fmt",
+      "file": "src/lib.rs",
+      "name": "fmt",
+      "qualified_name": "Unbounded::fmt",
+      "line": 230,
+      "kind": "function",
+      "attributes": [],
+      "source": "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {"
+    },
+    {
+      "id": "src/lib.rs:256:Response::meets",
+      "file": "src/lib.rs",
+      "name": "meets",
+      "qualified_name": "Response::meets",
+      "line": 256,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn meets(&self, deadline_us: u64) -> bool {"
+    },
+    {
+      "id": "src/lib.rs:265:Response::bound",
+      "file": "src/lib.rs",
+      "name": "bound",
+      "qualified_name": "Response::bound",
+      "line": 265,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn bound(&self) -> Option<u64> {"
+    },
+    {
+      "id": "src/lib.rs:278:Response::response_time",
+      "file": "src/lib.rs",
+      "name": "response_time",
+      "qualified_name": "Response::response_time",
+      "line": 278,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn response_time(&self) -> Option<u64> {"
+    },
+    {
+      "id": "src/lib.rs:288:Response::is_bounded",
+      "file": "src/lib.rs",
+      "name": "is_bounded",
+      "qualified_name": "Response::is_bounded",
+      "line": 288,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn is_bounded(&self) -> bool {"
+    },
+    {
+      "id": "src/lib.rs:294:Response::reason",
+      "file": "src/lib.rs",
+      "name": "reason",
+      "qualified_name": "Response::reason",
+      "line": 294,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn reason(&self) -> Option<Unbounded> {"
+    },
+    {
+      "id": "src/lib.rs:305:Response::fmt",
+      "file": "src/lib.rs",
+      "name": "fmt",
+      "qualified_name": "Response::fmt",
+      "line": 305,
+      "kind": "function",
+      "attributes": [],
+      "source": "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {"
+    },
+    {
+      "id": "src/lib.rs:330:Rejected::fmt",
+      "file": "src/lib.rs",
+      "name": "fmt",
+      "qualified_name": "Rejected::fmt",
+      "line": 330,
+      "kind": "function",
+      "attributes": [],
+      "source": "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {"
+    },
+    {
+      "id": "src/lib.rs:357:TaskSet::new",
+      "file": "src/lib.rs",
+      "name": "new",
+      "qualified_name": "TaskSet::new",
+      "line": 357,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn new() -> Self {"
+    },
+    {
+      "id": "src/lib.rs:366:TaskSet::len",
+      "file": "src/lib.rs",
+      "name": "len",
+      "qualified_name": "TaskSet::len",
+      "line": 366,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn len(&self) -> usize {"
+    },
+    {
+      "id": "src/lib.rs:372:TaskSet::is_empty",
+      "file": "src/lib.rs",
+      "name": "is_empty",
+      "qualified_name": "TaskSet::is_empty",
+      "line": 372,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub const fn is_empty(&self) -> bool {"
+    },
+    {
+      "id": "src/lib.rs:378:TaskSet::get",
+      "file": "src/lib.rs",
+      "name": "get",
+      "qualified_name": "TaskSet::get",
+      "line": 378,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn get(&self, index: usize) -> Option<&Task> {"
+    },
+    {
+      "id": "src/lib.rs:383:TaskSet::iter",
+      "file": "src/lib.rs",
+      "name": "iter",
+      "qualified_name": "TaskSet::iter",
+      "line": 383,
+      "kind": "function",
+      "attributes": [],
+      "source": "pub fn iter(&self) -> impl Iterator<Item = &Task> {"
+    },
+    {
+      "id": "src/lib.rs:391:TaskSet::push",
+      "file": "src/lib.rs",
+      "name": "push",
+      "qualified_name": "TaskSet::push",
+      "line": 391,
+      "kind": "function",
+      "attributes": [],
+      "source": "pub fn push(&mut self, t: Task) -> Result<(), Rejected> {"
+    },
+    {
+      "id": "src/lib.rs:413:TaskSet::utilisation_ppm",
+      "file": "src/lib.rs",
+      "name": "utilisation_ppm",
+      "qualified_name": "TaskSet::utilisation_ppm",
+      "line": 413,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn utilisation_ppm(&self) -> Option<u64> {"
+    },
+    {
+      "id": "src/lib.rs:424:TaskSet::utilisation_through",
+      "file": "src/lib.rs",
+      "name": "utilisation_through",
+      "qualified_name": "TaskSet::utilisation_through",
+      "line": 424,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn utilisation_through(&self, index: usize) -> Option<u64> {"
+    },
+    {
+      "id": "src/lib.rs:453:TaskSet::response_of",
+      "file": "src/lib.rs",
+      "name": "response_of",
+      "qualified_name": "TaskSet::response_of",
+      "line": 453,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn response_of(&self, index: usize) -> Response {"
+    },
+    {
+      "id": "src/lib.rs:511:TaskSet::is_schedulable",
+      "file": "src/lib.rs",
+      "name": "is_schedulable",
+      "qualified_name": "TaskSet::is_schedulable",
+      "line": 511,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn is_schedulable(&self) -> bool {"
+    },
+    {
+      "id": "src/lib.rs:522:TaskSet::first_failure",
+      "file": "src/lib.rs",
+      "name": "first_failure",
+      "qualified_name": "TaskSet::first_failure",
+      "line": 522,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn first_failure(&self) -> Option<usize> {"
+    },
+    {
+      "id": "src/lib.rs:532:TaskSet::slack_of",
+      "file": "src/lib.rs",
+      "name": "slack_of",
+      "qualified_name": "TaskSet::slack_of",
+      "line": 532,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn slack_of(&self, index: usize) -> Option<u64> {"
+    },
+    {
+      "id": "src/lib.rs:549:TaskSet::max_wcet_increase",
+      "file": "src/lib.rs",
+      "name": "max_wcet_increase",
+      "qualified_name": "TaskSet::max_wcet_increase",
+      "line": 549,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn max_wcet_increase(&self, index: usize) -> Option<u64> {"
+    },
+    {
+      "id": "src/lib.rs:588:TaskSet::liu_layland_bound_ppm",
+      "file": "src/lib.rs",
+      "name": "liu_layland_bound_ppm",
+      "qualified_name": "TaskSet::liu_layland_bound_ppm",
+      "line": 588,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn liu_layland_bound_ppm(n: usize) -> u64 {"
+    },
+    {
+      "id": "src/lib.rs:602:TaskSet::passes_utilisation_bound",
+      "file": "src/lib.rs",
+      "name": "passes_utilisation_bound",
+      "qualified_name": "TaskSet::passes_utilisation_bound",
+      "line": 602,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn passes_utilisation_bound(&self) -> bool {"
+    },
+    {
+      "id": "src/lib.rs:624:TaskSet::optimal_priority_order",
+      "file": "src/lib.rs",
+      "name": "optimal_priority_order",
+      "qualified_name": "TaskSet::optimal_priority_order",
+      "line": 624,
+      "kind": "function",
+      "attributes": [
+        "#[must_use]"
+      ],
+      "source": "pub fn optimal_priority_order(&self) -> Option<[usize; MAX_TASKS]> {"
+    },
+    {
+      "id": "src/lib.rs:673:tests::t",
+      "file": "src/lib.rs",
+      "name": "t",
+      "qualified_name": "tests::t",
+      "line": 673,
+      "kind": "function",
+      "attributes": [],
+      "source": "fn t(w: u64, p: u64) -> Task {"
+    },
+    {
+      "id": "src/lib.rs:678:tests::a_single_task_responds_in_its_own_execution_time",
+      "file": "src/lib.rs",
+      "name": "a_single_task_responds_in_its_own_execution_time",
+      "qualified_name": "tests::a_single_task_responds_in_its_own_execution_time",
+      "line": 678,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_single_task_responds_in_its_own_execution_time() {"
+    },
+    {
+      "id": "src/lib.rs:685:tests::a_lower_priority_task_pays_for_every_preemption",
+      "file": "src/lib.rs",
+      "name": "a_lower_priority_task_pays_for_every_preemption",
+      "qualified_name": "tests::a_lower_priority_task_pays_for_every_preemption",
+      "line": 685,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_lower_priority_task_pays_for_every_preemption() {"
+    },
+    {
+      "id": "src/lib.rs:694:tests::blocking_is_added_once_and_not_per_preemption",
+      "file": "src/lib.rs",
+      "name": "blocking_is_added_once_and_not_per_preemption",
+      "qualified_name": "tests::blocking_is_added_once_and_not_per_preemption",
+      "line": 694,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn blocking_is_added_once_and_not_per_preemption() {"
+    },
+    {
+      "id": "src/lib.rs:702:tests::jitter_widens_the_window_and_adds_to_the_answer",
+      "file": "src/lib.rs",
+      "name": "jitter_widens_the_window_and_adds_to_the_answer",
+      "qualified_name": "tests::jitter_widens_the_window_and_adds_to_the_answer",
+      "line": 702,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn jitter_widens_the_window_and_adds_to_the_answer() {"
+    },
+    {
+      "id": "src/lib.rs:712:tests::a_tasks_own_jitter_lands_in_its_own_response",
+      "file": "src/lib.rs",
+      "name": "a_tasks_own_jitter_lands_in_its_own_response",
+      "qualified_name": "tests::a_tasks_own_jitter_lands_in_its_own_response",
+      "line": 712,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_tasks_own_jitter_lands_in_its_own_response() {"
+    },
+    {
+      "id": "src/lib.rs:721:tests::zero_jitter_reduces_to_joseph_and_pandya",
+      "file": "src/lib.rs",
+      "name": "zero_jitter_reduces_to_joseph_and_pandya",
+      "qualified_name": "tests::zero_jitter_reduces_to_joseph_and_pandya",
+      "line": 721,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn zero_jitter_reduces_to_joseph_and_pandya() {"
+    },
+    {
+      "id": "src/lib.rs:732:tests::an_overloaded_set_does_not_converge_and_says_so",
+      "file": "src/lib.rs",
+      "name": "an_overloaded_set_does_not_converge_and_says_so",
+      "qualified_name": "tests::an_overloaded_set_does_not_converge_and_says_so",
+      "line": 732,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn an_overloaded_set_does_not_converge_and_says_so() {"
+    },
+    {
+      "id": "src/lib.rs:743:tests::a_bound_above_the_deadline_is_reported_with_its_value",
+      "file": "src/lib.rs",
+      "name": "a_bound_above_the_deadline_is_reported_with_its_value",
+      "qualified_name": "tests::a_bound_above_the_deadline_is_reported_with_its_value",
+      "line": 743,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_bound_above_the_deadline_is_reported_with_its_value() {"
+    },
+    {
+      "id": "src/lib.rs:755:tests::every_unbounded_variant_fails_every_deadline",
+      "file": "src/lib.rs",
+      "name": "every_unbounded_variant_fails_every_deadline",
+      "qualified_name": "tests::every_unbounded_variant_fails_every_deadline",
+      "line": 755,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn every_unbounded_variant_fails_every_deadline() {"
+    },
+    {
+      "id": "src/lib.rs:768:tests::an_index_past_the_end_is_named_rather_than_guessed",
+      "file": "src/lib.rs",
+      "name": "an_index_past_the_end_is_named_rather_than_guessed",
+      "qualified_name": "tests::an_index_past_the_end_is_named_rather_than_guessed",
+      "line": 768,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn an_index_past_the_end_is_named_rather_than_guessed() {"
+    },
+    {
+      "id": "src/lib.rs:775:tests::overflow_is_reported_and_never_wrapped",
+      "file": "src/lib.rs",
+      "name": "overflow_is_reported_and_never_wrapped",
+      "qualified_name": "tests::overflow_is_reported_and_never_wrapped",
+      "line": 775,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn overflow_is_reported_and_never_wrapped() {"
+    },
+    {
+      "id": "src/lib.rs:786:tests::a_zero_period_is_refused_at_admission",
+      "file": "src/lib.rs",
+      "name": "a_zero_period_is_refused_at_admission",
+      "qualified_name": "tests::a_zero_period_is_refused_at_admission",
+      "line": 786,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_zero_period_is_refused_at_admission() {"
+    },
+    {
+      "id": "src/lib.rs:792:tests::execution_longer_than_its_deadline_is_refused",
+      "file": "src/lib.rs",
+      "name": "execution_longer_than_its_deadline_is_refused",
+      "qualified_name": "tests::execution_longer_than_its_deadline_is_refused",
+      "line": 792,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn execution_longer_than_its_deadline_is_refused() {"
+    },
+    {
+      "id": "src/lib.rs:801:tests::the_task_limit_is_enforced_rather_than_overrun",
+      "file": "src/lib.rs",
+      "name": "the_task_limit_is_enforced_rather_than_overrun",
+      "qualified_name": "tests::the_task_limit_is_enforced_rather_than_overrun",
+      "line": 801,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn the_task_limit_is_enforced_rather_than_overrun() {"
+    },
+    {
+      "id": "src/lib.rs:810:tests::utilisation_is_parts_per_million_and_never_a_float",
+      "file": "src/lib.rs",
+      "name": "utilisation_is_parts_per_million_and_never_a_float",
+      "qualified_name": "tests::utilisation_is_parts_per_million_and_never_a_float",
+      "line": 810,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn utilisation_is_parts_per_million_and_never_a_float() {"
+    },
+    {
+      "id": "src/lib.rs:818:tests::the_same_set_gives_the_same_bits_every_time",
+      "file": "src/lib.rs",
+      "name": "the_same_set_gives_the_same_bits_every_time",
+      "qualified_name": "tests::the_same_set_gives_the_same_bits_every_time",
+      "line": 818,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn the_same_set_gives_the_same_bits_every_time() {"
+    },
+    {
+      "id": "src/lib.rs:829:tests::a_set_at_exactly_its_deadline_is_schedulable",
+      "file": "src/lib.rs",
+      "name": "a_set_at_exactly_its_deadline_is_schedulable",
+      "qualified_name": "tests::a_set_at_exactly_its_deadline_is_schedulable",
+      "line": 829,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_set_at_exactly_its_deadline_is_schedulable() {"
+    },
+    {
+      "id": "src/lib.rs:837:tests::one_microsecond_past_the_deadline_is_not",
+      "file": "src/lib.rs",
+      "name": "one_microsecond_past_the_deadline_is_not",
+      "qualified_name": "tests::one_microsecond_past_the_deadline_is_not",
+      "line": 837,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn one_microsecond_past_the_deadline_is_not() {"
+    },
+    {
+      "id": "src/lib.rs:845:tests::slack_is_none_when_the_task_misses",
+      "file": "src/lib.rs",
+      "name": "slack_is_none_when_the_task_misses",
+      "qualified_name": "tests::slack_is_none_when_the_task_misses",
+      "line": 845,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn slack_is_none_when_the_task_misses() {"
+    },
+    {
+      "id": "src/lib.rs:854:tests::slack_is_the_distance_to_the_deadline",
+      "file": "src/lib.rs",
+      "name": "slack_is_the_distance_to_the_deadline",
+      "qualified_name": "tests::slack_is_the_distance_to_the_deadline",
+      "line": 854,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn slack_is_the_distance_to_the_deadline() {"
+    },
+    {
+      "id": "src/lib.rs:862:tests::sensitivity_finds_the_last_execution_time_that_still_fits",
+      "file": "src/lib.rs",
+      "name": "sensitivity_finds_the_last_execution_time_that_still_fits",
+      "qualified_name": "tests::sensitivity_finds_the_last_execution_time_that_still_fits",
+      "line": 862,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn sensitivity_finds_the_last_execution_time_that_still_fits() {"
+    },
+    {
+      "id": "src/lib.rs:876:tests::the_utilisation_bound_is_a_precheck_and_says_so",
+      "file": "src/lib.rs",
+      "name": "the_utilisation_bound_is_a_precheck_and_says_so",
+      "qualified_name": "tests::the_utilisation_bound_is_a_precheck_and_says_so",
+      "line": 876,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn the_utilisation_bound_is_a_precheck_and_says_so() {"
+    },
+    {
+      "id": "src/lib.rs:884:tests::audsley_finds_an_ordering_the_caller_had_backwards",
+      "file": "src/lib.rs",
+      "name": "audsley_finds_an_ordering_the_caller_had_backwards",
+      "qualified_name": "tests::audsley_finds_an_ordering_the_caller_had_backwards",
+      "line": 884,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn audsley_finds_an_ordering_the_caller_had_backwards() {"
+    },
+    {
+      "id": "src/lib.rs:897:tests::audsley_returns_none_when_no_ordering_works",
+      "file": "src/lib.rs",
+      "name": "audsley_returns_none_when_no_ordering_works",
+      "qualified_name": "tests::audsley_returns_none_when_no_ordering_works",
+      "line": 897,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn audsley_returns_none_when_no_ordering_works() {"
+    },
+    {
+      "id": "src/lib.rs:905:tests::rejections_and_responses_describe_themselves",
+      "file": "src/lib.rs",
+      "name": "rejections_and_responses_describe_themselves",
+      "qualified_name": "tests::rejections_and_responses_describe_themselves",
+      "line": 905,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn rejections_and_responses_describe_themselves() {"
+    },
+    {
+      "id": "src/lib.rs:917:tests::a_task_builder_leaves_nothing_implicit",
+      "file": "src/lib.rs",
+      "name": "a_task_builder_leaves_nothing_implicit",
+      "qualified_name": "tests::a_task_builder_leaves_nothing_implicit",
+      "line": 917,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_task_builder_leaves_nothing_implicit() {"
+    },
+    {
+      "id": "tests/on_paper.rs:23:three_tasks_settling_at_six",
+      "file": "tests/on_paper.rs",
+      "name": "three_tasks_settling_at_six",
+      "qualified_name": "three_tasks_settling_at_six",
+      "line": 23,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn three_tasks_settling_at_six() {"
+    },
+    {
+      "id": "tests/on_paper.rs:39:a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+      "file": "tests/on_paper.rs",
+      "name": "a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+      "qualified_name": "a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+      "line": 39,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_deadline_shorter_than_the_period_can_fail_at_low_utilisation() {"
+    },
+    {
+      "id": "tests/on_paper.rs:58:full_utilisation_is_schedulable_when_it_lands_exactly",
+      "file": "tests/on_paper.rs",
+      "name": "full_utilisation_is_schedulable_when_it_lands_exactly",
+      "qualified_name": "full_utilisation_is_schedulable_when_it_lands_exactly",
+      "line": 58,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn full_utilisation_is_schedulable_when_it_lands_exactly() {"
+    },
+    {
+      "id": "tests/on_paper.rs:73:blocking_alone_can_exceed_a_deadline",
+      "file": "tests/on_paper.rs",
+      "name": "blocking_alone_can_exceed_a_deadline",
+      "qualified_name": "blocking_alone_can_exceed_a_deadline",
+      "line": 73,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn blocking_alone_can_exceed_a_deadline() {"
+    },
+    {
+      "id": "tests/on_paper.rs:92:a_zero_execution_task_terminates_rather_than_spinning",
+      "file": "tests/on_paper.rs",
+      "name": "a_zero_execution_task_terminates_rather_than_spinning",
+      "qualified_name": "a_zero_execution_task_terminates_rather_than_spinning",
+      "line": 92,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_zero_execution_task_terminates_rather_than_spinning() {"
+    },
+    {
+      "id": "tests/on_paper.rs:107:the_deadline_boundary_from_both_sides",
+      "file": "tests/on_paper.rs",
+      "name": "the_deadline_boundary_from_both_sides",
+      "qualified_name": "the_deadline_boundary_from_both_sides",
+      "line": 107,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn the_deadline_boundary_from_both_sides() {"
+    },
+    {
+      "id": "tests/on_paper.rs:130:a_deadline_beyond_the_period_is_permitted",
+      "file": "tests/on_paper.rs",
+      "name": "a_deadline_beyond_the_period_is_permitted",
+      "qualified_name": "a_deadline_beyond_the_period_is_permitted",
+      "line": 130,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_deadline_beyond_the_period_is_permitted() {"
+    },
+    {
+      "id": "tests/on_paper.rs:147:jitter_upstream_buys_a_whole_extra_preemption",
+      "file": "tests/on_paper.rs",
+      "name": "jitter_upstream_buys_a_whole_extra_preemption",
+      "qualified_name": "jitter_upstream_buys_a_whole_extra_preemption",
+      "line": 147,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn jitter_upstream_buys_a_whole_extra_preemption() {"
+    },
+    {
+      "id": "tests/on_paper.rs:168:a_tasks_own_jitter_is_added_once_at_the_end",
+      "file": "tests/on_paper.rs",
+      "name": "a_tasks_own_jitter_is_added_once_at_the_end",
+      "qualified_name": "a_tasks_own_jitter_is_added_once_at_the_end",
+      "line": 168,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_tasks_own_jitter_is_added_once_at_the_end() {"
+    },
+    {
+      "id": "tests/on_paper.rs:183:an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+      "file": "tests/on_paper.rs",
+      "name": "an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+      "qualified_name": "an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+      "line": 183,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion() {"
+    },
+    {
+      "id": "tests/on_paper.rs:203:overflow_beats_the_iteration_cap_to_the_answer",
+      "file": "tests/on_paper.rs",
+      "name": "overflow_beats_the_iteration_cap_to_the_answer",
+      "qualified_name": "overflow_beats_the_iteration_cap_to_the_answer",
+      "line": 203,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn overflow_beats_the_iteration_cap_to_the_answer() {"
+    },
+    {
+      "id": "tests/on_paper.rs:214:determinism_across_repeated_evaluation",
+      "file": "tests/on_paper.rs",
+      "name": "determinism_across_repeated_evaluation",
+      "qualified_name": "determinism_across_repeated_evaluation",
+      "line": 214,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn determinism_across_repeated_evaluation() {"
+    },
+    {
+      "id": "tests/on_paper.rs:226:the_task_limit_is_enforced_rather_than_overrun",
+      "file": "tests/on_paper.rs",
+      "name": "the_task_limit_is_enforced_rather_than_overrun",
+      "qualified_name": "the_task_limit_is_enforced_rather_than_overrun",
+      "line": 226,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn the_task_limit_is_enforced_rather_than_overrun() {"
+    },
+    {
+      "id": "tests/on_paper.rs:237:rejections_and_responses_describe_themselves",
+      "file": "tests/on_paper.rs",
+      "name": "rejections_and_responses_describe_themselves",
+      "qualified_name": "rejections_and_responses_describe_themselves",
+      "line": 237,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn rejections_and_responses_describe_themselves() {"
+    },
+    {
+      "id": "tests/on_paper.rs:253:a_named_task_carries_its_name",
+      "file": "tests/on_paper.rs",
+      "name": "a_named_task_carries_its_name",
+      "qualified_name": "a_named_task_carries_its_name",
+      "line": 253,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_named_task_carries_its_name() {"
+    },
+    {
+      "id": "tests/properties.rs:17:Rng::bits",
+      "file": "tests/properties.rs",
+      "name": "bits",
+      "qualified_name": "Rng::bits",
+      "line": 17,
+      "kind": "function",
+      "attributes": [],
+      "source": "fn bits(&mut self) -> u64 {"
+    },
+    {
+      "id": "tests/properties.rs:24:Rng::between",
+      "file": "tests/properties.rs",
+      "name": "between",
+      "qualified_name": "Rng::between",
+      "line": 24,
+      "kind": "function",
+      "attributes": [],
+      "source": "fn between(&mut self, lo: u64, hi: u64) -> u64 {"
+    },
+    {
+      "id": "tests/properties.rs:31:generate",
+      "file": "tests/properties.rs",
+      "name": "generate",
+      "qualified_name": "generate",
+      "line": 31,
+      "kind": "function",
+      "attributes": [],
+      "source": "fn generate(rng: &mut Rng, n: usize) -> TaskSet {"
+    },
+    {
+      "id": "tests/properties.rs:60:a_response_is_never_shorter_than_the_work_it_contains",
+      "file": "tests/properties.rs",
+      "name": "a_response_is_never_shorter_than_the_work_it_contains",
+      "qualified_name": "a_response_is_never_shorter_than_the_work_it_contains",
+      "line": 60,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_response_is_never_shorter_than_the_work_it_contains() {"
+    },
+    {
+      "id": "tests/properties.rs:77:dropping_a_task_one_priority_level_never_helps_it",
+      "file": "tests/properties.rs",
+      "name": "dropping_a_task_one_priority_level_never_helps_it",
+      "qualified_name": "dropping_a_task_one_priority_level_never_helps_it",
+      "line": 77,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn dropping_a_task_one_priority_level_never_helps_it() {"
+    },
+    {
+      "id": "tests/properties.rs:112:adding_jitter_never_shortens_a_response",
+      "file": "tests/properties.rs",
+      "name": "adding_jitter_never_shortens_a_response",
+      "qualified_name": "adding_jitter_never_shortens_a_response",
+      "line": 112,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn adding_jitter_never_shortens_a_response() {"
+    },
+    {
+      "id": "tests/properties.rs:148:the_same_set_gives_the_same_bits_across_repetition",
+      "file": "tests/properties.rs",
+      "name": "the_same_set_gives_the_same_bits_across_repetition",
+      "qualified_name": "the_same_set_gives_the_same_bits_across_repetition",
+      "line": 148,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn the_same_set_gives_the_same_bits_across_repetition() {"
+    },
+    {
+      "id": "tests/properties.rs:162:a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "file": "tests/properties.rs",
+      "name": "a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "qualified_name": "a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "line": 162,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does() {"
+    },
+    {
+      "id": "tests/properties.rs:190:audsley_is_optimal_and_not_merely_lucky",
+      "file": "tests/properties.rs",
+      "name": "audsley_is_optimal_and_not_merely_lucky",
+      "qualified_name": "audsley_is_optimal_and_not_merely_lucky",
+      "line": 190,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn audsley_is_optimal_and_not_merely_lucky() {"
+    },
+    {
+      "id": "tests/properties.rs:215:sensitivity_is_the_last_value_that_fits_and_not_one_more",
+      "file": "tests/properties.rs",
+      "name": "sensitivity_is_the_last_value_that_fits_and_not_one_more",
+      "qualified_name": "sensitivity_is_the_last_value_that_fits_and_not_one_more",
+      "line": 215,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn sensitivity_is_the_last_value_that_fits_and_not_one_more() {"
+    },
+    {
+      "id": "tests/properties.rs:256:the_set_limit_holds_under_generation",
+      "file": "tests/properties.rs",
+      "name": "the_set_limit_holds_under_generation",
+      "qualified_name": "the_set_limit_holds_under_generation",
+      "line": 256,
+      "kind": "test",
+      "attributes": [
+        "#[test]"
+      ],
+      "source": "fn the_set_limit_holds_under_generation() {"
+    }
+  ],
+  "tests": [
+    "src/lib.rs:678:tests::a_single_task_responds_in_its_own_execution_time",
+    "src/lib.rs:685:tests::a_lower_priority_task_pays_for_every_preemption",
+    "src/lib.rs:694:tests::blocking_is_added_once_and_not_per_preemption",
+    "src/lib.rs:702:tests::jitter_widens_the_window_and_adds_to_the_answer",
+    "src/lib.rs:712:tests::a_tasks_own_jitter_lands_in_its_own_response",
+    "src/lib.rs:721:tests::zero_jitter_reduces_to_joseph_and_pandya",
+    "src/lib.rs:732:tests::an_overloaded_set_does_not_converge_and_says_so",
+    "src/lib.rs:743:tests::a_bound_above_the_deadline_is_reported_with_its_value",
+    "src/lib.rs:755:tests::every_unbounded_variant_fails_every_deadline",
+    "src/lib.rs:768:tests::an_index_past_the_end_is_named_rather_than_guessed",
+    "src/lib.rs:775:tests::overflow_is_reported_and_never_wrapped",
+    "src/lib.rs:786:tests::a_zero_period_is_refused_at_admission",
+    "src/lib.rs:792:tests::execution_longer_than_its_deadline_is_refused",
+    "src/lib.rs:801:tests::the_task_limit_is_enforced_rather_than_overrun",
+    "src/lib.rs:810:tests::utilisation_is_parts_per_million_and_never_a_float",
+    "src/lib.rs:818:tests::the_same_set_gives_the_same_bits_every_time",
+    "src/lib.rs:829:tests::a_set_at_exactly_its_deadline_is_schedulable",
+    "src/lib.rs:837:tests::one_microsecond_past_the_deadline_is_not",
+    "src/lib.rs:845:tests::slack_is_none_when_the_task_misses",
+    "src/lib.rs:854:tests::slack_is_the_distance_to_the_deadline",
+    "src/lib.rs:862:tests::sensitivity_finds_the_last_execution_time_that_still_fits",
+    "src/lib.rs:876:tests::the_utilisation_bound_is_a_precheck_and_says_so",
+    "src/lib.rs:884:tests::audsley_finds_an_ordering_the_caller_had_backwards",
+    "src/lib.rs:897:tests::audsley_returns_none_when_no_ordering_works",
+    "src/lib.rs:905:tests::rejections_and_responses_describe_themselves",
+    "src/lib.rs:917:tests::a_task_builder_leaves_nothing_implicit",
+    "tests/on_paper.rs:23:three_tasks_settling_at_six",
+    "tests/on_paper.rs:39:a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+    "tests/on_paper.rs:58:full_utilisation_is_schedulable_when_it_lands_exactly",
+    "tests/on_paper.rs:73:blocking_alone_can_exceed_a_deadline",
+    "tests/on_paper.rs:92:a_zero_execution_task_terminates_rather_than_spinning",
+    "tests/on_paper.rs:107:the_deadline_boundary_from_both_sides",
+    "tests/on_paper.rs:130:a_deadline_beyond_the_period_is_permitted",
+    "tests/on_paper.rs:147:jitter_upstream_buys_a_whole_extra_preemption",
+    "tests/on_paper.rs:168:a_tasks_own_jitter_is_added_once_at_the_end",
+    "tests/on_paper.rs:183:an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+    "tests/on_paper.rs:203:overflow_beats_the_iteration_cap_to_the_answer",
+    "tests/on_paper.rs:214:determinism_across_repeated_evaluation",
+    "tests/on_paper.rs:226:the_task_limit_is_enforced_rather_than_overrun",
+    "tests/on_paper.rs:237:rejections_and_responses_describe_themselves",
+    "tests/on_paper.rs:253:a_named_task_carries_its_name",
+    "tests/properties.rs:60:a_response_is_never_shorter_than_the_work_it_contains",
+    "tests/properties.rs:77:dropping_a_task_one_priority_level_never_helps_it",
+    "tests/properties.rs:112:adding_jitter_never_shortens_a_response",
+    "tests/properties.rs:148:the_same_set_gives_the_same_bits_across_repetition",
+    "tests/properties.rs:162:a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+    "tests/properties.rs:190:audsley_is_optimal_and_not_merely_lucky",
+    "tests/properties.rs:215:sensitivity_is_the_last_value_that_fits_and_not_one_more",
+    "tests/properties.rs:256:the_set_limit_holds_under_generation"
+  ],
+  "kani_harnesses": [
+    "kani/response_bounds.rs:27:a_bounded_response_never_exceeds_its_deadline",
+    "kani/response_bounds.rs:48:every_unbounded_variant_fails_every_deadline",
+    "kani/response_bounds.rs:61:the_recurrence_terminates_without_panicking",
+    "kani/response_bounds.rs:81:a_lone_task_pays_only_for_itself",
+    "kani/response_bounds.rs:100:an_index_past_the_end_is_named"
+  ],
+  "response_of_callsites": [
+    {
+      "file": "kani/response_bounds.rs",
+      "line": 39,
+      "column": 39,
+      "caller_id": "kani/response_bounds.rs:27:a_bounded_response_never_exceeds_its_deadline",
+      "caller": "a_bounded_response_never_exceeds_its_deadline",
+      "receiver": "s",
+      "expression": "s.response_of(0)",
+      "source": "if let Response::Bounded(r) = s.response_of(0) {",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "kani/response_bounds.rs",
+      "line": 71,
+      "column": 17,
+      "caller_id": "kani/response_bounds.rs:61:the_recurrence_terminates_without_panicking",
+      "caller": "the_recurrence_terminates_without_panicking",
+      "receiver": "s",
+      "expression": "s.response_of(0)",
+      "source": "let _ = s.response_of(0);",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "kani/response_bounds.rs",
+      "line": 72,
+      "column": 17,
+      "caller_id": "kani/response_bounds.rs:61:the_recurrence_terminates_without_panicking",
+      "caller": "the_recurrence_terminates_without_panicking",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "let _ = s.response_of(1);",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "kani/response_bounds.rs",
+      "line": 91,
+      "column": 39,
+      "caller_id": "kani/response_bounds.rs:81:a_lone_task_pays_only_for_itself",
+      "caller": "a_lone_task_pays_only_for_itself",
+      "receiver": "s",
+      "expression": "s.response_of(0)",
+      "source": "if let Response::Bounded(r) = s.response_of(0) {",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "kani/response_bounds.rs",
+      "line": 104,
+      "column": 13,
+      "caller_id": "kani/response_bounds.rs:100:an_index_past_the_end_is_named",
+      "caller": "an_index_past_the_end_is_named",
+      "receiver": "s",
+      "expression": "s.response_of(i)",
+      "source": "assert!(s.response_of(i) == Response::Unbounded(Unbounded::NoSuchTask));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 513,
+      "column": 17,
+      "caller_id": "src/lib.rs:511:TaskSet::is_schedulable",
+      "caller": "TaskSet::is_schedulable",
+      "receiver": "self",
+      "expression": "self.response_of(i)",
+      "source": "if !self.response_of(i).is_bounded() {",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 523,
+      "column": 34,
+      "caller_id": "src/lib.rs:522:TaskSet::first_failure",
+      "caller": "TaskSet::first_failure",
+      "receiver": "self",
+      "expression": "self.response_of(i)",
+      "source": "(0..self.len).find(|&i| !self.response_of(i).is_bounded())",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 534,
+      "column": 17,
+      "caller_id": "src/lib.rs:532:TaskSet::slack_of",
+      "caller": "TaskSet::slack_of",
+      "receiver": "self",
+      "expression": "self.response_of(index)",
+      "source": "let r = self.response_of(index).bound()?;",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 654,
+      "column": 20,
+      "caller_id": "src/lib.rs:624:TaskSet::optimal_priority_order",
+      "caller": "TaskSet::optimal_priority_order",
+      "receiver": "trial",
+      "expression": "trial.response_of(last)",
+      "source": "if trial.response_of(last).is_bounded() {",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 681,
+      "column": 20,
+      "caller_id": "src/lib.rs:678:tests::a_single_task_responds_in_its_own_execution_time",
+      "caller": "tests::a_single_task_responds_in_its_own_execution_time",
+      "receiver": "s",
+      "expression": "s.response_of(0)",
+      "source": "assert_eq!(s.response_of(0), Response::Bounded(100));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 690,
+      "column": 20,
+      "caller_id": "src/lib.rs:685:tests::a_lower_priority_task_pays_for_every_preemption",
+      "caller": "tests::a_lower_priority_task_pays_for_every_preemption",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(300));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 698,
+      "column": 20,
+      "caller_id": "src/lib.rs:694:tests::blocking_is_added_once_and_not_per_preemption",
+      "caller": "tests::blocking_is_added_once_and_not_per_preemption",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(320));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 708,
+      "column": 20,
+      "caller_id": "src/lib.rs:702:tests::jitter_widens_the_window_and_adds_to_the_answer",
+      "caller": "tests::jitter_widens_the_window_and_adds_to_the_answer",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(300));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 717,
+      "column": 20,
+      "caller_id": "src/lib.rs:712:tests::a_tasks_own_jitter_lands_in_its_own_response",
+      "caller": "tests::a_tasks_own_jitter_lands_in_its_own_response",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(340));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 728,
+      "column": 20,
+      "caller_id": "src/lib.rs:721:tests::zero_jitter_reduces_to_joseph_and_pandya",
+      "caller": "tests::zero_jitter_reduces_to_joseph_and_pandya",
+      "receiver": "a",
+      "expression": "a.response_of(1)",
+      "source": "assert_eq!(a.response_of(1), b.response_of(1));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 728,
+      "column": 38,
+      "caller_id": "src/lib.rs:721:tests::zero_jitter_reduces_to_joseph_and_pandya",
+      "caller": "tests::zero_jitter_reduces_to_joseph_and_pandya",
+      "receiver": "b",
+      "expression": "b.response_of(1)",
+      "source": "assert_eq!(a.response_of(1), b.response_of(1));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 737,
+      "column": 13,
+      "caller_id": "src/lib.rs:732:tests::an_overloaded_set_does_not_converge_and_says_so",
+      "caller": "tests::an_overloaded_set_does_not_converge_and_says_so",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "s.response_of(1),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 748,
+      "column": 15,
+      "caller_id": "src/lib.rs:743:tests::a_bound_above_the_deadline_is_reported_with_its_value",
+      "caller": "tests::a_bound_above_the_deadline_is_reported_with_its_value",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "match s.response_of(1) {",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 771,
+      "column": 20,
+      "caller_id": "src/lib.rs:768:tests::an_index_past_the_end_is_named_rather_than_guessed",
+      "caller": "tests::an_index_past_the_end_is_named_rather_than_guessed",
+      "receiver": "s",
+      "expression": "s.response_of(9)",
+      "source": "assert_eq!(s.response_of(9), Response::Unbounded(Unbounded::NoSuchTask));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 781,
+      "column": 26,
+      "caller_id": "src/lib.rs:775:tests::overflow_is_reported_and_never_wrapped",
+      "caller": "tests::overflow_is_reported_and_never_wrapped",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert!(matches!(s.response_of(1), Response::Unbounded(_)));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 782,
+      "column": 20,
+      "caller_id": "src/lib.rs:775:tests::overflow_is_reported_and_never_wrapped",
+      "caller": "tests::overflow_is_reported_and_never_wrapped",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1).bound(), None);",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 822,
+      "column": 21,
+      "caller_id": "src/lib.rs:818:tests::the_same_set_gives_the_same_bits_every_time",
+      "caller": "tests::the_same_set_gives_the_same_bits_every_time",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "let first = s.response_of(1);",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 824,
+      "column": 24,
+      "caller_id": "src/lib.rs:818:tests::the_same_set_gives_the_same_bits_every_time",
+      "caller": "tests::the_same_set_gives_the_same_bits_every_time",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), first);",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 833,
+      "column": 20,
+      "caller_id": "src/lib.rs:829:tests::a_set_at_exactly_its_deadline_is_schedulable",
+      "caller": "tests::a_set_at_exactly_its_deadline_is_schedulable",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(300));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 841,
+      "column": 18,
+      "caller_id": "src/lib.rs:837:tests::one_microsecond_past_the_deadline_is_not",
+      "caller": "tests::one_microsecond_past_the_deadline_is_not",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert!(!s.response_of(1).is_bounded());",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 28,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:23:three_tasks_settling_at_six",
+      "caller": "three_tasks_settling_at_six",
+      "receiver": "s",
+      "expression": "s.response_of(2)",
+      "source": "assert_eq!(s.response_of(2), Response::Bounded(6));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 44,
+      "column": 9,
+      "caller_id": "tests/on_paper.rs:39:a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+      "caller": "a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "s.response_of(1),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 63,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:58:full_utilisation_is_schedulable_when_it_lands_exactly",
+      "caller": "full_utilisation_is_schedulable_when_it_lands_exactly",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(4));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 78,
+      "column": 9,
+      "caller_id": "tests/on_paper.rs:73:blocking_alone_can_exceed_a_deadline",
+      "caller": "blocking_alone_can_exceed_a_deadline",
+      "receiver": "s",
+      "expression": "s.response_of(0)",
+      "source": "s.response_of(0),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 96,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:92:a_zero_execution_task_terminates_rather_than_spinning",
+      "caller": "a_zero_execution_task_terminates_rather_than_spinning",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(7));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 111,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:107:the_deadline_boundary_from_both_sides",
+      "caller": "the_deadline_boundary_from_both_sides",
+      "receiver": "fits",
+      "expression": "fits.response_of(1)",
+      "source": "assert_eq!(fits.response_of(1), Response::Bounded(300));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 117,
+      "column": 9,
+      "caller_id": "tests/on_paper.rs:107:the_deadline_boundary_from_both_sides",
+      "caller": "the_deadline_boundary_from_both_sides",
+      "receiver": "misses",
+      "expression": "misses.response_of(1)",
+      "source": "misses.response_of(1),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 134,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:130:a_deadline_beyond_the_period_is_permitted",
+      "caller": "a_deadline_beyond_the_period_is_permitted",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(300));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 151,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:147:jitter_upstream_buys_a_whole_extra_preemption",
+      "caller": "jitter_upstream_buys_a_whole_extra_preemption",
+      "receiver": "with_jitter",
+      "expression": "with_jitter.response_of(1)",
+      "source": "assert_eq!(with_jitter.response_of(1), Response::Bounded(400));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 156,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:147:jitter_upstream_buys_a_whole_extra_preemption",
+      "caller": "jitter_upstream_buys_a_whole_extra_preemption",
+      "receiver": "without",
+      "expression": "without.response_of(1)",
+      "source": "assert_eq!(without.response_of(1), Response::Bounded(300));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 172,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:168:a_tasks_own_jitter_is_added_once_at_the_end",
+      "caller": "a_tasks_own_jitter_is_added_once_at_the_end",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), Response::Bounded(340));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 189,
+      "column": 9,
+      "caller_id": "tests/on_paper.rs:183:an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+      "caller": "an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "s.response_of(1),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 208,
+      "column": 14,
+      "caller_id": "tests/on_paper.rs:203:overflow_beats_the_iteration_cap_to_the_answer",
+      "caller": "overflow_beats_the_iteration_cap_to_the_answer",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert!(!s.response_of(1).is_bounded());",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 209,
+      "column": 16,
+      "caller_id": "tests/on_paper.rs:203:overflow_beats_the_iteration_cap_to_the_answer",
+      "caller": "overflow_beats_the_iteration_cap_to_the_answer",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1).bound(), None);",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 218,
+      "column": 20,
+      "caller_id": "tests/on_paper.rs:214:determinism_across_repeated_evaluation",
+      "caller": "determinism_across_repeated_evaluation",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "let expected = s.response_of(1);",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/on_paper.rs",
+      "line": 220,
+      "column": 20,
+      "caller_id": "tests/on_paper.rs:214:determinism_across_repeated_evaluation",
+      "caller": "determinism_across_repeated_evaluation",
+      "receiver": "s",
+      "expression": "s.response_of(1)",
+      "source": "assert_eq!(s.response_of(1), expected);",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 66,
+      "column": 30,
+      "caller_id": "tests/properties.rs:60:a_response_is_never_shorter_than_the_work_it_contains",
+      "caller": "a_response_is_never_shorter_than_the_work_it_contains",
+      "receiver": "s",
+      "expression": "s.response_of(i)",
+      "source": "if let Some(r) = s.response_of(i).response_time() {",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 98,
+      "column": 13,
+      "caller_id": "tests/properties.rs:77:dropping_a_task_one_priority_level_never_helps_it",
+      "caller": "dropping_a_task_one_priority_level_never_helps_it",
+      "receiver": "s",
+      "expression": "s.response_of(last)",
+      "source": "s.response_of(last).response_time(),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 99,
+      "column": 13,
+      "caller_id": "tests/properties.rs:77:dropping_a_task_one_priority_level_never_helps_it",
+      "caller": "dropping_a_task_one_priority_level_never_helps_it",
+      "receiver": "lifted",
+      "expression": "lifted.response_of(last - 1)",
+      "source": "lifted.response_of(last - 1).response_time(),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 139,
+      "column": 13,
+      "caller_id": "tests/properties.rs:112:adding_jitter_never_shortens_a_response",
+      "caller": "adding_jitter_never_shortens_a_response",
+      "receiver": "plain",
+      "expression": "plain.response_of(last)",
+      "source": "plain.response_of(last).response_time(),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 140,
+      "column": 13,
+      "caller_id": "tests/properties.rs:112:adding_jitter_never_shortens_a_response",
+      "caller": "adding_jitter_never_shortens_a_response",
+      "receiver": "widened",
+      "expression": "widened.response_of(last)",
+      "source": "widened.response_of(last).response_time(),",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 153,
+      "column": 25,
+      "caller_id": "tests/properties.rs:148:the_same_set_gives_the_same_bits_across_repetition",
+      "caller": "the_same_set_gives_the_same_bits_across_repetition",
+      "receiver": "s",
+      "expression": "s.response_of(i)",
+      "source": "let first = s.response_of(i);",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 155,
+      "column": 28,
+      "caller_id": "tests/properties.rs:148:the_same_set_gives_the_same_bits_across_repetition",
+      "caller": "the_same_set_gives_the_same_bits_across_repetition",
+      "receiver": "s",
+      "expression": "s.response_of(i)",
+      "source": "assert_eq!(s.response_of(i), first, \"same input, different answer\");",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 168,
+      "column": 19,
+      "caller_id": "tests/properties.rs:162:a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "caller": "a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "receiver": "s",
+      "expression": "s.response_of(i)",
+      "source": "match s.response_of(i) {",
+      "inside_macro_on_same_line": false
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 171,
+      "column": 29,
+      "caller_id": "tests/properties.rs:162:a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "caller": "a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "receiver": "s",
+      "expression": "s.response_of(i)",
+      "source": "assert!(s.response_of(i).meets(task.deadline_us));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 179,
+      "column": 30,
+      "caller_id": "tests/properties.rs:162:a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "caller": "a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "receiver": "s",
+      "expression": "s.response_of(i)",
+      "source": "assert!(!s.response_of(i).meets(task.deadline_us));",
+      "inside_macro_on_same_line": true
+    },
+    {
+      "file": "tests/properties.rs",
+      "line": 182,
+      "column": 30,
+      "caller_id": "tests/properties.rs:162:a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "caller": "a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+      "receiver": "s",
+      "expression": "s.response_of(i)",
+      "source": "assert!(!s.response_of(i).meets(u64::MAX));",
+      "inside_macro_on_same_line": true
+    }
+  ],
+  "response_of_callers": [
+    "kani/response_bounds.rs:100:an_index_past_the_end_is_named",
+    "kani/response_bounds.rs:27:a_bounded_response_never_exceeds_its_deadline",
+    "kani/response_bounds.rs:61:the_recurrence_terminates_without_panicking",
+    "kani/response_bounds.rs:81:a_lone_task_pays_only_for_itself",
+    "src/lib.rs:511:TaskSet::is_schedulable",
+    "src/lib.rs:522:TaskSet::first_failure",
+    "src/lib.rs:532:TaskSet::slack_of",
+    "src/lib.rs:624:TaskSet::optimal_priority_order",
+    "src/lib.rs:678:tests::a_single_task_responds_in_its_own_execution_time",
+    "src/lib.rs:685:tests::a_lower_priority_task_pays_for_every_preemption",
+    "src/lib.rs:694:tests::blocking_is_added_once_and_not_per_preemption",
+    "src/lib.rs:702:tests::jitter_widens_the_window_and_adds_to_the_answer",
+    "src/lib.rs:712:tests::a_tasks_own_jitter_lands_in_its_own_response",
+    "src/lib.rs:721:tests::zero_jitter_reduces_to_joseph_and_pandya",
+    "src/lib.rs:732:tests::an_overloaded_set_does_not_converge_and_says_so",
+    "src/lib.rs:743:tests::a_bound_above_the_deadline_is_reported_with_its_value",
+    "src/lib.rs:768:tests::an_index_past_the_end_is_named_rather_than_guessed",
+    "src/lib.rs:775:tests::overflow_is_reported_and_never_wrapped",
+    "src/lib.rs:818:tests::the_same_set_gives_the_same_bits_every_time",
+    "src/lib.rs:829:tests::a_set_at_exactly_its_deadline_is_schedulable",
+    "src/lib.rs:837:tests::one_microsecond_past_the_deadline_is_not",
+    "tests/on_paper.rs:107:the_deadline_boundary_from_both_sides",
+    "tests/on_paper.rs:130:a_deadline_beyond_the_period_is_permitted",
+    "tests/on_paper.rs:147:jitter_upstream_buys_a_whole_extra_preemption",
+    "tests/on_paper.rs:168:a_tasks_own_jitter_is_added_once_at_the_end",
+    "tests/on_paper.rs:183:an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+    "tests/on_paper.rs:203:overflow_beats_the_iteration_cap_to_the_answer",
+    "tests/on_paper.rs:214:determinism_across_repeated_evaluation",
+    "tests/on_paper.rs:23:three_tasks_settling_at_six",
+    "tests/on_paper.rs:39:a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+    "tests/on_paper.rs:58:full_utilisation_is_schedulable_when_it_lands_exactly",
+    "tests/on_paper.rs:73:blocking_alone_can_exceed_a_deadline",
+    "tests/on_paper.rs:92:a_zero_execution_task_terminates_rather_than_spinning",
+    "tests/properties.rs:112:adding_jitter_never_shortens_a_response",
+    "tests/properties.rs:148:the_same_set_gives_the_same_bits_across_repetition",
+    "tests/properties.rs:162:a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+    "tests/properties.rs:60:a_response_is_never_shorter_than_the_work_it_contains",
+    "tests/properties.rs:77:dropping_a_task_one_priority_level_never_helps_it"
+  ],
+  "excluded_response_of_occurrences": [
+    {
+      "file": "src/lib.rs",
+      "line": 72,
+      "reason": "Rustdoc example outside a source fn definition; kept outside caller denominator."
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 453,
+      "reason": "Method declaration, not a call."
+    }
+  ],
+  "limitations": [
+    "Source inventory is not proof execution, runtime coverage, or verification of mathematical correctness.",
+    "Kani harness results not executed by this worker.",
+    "Cargo manifest includes kani files in package archive but declares no harness target; source has no module/include reference; CI has no Kani step.",
+    "Procedural derive-generated functions, anonymous closures, and rustdoc-generated functions are outside the explicit-fn denominator.",
+    "Lexical inventory is corpus-specific and is not a general Rust parser."
+  ]
+}

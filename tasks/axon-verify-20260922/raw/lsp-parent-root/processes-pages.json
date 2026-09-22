@@ -1,0 +1,14 @@
+[
+  {
+    "detail": "full",
+    "format": "json",
+    "offset": 0,
+    "process_count": 0,
+    "processes": [],
+    "stage": 3,
+    "status": "ok",
+    "tool": "get_processes",
+    "total_count": 0,
+    "truncated": false
+  }
+]

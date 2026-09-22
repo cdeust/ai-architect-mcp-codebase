@@ -1,0 +1,48 @@
+[
+  {
+    "columns": [
+      "a.qualified_name",
+      "b.qualified_name",
+      "r.resolution_method",
+      "r.confidence"
+    ],
+    "detail": "full",
+    "elapsed_ms": 2,
+    "format": "tabular",
+    "limit_injected": true,
+    "offset": 0,
+    "order_stable": true,
+    "returned_count": 4,
+    "rows": [
+      [
+        "src/lib.rs::TaskSet::first_failure",
+        "src/lib.rs::TaskSet::response_of",
+        "receiver-type",
+        "0.93"
+      ],
+      [
+        "src/lib.rs::TaskSet::is_schedulable",
+        "src/lib.rs::TaskSet::response_of",
+        "receiver-type",
+        "0.93"
+      ],
+      [
+        "src/lib.rs::TaskSet::optimal_priority_order",
+        "src/lib.rs::TaskSet::response_of",
+        "receiver-local-binding",
+        "0.87"
+      ],
+      [
+        "src/lib.rs::TaskSet::slack_of",
+        "src/lib.rs::TaskSet::response_of",
+        "receiver-type",
+        "0.93"
+      ]
+    ],
+    "stage": 3,
+    "status": "ok",
+    "tool": "query_graph",
+    "total_count": 4,
+    "truncated": false
+  }
+]

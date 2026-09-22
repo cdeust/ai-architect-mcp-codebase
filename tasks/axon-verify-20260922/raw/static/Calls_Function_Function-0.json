@@ -1,0 +1,29 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "tools/call",
+    "params": {
+      "name": "query_graph",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/static/graph",
+        "query": "MATCH (a)-[r:Calls_Function_Function]->(b) RETURN a.qualified_name, b.qualified_name ORDER BY a.qualified_name, b.qualified_name",
+        "format": "tabular",
+        "offset": 0
+      }
+    }
+  },
+  "response": {
+    "id": 10,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"columns\": [\n    \"a.qualified_name\",\n    \"b.qualified_name\"\n  ],\n  \"detail\": \"full\",\n  \"elapsed_ms\": 1,\n  \"format\": \"tabular\",\n  \"limit_injected\": true,\n  \"offset\": 0,\n  \"order_stable\": true,\n  \"returned_count\": 27,\n  \"rows\": [\n    [\n      \"kani/response_bounds.rs::a_bounded_response_never_exceeds_its_deadline\",\n      \"kani/response_bounds.rs::task\"\n    ],\n    [\n      \"kani/response_bounds.rs::a_lone_task_pays_only_for_itself\",\n      \"kani/response_bounds.rs::task\"\n    ],\n    [\n      \"kani/response_bounds.rs::the_recurrence_terminates_without_panicking\",\n      \"kani/response_bounds.rs::task\"\n    ],\n    [\n      \"src/lib.rs::tests::a_bound_above_the_deadline_is_reported_with_its_value\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::a_lower_priority_task_pays_for_every_preemption\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::a_set_at_exactly_its_deadline_is_schedulable\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::a_single_task_responds_in_its_own_execution_time\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::an_index_past_the_end_is_named_rather_than_guessed\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::an_overloaded_set_does_not_converge_and_says_so\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::audsley_returns_none_when_no_ordering_works\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::blocking_is_added_once_and_not_per_preemption\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::one_microsecond_past_the_deadline_is_not\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::sensitivity_finds_the_last_execution_time_that_still_fits\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::slack_is_none_when_the_task_misses\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::slack_is_the_distance_to_the_deadline\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::the_task_limit_is_enforced_rather_than_overrun\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::utilisation_is_parts_per_million_and_never_a_float\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya\",\n      \"src/lib.rs::tests::t\"\n    ],\n    [\n      \"tests/properties.rs::a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does\",\n      \"tests/properties.rs::generate\"\n    ],\n    [\n      \"tests/properties.rs::a_response_is_never_shorter_than_the_work_it_contains\",\n      \"tests/properties.rs::generate\"\n    ],\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response\",\n      \"tests/properties.rs::generate\"\n    ],\n    [\n      \"tests/properties.rs::audsley_is_optimal_and_not_merely_lucky\",\n      \"tests/properties.rs::generate\"\n    ],\n    [\n      \"tests/properties.rs::dropping_a_task_one_priority_level_never_helps_it\",\n      \"tests/properties.rs::generate\"\n    ],\n    [\n      \"tests/properties.rs::sensitivity_is_the_last_value_that_fits_and_not_one_more\",\n      \"tests/properties.rs::generate\"\n    ],\n    [\n      \"tests/properties.rs::the_same_set_gives_the_same_bits_across_repetition\",\n      \"tests/properties.rs::generate\"\n    ],\n    [\n      \"tests/properties.rs::the_set_limit_holds_under_generation\",\n      \"tests/properties.rs::generate\"\n    ]\n  ],\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"query_graph\",\n  \"total_count\": 27,\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.0018540839664638042
+}

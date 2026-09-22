@@ -1,0 +1,233 @@
+[
+  {
+    "directory": "raw/lsp-nested",
+    "definitions": {
+      "tp": 89,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missing": [],
+      "unexpected": []
+    },
+    "test_definitions_found": 49,
+    "proof_definitions_found": 5,
+    "response_callsite_extraction": {
+      "tp": 52,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missing": [],
+      "unexpected": []
+    },
+    "response_callsite_resolution": {
+      "tp": 44,
+      "fp": 0,
+      "fn": 8,
+      "precision": 1.0,
+      "recall": 0.8461538461538461,
+      "missing": [
+        [
+          "tests/properties.rs",
+          66
+        ],
+        [
+          "tests/properties.rs",
+          98
+        ],
+        [
+          "tests/properties.rs",
+          153
+        ],
+        [
+          "tests/properties.rs",
+          155
+        ],
+        [
+          "tests/properties.rs",
+          168
+        ],
+        [
+          "tests/properties.rs",
+          171
+        ],
+        [
+          "tests/properties.rs",
+          179
+        ],
+        [
+          "tests/properties.rs",
+          182
+        ]
+      ],
+      "unexpected": []
+    },
+    "response_callers": {
+      "tp": 35,
+      "fp": 0,
+      "fn": 3,
+      "precision": 1.0,
+      "recall": 0.9210526315789473,
+      "missing": [
+        "tests/properties.rs::the_same_set_gives_the_same_bits_across_repetition",
+        "tests/properties.rs::a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+        "tests/properties.rs::a_response_is_never_shorter_than_the_work_it_contains"
+      ],
+      "unexpected": []
+    },
+    "production_callers": {
+      "tp": 4,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missing": [],
+      "unexpected": []
+    },
+    "kani_callers": {
+      "tp": 4,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missing": [],
+      "unexpected": []
+    },
+    "self_edges": [],
+    "semantic_sha256": "3acd91e7bbd35205b9c2358b7e28bcf2725e457f9b842bd1c2a900a96280ad39",
+    "resolution_methods": {
+      "receiver-type": 3,
+      "receiver-local-binding": 32
+    },
+    "callsite_unresolved_reasons": {
+      "": 8
+    },
+    "epistemic": "lower-bound",
+    "epistemic_reasons": [
+      "35 reverse-dependency edge(s) were resolved heuristically (confidence < 1.0) and may be incomplete or incorrect",
+      "8 unresolved call site(s) name this symbol \u2014 8 `CallSite` node(s) in the graph reference it by name but were never resolved to a Calls edge; the reported callers are a lower bound"
+    ],
+    "unresolved_callsites_naming_target": 8,
+    "unresolved_callsites_outside_targets": 0,
+    "lsp_status": {
+      "error": "lsp_workspace_load_failed: Failed to load workspaces.; the language server loaded no crate graph, so every definition request would answer []. Fix: add the package to the parent workspace's members, or analyze the workspace root",
+      "fallback": "available_graph",
+      "note": "Analysis continued; the graph may include partial LSP results.",
+      "requested": true,
+      "state": "failed"
+    },
+    "lsp_resolve": null,
+    "lsp_resolve_tool": {
+      "message": "lsp_workspace_load_failed: Failed to load workspaces.; the language server loaded no crate graph, so every definition request would answer []. Fix: add the package to the parent workspace's members, or analyze the workspace root",
+      "reason": "lsp_workspace_load_failed",
+      "stage": 3,
+      "status": "error"
+    },
+    "coverage": {
+      "coverage": {
+        "caveat": "Best-effort signal, NOT a completeness guarantee: absence of a flag only means the indexer detected no gap (a file keyed to a subtly wrong grammar can still parse 'clean'). 'parse_incomplete' files WERE indexed but constructs inside the flagged line ranges MAY be missing from the graph \u2014 prefer grep there. 'skipped'/'quarantined' files are NOT in the graph at all. 'outside_build_targets' files (issue #284) WERE indexed \u2014 declarations are in the graph \u2014 but sit outside every compiled Cargo target, so calls out of them cannot be resolved by the language server. source: DeusData/codebase-memory-mcp coverage wording.",
+        "files_indexed": 4,
+        "index_mode": "full",
+        "outside_build_targets": {
+          "count": 0,
+          "files": []
+        },
+        "parse_incomplete": {
+          "count": 0,
+          "files": []
+        },
+        "pruned_dirs": {
+          "count": 1,
+          "dirs": [
+            {
+              "path": ".git",
+              "reason": "vcs"
+            }
+          ]
+        },
+        "quarantined": {
+          "count": 0,
+          "files": []
+        },
+        "skipped": {
+          "count": 0,
+          "files": [],
+          "user_excluded_count": 0
+        }
+      },
+      "graph": "missed",
+      "note": "These files/ranges are where the index is known to be incomplete \u2014 prefer grep for them before trusting a negative graph result.",
+      "stage": 3,
+      "status": "ok",
+      "tool": "query_graph"
+    },
+    "analyze": {
+      "cluster": {
+        "community_count": 6,
+        "modularity": "0.554949",
+        "process_count": 54
+      },
+      "coverage": {
+        "caveat": "Best-effort signal, NOT a completeness guarantee: absence of a flag only means the indexer detected no gap (a file keyed to a subtly wrong grammar can still parse 'clean'). 'parse_incomplete' files WERE indexed but constructs inside the flagged line ranges MAY be missing from the graph \u2014 prefer grep there. 'skipped'/'quarantined' files are NOT in the graph at all. 'outside_build_targets' files (issue #284) WERE indexed \u2014 declarations are in the graph \u2014 but sit outside every compiled Cargo target, so calls out of them cannot be resolved by the language server. source: DeusData/codebase-memory-mcp coverage wording.",
+        "files_indexed": 4,
+        "index_mode": "full",
+        "outside_build_targets": {
+          "count": 0,
+          "files": []
+        },
+        "parse_incomplete": {
+          "count": 0,
+          "files": []
+        },
+        "pruned_dirs": {
+          "count": 1,
+          "dirs": [
+            {
+              "path": ".git",
+              "reason": "vcs"
+            }
+          ]
+        },
+        "quarantined": {
+          "count": 0,
+          "files": []
+        },
+        "skipped": {
+          "count": 0,
+          "files": [],
+          "user_excluded_count": 0
+        }
+      },
+      "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-nested/graph",
+      "index": {
+        "edge_count": 15060,
+        "files_indexed": 4,
+        "node_count": 15068
+      },
+      "lsp_resolve": null,
+      "lsp_status": {
+        "error": "lsp_workspace_load_failed: Failed to load workspaces.; the language server loaded no crate graph, so every definition request would answer []. Fix: add the package to the parent workspace's members, or analyze the workspace root",
+        "fallback": "available_graph",
+        "note": "Analysis continued; the graph may include partial LSP results.",
+        "requested": true,
+        "state": "failed"
+      },
+      "resolve": {
+        "phase": "static",
+        "resolution_rate": "0.57",
+        "total_edges": 494
+      },
+      "search_index": {
+        "bm25_doc_count": 100,
+        "elapsed_ms": 180,
+        "vector_doc_count": 100
+      },
+      "stage": 3,
+      "status": "ok",
+      "tool": "analyze_codebase",
+      "total_elapsed_ms": 4054
+    },
+    "analyze_wall_seconds": 4.111913959030062
+  }
+]

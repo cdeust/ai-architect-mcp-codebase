@@ -1,0 +1,393 @@
+[
+  {
+    "detail": "full",
+    "format": "json",
+    "offset": 0,
+    "process_count": 54,
+    "processes": [
+      {
+        "depth": 2,
+        "entry_kind": "proof",
+        "entry_point": "dy-wcet/kani/response_bounds.rs::a_bounded_response_never_exceeds_its_deadline",
+        "name": "process::dy-wcet/kani/response_bounds.rs::a_bounded_response_never_exceeds_its_deadline",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "proof",
+        "entry_point": "dy-wcet/kani/response_bounds.rs::a_lone_task_pays_only_for_itself",
+        "name": "process::dy-wcet/kani/response_bounds.rs::a_lone_task_pays_only_for_itself",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "proof",
+        "entry_point": "dy-wcet/kani/response_bounds.rs::an_index_past_the_end_is_named",
+        "name": "process::dy-wcet/kani/response_bounds.rs::an_index_past_the_end_is_named",
+        "node_count": 4
+      },
+      {
+        "depth": 0,
+        "entry_kind": "proof",
+        "entry_point": "dy-wcet/kani/response_bounds.rs::every_unbounded_variant_fails_every_deadline",
+        "name": "process::dy-wcet/kani/response_bounds.rs::every_unbounded_variant_fails_every_deadline",
+        "node_count": 1
+      },
+      {
+        "depth": 2,
+        "entry_kind": "proof",
+        "entry_point": "dy-wcet/kani/response_bounds.rs::the_recurrence_terminates_without_panicking",
+        "name": "process::dy-wcet/kani/response_bounds.rs::the_recurrence_terminates_without_panicking",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::a_bound_above_the_deadline_is_reported_with_its_value",
+        "name": "process::dy-wcet/src/lib.rs::tests::a_bound_above_the_deadline_is_reported_with_its_value",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::a_lower_priority_task_pays_for_every_preemption",
+        "name": "process::dy-wcet/src/lib.rs::tests::a_lower_priority_task_pays_for_every_preemption",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::a_set_at_exactly_its_deadline_is_schedulable",
+        "name": "process::dy-wcet/src/lib.rs::tests::a_set_at_exactly_its_deadline_is_schedulable",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::a_single_task_responds_in_its_own_execution_time",
+        "name": "process::dy-wcet/src/lib.rs::tests::a_single_task_responds_in_its_own_execution_time",
+        "node_count": 7
+      },
+      {
+        "depth": 1,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::a_task_builder_leaves_nothing_implicit",
+        "name": "process::dy-wcet/src/lib.rs::tests::a_task_builder_leaves_nothing_implicit",
+        "node_count": 2
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::a_tasks_own_jitter_lands_in_its_own_response",
+        "name": "process::dy-wcet/src/lib.rs::tests::a_tasks_own_jitter_lands_in_its_own_response",
+        "node_count": 6
+      },
+      {
+        "depth": 1,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::a_zero_period_is_refused_at_admission",
+        "name": "process::dy-wcet/src/lib.rs::tests::a_zero_period_is_refused_at_admission",
+        "node_count": 3
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::an_index_past_the_end_is_named_rather_than_guessed",
+        "name": "process::dy-wcet/src/lib.rs::tests::an_index_past_the_end_is_named_rather_than_guessed",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::an_overloaded_set_does_not_converge_and_says_so",
+        "name": "process::dy-wcet/src/lib.rs::tests::an_overloaded_set_does_not_converge_and_says_so",
+        "node_count": 7
+      },
+      {
+        "depth": 3,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::audsley_finds_an_ordering_the_caller_had_backwards",
+        "name": "process::dy-wcet/src/lib.rs::tests::audsley_finds_an_ordering_the_caller_had_backwards",
+        "node_count": 9
+      },
+      {
+        "depth": 3,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::audsley_returns_none_when_no_ordering_works",
+        "name": "process::dy-wcet/src/lib.rs::tests::audsley_returns_none_when_no_ordering_works",
+        "node_count": 9
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::blocking_is_added_once_and_not_per_preemption",
+        "name": "process::dy-wcet/src/lib.rs::tests::blocking_is_added_once_and_not_per_preemption",
+        "node_count": 7
+      },
+      {
+        "depth": 0,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::every_unbounded_variant_fails_every_deadline",
+        "name": "process::dy-wcet/src/lib.rs::tests::every_unbounded_variant_fails_every_deadline",
+        "node_count": 1
+      },
+      {
+        "depth": 1,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::execution_longer_than_its_deadline_is_refused",
+        "name": "process::dy-wcet/src/lib.rs::tests::execution_longer_than_its_deadline_is_refused",
+        "node_count": 4
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::jitter_widens_the_window_and_adds_to_the_answer",
+        "name": "process::dy-wcet/src/lib.rs::tests::jitter_widens_the_window_and_adds_to_the_answer",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::one_microsecond_past_the_deadline_is_not",
+        "name": "process::dy-wcet/src/lib.rs::tests::one_microsecond_past_the_deadline_is_not",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::overflow_is_reported_and_never_wrapped",
+        "name": "process::dy-wcet/src/lib.rs::tests::overflow_is_reported_and_never_wrapped",
+        "node_count": 6
+      },
+      {
+        "depth": 0,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::rejections_and_responses_describe_themselves",
+        "name": "process::dy-wcet/src/lib.rs::tests::rejections_and_responses_describe_themselves",
+        "node_count": 1
+      },
+      {
+        "depth": 4,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::sensitivity_finds_the_last_execution_time_that_still_fits",
+        "name": "process::dy-wcet/src/lib.rs::tests::sensitivity_finds_the_last_execution_time_that_still_fits",
+        "node_count": 10
+      },
+      {
+        "depth": 3,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::slack_is_none_when_the_task_misses",
+        "name": "process::dy-wcet/src/lib.rs::tests::slack_is_none_when_the_task_misses",
+        "node_count": 10
+      },
+      {
+        "depth": 3,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::slack_is_the_distance_to_the_deadline",
+        "name": "process::dy-wcet/src/lib.rs::tests::slack_is_the_distance_to_the_deadline",
+        "node_count": 9
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time",
+        "name": "process::dy-wcet/src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::the_task_limit_is_enforced_rather_than_overrun",
+        "name": "process::dy-wcet/src/lib.rs::tests::the_task_limit_is_enforced_rather_than_overrun",
+        "node_count": 5
+      },
+      {
+        "depth": 1,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::the_utilisation_bound_is_a_precheck_and_says_so",
+        "name": "process::dy-wcet/src/lib.rs::tests::the_utilisation_bound_is_a_precheck_and_says_so",
+        "node_count": 2
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::utilisation_is_parts_per_million_and_never_a_float",
+        "name": "process::dy-wcet/src/lib.rs::tests::utilisation_is_parts_per_million_and_never_a_float",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya",
+        "name": "process::dy-wcet/src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::a_deadline_beyond_the_period_is_permitted",
+        "name": "process::dy-wcet/tests/on_paper.rs::a_deadline_beyond_the_period_is_permitted",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+        "name": "process::dy-wcet/tests/on_paper.rs::a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+        "node_count": 7
+      },
+      {
+        "depth": 1,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::a_named_task_carries_its_name",
+        "name": "process::dy-wcet/tests/on_paper.rs::a_named_task_carries_its_name",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::a_tasks_own_jitter_is_added_once_at_the_end",
+        "name": "process::dy-wcet/tests/on_paper.rs::a_tasks_own_jitter_is_added_once_at_the_end",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::a_zero_execution_task_terminates_rather_than_spinning",
+        "name": "process::dy-wcet/tests/on_paper.rs::a_zero_execution_task_terminates_rather_than_spinning",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+        "name": "process::dy-wcet/tests/on_paper.rs::an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::blocking_alone_can_exceed_a_deadline",
+        "name": "process::dy-wcet/tests/on_paper.rs::blocking_alone_can_exceed_a_deadline",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::determinism_across_repeated_evaluation",
+        "name": "process::dy-wcet/tests/on_paper.rs::determinism_across_repeated_evaluation",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::full_utilisation_is_schedulable_when_it_lands_exactly",
+        "name": "process::dy-wcet/tests/on_paper.rs::full_utilisation_is_schedulable_when_it_lands_exactly",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::jitter_upstream_buys_a_whole_extra_preemption",
+        "name": "process::dy-wcet/tests/on_paper.rs::jitter_upstream_buys_a_whole_extra_preemption",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::overflow_beats_the_iteration_cap_to_the_answer",
+        "name": "process::dy-wcet/tests/on_paper.rs::overflow_beats_the_iteration_cap_to_the_answer",
+        "node_count": 6
+      },
+      {
+        "depth": 0,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::rejections_and_responses_describe_themselves",
+        "name": "process::dy-wcet/tests/on_paper.rs::rejections_and_responses_describe_themselves",
+        "node_count": 1
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::the_deadline_boundary_from_both_sides",
+        "name": "process::dy-wcet/tests/on_paper.rs::the_deadline_boundary_from_both_sides",
+        "node_count": 6
+      },
+      {
+        "depth": 1,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::the_task_limit_is_enforced_rather_than_overrun",
+        "name": "process::dy-wcet/tests/on_paper.rs::the_task_limit_is_enforced_rather_than_overrun",
+        "node_count": 5
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/on_paper.rs::three_tasks_settling_at_six",
+        "name": "process::dy-wcet/tests/on_paper.rs::three_tasks_settling_at_six",
+        "node_count": 6
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/properties.rs::a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+        "name": "process::dy-wcet/tests/properties.rs::a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/properties.rs::a_response_is_never_shorter_than_the_work_it_contains",
+        "name": "process::dy-wcet/tests/properties.rs::a_response_is_never_shorter_than_the_work_it_contains",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/properties.rs::adding_jitter_never_shortens_a_response",
+        "name": "process::dy-wcet/tests/properties.rs::adding_jitter_never_shortens_a_response",
+        "node_count": 10
+      },
+      {
+        "depth": 3,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/properties.rs::audsley_is_optimal_and_not_merely_lucky",
+        "name": "process::dy-wcet/tests/properties.rs::audsley_is_optimal_and_not_merely_lucky",
+        "node_count": 10
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/properties.rs::dropping_a_task_one_priority_level_never_helps_it",
+        "name": "process::dy-wcet/tests/properties.rs::dropping_a_task_one_priority_level_never_helps_it",
+        "node_count": 9
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/properties.rs::sensitivity_is_the_last_value_that_fits_and_not_one_more",
+        "name": "process::dy-wcet/tests/properties.rs::sensitivity_is_the_last_value_that_fits_and_not_one_more",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/properties.rs::the_same_set_gives_the_same_bits_across_repetition",
+        "name": "process::dy-wcet/tests/properties.rs::the_same_set_gives_the_same_bits_across_repetition",
+        "node_count": 7
+      },
+      {
+        "depth": 2,
+        "entry_kind": "test",
+        "entry_point": "dy-wcet/tests/properties.rs::the_set_limit_holds_under_generation",
+        "name": "process::dy-wcet/tests/properties.rs::the_set_limit_holds_under_generation",
+        "node_count": 7
+      }
+    ],
+    "stage": 3,
+    "status": "ok",
+    "tool": "get_processes",
+    "total_count": 54,
+    "truncated": false
+  }
+]

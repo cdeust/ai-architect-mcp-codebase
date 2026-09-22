@@ -1,0 +1,29 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 12,
+    "method": "tools/call",
+    "params": {
+      "name": "query_graph",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/static/graph",
+        "query": "MATCH (a)-[r:Calls_Method_Function]->(b) RETURN a.qualified_name, b.qualified_name ORDER BY a.qualified_name, b.qualified_name",
+        "format": "tabular",
+        "offset": 0
+      }
+    }
+  },
+  "response": {
+    "id": 12,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"columns\": [\n    \"a.qualified_name\",\n    \"b.qualified_name\"\n  ],\n  \"detail\": \"full\",\n  \"elapsed_ms\": 1,\n  \"format\": \"tabular\",\n  \"limit_injected\": true,\n  \"offset\": 0,\n  \"order_stable\": true,\n  \"returned_count\": 0,\n  \"rows\": [],\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"query_graph\",\n  \"total_count\": 0,\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.0015307499561458826
+}

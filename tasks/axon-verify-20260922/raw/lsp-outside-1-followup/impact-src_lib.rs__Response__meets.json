@@ -1,0 +1,27 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "get_impact",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-1/graph",
+        "qualified_name": "src/lib.rs::Response::meets"
+      }
+    }
+  },
+  "response": {
+    "id": 4,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"callers\": [\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"src/lib.rs::tests::every_unbounded_variant_fails_every_deadline\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"src/lib.rs::tests::every_unbounded_variant_fails_every_deadline\"\n    },\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"tests/properties.rs::a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"tests/properties.rs::a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does\"\n    }\n  ],\n  \"callers_total\": 2,\n  \"cochange_partners\": [],\n  \"cochange_partners_total\": 0,\n  \"communities\": [\n    \"community::louvain::1::1\"\n  ],\n  \"communities_affected\": 1,\n  \"counts\": {\n    \"code\": 2,\n    \"references\": 0\n  },\n  \"dependents_total\": 2,\n  \"detail\": \"full\",\n  \"epistemic\": \"lower-bound\",\n  \"epistemic_reasons\": [\n    \"2 reverse-dependency edge(s) were resolved heuristically (confidence < 1.0) and may be incomplete or incorrect\",\n    \"4 unresolved call site(s) name this symbol \u2014 4 `CallSite` node(s) in the graph reference it by name but were never resolved to a Calls edge; the reported callers are a lower bound; 4 of them sit in files outside the compiled Cargo targets (kani/response_bounds.rs) \u2014 unresolvable by the language server; static receiver binding may still resolve them\"\n  ],\n  \"format\": \"json\",\n  \"graph_freshness\": {\n    \"checked_files\": 4,\n    \"commits_ahead\": 0,\n    \"commits_behind\": 0,\n    \"dirty_files\": 0,\n    \"state\": \"fresh\"\n  },\n  \"implementors\": [],\n  \"implementors_total\": 0,\n  \"importers\": [],\n  \"importers_total\": 0,\n  \"next_steps\": [\n    \"inspect a caller's own blast radius: get_impact on a `callers[].qualified_name`\",\n    \"this is a lower bound \u2014 run get_context on 'src/lib.rs::Response::meets' to review its interface relationships, or lsp_resolve to tighten dynamic-dispatch edges\"\n  ],\n  \"offset\": 0,\n  \"primary_list\": \"callers\",\n  \"processes\": [\n    \"process::src/lib.rs::tests::every_unbounded_variant_fails_every_deadline\",\n    \"process::tests/properties.rs::a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does\"\n  ],\n  \"processes_affected\": 2,\n  \"qualified_name\": \"src/lib.rs::Response::meets\",\n  \"references\": [],\n  \"references_total\": 0,\n  \"secondary_lists_paged\": false,\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"get_impact\",\n  \"truncated\": false,\n  \"unresolved_callsites_naming_target\": 4,\n  \"unresolved_callsites_outside_targets\": 4,\n  \"users\": [],\n  \"users_total\": 0\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.09993879101239145
+}

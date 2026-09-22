@@ -1,0 +1,28 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "query_graph",
+      "arguments": {
+        "graph_path": "/private/tmp/claude-501/-Users-cdeust-Developments-anthropic-partnership-ai-architect-mcp-codebase/4e71ce35-1696-4b48-be02-deedae88ba5e/scratchpad/oldgraph/graph",
+        "query": "MATCH (n:CallSite) WHERE NOT n.callee_name CONTAINS '.' AND NOT n.callee_name CONTAINS '::' AND n.callee_name IN ['deadline','jitter','blocking','t','meets','bound','is_bounded','push','response_of'] RETURN n.callee_name, count(n) ORDER BY n.callee_name",
+        "format": "tabular"
+      }
+    }
+  },
+  "response": {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"columns\": [\n    \"n.callee_name\",\n    \"COUNT(n._ID)\"\n  ],\n  \"detail\": \"full\",\n  \"elapsed_ms\": 6,\n  \"format\": \"tabular\",\n  \"limit_injected\": true,\n  \"offset\": 0,\n  \"order_stable\": true,\n  \"returned_count\": 4,\n  \"rows\": [\n    [\n      \"blocking\",\n      \"1\"\n    ],\n    [\n      \"deadline\",\n      \"1\"\n    ],\n    [\n      \"jitter\",\n      \"1\"\n    ],\n    [\n      \"t\",\n      \"26\"\n    ]\n  ],\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"query_graph\",\n  \"total_count\": 4,\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.007088666083291173
+}

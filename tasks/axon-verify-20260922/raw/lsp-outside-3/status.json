@@ -1,0 +1,26 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "index_status",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-3/graph"
+      }
+    }
+  },
+  "response": {
+    "id": 3,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"coverage\": {\n    \"caveat\": \"Best-effort signal, NOT a completeness guarantee: absence of a flag only means the indexer detected no gap (a file keyed to a subtly wrong grammar can still parse 'clean'). 'parse_incomplete' files WERE indexed but constructs inside the flagged line ranges MAY be missing from the graph \u2014 prefer grep there. 'skipped'/'quarantined' files are NOT in the graph at all. 'outside_build_targets' files (issue #284) WERE indexed \u2014 declarations are in the graph \u2014 but sit outside every compiled Cargo target, so calls out of them cannot be resolved by the language server. source: DeusData/codebase-memory-mcp coverage wording.\",\n    \"files_indexed\": 4,\n    \"index_mode\": \"full\",\n    \"outside_build_targets\": {\n      \"count\": 1,\n      \"files\": [\n        \"kani/response_bounds.rs\"\n      ]\n    },\n    \"parse_incomplete\": {\n      \"count\": 0,\n      \"files\": []\n    },\n    \"pruned_dirs\": {\n      \"count\": 2,\n      \"dirs\": [\n        {\n          \"path\": \".git\",\n          \"reason\": \"vcs\"\n        },\n        {\n          \"path\": \"target\",\n          \"reason\": \"dependency_or_build_dir\"\n        }\n      ]\n    },\n    \"quarantined\": {\n      \"count\": 0,\n      \"files\": []\n    },\n    \"skipped\": {\n      \"count\": 0,\n      \"files\": [],\n      \"user_excluded_count\": 0\n    }\n  },\n  \"edge_count\": 16068,\n  \"graph_path\": \"/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-3/graph\",\n  \"node_count\": 15138,\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"index_status\"\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.23297262494452298
+}

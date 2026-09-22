@@ -1,0 +1,29 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "tools/call",
+    "params": {
+      "name": "query_graph",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-2/graph",
+        "query": "MATCH (n:Method) RETURN n.qualified_name, n.name, n.start_line, n.end_line ORDER BY n.qualified_name",
+        "format": "tabular",
+        "offset": 0
+      }
+    }
+  },
+  "response": {
+    "id": 8,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"columns\": [\n    \"n.qualified_name\",\n    \"n.name\",\n    \"n.start_line\",\n    \"n.end_line\"\n  ],\n  \"detail\": \"full\",\n  \"elapsed_ms\": 1,\n  \"format\": \"tabular\",\n  \"limit_injected\": true,\n  \"offset\": 0,\n  \"order_stable\": true,\n  \"returned_count\": 32,\n  \"rows\": [\n    [\n      \"src/lib.rs::Rejected::fmt\",\n      \"fmt\",\n      \"330\",\n      \"338\"\n    ],\n    [\n      \"src/lib.rs::Response::bound\",\n      \"bound\",\n      \"265\",\n      \"270\"\n    ],\n    [\n      \"src/lib.rs::Response::fmt\",\n      \"fmt\",\n      \"305\",\n      \"310\"\n    ],\n    [\n      \"src/lib.rs::Response::is_bounded\",\n      \"is_bounded\",\n      \"288\",\n      \"290\"\n    ],\n    [\n      \"src/lib.rs::Response::meets\",\n      \"meets\",\n      \"256\",\n      \"261\"\n    ],\n    [\n      \"src/lib.rs::Response::reason\",\n      \"reason\",\n      \"294\",\n      \"299\"\n    ],\n    [\n      \"src/lib.rs::Response::response_time\",\n      \"response_time\",\n      \"278\",\n      \"284\"\n    ],\n    [\n      \"src/lib.rs::Task::blocking\",\n      \"blocking\",\n      \"172\",\n      \"175\"\n    ],\n    [\n      \"src/lib.rs::Task::deadline\",\n      \"deadline\",\n      \"165\",\n      \"168\"\n    ],\n    [\n      \"src/lib.rs::Task::jitter\",\n      \"jitter\",\n      \"179\",\n      \"182\"\n    ],\n    [\n      \"src/lib.rs::Task::named\",\n      \"named\",\n      \"186\",\n      \"189\"\n    ],\n    [\n      \"src/lib.rs::Task::new\",\n      \"new\",\n      \"152\",\n      \"161\"\n    ],\n    [\n      \"src/lib.rs::Task::utilisation_ppm\",\n      \"utilisation_ppm\",\n      \"194\",\n      \"201\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::first_failure\",\n      \"first_failure\",\n      \"522\",\n      \"524\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::get\",\n      \"get\",\n      \"378\",\n      \"380\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::is_empty\",\n      \"is_empty\",\n      \"372\",\n      \"374\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::is_schedulable\",\n      \"is_schedulable\",\n      \"511\",\n      \"518\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::iter\",\n      \"iter\",\n      \"383\",\n      \"385\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::len\",\n      \"len\",\n      \"366\",\n      \"368\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::liu_layland_bound_ppm\",\n      \"liu_layland_bound_ppm\",\n      \"588\",\n      \"594\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::max_wcet_increase\",\n      \"max_wcet_increase\",\n      \"549\",\n      \"577\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::new\",\n      \"new\",\n      \"357\",\n      \"362\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::optimal_priority_order\",\n      \"optimal_priority_order\",\n      \"624\",\n      \"666\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::passes_utilisation_bound\",\n      \"passes_utilisation_bound\",\n      \"602\",\n      \"607\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::push\",\n      \"push\",\n      \"391\",\n      \"404\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::response_of\",\n      \"response_of\",\n      \"453\",\n      \"507\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::slack_of\",\n      \"slack_of\",\n      \"532\",\n      \"536\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::utilisation_ppm\",\n      \"utilisation_ppm\",\n      \"413\",\n      \"415\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::utilisation_through\",\n      \"utilisation_through\",\n      \"424\",\n      \"430\"\n    ],\n    [\n      \"src/lib.rs::Unbounded::fmt\",\n      \"fmt\",\n      \"230\",\n      \"237\"\n    ],\n    [\n      \"tests/properties.rs::Rng::between\",\n      \"between\",\n      \"24\",\n      \"26\"\n    ],\n    [\n      \"tests/properties.rs::Rng::bits\",\n      \"bits\",\n      \"17\",\n      \"23\"\n    ]\n  ],\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"query_graph\",\n  \"total_count\": 32,\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.0011509580072015524
+}

@@ -1,0 +1,24 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "health_check",
+      "arguments": {}
+    }
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"name\": \"health_check\",\n  \"protocol\": \"2024-11-05\",\n  \"server\": \"ai-architect\",\n  \"stage\": 0,\n  \"stages_registered\": 26,\n  \"status\": \"ok\",\n  \"tools_count\": 26,\n  \"version\": \"0.11.1\"\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.02450154209509492
+}

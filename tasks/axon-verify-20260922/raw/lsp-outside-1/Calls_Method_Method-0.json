@@ -1,0 +1,29 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 13,
+    "method": "tools/call",
+    "params": {
+      "name": "query_graph",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-1/graph",
+        "query": "MATCH (a)-[r:Calls_Method_Method]->(b) RETURN a.qualified_name, b.qualified_name ORDER BY a.qualified_name, b.qualified_name",
+        "format": "tabular",
+        "offset": 0
+      }
+    }
+  },
+  "response": {
+    "id": 13,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"columns\": [\n    \"a.qualified_name\",\n    \"b.qualified_name\"\n  ],\n  \"detail\": \"full\",\n  \"elapsed_ms\": 1,\n  \"format\": \"tabular\",\n  \"limit_injected\": true,\n  \"offset\": 0,\n  \"order_stable\": true,\n  \"returned_count\": 20,\n  \"rows\": [\n    [\n      \"src/lib.rs::TaskSet::first_failure\",\n      \"src/lib.rs::Response::is_bounded\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::first_failure\",\n      \"src/lib.rs::TaskSet::response_of\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::is_schedulable\",\n      \"src/lib.rs::Response::is_bounded\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::is_schedulable\",\n      \"src/lib.rs::TaskSet::response_of\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::max_wcet_increase\",\n      \"src/lib.rs::TaskSet::get\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::max_wcet_increase\",\n      \"src/lib.rs::TaskSet::is_schedulable\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::optimal_priority_order\",\n      \"src/lib.rs::Response::is_bounded\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::optimal_priority_order\",\n      \"src/lib.rs::TaskSet::len\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::optimal_priority_order\",\n      \"src/lib.rs::TaskSet::new\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::optimal_priority_order\",\n      \"src/lib.rs::TaskSet::push\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::optimal_priority_order\",\n      \"src/lib.rs::TaskSet::response_of\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::passes_utilisation_bound\",\n      \"src/lib.rs::TaskSet::liu_layland_bound_ppm\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::passes_utilisation_bound\",\n      \"src/lib.rs::TaskSet::utilisation_ppm\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::response_of\",\n      \"src/lib.rs::TaskSet::utilisation_through\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::slack_of\",\n      \"src/lib.rs::Response::bound\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::slack_of\",\n      \"src/lib.rs::TaskSet::get\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::slack_of\",\n      \"src/lib.rs::TaskSet::response_of\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::utilisation_ppm\",\n      \"src/lib.rs::TaskSet::utilisation_through\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::utilisation_through\",\n      \"src/lib.rs::Task::utilisation_ppm\"\n    ],\n    [\n      \"tests/properties.rs::Rng::between\",\n      \"tests/properties.rs::Rng::bits\"\n    ]\n  ],\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"query_graph\",\n  \"total_count\": 20,\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.00147687504068017
+}

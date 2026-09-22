@@ -1,0 +1,27 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "get_processes",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-parent-root/graph",
+        "offset": 0
+      }
+    }
+  },
+  "response": {
+    "id": 5,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"detail\": \"full\",\n  \"format\": \"json\",\n  \"offset\": 0,\n  \"process_count\": 0,\n  \"processes\": [],\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"get_processes\",\n  \"total_count\": 0,\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.014578124973922968
+}

@@ -1,0 +1,21 @@
+[
+  {
+    "columns": [
+      "a.qualified_name",
+      "b.qualified_name"
+    ],
+    "detail": "full",
+    "elapsed_ms": 1,
+    "format": "tabular",
+    "limit_injected": true,
+    "offset": 0,
+    "order_stable": true,
+    "returned_count": 0,
+    "rows": [],
+    "stage": 3,
+    "status": "ok",
+    "tool": "query_graph",
+    "total_count": 0,
+    "truncated": false
+  }
+]

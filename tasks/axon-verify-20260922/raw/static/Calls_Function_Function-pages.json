@@ -1,0 +1,130 @@
+[
+  {
+    "columns": [
+      "a.qualified_name",
+      "b.qualified_name"
+    ],
+    "detail": "full",
+    "elapsed_ms": 1,
+    "format": "tabular",
+    "limit_injected": true,
+    "offset": 0,
+    "order_stable": true,
+    "returned_count": 27,
+    "rows": [
+      [
+        "kani/response_bounds.rs::a_bounded_response_never_exceeds_its_deadline",
+        "kani/response_bounds.rs::task"
+      ],
+      [
+        "kani/response_bounds.rs::a_lone_task_pays_only_for_itself",
+        "kani/response_bounds.rs::task"
+      ],
+      [
+        "kani/response_bounds.rs::the_recurrence_terminates_without_panicking",
+        "kani/response_bounds.rs::task"
+      ],
+      [
+        "src/lib.rs::tests::a_bound_above_the_deadline_is_reported_with_its_value",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::a_lower_priority_task_pays_for_every_preemption",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::a_set_at_exactly_its_deadline_is_schedulable",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::a_single_task_responds_in_its_own_execution_time",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::an_index_past_the_end_is_named_rather_than_guessed",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::an_overloaded_set_does_not_converge_and_says_so",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::audsley_returns_none_when_no_ordering_works",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::blocking_is_added_once_and_not_per_preemption",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::one_microsecond_past_the_deadline_is_not",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::sensitivity_finds_the_last_execution_time_that_still_fits",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::slack_is_none_when_the_task_misses",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::slack_is_the_distance_to_the_deadline",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::the_task_limit_is_enforced_rather_than_overrun",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::utilisation_is_parts_per_million_and_never_a_float",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya",
+        "src/lib.rs::tests::t"
+      ],
+      [
+        "tests/properties.rs::a_bounded_answer_always_meets_its_deadline_and_an_unbounded_one_never_does",
+        "tests/properties.rs::generate"
+      ],
+      [
+        "tests/properties.rs::a_response_is_never_shorter_than_the_work_it_contains",
+        "tests/properties.rs::generate"
+      ],
+      [
+        "tests/properties.rs::adding_jitter_never_shortens_a_response",
+        "tests/properties.rs::generate"
+      ],
+      [
+        "tests/properties.rs::audsley_is_optimal_and_not_merely_lucky",
+        "tests/properties.rs::generate"
+      ],
+      [
+        "tests/properties.rs::dropping_a_task_one_priority_level_never_helps_it",
+        "tests/properties.rs::generate"
+      ],
+      [
+        "tests/properties.rs::sensitivity_is_the_last_value_that_fits_and_not_one_more",
+        "tests/properties.rs::generate"
+      ],
+      [
+        "tests/properties.rs::the_same_set_gives_the_same_bits_across_repetition",
+        "tests/properties.rs::generate"
+      ],
+      [
+        "tests/properties.rs::the_set_limit_holds_under_generation",
+        "tests/properties.rs::generate"
+      ]
+    ],
+    "stage": 3,
+    "status": "ok",
+    "tool": "query_graph",
+    "total_count": 27,
+    "truncated": false
+  }
+]

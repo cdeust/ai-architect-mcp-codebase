@@ -1,0 +1,28 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 18,
+    "method": "tools/call",
+    "params": {
+      "name": "lsp_resolve",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-nested/graph",
+        "codebase_path": "/private/tmp/claude-501/-Users-cdeust-Developments-anthropic-partnership-ai-architect-mcp-codebase/4e71ce35-1696-4b48-be02-deedae88ba5e/scratchpad/specimens/nested/dy-wcet",
+        "language": "rust"
+      }
+    }
+  },
+  "response": {
+    "id": 18,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"message\": \"lsp_workspace_load_failed: Failed to load workspaces.; the language server loaded no crate graph, so every definition request would answer []. Fix: add the package to the parent workspace's members, or analyze the workspace root\",\n  \"reason\": \"lsp_workspace_load_failed\",\n  \"stage\": 3,\n  \"status\": \"error\"\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.44303241604939103
+}

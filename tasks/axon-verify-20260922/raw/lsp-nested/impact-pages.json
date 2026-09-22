@@ -1,0 +1,304 @@
+[
+  {
+    "callers": [
+      {
+        "confidence": "0.87",
+        "id": "kani/response_bounds.rs::a_bounded_response_never_exceeds_its_deadline",
+        "label": "Function",
+        "qualified_name": "kani/response_bounds.rs::a_bounded_response_never_exceeds_its_deadline"
+      },
+      {
+        "confidence": "0.87",
+        "id": "kani/response_bounds.rs::a_lone_task_pays_only_for_itself",
+        "label": "Function",
+        "qualified_name": "kani/response_bounds.rs::a_lone_task_pays_only_for_itself"
+      },
+      {
+        "confidence": "0.87",
+        "id": "kani/response_bounds.rs::an_index_past_the_end_is_named",
+        "label": "Function",
+        "qualified_name": "kani/response_bounds.rs::an_index_past_the_end_is_named"
+      },
+      {
+        "confidence": "0.87",
+        "id": "kani/response_bounds.rs::the_recurrence_terminates_without_panicking",
+        "label": "Function",
+        "qualified_name": "kani/response_bounds.rs::the_recurrence_terminates_without_panicking"
+      },
+      {
+        "confidence": "0.93",
+        "id": "src/lib.rs::TaskSet::first_failure",
+        "label": "Method",
+        "qualified_name": "src/lib.rs::TaskSet::first_failure"
+      },
+      {
+        "confidence": "0.93",
+        "id": "src/lib.rs::TaskSet::is_schedulable",
+        "label": "Method",
+        "qualified_name": "src/lib.rs::TaskSet::is_schedulable"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::TaskSet::optimal_priority_order",
+        "label": "Method",
+        "qualified_name": "src/lib.rs::TaskSet::optimal_priority_order"
+      },
+      {
+        "confidence": "0.93",
+        "id": "src/lib.rs::TaskSet::slack_of",
+        "label": "Method",
+        "qualified_name": "src/lib.rs::TaskSet::slack_of"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::a_bound_above_the_deadline_is_reported_with_its_value",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::a_bound_above_the_deadline_is_reported_with_its_value"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::a_lower_priority_task_pays_for_every_preemption",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::a_lower_priority_task_pays_for_every_preemption"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::a_set_at_exactly_its_deadline_is_schedulable",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::a_set_at_exactly_its_deadline_is_schedulable"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::a_single_task_responds_in_its_own_execution_time",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::a_single_task_responds_in_its_own_execution_time"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::a_tasks_own_jitter_lands_in_its_own_response",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::a_tasks_own_jitter_lands_in_its_own_response"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::an_index_past_the_end_is_named_rather_than_guessed",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::an_index_past_the_end_is_named_rather_than_guessed"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::an_overloaded_set_does_not_converge_and_says_so",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::an_overloaded_set_does_not_converge_and_says_so"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::blocking_is_added_once_and_not_per_preemption",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::blocking_is_added_once_and_not_per_preemption"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::jitter_widens_the_window_and_adds_to_the_answer",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::jitter_widens_the_window_and_adds_to_the_answer"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::one_microsecond_past_the_deadline_is_not",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::one_microsecond_past_the_deadline_is_not"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::overflow_is_reported_and_never_wrapped",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::overflow_is_reported_and_never_wrapped"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time"
+      },
+      {
+        "confidence": "0.87",
+        "id": "src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya",
+        "label": "Function",
+        "qualified_name": "src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::a_deadline_beyond_the_period_is_permitted",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::a_deadline_beyond_the_period_is_permitted"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::a_deadline_shorter_than_the_period_can_fail_at_low_utilisation"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::a_tasks_own_jitter_is_added_once_at_the_end",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::a_tasks_own_jitter_is_added_once_at_the_end"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::a_zero_execution_task_terminates_rather_than_spinning",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::a_zero_execution_task_terminates_rather_than_spinning"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::blocking_alone_can_exceed_a_deadline",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::blocking_alone_can_exceed_a_deadline"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::determinism_across_repeated_evaluation",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::determinism_across_repeated_evaluation"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::full_utilisation_is_schedulable_when_it_lands_exactly",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::full_utilisation_is_schedulable_when_it_lands_exactly"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::jitter_upstream_buys_a_whole_extra_preemption",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::jitter_upstream_buys_a_whole_extra_preemption"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::overflow_beats_the_iteration_cap_to_the_answer",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::overflow_beats_the_iteration_cap_to_the_answer"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::the_deadline_boundary_from_both_sides",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::the_deadline_boundary_from_both_sides"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/on_paper.rs::three_tasks_settling_at_six",
+        "label": "Function",
+        "qualified_name": "tests/on_paper.rs::three_tasks_settling_at_six"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/properties.rs::adding_jitter_never_shortens_a_response",
+        "label": "Function",
+        "qualified_name": "tests/properties.rs::adding_jitter_never_shortens_a_response"
+      },
+      {
+        "confidence": "0.87",
+        "id": "tests/properties.rs::dropping_a_task_one_priority_level_never_helps_it",
+        "label": "Function",
+        "qualified_name": "tests/properties.rs::dropping_a_task_one_priority_level_never_helps_it"
+      }
+    ],
+    "callers_total": 35,
+    "cochange_partners": [],
+    "cochange_partners_total": 0,
+    "communities": [
+      "community::louvain::1::2"
+    ],
+    "communities_affected": 1,
+    "counts": {
+      "code": 35,
+      "references": 0
+    },
+    "dependents_total": 35,
+    "detail": "full",
+    "epistemic": "lower-bound",
+    "epistemic_reasons": [
+      "35 reverse-dependency edge(s) were resolved heuristically (confidence < 1.0) and may be incomplete or incorrect",
+      "8 unresolved call site(s) name this symbol \u2014 8 `CallSite` node(s) in the graph reference it by name but were never resolved to a Calls edge; the reported callers are a lower bound"
+    ],
+    "format": "json",
+    "graph_freshness": {
+      "checked_files": 4,
+      "commits_ahead": 0,
+      "commits_behind": 0,
+      "dirty_files": 0,
+      "state": "fresh"
+    },
+    "implementors": [],
+    "implementors_total": 0,
+    "importers": [],
+    "importers_total": 0,
+    "next_steps": [
+      "inspect a caller's own blast radius: get_impact on a `callers[].qualified_name`",
+      "this is a lower bound \u2014 run get_context on 'src/lib.rs::TaskSet::response_of' to review its interface relationships, or lsp_resolve to tighten dynamic-dispatch edges"
+    ],
+    "offset": 0,
+    "primary_list": "callers",
+    "processes": [
+      "process::kani/response_bounds.rs::a_bounded_response_never_exceeds_its_deadline",
+      "process::kani/response_bounds.rs::the_recurrence_terminates_without_panicking",
+      "process::kani/response_bounds.rs::a_lone_task_pays_only_for_itself",
+      "process::kani/response_bounds.rs::an_index_past_the_end_is_named",
+      "process::src/lib.rs::tests::a_single_task_responds_in_its_own_execution_time",
+      "process::src/lib.rs::tests::a_lower_priority_task_pays_for_every_preemption",
+      "process::src/lib.rs::tests::blocking_is_added_once_and_not_per_preemption",
+      "process::src/lib.rs::tests::jitter_widens_the_window_and_adds_to_the_answer",
+      "process::src/lib.rs::tests::a_tasks_own_jitter_lands_in_its_own_response",
+      "process::src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya",
+      "process::src/lib.rs::tests::an_overloaded_set_does_not_converge_and_says_so",
+      "process::src/lib.rs::tests::a_bound_above_the_deadline_is_reported_with_its_value",
+      "process::src/lib.rs::tests::an_index_past_the_end_is_named_rather_than_guessed",
+      "process::src/lib.rs::tests::overflow_is_reported_and_never_wrapped",
+      "process::src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time",
+      "process::src/lib.rs::tests::a_set_at_exactly_its_deadline_is_schedulable",
+      "process::src/lib.rs::tests::one_microsecond_past_the_deadline_is_not",
+      "process::src/lib.rs::tests::slack_is_none_when_the_task_misses",
+      "process::src/lib.rs::tests::slack_is_the_distance_to_the_deadline",
+      "process::src/lib.rs::tests::sensitivity_finds_the_last_execution_time_that_still_fits",
+      "process::src/lib.rs::tests::audsley_finds_an_ordering_the_caller_had_backwards",
+      "process::src/lib.rs::tests::audsley_returns_none_when_no_ordering_works",
+      "process::tests/on_paper.rs::three_tasks_settling_at_six",
+      "process::tests/on_paper.rs::a_deadline_shorter_than_the_period_can_fail_at_low_utilisation",
+      "process::tests/on_paper.rs::full_utilisation_is_schedulable_when_it_lands_exactly",
+      "process::tests/on_paper.rs::blocking_alone_can_exceed_a_deadline",
+      "process::tests/on_paper.rs::a_zero_execution_task_terminates_rather_than_spinning",
+      "process::tests/on_paper.rs::the_deadline_boundary_from_both_sides",
+      "process::tests/on_paper.rs::a_deadline_beyond_the_period_is_permitted",
+      "process::tests/on_paper.rs::jitter_upstream_buys_a_whole_extra_preemption",
+      "process::tests/on_paper.rs::a_tasks_own_jitter_is_added_once_at_the_end",
+      "process::tests/on_paper.rs::an_over_utilised_set_is_refused_by_arithmetic_not_by_exhaustion",
+      "process::tests/on_paper.rs::overflow_beats_the_iteration_cap_to_the_answer",
+      "process::tests/on_paper.rs::determinism_across_repeated_evaluation",
+      "process::tests/properties.rs::dropping_a_task_one_priority_level_never_helps_it",
+      "process::tests/properties.rs::adding_jitter_never_shortens_a_response",
+      "process::tests/properties.rs::audsley_is_optimal_and_not_merely_lucky"
+    ],
+    "processes_affected": 37,
+    "qualified_name": "src/lib.rs::TaskSet::response_of",
+    "references": [],
+    "references_total": 0,
+    "secondary_lists_paged": false,
+    "stage": 3,
+    "status": "ok",
+    "tool": "get_impact",
+    "truncated": false,
+    "unresolved_callsites_naming_target": 8,
+    "unresolved_callsites_outside_targets": 0,
+    "users": [],
+    "users_total": 0
+  }
+]

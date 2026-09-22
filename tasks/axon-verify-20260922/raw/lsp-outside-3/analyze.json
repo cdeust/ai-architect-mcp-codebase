@@ -1,0 +1,30 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "analyze_codebase",
+      "arguments": {
+        "path": "/private/tmp/claude-501/-Users-cdeust-Developments-anthropic-partnership-ai-architect-mcp-codebase/4e71ce35-1696-4b48-be02-deedae88ba5e/scratchpad/specimens/standalone",
+        "output_dir": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-3",
+        "language": "rust",
+        "dependency_scope": "none",
+        "lsp": true
+      }
+    }
+  },
+  "response": {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"cluster\": {\n    \"community_count\": 6,\n    \"modularity\": \"0.529375\",\n    \"process_count\": 54\n  },\n  \"coverage\": {\n    \"caveat\": \"Best-effort signal, NOT a completeness guarantee: absence of a flag only means the indexer detected no gap (a file keyed to a subtly wrong grammar can still parse 'clean'). 'parse_incomplete' files WERE indexed but constructs inside the flagged line ranges MAY be missing from the graph \u2014 prefer grep there. 'skipped'/'quarantined' files are NOT in the graph at all. 'outside_build_targets' files (issue #284) WERE indexed \u2014 declarations are in the graph \u2014 but sit outside every compiled Cargo target, so calls out of them cannot be resolved by the language server. source: DeusData/codebase-memory-mcp coverage wording.\",\n    \"files_indexed\": 4,\n    \"index_mode\": \"full\",\n    \"outside_build_targets\": {\n      \"count\": 1,\n      \"files\": [\n        \"kani/response_bounds.rs\"\n      ]\n    },\n    \"parse_incomplete\": {\n      \"count\": 0,\n      \"files\": []\n    },\n    \"pruned_dirs\": {\n      \"count\": 2,\n      \"dirs\": [\n        {\n          \"path\": \".git\",\n          \"reason\": \"vcs\"\n        },\n        {\n          \"path\": \"target\",\n          \"reason\": \"dependency_or_build_dir\"\n        }\n      ]\n    },\n    \"quarantined\": {\n      \"count\": 0,\n      \"files\": []\n    },\n    \"skipped\": {\n      \"count\": 0,\n      \"files\": [],\n      \"user_excluded_count\": 0\n    }\n  },\n  \"graph_path\": \"/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-3/graph\",\n  \"index\": {\n    \"edge_count\": 15060,\n    \"files_indexed\": 4,\n    \"node_count\": 15068\n  },\n  \"lsp_resolve\": {\n    \"elapsed_ms\": 9360,\n    \"failed_count\": 329,\n    \"outside_targets_count\": 44,\n    \"resolved_count\": 88,\n    \"skipped_count\": 0\n  },\n  \"lsp_status\": {\n    \"requested\": true,\n    \"server_health\": {\n      \"health\": \"ok\",\n      \"message\": null,\n      \"readiness\": \"server_reported_quiescent\"\n    },\n    \"state\": \"completed\"\n  },\n  \"resolve\": {\n    \"phase\": \"static\",\n    \"resolution_rate\": \"0.57\",\n    \"total_edges\": 494\n  },\n  \"search_index\": {\n    \"bm25_doc_count\": 100,\n    \"elapsed_ms\": 521,\n    \"vector_doc_count\": 100\n  },\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"analyze_codebase\",\n  \"total_elapsed_ms\": 25327\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 25.49352595815435
+}

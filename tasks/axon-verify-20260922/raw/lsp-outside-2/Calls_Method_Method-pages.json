@@ -1,0 +1,102 @@
+[
+  {
+    "columns": [
+      "a.qualified_name",
+      "b.qualified_name"
+    ],
+    "detail": "full",
+    "elapsed_ms": 1,
+    "format": "tabular",
+    "limit_injected": true,
+    "offset": 0,
+    "order_stable": true,
+    "returned_count": 20,
+    "rows": [
+      [
+        "src/lib.rs::TaskSet::first_failure",
+        "src/lib.rs::Response::is_bounded"
+      ],
+      [
+        "src/lib.rs::TaskSet::first_failure",
+        "src/lib.rs::TaskSet::response_of"
+      ],
+      [
+        "src/lib.rs::TaskSet::is_schedulable",
+        "src/lib.rs::Response::is_bounded"
+      ],
+      [
+        "src/lib.rs::TaskSet::is_schedulable",
+        "src/lib.rs::TaskSet::response_of"
+      ],
+      [
+        "src/lib.rs::TaskSet::max_wcet_increase",
+        "src/lib.rs::TaskSet::get"
+      ],
+      [
+        "src/lib.rs::TaskSet::max_wcet_increase",
+        "src/lib.rs::TaskSet::is_schedulable"
+      ],
+      [
+        "src/lib.rs::TaskSet::optimal_priority_order",
+        "src/lib.rs::Response::is_bounded"
+      ],
+      [
+        "src/lib.rs::TaskSet::optimal_priority_order",
+        "src/lib.rs::TaskSet::len"
+      ],
+      [
+        "src/lib.rs::TaskSet::optimal_priority_order",
+        "src/lib.rs::TaskSet::new"
+      ],
+      [
+        "src/lib.rs::TaskSet::optimal_priority_order",
+        "src/lib.rs::TaskSet::push"
+      ],
+      [
+        "src/lib.rs::TaskSet::optimal_priority_order",
+        "src/lib.rs::TaskSet::response_of"
+      ],
+      [
+        "src/lib.rs::TaskSet::passes_utilisation_bound",
+        "src/lib.rs::TaskSet::liu_layland_bound_ppm"
+      ],
+      [
+        "src/lib.rs::TaskSet::passes_utilisation_bound",
+        "src/lib.rs::TaskSet::utilisation_ppm"
+      ],
+      [
+        "src/lib.rs::TaskSet::response_of",
+        "src/lib.rs::TaskSet::utilisation_through"
+      ],
+      [
+        "src/lib.rs::TaskSet::slack_of",
+        "src/lib.rs::Response::bound"
+      ],
+      [
+        "src/lib.rs::TaskSet::slack_of",
+        "src/lib.rs::TaskSet::get"
+      ],
+      [
+        "src/lib.rs::TaskSet::slack_of",
+        "src/lib.rs::TaskSet::response_of"
+      ],
+      [
+        "src/lib.rs::TaskSet::utilisation_ppm",
+        "src/lib.rs::TaskSet::utilisation_through"
+      ],
+      [
+        "src/lib.rs::TaskSet::utilisation_through",
+        "src/lib.rs::Task::utilisation_ppm"
+      ],
+      [
+        "tests/properties.rs::Rng::between",
+        "tests/properties.rs::Rng::bits"
+      ]
+    ],
+    "stage": 3,
+    "status": "ok",
+    "tool": "query_graph",
+    "total_count": 20,
+    "truncated": false
+  }
+]

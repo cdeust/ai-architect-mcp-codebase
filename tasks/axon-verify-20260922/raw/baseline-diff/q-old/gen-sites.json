@@ -1,0 +1,29 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "query_graph",
+      "arguments": {
+        "graph_path": "/private/tmp/claude-501/-Users-cdeust-Developments-anthropic-partnership-ai-architect-mcp-codebase/4e71ce35-1696-4b48-be02-deedae88ba5e/scratchpad/oldgraph/graph",
+        "query": "MATCH (n:CallSite) WHERE n.id STARTS WITH 'tests/properties.rs' AND (n.callee_name CONTAINS 'jitter' OR n.callee_name CONTAINS 'deadline' OR n.callee_name CONTAINS 'blocking' OR n.callee_name CONTAINS 'Task::new') RETURN n.id, n.callee_name, n.line, n.is_resolved ORDER BY n.id",
+        "format": "tabular",
+        "limit": 200
+      }
+    }
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"columns\": [\n    \"n.id\",\n    \"n.callee_name\",\n    \"n.line\",\n    \"n.is_resolved\"\n  ],\n  \"detail\": \"full\",\n  \"elapsed_ms\": 87,\n  \"format\": \"tabular\",\n  \"limit_injected\": true,\n  \"offset\": 0,\n  \"order_stable\": true,\n  \"returned_count\": 15,\n  \"rows\": [\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response::call@122:16#3838-3871\",\n      \"Task::new\",\n      \"122\",\n      \"true\"\n    ],\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response::call@122:16#3838-3911\",\n      \"Task::new(t.wcet_us, t.period_us)\\n                    .deadline\",\n      \"122\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response::call@122:16#3838-3956\",\n      \"Task::new(t.wcet_us, t.period_us)\\n                    .deadline(u64::MAX)\\n                    .blocking\",\n      \"122\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response::call@122:16#3838-4001\",\n      \"Task::new(t.wcet_us, t.period_us)\\n                    .deadline(u64::MAX)\\n                    .blocking(t.blocking_us)\\n                    .jitter\",\n      \"122\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response::call@131:16#4147-4180\",\n      \"Task::new\",\n      \"131\",\n      \"true\"\n    ],\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response::call@131:16#4147-4220\",\n      \"Task::new(t.wcet_us, t.period_us)\\n                    .deadline\",\n      \"131\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response::call@131:16#4147-4265\",\n      \"Task::new(t.wcet_us, t.period_us)\\n                    .deadline(u64::MAX)\\n                    .blocking\",\n      \"131\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::adding_jitter_never_shortens_a_response::call@131:16#4147-4306\",\n      \"Task::new(t.wcet_us, t.period_us)\\n                    .deadline(u64::MAX)\\n                    .blocking(t.blocking_us)\\n                    .jitter\",\n      \"131\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::generate::call@48:12#1659-1682\",\n      \"Task::new\",\n      \"48\",\n      \"true\"\n    ],\n    [\n      \"tests/properties.rs::generate::call@48:12#1659-1718\",\n      \"Task::new(wcet, period)\\n                .deadline\",\n      \"48\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::generate::call@48:12#1659-1750\",\n      \"Task::new(wcet, period)\\n                .deadline(deadline)\\n                .jitter\",\n      \"48\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::generate::call@48:12#1659-1786\",\n      \"Task::new(wcet, period)\\n                .deadline(deadline)\\n                .jitter(jitter)\\n                .blocking\",\n      \"48\",\n      \"false\"\n    ],\n    [\n      \"tests/properties.rs::generate::call@49:26#1709-1717\",\n      \"deadline\",\n      \"49\",\n      \"true\"\n    ],\n    [\n      \"tests/properties.rs::generate::call@50:24#1743-1749\",\n      \"jitter\",\n      \"50\",\n      \"true\"\n    ],\n    [\n      \"tests/properties.rs::generate::call@51:26#1777-1785\",\n      \"blocking\",\n      \"51\",\n      \"true\"\n    ]\n  ],\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"query_graph\",\n  \"total_count\": 15,\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.11507045896723866
+}

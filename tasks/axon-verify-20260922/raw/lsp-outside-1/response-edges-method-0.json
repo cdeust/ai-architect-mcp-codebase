@@ -1,0 +1,29 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 16,
+    "method": "tools/call",
+    "params": {
+      "name": "query_graph",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-1/graph",
+        "query": "MATCH (a)-[r:Calls_Method_Method]->(b) WHERE b.name = 'response_of' RETURN a.qualified_name, b.qualified_name, r.resolution_method, r.confidence ORDER BY a.qualified_name",
+        "format": "tabular",
+        "offset": 0
+      }
+    }
+  },
+  "response": {
+    "id": 16,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"columns\": [\n    \"a.qualified_name\",\n    \"b.qualified_name\",\n    \"r.resolution_method\",\n    \"r.confidence\"\n  ],\n  \"detail\": \"full\",\n  \"elapsed_ms\": 2,\n  \"format\": \"tabular\",\n  \"limit_injected\": true,\n  \"offset\": 0,\n  \"order_stable\": true,\n  \"returned_count\": 4,\n  \"rows\": [\n    [\n      \"src/lib.rs::TaskSet::first_failure\",\n      \"src/lib.rs::TaskSet::response_of\",\n      \"receiver-type\",\n      \"0.93\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::is_schedulable\",\n      \"src/lib.rs::TaskSet::response_of\",\n      \"receiver-type\",\n      \"0.93\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::optimal_priority_order\",\n      \"src/lib.rs::TaskSet::response_of\",\n      \"receiver-local-binding\",\n      \"0.87\"\n    ],\n    [\n      \"src/lib.rs::TaskSet::slack_of\",\n      \"src/lib.rs::TaskSet::response_of\",\n      \"receiver-type\",\n      \"0.93\"\n    ]\n  ],\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"query_graph\",\n  \"total_count\": 4,\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.002267958829179406
+}

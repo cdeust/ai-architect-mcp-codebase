@@ -1,0 +1,27 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "get_impact",
+      "arguments": {
+        "graph_path": "/Users/cdeust/Developments/anthropic-partnership/ai-architect-mcp-codebase/.claude/worktrees/lot7-verify/tasks/axon-verify-20260922/raw/lsp-outside-1/graph",
+        "qualified_name": "src/lib.rs::Task::jitter"
+      }
+    }
+  },
+  "response": {
+    "id": 3,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"callers\": [\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"src/lib.rs::tests::a_tasks_own_jitter_lands_in_its_own_response\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"src/lib.rs::tests::a_tasks_own_jitter_lands_in_its_own_response\"\n    },\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"src/lib.rs::tests::jitter_widens_the_window_and_adds_to_the_answer\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"src/lib.rs::tests::jitter_widens_the_window_and_adds_to_the_answer\"\n    },\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time\"\n    },\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya\"\n    },\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"tests/on_paper.rs::a_tasks_own_jitter_is_added_once_at_the_end\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"tests/on_paper.rs::a_tasks_own_jitter_is_added_once_at_the_end\"\n    },\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"tests/on_paper.rs::determinism_across_repeated_evaluation\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"tests/on_paper.rs::determinism_across_repeated_evaluation\"\n    },\n    {\n      \"confidence\": \"0.90\",\n      \"id\": \"tests/on_paper.rs::jitter_upstream_buys_a_whole_extra_preemption\",\n      \"label\": \"Function\",\n      \"qualified_name\": \"tests/on_paper.rs::jitter_upstream_buys_a_whole_extra_preemption\"\n    }\n  ],\n  \"callers_total\": 7,\n  \"cochange_partners\": [],\n  \"cochange_partners_total\": 0,\n  \"communities\": [\n    \"community::louvain::1::2\"\n  ],\n  \"communities_affected\": 1,\n  \"counts\": {\n    \"code\": 7,\n    \"references\": 0\n  },\n  \"dependents_total\": 7,\n  \"detail\": \"full\",\n  \"epistemic\": \"lower-bound\",\n  \"epistemic_reasons\": [\n    \"7 reverse-dependency edge(s) were resolved heuristically (confidence < 1.0) and may be incomplete or incorrect\",\n    \"5 unresolved call site(s) name this symbol \u2014 5 `CallSite` node(s) in the graph reference it by name but were never resolved to a Calls edge; the reported callers are a lower bound; 1 of them sit in files outside the compiled Cargo targets (kani/response_bounds.rs) \u2014 unresolvable by the language server; static receiver binding may still resolve them\"\n  ],\n  \"format\": \"json\",\n  \"graph_freshness\": {\n    \"checked_files\": 4,\n    \"commits_ahead\": 0,\n    \"commits_behind\": 0,\n    \"dirty_files\": 0,\n    \"state\": \"fresh\"\n  },\n  \"implementors\": [],\n  \"implementors_total\": 0,\n  \"importers\": [],\n  \"importers_total\": 0,\n  \"next_steps\": [\n    \"inspect a caller's own blast radius: get_impact on a `callers[].qualified_name`\",\n    \"this is a lower bound \u2014 run get_context on 'src/lib.rs::Task::jitter' to review its interface relationships, or lsp_resolve to tighten dynamic-dispatch edges\"\n  ],\n  \"offset\": 0,\n  \"primary_list\": \"callers\",\n  \"processes\": [\n    \"process::src/lib.rs::tests::jitter_widens_the_window_and_adds_to_the_answer\",\n    \"process::src/lib.rs::tests::a_tasks_own_jitter_lands_in_its_own_response\",\n    \"process::src/lib.rs::tests::zero_jitter_reduces_to_joseph_and_pandya\",\n    \"process::src/lib.rs::tests::the_same_set_gives_the_same_bits_every_time\",\n    \"process::tests/on_paper.rs::jitter_upstream_buys_a_whole_extra_preemption\",\n    \"process::tests/on_paper.rs::a_tasks_own_jitter_is_added_once_at_the_end\",\n    \"process::tests/on_paper.rs::determinism_across_repeated_evaluation\"\n  ],\n  \"processes_affected\": 7,\n  \"qualified_name\": \"src/lib.rs::Task::jitter\",\n  \"references\": [],\n  \"references_total\": 0,\n  \"secondary_lists_paged\": false,\n  \"stage\": 3,\n  \"status\": \"ok\",\n  \"tool\": \"get_impact\",\n  \"truncated\": false,\n  \"unresolved_callsites_naming_target\": 5,\n  \"unresolved_callsites_outside_targets\": 1,\n  \"users\": [],\n  \"users_total\": 0\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "wall_seconds": 0.11860741581767797
+}
