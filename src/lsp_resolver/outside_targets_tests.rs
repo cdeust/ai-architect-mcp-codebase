@@ -6,6 +6,9 @@
 //! request for the excluded file, while the included file still goes through
 //! the normal request path — the distinction the plain-count fixture in
 //! `health_gate_tests.rs` cannot make (it never opens ANY file).
+//! This fake advertises no `diagnosticProvider`: against a server that does,
+//! the excluded file gets one `didOpen` + `textDocument/diagnostic` pull (#292,
+//! `unlinked_tests.rs`) — still never a definition request.
 
 use super::*;
 use crate::graph_store::{GraphStore, NODE_CALL_SITE, NODE_FUNCTION};

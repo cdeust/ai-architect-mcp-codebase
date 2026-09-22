@@ -154,3 +154,54 @@ pub(super) fn save_incremental_coverage(
         eprintln!("[ap] coverage sidecar write failed: {e}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gap(kind: coverage::CoverageKind) -> FileCoverage {
+        FileCoverage {
+            kind,
+            detail: String::new(),
+            error_ranges: Vec::new(),
+        }
+    }
+
+    /// Issue #292 (ADR-9845): an `unlinked-file` verdict depends on OTHER files
+    /// (a `mod` added elsewhere links an untouched one), and only an LSP pass
+    /// can recompute it — so an incremental pass must drop it, not carry it.
+    #[test]
+    fn an_unlinked_file_verdict_is_not_carried_forward_but_a_parse_gap_is() {
+        let mut prior = coverage::CoverageReport::new("full", 2);
+        prior.files.insert(
+            "src/orphan.rs".into(),
+            gap(coverage::CoverageKind::UnlinkedFile),
+        );
+        prior.files.insert(
+            "src/partial.rs".into(),
+            gap(coverage::CoverageKind::ParsePartial),
+        );
+        let current: HashSet<String> = ["src/orphan.rs", "src/partial.rs"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        let merged = merge_coverage(
+            Some(&prior),
+            BTreeMap::new(),
+            &HashSet::new(),
+            &current,
+            "incremental",
+            2,
+        );
+
+        assert!(
+            !merged.files.contains_key("src/orphan.rs"),
+            "a stale unlinked-file verdict must not survive an index pass"
+        );
+        assert_eq!(
+            merged.files["src/partial.rs"].kind,
+            coverage::CoverageKind::ParsePartial
+        );
+    }
+}

@@ -103,7 +103,9 @@ coverage report as `unlinked_file`, and `lsp_resolve.unlinked_file_check`
 sets the verdict beside the `cargo metadata` attribution, reporting
 disagreement in both directions rather than picking one. Only files holding
 an unresolved call site are opened, so absence of the flag is not a
-completeness claim.
+completeness claim. An incremental `index_codebase` drops `unlinked_file`
+entries (the verdict can change when another file adds a `mod`); the next
+LSP pass records them again.
 Graphs created before entry metadata was stored require a full reindex:
 `analyze_codebase` rebuilds them, and `index_codebase` automatically falls back
 to a full index when its incremental compatibility check detects the old schema.
