@@ -315,7 +315,11 @@ pub(crate) const COVERAGE_CAVEAT: &str = "Best-effort signal, NOT a completeness
     graph — prefer grep there. 'skipped'/'quarantined' files are NOT in the graph \
     at all. 'outside_build_targets' files (issue #284) WERE indexed — declarations \
     are in the graph — but sit outside every compiled Cargo target, so calls out of \
-    them cannot be resolved by the language server. \
+    them cannot be resolved by the language server. 'feature_gated' files (issue \
+    #291) WERE indexed and sit inside a compiled target, but every `mod` \
+    declaration reaching them is behind a `#[cfg]` false under the package's \
+    default features, so the default build — and the language server — compiles \
+    them out; the reason names the gate. \
     source: DeusData/codebase-memory-mcp coverage wording.";
 
 // ---------------------------------------------------------------------------

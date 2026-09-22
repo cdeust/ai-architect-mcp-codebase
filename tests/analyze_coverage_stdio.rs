@@ -194,6 +194,55 @@ fn analyze_flags_a_kani_harness_outside_cargo_targets_in_missed() {
 }
 
 #[test]
+fn analyze_flags_a_module_behind_a_default_disabled_feature_in_missed() {
+    // Issue #291: `src/extra.rs` is inside the compiled `src/` target, so
+    // outside_build_targets cannot see it; its `mod` is gated behind a
+    // feature the default build leaves off. It must show up as feature_gated
+    // on the analyze response and in query_graph(graph="missed").
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let repo = tmp.path().join("repo");
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [features]\nextra = []\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "#[cfg(feature = \"extra\")]\npub mod extra;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("src/extra.rs"),
+        "pub fn a() -> u64 { b() }\npub fn b() -> u64 { 1 }\n",
+    )
+    .unwrap();
+
+    let mut server = Server::spawn();
+    let response = analyze(&mut server, &repo, &out, false);
+    assert_eq!(response["status"], "ok", "{response}");
+    let bucket = &response["coverage"]["feature_gated"];
+    assert_eq!(bucket["count"], 1, "{response}");
+    assert_eq!(bucket["files"][0]["path"], "src/extra.rs", "{response}");
+    assert!(
+        bucket["files"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("#[cfg(feature = \"extra\")]"),
+        "{response}"
+    );
+    assert_eq!(response["coverage"]["outside_build_targets"]["count"], 0);
+
+    let missed_response = missed(&mut server, &out);
+    assert_eq!(
+        missed_response["coverage"], response["coverage"],
+        "{missed_response}"
+    );
+}
+
+#[test]
 fn analyze_surfaces_a_coverage_save_failure_over_stdio() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let repo = tmp.path().join("repo");

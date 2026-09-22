@@ -2,7 +2,7 @@
 //
 // Layer: shared/persistence within the indexer. Records, per indexing run, which
 // files the indexer could NOT fully cover — so an agent never overtrusts the
-// graph. Four kinds of gap:
+// graph. Five kinds of gap:
 //   * ParsePartial — the file WAS indexed, but its parse tree had ERROR/MISSING
 //     regions (1-based line ranges); constructs inside those lines may be absent
 //     from the graph.
@@ -16,6 +16,11 @@
 //     gated behind a disabled feature the coarse directory-level check misses):
 //     calls out of it cannot be resolved by the language server, because
 //     rust-analyzer's crate graph never contains it. See `cargo_targets.rs`.
+//   * FeatureGated (issue #291) — the file WAS indexed and sits inside a
+//     compiled target's directory, but every `mod` declaration reaching it
+//     carries a `#[cfg]` that is false under the package's default features,
+//     so the default build (and rust-analyzer) compiles it out. See
+//     `feature_gated.rs`. Additive like OutsideBuildTargets (schema note below).
 //
 // Schema note (issue #284, arbitrage #5 — not bumping `COVERAGE_SCHEMA_VERSION`
 // for this addition): the change is purely additive (a new enum variant with a
@@ -69,6 +74,9 @@ pub enum CoverageKind {
     /// declarations are in the graph, calls out of it cannot be resolved by
     /// the language server.
     OutsideBuildTargets,
+    /// Indexed, inside a compiled target's directory, but compiled out by a
+    /// `#[cfg(feature)]` false under default features (issue #291).
+    FeatureGated,
 }
 
 /// One uncovered file's record.
@@ -125,6 +133,7 @@ impl CoverageReport {
                 CoverageKind::Skipped => counts.skipped += 1,
                 CoverageKind::Quarantined => counts.quarantined += 1,
                 CoverageKind::OutsideBuildTargets => counts.outside_build_targets += 1,
+                CoverageKind::FeatureGated => counts.feature_gated += 1,
             }
         }
         counts
@@ -138,6 +147,7 @@ pub struct CoverageCounts {
     pub skipped: u64,
     pub quarantined: u64,
     pub outside_build_targets: u64,
+    pub feature_gated: u64,
 }
 
 /// The coverage sidecar path for a given tool `output_dir` (sibling of `graph/`).
@@ -234,12 +244,22 @@ impl CoverageCollector {
     /// and a file that is ALSO parse-incomplete/skipped/quarantined already
     /// carries the stronger signal (its declarations may be missing outright,
     /// which subsumes "declarations present but unresolved calls"). Called
-    /// after the main walk (`mod.rs`'s `record_outside_target_files`) and
+    /// after the main walk (`mod.rs`'s `record_cargo_attributions`) and
     /// after `record_iac_gaps`, so any prior record for the same file wins.
     pub fn record_outside_targets(&mut self, rel: &str, detail: &str) {
         self.files.entry(rel.to_string()).or_insert(FileCoverage {
             kind: CoverageKind::OutsideBuildTargets,
             detail: detail.to_string(),
+            error_ranges: Vec::new(),
+        });
+    }
+
+    /// Records a file compiled out by a default-disabled feature (issue
+    /// #291). `or_insert`, for the reason `record_outside_targets` gives.
+    pub fn record_feature_gated(&mut self, rel: &str, detail: String) {
+        self.files.entry(rel.to_string()).or_insert(FileCoverage {
+            kind: CoverageKind::FeatureGated,
+            detail,
             error_ranges: Vec::new(),
         });
     }

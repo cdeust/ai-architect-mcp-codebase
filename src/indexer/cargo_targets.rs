@@ -38,8 +38,9 @@
 // own sparse-map honesty rule (`coverage.rs`'s module doc): silence is not a
 // completeness claim.
 
+use super::cargo_features;
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -79,7 +80,20 @@ pub enum TargetMap {
         /// directory — which would make every file in the tree "inside" and
         /// silently defeat outside-detection.
         target_files: BTreeSet<PathBuf>,
+        /// Every target entry file with the features its package enables by
+        /// default (issue #291): the roots of the module trees the default
+        /// build compiles, for `feature_gated`.
+        crate_roots: Vec<CrateRoot>,
     },
+}
+
+/// One compiled target's entry file and its package's default feature set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrateRoot {
+    /// Root-relative entry file (`src/lib.rs`, `src/bin/x.rs`, …).
+    pub entry: PathBuf,
+    /// Features enabled when the package is built with default features.
+    pub default_features: BTreeSet<String>,
 }
 
 impl TargetMap {
@@ -97,6 +111,7 @@ impl TargetMap {
         let Self::Known {
             target_dirs,
             target_files,
+            ..
         } = self
         else {
             return false;
@@ -176,6 +191,9 @@ struct CargoMetadata {
 #[derive(Deserialize)]
 struct CargoPackage {
     targets: Vec<CargoTarget>,
+    /// `[features]`, plus one implicit entry per optional dependency.
+    #[serde(default)]
+    features: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -200,7 +218,9 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
     };
     let mut target_dirs = BTreeSet::new();
     let mut target_files = BTreeSet::new();
+    let mut crate_roots = Vec::new();
     for pkg in meta.packages {
+        let default_features = cargo_features::default_closure(&pkg.features);
         for t in pkg.targets {
             let abs = PathBuf::from(&t.src_path);
             let Ok(rel) = abs.strip_prefix(root) else {
@@ -212,12 +232,17 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
                     target_dirs.insert(parent.to_path_buf());
                 }
             }
+            crate_roots.push(CrateRoot {
+                entry: rel.clone(),
+                default_features: default_features.clone(),
+            });
             target_files.insert(rel);
         }
     }
     TargetMap::Known {
         target_dirs,
         target_files,
+        crate_roots,
     }
 }
 
@@ -287,6 +312,29 @@ mod tests {
         let map = parse_metadata_json(&fixture_json(), Path::new(FIXTURE_ROOT));
         assert!(!map.is_outside_targets(Path::new("README.md")));
         assert!(!map.is_outside_targets(Path::new("kani/notes.md")));
+    }
+
+    #[test]
+    fn every_target_is_a_crate_root_carrying_its_package_default_features() {
+        let json = format!(
+            r#"{{"packages":[{{"targets":[{{"src_path":"{root}/src/lib.rs"}},
+                {{"src_path":"{root}/src/main.rs"}}],
+                "features":{{"default":["std"],"std":[],"extra":[]}}}}]}}"#,
+            root = FIXTURE_ROOT
+        );
+        let TargetMap::Known { crate_roots, .. } =
+            parse_metadata_json(&json, Path::new(FIXTURE_ROOT))
+        else {
+            panic!("the fixture parses");
+        };
+        let entries: Vec<&Path> = crate_roots.iter().map(|c| c.entry.as_path()).collect();
+        assert_eq!(entries, [Path::new("src/lib.rs"), Path::new("src/main.rs")]);
+        let features: Vec<&str> = crate_roots[0]
+            .default_features
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(features, ["default", "std"]);
     }
 
     #[test]
