@@ -19,8 +19,9 @@
 //   5. Receiver shapes the classifier refuses to guess through
 //      (`self.tasks.get`, `sets[0].response_of`, `x.trim().len`) are
 //      unchanged: still `NotFound`, never a false edge.
-//   6. Python `self.m()` is unaffected — the gate is `language == "rust"`
-//      only.
+//   6. Python `self.m()` takes the SAME gate and tier (issue #290 extended
+//      paliers 1-2 to Python/TypeScript; their suite is
+//      `tests/py_ts_receiver_static_resolution.rs`).
 //
 // source: tasks/plan-issues-282-283-284.md §2.4 (lot 4 test list).
 
@@ -349,11 +350,11 @@ fn unclassifiable_receiver_shapes_stay_not_found() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 6 — Python self.m() is unaffected: the gate is language == "rust".
+// Test 6 — Python self.m() shares the gate (was Rust-only until issue #290).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn python_self_receiver_path_is_unaffected() {
+fn python_self_receiver_takes_the_shared_receiver_tier() {
     let src = "class TaskSet:\n\
                \x20\x20\x20\x20def response_of(self):\n\
                \x20\x20\x20\x20\x20\x20\x20\x20return 1\n\
@@ -362,21 +363,12 @@ fn python_self_receiver_path_is_unaffected() {
                \x20\x20\x20\x20\x20\x20\x20\x20return self.response_of()\n";
     let (store, res, _root) = index_and_resolve("python", &[("task_set.py", src)]);
 
-    // Whatever Python's own (pre-existing, unmodified-by-this-lot) call
-    // resolution does for `self.response_of()` — this lot's Rust-only gate
-    // must not have touched it. The classified proof is structural, not
-    // behavioral: no CallSite carries `receiver-type` for a Python caller.
-    let qr = store
-        .execute_query(
-            "MATCH ()-[r]->() WHERE r.resolution_method = 'receiver-type' RETURN count(*)",
-        )
-        .expect("query for any receiver-type edge");
+    let edges = calls_edges(&store, "TaskSet::response_of");
     assert_eq!(
-        qr.rows[0][0], "0",
-        "the Rust-only receiver palier must never fire for a Python caller"
-    );
-    eprintln!(
-        "python_self_receiver_path_is_unaffected: unresolved={:?}",
+        edges.len(),
+        1,
+        "Python self.response_of() must bind like Rust's; unresolved={:?}",
         res.unresolved.iter().map(|u| &u.reason).collect::<Vec<_>>()
     );
+    assert_eq!(edges[0][3], "receiver-type");
 }

@@ -24,15 +24,17 @@ pub enum Evidence {
     /// Exactly one candidate exists for the callee's name in the whole
     /// symbol index — no ambiguity to resolve.
     UniqueGlobal,
-    /// A Rust `self.<m>` / `Self::<m>` callee bound to a method on the
-    /// caller's own enclosing `impl` type — either the exact
-    /// `{impl_qn}::{m}` key, or the single `idx.by_name[m]` candidate whose
-    /// parent type matches that `impl`. Produced only by
-    /// `resolver::receiver::resolve_receiver_bound`, gated to
-    /// `language == "rust"` and a `Method` caller.
+    /// A same-class receiver callee — Rust `self.<m>` / `Self::<m>`,
+    /// Python `self.<m>`, TypeScript `this.<m>` — bound to a method on the
+    /// caller's own enclosing type (Rust `impl` target, Python/TypeScript
+    /// class): either the exact `{type_qn}::{m}` key, or the single
+    /// `idx.by_name[m]` candidate whose parent type matches it. Produced only
+    /// by `resolver::receiver::resolve_receiver_bound`, gated to a `Method`
+    /// caller in a language whose `LanguageProvider::self_value_prefix` /
+    /// `self_type_prefix` opts in.
     /// source: tasks/plan-issues-282-283-284.md §2.2/§9-3 (issue #283, lot
-    /// 4). source: ADR-9840 carries the rationale and the arbitrated
-    /// confidence value.
+    /// 4); issue #290 (Python/TypeScript). source: ADR-9840 carries the
+    /// rationale and the arbitrated confidence value.
     ReceiverBound,
     /// The callee (or its qualified spelling) matches an import path in
     /// scope at the call site, and exactly one candidate's qualified name
