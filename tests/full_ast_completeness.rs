@@ -24,7 +24,7 @@ use ai_architect_mcp::parser::Language;
 /// verification, not shared implementation.
 fn count_all_nodes_independently(node: tree_sitter::Node) -> usize {
     let mut count = 1;
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             count += count_all_nodes_independently(child);
         }
