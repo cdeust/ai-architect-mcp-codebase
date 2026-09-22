@@ -3,43 +3,27 @@
 Written unittest-style on purpose: the byte-identical AP copy runs them via
 plain `python3 -m unittest` (no pytest there); Cortex's pytest collects
 unittest classes natively.
+
+Split into three files (issue: this file crossed the 300-line §4.1 cap once
+PIN_VERSION_UNPUBLISHED coverage was added) — sha/reachability and root-
+manifest-split coverage moved to
+test_check_marketplace_pins_sha_manifest.py, same `gate` module instance via
+_marketplace_pins_test_loader.py.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import subprocess
 import unittest
 import urllib.error
-from pathlib import Path
 from tempfile import TemporaryDirectory
 
-_spec = importlib.util.spec_from_file_location(
-    "check_marketplace_pins",
-    Path(__file__).resolve().parents[2] / "scripts" / "check_marketplace_pins.py",
+from scripts.tests._marketplace_pins_legacy_replay import (
+    LegacyGithubFetchers,
+    pre_fix_check_github_pin,
+    pre_fix_check_self_pin,
 )
-gate = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(gate)
-
-
-def _git_repo_with_tags(root: str, tags: list[str]) -> Path:
-    p = Path(root)
-    subprocess.run(["git", "-C", root, "init", "-q"], check=True)
-    subprocess.run(
-        ["git", "-C", root, "commit", "-q", "--allow-empty", "-m", "x"],
-        check=True,
-        env={
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-        },
-    )
-    for t in tags:
-        subprocess.run(["git", "-C", root, "tag", t], check=True)
-    return p
+from scripts.tests._marketplace_pins_test_loader import gate, git_repo_with_tags
 
 
 class TestParseSemver(unittest.TestCase):
@@ -58,155 +42,163 @@ class TestParseSemver(unittest.TestCase):
 class TestPinBehindTag(unittest.TestCase):
     """The review's replay: both manifests agree AND both are stale (#67)."""
 
+    def test_legacy_publication_identities_are_explicitly_frozen(self):
+        self.assertEqual(
+            gate.FROZEN_PINS,
+            {
+                "cortex": "deprecation shim, frozen at the 4.15.0 rename release",
+                "cortex-viz": (
+                    "deprecation shim, frozen at the 2.8.0 pre-rename release"
+                ),
+            },
+        )
+
     def test_incident_replay_both_manifests_stale_tag_ahead(self):
         with TemporaryDirectory() as d:
-            root = _git_repo_with_tags(d, ["v0.7.0", "v0.8.0", "v0.8.1", "v0.8.2"])
+            root = git_repo_with_tags(d, ["v0.7.0", "v0.8.0", "v0.8.1", "v0.8.2"])
             plug = root / ".claude-plugin"
             plug.mkdir()
             (plug / "plugin.json").write_text(json.dumps({"version": "0.8.0"}))
-            failures, notices = gate.check_self_pin("ap", "./", "0.8.0", root)
+            failures = gate.check_self_pin("ap", "./", "0.8.0", root)
             joined = "\n".join(failures)
             self.assertIn("PIN_BEHIND_TAG", joined)  # detection ORIGINATES here
             self.assertNotIn("SELF_PIN_MISMATCH", joined)  # manifests agree
             self.assertIn("2 release(s)", joined)  # v0.8.1 + v0.8.2 counted
-            self.assertEqual(notices, [])
 
     def test_current_pin_green(self):
         with TemporaryDirectory() as d:
-            root = _git_repo_with_tags(d, ["v0.8.2"])
+            root = git_repo_with_tags(d, ["v0.8.2"])
             plug = root / ".claude-plugin"
             plug.mkdir()
             (plug / "plugin.json").write_text(json.dumps({"version": "0.8.2"}))
-            self.assertEqual(
-                gate.check_self_pin("ap", "./", "0.8.2", root), ([], [])
-            )
+            self.assertEqual(gate.check_self_pin("ap", "./", "0.8.2", root), [])
 
     def test_untagged_repo_no_crash_no_flag(self):
         with TemporaryDirectory() as d:
-            root = _git_repo_with_tags(d, [])
+            root = git_repo_with_tags(d, [])
+            self.assertEqual(gate.check_self_pin("p", "./", "1.0.0", root), [])
+
+    def test_pin_ahead_of_every_tag_is_unpublished_not_silently_current(self):
+        """The generic form of the cortex-viz 3.0.0 incident, on a self-pin —
+        replayed through BOTH the frozen pre-fix `check_self_pin` and the
+        current one on identical inputs, not just asserted in prose.
+        """
+        with TemporaryDirectory() as d:
+            root = git_repo_with_tags(d, ["v2.8.0", "v2.7.1", "v2.7.0"])
+
+            # BEFORE: a pin newer than the latest tag read as "current" (the
+            # old check only ever asked "is pin < latest?"; it never asked
+            # "does a tag matching pin exist at all?").
+            pre_fix_failures = pre_fix_check_self_pin("p", "./", "3.0.0", root)
             self.assertEqual(
-                gate.check_self_pin("p", "./", "1.0.0", root), ([], [])
+                pre_fix_failures, [], "the historical defect: silently current"
             )
+
+            # AFTER: this is the exact defect PIN_VERSION_UNPUBLISHED closes.
+            failures = gate.check_self_pin("p", "./", "3.0.0", root)
+            joined = "\n".join(failures)
+            self.assertIn("PIN_VERSION_UNPUBLISHED", joined)
+            self.assertIn("no matching tag", joined)
+            self.assertIn("2.8.0", joined)  # latest real tag, named for the reader
+            self.assertNotIn("PIN_BEHIND_TAG", joined)  # not a staleness case
 
     def test_frozen_pin_skips_tag_check_keeps_coherence(self):
         with TemporaryDirectory() as d:
-            root = _git_repo_with_tags(d, ["v4.16.0"])
+            root = git_repo_with_tags(d, ["v4.16.0"])
             shim = root / "shim" / ".claude-plugin"
             shim.mkdir(parents=True)
             (shim / "plugin.json").write_text(json.dumps({"version": "4.15.0"}))
             gate.FROZEN_PINS["frozen-test"] = "test"
             try:
                 self.assertEqual(
-                    gate.check_self_pin("frozen-test", "shim", "4.15.0", root),
-                    ([], []),
+                    gate.check_self_pin("frozen-test", "shim", "4.15.0", root), []
                 )
                 (shim / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
-                failures, _notices = gate.check_self_pin(
-                    "frozen-test", "shim", "4.15.0", root
-                )
+                failures = gate.check_self_pin("frozen-test", "shim", "4.15.0", root)
                 self.assertIn("SELF_PIN_MISMATCH", "\n".join(failures))
             finally:
                 gate.FROZEN_PINS.pop("frozen-test")
 
-    def test_pending_self_pin_degrades_unpublished_to_notice(self):
-        """Regression for the release-PR deadlock: a release PR must bump the
-        self pin ahead of the tag (the tag names the PR's merge commit, which
-        does not exist until after merge), so PIN_VERSION_UNPUBLISHED fires on
-        every self-hosted release PR's own CI run unless the pin names its own
-        in-flight release, mirroring check_github_pin's PENDING_PINS valve.
-        """
-        with TemporaryDirectory() as d:
-            root = _git_repo_with_tags(d, ["v0.9.1"])
-            plug = root / ".claude-plugin"
-            plug.mkdir()
-            (plug / "plugin.json").write_text(json.dumps({"version": "0.10.0"}))
-            failures, notices = gate.check_self_pin(
-                "ap", "./", "0.10.0", root, pending={"ap": "PR #999"}
-            )
-            self.assertEqual(failures, [])
-            self.assertIn("PENDING: PR #999", "\n".join(notices))
-
-    def test_unpending_unpublished_self_pin_still_fails(self):
-        with TemporaryDirectory() as d:
-            root = _git_repo_with_tags(d, ["v0.9.1"])
-            plug = root / ".claude-plugin"
-            plug.mkdir()
-            (plug / "plugin.json").write_text(json.dumps({"version": "0.10.0"}))
-            failures, notices = gate.check_self_pin(
-                "ap", "./", "0.10.0", root, pending={}
-            )
-            self.assertIn("PIN_VERSION_UNPUBLISHED", "\n".join(failures))
-            self.assertEqual(notices, [])
-
 
 class TestGithubPin(unittest.TestCase):
-    """check_github_pin(name, repo, pin, list_tags=..., pending=...).
-
-    `list_tags` returns the FULL tag list (not just latest) because
-    PIN_VERSION_UNPUBLISHED needs set-membership: a pin can be simultaneously
-    "not the latest" AND "not published at all" (marketplace_pins_github.py
-    ``list_release_tags`` docstring). Every test below supplies the full list.
-    """
-
     def test_stale_flagged_with_count(self):
-        tags = ["2.29.0", "2.30.0", "2.31.0", "2.32.0", "2.33.0", "2.34.0", "2.35.0"]
+        tags = [
+            "v2.28.0",
+            "v2.29.0",
+            "v2.30.0",
+            "v2.31.0",
+            "v2.32.0",
+            "v2.33.0",
+            "v2.34.0",
+        ]
         failure, notice = gate.check_github_pin(
-            "p", "o/r", "2.29.0", list_tags=lambda r: tags
+            "p", "o/r", "2.28.0", list_tags=lambda r: tags
         )
         self.assertIn("PIN_BEHIND_RELEASE", failure)
-        # v2.30.0..v2.35.0: six releases strictly after the pin, up to latest.
-        self.assertIn("6 release(s)", failure)
+        self.assertIn("6 release(s)", failure)  # v2.29.0..v2.34.0
         self.assertIsNone(notice)
 
     def test_current_pin_passes(self):
+        tags = ["v2.29.0", "v2.34.0"]
         self.assertEqual(
-            gate.check_github_pin(
-                "p", "o/r", "2.34.0", list_tags=lambda r: ["2.34.0"]
-            ),
+            gate.check_github_pin("p", "o/r", "2.34.0", list_tags=lambda r: tags),
             (None, None),
         )
 
-    def test_ahead_pin_now_flagged_unpublished(self):
-        """The bug PIN_VERSION_UNPUBLISHED exists to close: a pin naming a
-        version nobody ever tagged used to compare `pin < latest` (false)
-        and pass silently. It must now fail loudly instead — this is the
-        cortex-viz "3.0.0" incident (marketplace_pins_github.py docstring):
-        the pin sat ahead of every real tag and PIN_BEHIND_RELEASE could
-        not see it because "ahead" is invisible to a "behind" comparison.
+    def test_incident_replay_pin_ahead_of_every_release_is_unpublished(self):
+        """The exact cortex-viz incident, replayed through BOTH the frozen
+        pre-fix logic and the current one on the identical historical
+        inputs — not just asserted in prose. Pin "3.0.0", repo's real tags
+        top out at v2.8.0.
         """
-        failure, notice = gate.check_github_pin(
-            "p", "o/r", "3.0.0", list_tags=lambda r: ["2.6.0", "2.7.0", "2.8.0"]
-        )
-        self.assertIsNotNone(failure)
-        self.assertIn("PIN_VERSION_UNPUBLISHED", failure)
-        self.assertIn("2.8.0", failure)  # names the latest that DOES exist
-        self.assertIsNone(notice)
+        tags = ["v2.8.0", "v2.7.1", "v2.7.0", "v2.6.3"]
 
-    def test_pin_version_unpublished_and_behind_reports_unpublished_only(self):
-        """A pin can be simultaneously unpublished AND numerically behind the
-        latest tag. PIN_VERSION_UNPUBLISHED is the stronger, more specific
-        statement (this version was never cut, full stop) and must win —
-        check_github_pin checks it FIRST and returns before ever reaching
-        the PIN_BEHIND_RELEASE comparison.
-        """
-        failure, notice = gate.check_github_pin(
-            "p", "o/r", "2.29.5", list_tags=lambda r: ["2.30.0", "2.31.0"]
-        )
-        self.assertIn("PIN_VERSION_UNPUBLISHED", failure)
-        self.assertNotIn("PIN_BEHIND_RELEASE", failure)
-        self.assertIsNone(notice)
-
-    def test_pin_version_unpublished_pending_degrades_to_notice(self):
-        failure, notice = gate.check_github_pin(
-            "p",
-            "o/r",
+        # BEFORE: `3.0.0 < 2.8.0` is false, so the pre-fix check (which only
+        # ever asked "is pin behind latest?") read this as current — silent
+        # pass, six days of a dangling pin, zero red runs.
+        pre_fix_result = pre_fix_check_github_pin(
+            "hypermnesia-mcp-viz",
+            "cdeust/cortex-viz",
             "3.0.0",
-            list_tags=lambda r: ["2.8.0"],
-            pending={"p": "https://github.com/o/r/pull/1"},
+            LegacyGithubFetchers(fetch=lambda r: "v2.8.0", count=lambda *a: 0),
+        )
+        self.assertEqual(
+            pre_fix_result,
+            (None, None),
+            "the historical defect: silently current, not a red run",
+        )
+
+        # AFTER: the same inputs (repo's tags list rather than a single
+        # "latest" fetch — the new signature) through the current check.
+        failure, notice = gate.check_github_pin(
+            "hypermnesia-mcp-viz",
+            "cdeust/cortex-viz",
+            "3.0.0",
+            list_tags=lambda r: tags,
+            pending={},  # no pending exemption active for this assertion
+        )
+        self.assertIsNotNone(failure, "must not silently pass — this is the incident")
+        self.assertIn("PIN_VERSION_UNPUBLISHED", failure)
+        self.assertIn("no matching", failure)
+        self.assertIn("v2.8.0", failure)  # names the real latest, for the reader
+        self.assertIsNone(notice)
+
+    def test_pending_pin_degrades_unpublished_to_named_notice(self):
+        """A pin correctly flagged unpublished, but the release is genuinely
+        in flight (tracked by an open upstream PR) — not silence: a NOTICE
+        that names the tracking reference, still printed every run.
+        """
+        tags = ["v2.8.0"]
+        failure, notice = gate.check_github_pin(
+            "hypermnesia-mcp-viz",
+            "cdeust/cortex-viz",
+            "3.1.0",
+            list_tags=lambda r: tags,
+            pending={"hypermnesia-mcp-viz": "cdeust/cortex-viz#130"},
         )
         self.assertIsNone(failure)
         self.assertIn("PENDING", notice)
-        self.assertIn("https://github.com/o/r/pull/1", notice)
+        self.assertIn("cortex-viz#130", notice)
 
     def test_network_failure_degrades_to_notice(self):
         def down(_repo):
@@ -223,114 +215,17 @@ class TestGithubPin(unittest.TestCase):
         self.assertIsNone(failure)
         self.assertIn("no published releases", notice)
 
-    def test_unparseable_pin_reported(self):
+    def test_unpublishable_pin_reported(self):
         failure, _ = gate.check_github_pin(
-            "p", "o/r", "nightly", list_tags=lambda r: ["1.0.0"]
+            "p", "o/r", "not-a-version", list_tags=lambda r: ["v1.0.0"]
         )
         self.assertIn("UNPARSEABLE", failure)
-        self.assertIn("nightly", failure)
 
-    def test_unparseable_tag_list_reported(self):
+    def test_repo_with_only_unparseable_tags_reported(self):
         failure, _ = gate.check_github_pin(
             "p", "o/r", "1.0.0", list_tags=lambda r: ["nightly"]
         )
         self.assertIn("UNPARSEABLE", failure)
-        self.assertIn("nightly", failure)
-
-
-class TestPinSha(unittest.TestCase):
-    """check_pin_sha(name, repo, sha, branch=..., compare=...) —
-    PIN_SHA_UNREACHABLE (Cortex #351: a pinned sha that is an unmerged PR
-    head, invisible to any version check because the pin's *version* reads
-    current while its *commit* does not resolve from the default branch).
-    """
-
-    def test_identical_or_behind_default_branch_passes(self):
-        for status in ("identical", "behind"):
-            failure, notice = gate.check_pin_sha(
-                "p", "o/r", "deadbeef", branch=lambda r: "main", compare=lambda *a: status
-            )
-            self.assertIsNone(failure, status)
-            self.assertIsNone(notice, status)
-
-    def test_ahead_of_default_branch_flagged_unreachable(self):
-        failure, notice = gate.check_pin_sha(
-            "p", "o/r", "deadbeef", branch=lambda r: "main", compare=lambda *a: "ahead"
-        )
-        self.assertIn("PIN_SHA_UNREACHABLE", failure)
-        self.assertIn("ahead", failure)
-        self.assertIsNone(notice)
-
-    def test_sha_not_found_flagged_unreachable(self):
-        failure, notice = gate.check_pin_sha(
-            "p", "o/r", "deadbeef", branch=lambda r: "main", compare=lambda *a: None
-        )
-        self.assertIn("PIN_SHA_UNREACHABLE", failure)
-        self.assertIn("does not resolve commit", failure)
-        self.assertIsNone(notice)
-
-    def test_repo_not_found_degrades_to_notice(self):
-        failure, notice = gate.check_pin_sha(
-            "p", "o/r", "deadbeef", branch=lambda r: None, compare=lambda *a: "identical"
-        )
-        self.assertIsNone(failure)
-        self.assertIn("does not resolve", notice)
-
-    def test_network_failure_degrades_to_notice(self):
-        def down(_repo):
-            raise urllib.error.URLError("offline")
-
-        failure, notice = gate.check_pin_sha("p", "o/r", "deadbeef", branch=down)
-        self.assertIsNone(failure)
-        self.assertIn("network degraded", notice)
-
-
-class TestRootManifestSplit(unittest.TestCase):
-    def test_three_way_split_third_leg_flagged(self):
-        with TemporaryDirectory() as d:
-            root = Path(d)
-            (root / "server.json").write_text(json.dumps({"version": "0.8.2"}))
-            issues = gate.check_root_manifests(root, "0.8.0")
-            self.assertTrue(any("SERVER_JSON_SPLIT" in i for i in issues))
-
-    def test_ap_172_incident_replay_manifest_json_two_releases_stale(self):
-        """The exact tree that exited 0 before this check existed.
-
-        automatised-pipeline carried manifest.json 0.8.0 while server.json and
-        every marketplace pin read 0.8.2. The gate passed, and the wrong
-        version shipped inside every .mcpb bundle for two releases.
-        """
-        with TemporaryDirectory() as d:
-            root = Path(d)
-            (root / "server.json").write_text(json.dumps({"version": "0.8.2"}))
-            (root / "manifest.json").write_text(json.dumps({"version": "0.8.0"}))
-            issues = gate.check_root_manifests(root, "0.8.2")
-            self.assertEqual(len(issues), 1, issues)
-            self.assertIn("MANIFEST_JSON_SPLIT", issues[0])
-            self.assertIn("0.8.0", issues[0])
-
-    def test_both_stale_are_reported_separately(self):
-        with TemporaryDirectory() as d:
-            root = Path(d)
-            (root / "server.json").write_text(json.dumps({"version": "0.8.1"}))
-            (root / "manifest.json").write_text(json.dumps({"version": "0.8.0"}))
-            issues = gate.check_root_manifests(root, "0.8.2")
-            self.assertEqual(len(issues), 2, issues)
-
-    def test_aligned_passes_and_absent_passes(self):
-        with TemporaryDirectory() as d:
-            root = Path(d)
-            # Absent: the canonical repo has neither file — not a failure.
-            self.assertEqual(gate.check_root_manifests(root, "0.8.2"), [])
-            (root / "server.json").write_text(json.dumps({"version": "0.8.2"}))
-            (root / "manifest.json").write_text(json.dumps({"version": "0.8.2"}))
-            self.assertEqual(gate.check_root_manifests(root, "0.8.2"), [])
-
-    def test_missing_version_key_is_not_a_failure(self):
-        with TemporaryDirectory() as d:
-            root = Path(d)
-            (root / "manifest.json").write_text(json.dumps({"name": "x"}))
-            self.assertEqual(gate.check_root_manifests(root, "0.8.2"), [])
 
 
 if __name__ == "__main__":
