@@ -20,6 +20,13 @@ pub(super) fn cargo_attribution(map: &TargetMap, rel: &str) -> CargoAttribution 
     }
 }
 
+/// A file the pass reached, with what cargo said about it — the parameter
+/// object `check_file` and `drive_pass`'s helpers share (§4.4).
+pub(super) struct FileRef<'a> {
+    pub(super) rel: &'a str,
+    pub(super) attribution: CargoAttribution,
+}
+
 /// Pulls the diagnostics of the already-opened `file_uri` and folds the
 /// verdict into `check`. A failed pull checks nothing and fails nothing: an
 /// unlinked file describes the build configuration, not an LSP error.
@@ -27,8 +34,7 @@ pub(super) fn check_file(
     client: &mut LspClient,
     check: &mut UnlinkedFileCheck,
     file_uri: &str,
-    rel: &str,
-    attribution: CargoAttribution,
+    file: &FileRef<'_>,
 ) {
     let Ok(diagnostics) = client.pull_diagnostics(file_uri) else {
         return;
@@ -36,12 +42,14 @@ pub(super) fn check_file(
     check.files_checked += 1;
     match lsp_client::unlinked_file_message(&diagnostics) {
         Some(message) => check.unlinked.push(UnlinkedFileFinding {
-            rel_path: rel.to_string(),
+            rel_path: file.rel.to_string(),
             message: message.to_string(),
-            cargo_attribution: attribution,
+            cargo_attribution: file.attribution,
         }),
-        None if attribution == CargoAttribution::OutsideBuildTargets => {
-            check.linked_despite_outside_targets.push(rel.to_string());
+        None if file.attribution == CargoAttribution::OutsideBuildTargets => {
+            check
+                .linked_despite_outside_targets
+                .push(file.rel.to_string());
         }
         None => {}
     }

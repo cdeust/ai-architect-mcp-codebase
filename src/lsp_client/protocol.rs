@@ -192,41 +192,7 @@ pub(super) fn build_initialize_request(id: i64, workspace_root: &Path) -> Value 
         "params": {
             "processId": std::process::id(),
             "rootUri": root_uri,
-            "capabilities": {
-                "textDocument": {
-                    // source: LSP 3.17 §textDocument/definition — a server
-                    // may only answer with `LocationLink[]` (which carries
-                    // `targetSelectionRange`, the precise identifier-name
-                    // range) when the client declares `linkSupport`;
-                    // otherwise it must answer with plain `Location`/
-                    // `Location[]` (only the loose `range`, "the whole
-                    // declaration"). Declaring it lets
-                    // `parse_definition_response` prefer the precise range
-                    // and lets `find_node_at_position` fail closed on an
-                    // exact line match instead of scanning nearby lines.
-                    "definition": {
-                        "dynamicRegistration": false,
-                        "linkSupport": true
-                    },
-                    // source: LSP 3.17 §Pull Diagnostics — declares
-                    // `textDocument/diagnostic`, which
-                    // `LspClient::pull_diagnostics` issues (ADR-9845).
-                    "diagnostic": { "dynamicRegistration": false }
-                },
-                // source: LSP 3.17 §Progress — a server may only report
-                // workDoneProgress for a request or a background job
-                // (`window/workDoneProgress/create`) when the client
-                // declares this. `readiness::client_wait_for_ready` consumes it as
-                // the readiness fallback signal.
-                "window": { "workDoneProgress": true },
-                // source: rust-analyzer's serverStatus LSP extension — opts
-                // into `experimental/serverStatus`, the readiness module's
-                // PRIMARY signal (lsp_client::readiness header). Ignored by
-                // a server that doesn't implement it (pyright,
-                // typescript-language-server): an unrecognized capability is
-                // not an error per LSP 3.17 §Capabilities.
-                "experimental": { "serverStatusNotification": true }
-            },
+            "capabilities": client_capabilities(),
             "workspaceFolders": [{
                 "uri": root_uri,
                 "name": workspace_root.file_name()
@@ -234,6 +200,47 @@ pub(super) fn build_initialize_request(id: i64, workspace_root: &Path) -> Value 
                     .unwrap_or_default()
             }]
         }
+    })
+}
+
+/// The client capabilities `build_initialize_request` declares — split out
+/// (§4.2) when the pull-diagnostics capability (issue #292) pushed that
+/// function past 50 lines.
+fn client_capabilities() -> Value {
+    json!({
+        "textDocument": {
+            // source: LSP 3.17 §textDocument/definition — a server
+            // may only answer with `LocationLink[]` (which carries
+            // `targetSelectionRange`, the precise identifier-name
+            // range) when the client declares `linkSupport`;
+            // otherwise it must answer with plain `Location`/
+            // `Location[]` (only the loose `range`, "the whole
+            // declaration"). Declaring it lets
+            // `parse_definition_response` prefer the precise range
+            // and lets `find_node_at_position` fail closed on an
+            // exact line match instead of scanning nearby lines.
+            "definition": {
+                "dynamicRegistration": false,
+                "linkSupport": true
+            },
+            // source: LSP 3.17 §Pull Diagnostics — declares
+            // `textDocument/diagnostic`, which
+            // `LspClient::pull_diagnostics` issues (ADR-9845).
+            "diagnostic": { "dynamicRegistration": false }
+        },
+        // source: LSP 3.17 §Progress — a server may only report
+        // workDoneProgress for a request or a background job
+        // (`window/workDoneProgress/create`) when the client
+        // declares this. `readiness::client_wait_for_ready` consumes it as
+        // the readiness fallback signal.
+        "window": { "workDoneProgress": true },
+        // source: rust-analyzer's serverStatus LSP extension — opts
+        // into `experimental/serverStatus`, the readiness module's
+        // PRIMARY signal (lsp_client::readiness header). Ignored by
+        // a server that doesn't implement it (pyright,
+        // typescript-language-server): an unrecognized capability is
+        // not an error per LSP 3.17 §Capabilities.
+        "experimental": { "serverStatusNotification": true }
     })
 }
 

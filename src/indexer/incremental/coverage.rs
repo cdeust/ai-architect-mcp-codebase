@@ -30,13 +30,16 @@ use std::collections::BTreeMap;
 /// excluded for the same reason — a `mod` added in another file links an
 /// untouched one — but only the next LSP pass can recompute them (ADR-9845).
 fn merge_coverage(
-    prior: Option<&coverage::CoverageReport>,
+    carry: &CarryForward<'_>,
     reparsed_gaps: BTreeMap<String, FileCoverage>,
-    reparsed_rels: &HashSet<String>,
-    current_rels: &HashSet<String>,
     index_mode: &str,
     files_indexed: u64,
 ) -> coverage::CoverageReport {
+    let CarryForward {
+        prior,
+        reparsed_rels,
+        current_rels,
+    } = *carry;
     let mut report = coverage::CoverageReport::new(index_mode, files_indexed);
     // Carry forward prior gaps for files that still exist and were not
     // reparsed — except OutsideBuildTargets and UnlinkedFile (see doc).
@@ -61,6 +64,15 @@ fn merge_coverage(
     let counts = report.counts();
     report.files_indexed = files_indexed.saturating_sub(counts.skipped + counts.quarantined);
     report
+}
+
+/// What `merge_coverage` carries forward from: the prior report and the two
+/// file sets that decide which of its entries survive (§4.4 parameter object).
+#[derive(Clone, Copy)]
+struct CarryForward<'a> {
+    prior: Option<&'a coverage::CoverageReport>,
+    reparsed_rels: &'a HashSet<String>,
+    current_rels: &'a HashSet<String>,
 }
 
 /// Recomputes `OutsideBuildTargets` coverage gaps (issue #284) for the CURRENT
@@ -136,14 +148,12 @@ pub(super) fn save_incremental_coverage(
     for r in &changes.renamed {
         reparsed_rels.insert(r.new_file.rel.clone());
     }
-    let mut report = merge_coverage(
-        prior.as_ref(),
-        reparsed_gaps,
-        &reparsed_rels,
-        &current_rels,
-        index_mode,
-        current.len() as u64,
-    );
+    let carry = CarryForward {
+        prior: prior.as_ref(),
+        reparsed_rels: &reparsed_rels,
+        current_rels: &current_rels,
+    };
+    let mut report = merge_coverage(&carry, reparsed_gaps, index_mode, current.len() as u64);
     // The prunes this pass observed, so the incremental sidecar names what the
     // walk refused exactly as the full index does. Recomputed every pass rather
     // than carried forward: the pruned set changes the moment a directory is
@@ -186,14 +196,12 @@ mod tests {
             .map(String::from)
             .collect();
 
-        let merged = merge_coverage(
-            Some(&prior),
-            BTreeMap::new(),
-            &HashSet::new(),
-            &current,
-            "incremental",
-            2,
-        );
+        let carry = CarryForward {
+            prior: Some(&prior),
+            reparsed_rels: &HashSet::new(),
+            current_rels: &current,
+        };
+        let merged = merge_coverage(&carry, BTreeMap::new(), "incremental", 2);
 
         assert!(
             !merged.files.contains_key("src/orphan.rs"),
