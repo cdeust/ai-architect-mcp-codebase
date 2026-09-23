@@ -7,7 +7,7 @@
 // belongs in.
 
 use super::sites::{NodePosition, UnresolvedCallSite};
-use crate::graph_store::{call_rel_table, is_known_rel_table, GraphStore};
+use crate::graph_store::{call_rel_table, call_site_rel_table, is_known_rel_table, GraphStore};
 use crate::lsp_client;
 use std::collections::HashMap;
 use std::path::Path;
@@ -81,17 +81,23 @@ fn insert_lsp_edge(
         );
         return false;
     }
-    store
-        .insert_edge_if_absent(
-            rel_type,
-            &site.caller_qn,
-            &target.id,
-            &[
-                ("confidence", "0.9"),
-                ("resolution_method", "'lsp-definition'"),
-            ],
-        )
-        .is_ok()
+    let props = [
+        ("confidence", "0.9"),
+        ("resolution_method", "'lsp-definition'"),
+    ];
+    if store
+        .insert_edge_if_absent(rel_type, &site.caller_qn, &target.id, &props)
+        .is_err()
+    {
+        return false;
+    }
+    // The per-site twin (issue #335), same provenance, same replay-safety.
+    match call_site_rel_table(&target.label) {
+        Some(site_rel) => store
+            .insert_edge_if_absent(site_rel, &site.id, &target.id, &props)
+            .is_ok(),
+        None => true,
+    }
 }
 
 /// Maps a definition URI onto the codebase-root-relative path the indexer
@@ -167,6 +173,31 @@ mod tests {
                 ],
             )
             .unwrap_or_else(|e| panic!("insert Function {id}: {e}"));
+    }
+
+    /// Inserts the `CallSite` node a per-site row starts from.
+    fn insert_call_site(store: &GraphStore, id: &str) {
+        store
+            .insert_node(
+                crate::graph_store::NODE_CALL_SITE,
+                &[
+                    ("id", &format!("'{id}'")),
+                    ("callee_name", "'target'"),
+                    ("is_resolved", "false"),
+                ],
+            )
+            .unwrap_or_else(|e| panic!("insert CallSite {id}: {e}"));
+    }
+
+    /// Every `Calls_CallSite_Function` row as (call site id, target id).
+    fn per_site_rows(store: &GraphStore) -> Vec<Vec<String>> {
+        store
+            .execute_query(
+                "MATCH (s:CallSite)-[:Calls_CallSite_Function]->(b:Function) \
+                 RETURN s.id, b.id ORDER BY s.id",
+            )
+            .expect("query per-site rows")
+            .rows
     }
 
     /// A store with `src/a.rs::caller` calling into `src/b.rs::target`, plus
@@ -315,6 +346,23 @@ mod tests {
     }
 
     #[test]
+    fn an_lsp_resolved_site_had_no_per_site_target_row() {
+        // Issue #335: the LSP pass wrote the caller-level edge only, so the
+        // call site it resolved had no row naming its own target.
+        let f = edge_fixture("lsp per-site test");
+        insert_call_site(&f.store, &f.site.id);
+        let ctx = SiteContext {
+            node_index: &f.node_index,
+            canonical_root: &f.root,
+        };
+        assert!(try_add_lsp_edge(&f.store, &f.site, &f.def, &ctx));
+        assert_eq!(
+            per_site_rows(&f.store),
+            vec![vec![f.site.id.clone(), "src/b.rs::target".to_string()]]
+        );
+    }
+
+    #[test]
     fn a_replayed_definition_does_not_duplicate_the_calls_edge() {
         // Review finding 3 (regression). The pass CREATEs one edge per call
         // site as it goes and flips `is_resolved` only at end of run, so an
@@ -324,6 +372,8 @@ mod tests {
         // sites in one caller reaching the same callee did it within a single
         // run. Replaying the same answer must be a no-op.
         let f = edge_fixture("lsp dup test");
+        insert_call_site(&f.store, &f.site.id);
+        insert_call_site(&f.store, "src/a.rs::caller::call@6:8");
         let ctx = SiteContext {
             node_index: &f.node_index,
             canonical_root: &f.root,
@@ -344,6 +394,8 @@ mod tests {
             1,
             "the caller→callee edge must exist exactly once"
         );
+        // One per-site row per call site, the replay adding none (#335).
+        assert_eq!(per_site_rows(&f.store).len(), 2);
     }
 
     #[test]

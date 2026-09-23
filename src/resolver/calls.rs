@@ -5,7 +5,7 @@
 // resolution types/helpers exactly as when this lived in one module.
 
 use super::*;
-use crate::graph_store::call_rel_table;
+use crate::graph_store::{call_rel_table, call_site_rel_table};
 
 // ---------------------------------------------------------------------------
 // Phase 2: Call resolution
@@ -232,13 +232,14 @@ fn stage_call_edge(
     // All three `AddOutcome` variants mean the reference resolved to a real
     // target (see `AddOutcome` doc comment); they differ only in whether a
     // DB write is queued.
-    buf.add(
-        &rel,
-        site.caller_qn,
-        &target.id,
-        matched.confidence,
-        ambiguity_policy::resolution_label(matched.evidence),
-    );
+    let method = ambiguity_policy::resolution_label(matched.evidence);
+    buf.add(&rel, site.caller_qn, &target.id, matched.confidence, method);
+    // The per-site row (issue #335) records the same resolution at call-site
+    // granularity. It is not a second reference: `tally` stays untouched so
+    // `total_edges` keeps counting resolved references, not rows.
+    if let Some(site_rel) = call_site_rel_table(&target.label) {
+        buf.add(site_rel, site.cs_id, &target.id, matched.confidence, method);
+    }
     *tally.resolved += 1;
 }
 

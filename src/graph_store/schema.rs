@@ -456,6 +456,18 @@ pub fn call_rel_table(caller_label: &str, target_label: &str) -> Option<String> 
     }
 }
 
+/// The per-site twin of a resolved call's `Calls_*` edge: the table holding
+/// one row from the `CallSite` itself to the same target (issue #335). `None`
+/// for a target no such table is declared for (a `Uses_`-degraded type).
+pub fn call_site_rel_table(target_label: &str) -> Option<&'static str> {
+    match target_label {
+        NODE_FUNCTION => Some("Calls_CallSite_Function"),
+        NODE_METHOD => Some("Calls_CallSite_Method"),
+        NODE_STDLIB_SYMBOL => Some("Calls_CallSite_StdlibSymbol"),
+        _ => None,
+    }
+}
+
 /// Single source of truth for "does this node label declare a `qualified_name`
 /// column?" — mirrors `node_column_types`. A read-side traversal that binds
 /// `n.qualified_name` MUST gate on this: lbug raises a hard Binder exception

@@ -3,9 +3,14 @@
 // that Q8 (symbols-in-file) ground truth for resolver.rs remains stable as
 // new passes are added. source: stages/stage-3b-v2.md §5.
 
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{call_site_rel_table, cypher_str, GraphStore, NODE_STDLIB_SYMBOL};
 use crate::resolver::{PhaseResult, UnresolvedRef};
 use std::collections::HashSet;
+
+// source: stages/stage-3b-v2.md §5 Layer 4 — rule-based macro expansion is
+// stored at confidence 0.85 with method "macro-expansion".
+const MACRO_CONFIDENCE: f64 = 0.85;
+const MACRO_METHOD: &str = "macro-expansion";
 
 /// Entry point for Layer 4 (macros + derives).
 /// postcondition: returns the same `(resolved, total, unresolved)` shape as
@@ -111,26 +116,63 @@ fn resolve_one_macro_call_site(
     if expansion.emit_calls.is_empty() {
         return Ok(one_unresolved("expansion has no emit_calls entries"));
     }
-    let mut resolved = 0u64;
-    let mut total = 0u64;
-    let mut unresolved = Vec::new();
+    let (mut resolved, mut unresolved) = (0u64, Vec::new());
+    let total = expansion.emit_calls.len() as u64;
     let rel = format!("Calls_{caller_label}_StdlibSymbol");
+    let site = MacroSite {
+        cs_id,
+        caller_qn: &caller_qn,
+    };
     for canonical in expansion.emit_calls {
-        total += 1;
         ensure_stdlib_symbol(store, created, canonical, "rust")?;
-        if !crate::graph_store::is_known_rel_table(&rel) {
-            unresolved.push(UnresolvedRef {
-                kind: "Calls".to_string(),
-                from_id: cs_id.to_string(),
-                target_text: canonical.to_string(),
-                reason: format!("unknown rel table {rel}"),
-            });
-            continue;
+        match stage_macro_emission(buf, &rel, &site, canonical) {
+            Some(miss) => unresolved.push(miss),
+            None => resolved += 1,
         }
-        buf.add(&rel, &caller_qn, canonical, 0.85, "macro-expansion");
-        resolved += 1;
     }
     Ok((resolved, total, unresolved))
+}
+
+/// The macro-marker `CallSite` one expansion belongs to, and its caller.
+struct MacroSite<'a> {
+    cs_id: &'a str,
+    caller_qn: &'a str,
+}
+
+/// Stages one expansion target: the caller-level `rel` edge plus its per-site
+/// twin (issue #335), which is not a second reference and so is not counted.
+/// Returns the unresolved record when `rel` is not a declared table.
+fn stage_macro_emission(
+    buf: &mut crate::resolver::EdgeBuffer,
+    rel: &str,
+    site: &MacroSite,
+    canonical: &str,
+) -> Option<UnresolvedRef> {
+    if !crate::graph_store::is_known_rel_table(rel) {
+        return Some(UnresolvedRef {
+            kind: "Calls".to_string(),
+            from_id: site.cs_id.to_string(),
+            target_text: canonical.to_string(),
+            reason: format!("unknown rel table {rel}"),
+        });
+    }
+    buf.add(
+        rel,
+        site.caller_qn,
+        canonical,
+        MACRO_CONFIDENCE,
+        MACRO_METHOD,
+    );
+    if let Some(site_rel) = call_site_rel_table(NODE_STDLIB_SYMBOL) {
+        buf.add(
+            site_rel,
+            site.cs_id,
+            canonical,
+            MACRO_CONFIDENCE,
+            MACRO_METHOD,
+        );
+    }
+    None
 }
 
 fn caller_from_callsite(cs_id: &str) -> String {
