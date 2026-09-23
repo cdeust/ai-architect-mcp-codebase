@@ -201,3 +201,15 @@ fn per_site_rows_leak_into_no_symbol_level_caller_list() {
     let callers: Vec<_> = impact.callers.iter().map(|n| n.id.as_str()).collect();
     assert_eq!(callers, vec!["src/lib.rs::entry"]);
 }
+
+#[test]
+fn a_macro_call_site_with_stdlib_rows_stayed_unresolved() {
+    // stages/stage-3.md §10.4: `is_resolved` flips when the site resolved,
+    // whichever phase resolved it. The macro phase wrote the stdlib edges
+    // (and now the per-site rows) for `println!` but left the flag false.
+    let (store, _tmp) = index_and_resolve();
+    let qr = store
+        .execute_query("MATCH (cs:CallSite) WHERE cs.line = 22 RETURN cs.is_resolved")
+        .expect("query println! site");
+    assert_eq!(qr.rows, vec![vec!["true".to_string()]]);
+}

@@ -63,6 +63,10 @@ fn expand_macro_calls(
     let mut resolved = 0u64;
     let mut total = 0u64;
     let mut unresolved = Vec::new();
+    // stages/stage-3.md §10.4: a CallSite's `is_resolved` flips when its
+    // callee resolved to a graph target, whichever phase found it. The
+    // macro phase wrote its edges but never flipped the flag (#335).
+    let mut resolved_ids: Vec<&str> = Vec::new();
     for row in &qr.rows {
         if row.len() < 2 {
             continue;
@@ -75,10 +79,14 @@ fn expand_macro_calls(
         };
         let (r, t, u) =
             resolve_one_macro_call_site(store, buf, caller_label_of, created, cs_id, macro_name)?;
+        if r > 0 {
+            resolved_ids.push(cs_id);
+        }
         resolved += r;
         total += t;
         unresolved.extend(u);
     }
+    store.mark_nodes_resolved("CallSite", &resolved_ids)?;
     Ok((resolved, total, unresolved))
 }
 
