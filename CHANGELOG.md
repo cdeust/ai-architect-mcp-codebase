@@ -6,6 +6,44 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] — Honest coverage for Rust builds; static receiver-call resolution; read-tool freshness receipt
+
+Minor, not patch: this release adds backward-compatible functionality — new
+response fields, new coverage buckets, a new `lsp_status.state` value, static
+receiver-call resolution, doc-content search — alongside a large set of
+correctness and security fixes. Most of the fixes come from a partner
+verification of the server against a real Rust corpus (DYResearch/dy-wcet
+@ `1e93ccd`), which found the server answering "exact, 0 callers" and
+"`status: ok`" about code it had never resolved or never seen. The common thread:
+**an absence of evidence is no longer reported as evidence of absence.**
+
+Two changes an integrator should act on:
+
+- **Re-index graphs built by 0.11.x.** A saved graph without the
+  `Function.entry_kind` column (#273) is refused by the incremental, artifact
+  import and fill paths with an actionable error; `index_codebase` rebuilds it
+  from source. A graph whose freshness sidecars predate `meta.json` schema 3
+  reports `graph_freshness.state: "unknown"` until re-indexed (see Security).
+- **`get_impact`'s `epistemic: "exact"` is now earned, not defaulted** (#299,
+  #316). It requires a coverage record with zero gaps in every bucket and a
+  known Cargo target map. Expect `lower-bound` more often, each time with a
+  reason naming the cause.
+
+New MCP-contract fields at a glance (all additive; no existing field changed
+shape):
+
+| Surface | Field | Issue |
+|---|---|---|
+| `search_codebase`, `get_symbol`, `get_impact` | `graph_freshness` `{state, dirty_files, checked_files, commits_behind, commits_ahead}` | fleet-watch#112 |
+| `index_codebase`, `analyze_codebase`, artifact bootstrap | `meta_write_error` (present only on failure) | fleet-watch#112 |
+| `search_codebase` | hits with `kind: "File"`; `label_filter: "File"` | fleet-watch#112 |
+| coverage (`analyze_codebase`, `index_status`, `query_graph(graph="missed")`) | `outside_build_targets`, `feature_gated`, `unlinked_file` `{count, files}`; `pruned_dirs` `{count, dirs: [{path, reason}]}`; `cargo_attribution` `{status, detail}` | #284, #291, #292, #300, #316 |
+| `analyze_codebase.lsp_status`, `lsp_resolve` | `state: "completed_unresolved"`; `server_health` `{health, message, readiness}`; `outside_targets_count`; `unlinked_file_check`; reason `lsp_workspace_load_failed` | #282, #284, #292, #315 |
+| `get_impact` | `unresolved_callsites_naming_target`, `unresolved_callsites_outside_targets` | #283, #284 |
+| Calls edges | `resolution_method: "receiver-type"` (Rust, Python, TypeScript), `"receiver-local-binding"` (Rust) | #283, #290 |
+| graph schema | `CallSite.unresolved_reason` (`"outside_compiled_targets"`), `Function.entry_kind` | #284, #273 |
+| `check_security_gates` | `report.assessment_complete` | #276 |
+
 ### Added
 
 - Query-time staleness guard (fleet-watch#112): `search_codebase`, `get_symbol`,
@@ -70,6 +108,156 @@ adheres to [Semantic Versioning](https://semver.org/).
   term with it lexically will not surface it. Extending vector indexing over doc
   bodies is deliberately left to its own change.
 
+- Static receiver-call resolution for Rust (#283). The resolver looked the
+  WHOLE callee spelling up as a symbol name, receiver included
+  (`idx.by_name["self.response_of"]`), so every Rust method call made through
+  a receiver was structurally unresolvable — 0 of 52 on the dy-wcet corpus —
+  and `get_impact` answered "no callers" for methods called only that way. The
+  receiver's type is already in the graph: a method's qualified name is
+  `{impl_qn}::{method}`, so the caller's own name minus its last segment is the
+  type `self` denotes. Two new `resolution_method` tiers on `Calls` edges:
+  `"receiver-type"` (confidence 0.93) binds `self.m()` / `Self::m()` inside an
+  `impl` method, by exact impl-type key or else the single candidate whose
+  parent type matches; `"receiver-local-binding"` (0.87) binds `x.m()` where `x`
+  is bound exactly once in the enclosing function by a typed parameter, a typed
+  `let`, or `let x = T::assoc(..)` (the parser now records this as
+  `CallSite.receiver_hint`). Two or more candidates land as ambiguous, zero as
+  not found; a receiver-shaped callee never falls back to a bare-name lookup,
+  which is what keeps the false-caller count at zero. Measured on dy-wcet:
+  `response_of` call sites resolved 3/52 → 44/52, distinct callers found
+  3/38 → 35/38, zero false positives. The 8 still unresolved sit inside a
+  `proptest!` macro body, a receiver shape the local-binding tier does not
+  claim.
+- The same receiver resolution for Python `self.m()` and TypeScript `this.m()`
+  (#290). Both languages share Rust's `{type_qn}::{name}` method naming, so the
+  `self`/`Self` tier was generalized rather than copied: the only per-language
+  fact, the receiver spelling, is now a `LanguageProvider` property
+  (`self_value_prefix` / `self_type_prefix`), and a language that does not opt
+  in is unchanged. Python and TypeScript edges resolved this way carry
+  `resolution_method: "receiver-type"`. The `"receiver-local-binding"` tier
+  stays Rust-only. The accuracy gate's ground truth gains 83 same-class
+  method-to-method `Calls` edges the fixtures had omitted, each checked pair for
+  pair against CPython's `ast`.
+- `get_impact.unresolved_callsites_naming_target` (#283, #285): the count of
+  unresolved `CallSite` nodes whose callee names the target (bare, receiver, or
+  qualified spelling). Previously this evidence existed only as prose inside
+  `epistemic_reasons`, so an empty `callers` list could not be told apart from
+  "genuinely has no callers" without parsing a sentence. When `callers` is
+  empty and the count is non-zero, `next_steps` points at `lsp_resolve` /
+  `analyze_codebase(lsp: true)` and `query_graph(graph="missed")`.
+- Files outside every compiled Cargo target are attributed, not silently absent
+  (#284). A Kani proof harness, a `fuzz/` directory excluded from the workspace,
+  or any `.rs` file the walker indexes but Cargo never compiles now lands in a
+  new `outside_build_targets` coverage bucket, computed from
+  `cargo metadata --no-deps --offline`. The LSP pass no longer queries call
+  sites in those files — no `textDocument/definition` answer is possible there —
+  and counts them in a new `outside_targets_count` on `lsp_resolve` and
+  `analyze_codebase.lsp_resolve`, kept out of both `failed` and `skipped`;
+  `resolved + failed + skipped + outside_targets == total` holds by
+  construction. Each such site is stamped `CallSite.unresolved_reason =
+  "outside_compiled_targets"`, and `get_impact` reports
+  `unresolved_callsites_outside_targets` with the file named in its reason.
+  Measured on dy-wcet: `kani/response_bounds.rs` is attributed, `failed_count`
+  drops 382 → 329 by exactly the 53 outside-target sites, and
+  `get_impact(TaskSet::response_of)` reports 5 of them.
+- `feature_gated` coverage bucket (#291). A module declared behind
+  `#[cfg(feature = "x")]` for a feature the default build leaves off sits inside
+  a compiled target's directory, so `outside_build_targets` calls it compiled;
+  and when the static resolver binds every call in it, no LSP pass opens it, so
+  `unlinked_file` never sees it either. On the issue's own fixture the coverage
+  report came back empty. The indexer now walks each crate's module tree from
+  its target entry files (`mod name;` edges), evaluates each declaration's
+  `#[cfg]` against the package's default feature closure (the `features` table
+  of the same `cargo metadata` call), and flags files reached only through a
+  false declaration. Evaluation is three-valued: only `feature = "..."` leaves
+  are decided, so `cfg(test)` or `cfg(unix)` never flag a file. Recomputed on
+  every incremental pass, since editing `[features]` changes the verdict without
+  touching a `.rs` file.
+- `unlinked_file` coverage bucket and `unlinked_file_check` (#292).
+  rust-analyzer's own `unlinked-file` diagnostic — "this file belongs to no
+  crate in the crate graph", the exact condition #282 and #284 reconstruct by
+  other means — is now read and cross-checked against the `cargo metadata`
+  attribution. **The issue asked for the push channel
+  (`textDocument/publishDiagnostics`); measurement against rust-analyzer 1.95.0
+  showed that channel never carries the code — the notifications it pushes for
+  the same files arrive with an empty list — while the pull request
+  `textDocument/diagnostic` does return it. The pull channel is what is wired,**
+  once per file the LSP pass opens, when the server advertises
+  `diagnosticProvider`. `lsp_resolve` and `analyze_codebase` report
+  `unlinked_file_check` `{pull_supported, files_checked, unlinked_count,
+  unlinked_files: [{path, cargo_attribution}],
+  linked_despite_outside_build_targets_count,
+  linked_despite_outside_build_targets}` — disagreement in either direction
+  stays visible. An unlinked file never fails the phase. Because only an LSP
+  pass can recompute it, an incremental pass drops the bucket rather than
+  carrying a stale verdict forward.
+- `coverage.cargo_attribution` `{status, detail}` (#316). When `cargo metadata`
+  failed (the #282 nested-workspace shape) or `cargo` was not on `PATH`, the
+  target map was unknown and attributed nothing, so `outside_build_targets` and
+  `feature_gated` rendered as `{count: 0, files: []}` — byte-identical to a
+  clean Rust corpus. `status` is now `known`, `unknown` (with cargo's stderr,
+  "cargo not found on PATH", or the parse error in `detail`), or
+  `not_applicable`; a sidecar written before this release renders
+  `not_recorded`, never `unknown`. `get_impact` no longer reports `exact` under
+  an `unknown` status, and names the cause.
+- `lsp_status.server_health` / `lsp_resolve.server_health`
+  `{health, message, readiness}` (#282): rust-analyzer's own
+  `experimental/serverStatus` health and message, previously discarded, plus why
+  the readiness wait ended.
+- Rust test and proof entry points (#273): `#[test]` and `#[kani::proof]`
+  functions are recorded exactly (`Function.entry_kind`, surfaced on
+  `get_processes` rows) and become process entry points. Classification needs
+  the exact attribute; a test-like name alone no longer qualifies. Measured on
+  dy-wcet: test processes 0 → 49, proof processes 0 → 5.
+- `check_security_gates` reports `report.assessment_complete` separately from
+  its zero-critical-flags verdict (#276), so an empty or unknown input, or a
+  skipped check, can no longer read as a clean pass.
+- `query_graph` admits schema introspection: `CALL` is classified per procedure
+  against a read-only allowlist (`TABLE_INFO`, `SHOW_TABLES`) instead of being
+  refused wholesale (#263). See Security for why the allowlist is per procedure.
+
+### Changed
+
+- The walk ingests what its blanket dot-prefix rule used to hide, and names
+  every path it refuses (#300, #301). Measured on this repository before the
+  change: 818 tracked files, 549 indexed, 270 absent from the manifest, none of
+  them recorded anywhere, and the run reported `status: ok`. Dot-prefixed
+  directories and files are now indexed (`.github`, `.claude`, …); the machine
+  state the rule was there for is named explicitly instead (`.hg`, `.svn`,
+  `.cache`, `.next`, `.terraform`, … alongside the existing `.venv`,
+  `.gradle`, …). `bin` leaves the prune list — Cargo compiles every
+  `src/bin/*.rs`, and this repository's own `src/bin` was invisible to its own
+  index; a compiled binary is still rejected by extension. A directory holding
+  its own `.git` is pruned by structure as `nested_repository`, which keeps
+  agent worktrees from indexing a codebase once per checkout. Every prune is
+  recorded in the new `coverage.pruned_dirs` with a reason from a closed set
+  (`vcs`, `tool_artifact`, `dependency_or_build_dir`, `nested_repository`),
+  outside the gap buckets — a declared policy is not a coverage gap, and
+  counting `.git` as one would make `exact` unreachable everywhere. Expect more
+  files, and more `File` nodes, on a re-index.
+- `lsp_status.state == "completed_unresolved"` (#282, broadened by #315). A
+  pass that resolved nothing but had sites to resolve used to report
+  `completed`, the same value as "there was nothing to resolve". The rule is
+  now `resolved_count == 0` with any failed, skipped **or outside-target** site.
+  The last clause is #315: a `[workspace] members = []` root whose only crate is
+  not a member attributed all 461 of its sites outside the targets and still
+  reported bare `completed`. Any resolution at all keeps `completed`, so a Kani
+  proof file beside a working crate is not by itself a failure. One rule, shared
+  by `analyze_codebase.lsp_status` and the standalone `lsp_resolve`.
+- `query_graph` refuses `;`-chained statements with the named reason
+  `multi_statement_not_supported` instead of the engine's message under a
+  generic `query_failed`; a single trailing `;` is still accepted (#261).
+- Contributors: every commit must now carry a DCO `Signed-off-by:` line
+  (`git commit -s`), checked on every pull request by a workflow using no
+  third-party action (#310). The dependabot exemption keys on the pull
+  request's GitHub login first and the author name second, so a commit merely
+  authored as `dependabot[bot]` is not exempt.
+- Internal refactors and CI maintenance with no behavior change: files and
+  functions split under the size caps (`search/mod.rs`, `tool_schemas.rs`,
+  `indexer/incremental.rs`, and others), the marketplace pin-gate scripts
+  re-synced byte-for-byte with their canonical copy (#314), and GitHub Actions
+  bumps.
+
 ### Fixed
 
 - `analyze_codebase` writes the file manifest, not just `meta.json`
@@ -100,6 +288,137 @@ adheres to [Semantic Versioning](https://semver.org/).
   and called a just-rebuilt graph stale, single-process, with no concurrent
   writer involved. `meta.json` moves to schema 3; a schema-1/2 sidecar still
   parses and simply skips the pairing check.
+
+- The LSP pass fails loudly when the language server loads no workspace
+  (#282). A crate nested under a parent Cargo workspace that does not list it
+  as a member makes rust-analyzer report `experimental/serverStatus`
+  `health: "error"` — it loaded no crate graph. The server discarded that, sent
+  every `textDocument/definition` anyway (634 of them on the reproduction), got
+  `[]` for each — individually indistinguishable from a legitimately
+  unresolvable call — and reported `state: "completed"`, `status: "ok"`. The
+  pass is now gated on the server's health before a single request is sent:
+  `lsp_status.state` is `"failed"`, the error starts with
+  `lsp_workspace_load_failed:` and carries the server's own message plus the
+  Cargo-level remedy (add the package to the parent's `members`, or analyze the
+  workspace root), and `lsp_resolve` answers with reason
+  `lsp_workspace_load_failed`. Static analysis is unaffected and the graph is
+  still written. `health: "warning"` does not gate: it also accompanies zero
+  resolution for reasons that are not this failure.
+- A chained method call split across lines now resolves through LSP (#317).
+  `lsp_position` added the byte offset of the method's name within the callee
+  text to the stored column but kept the stored line; the callee text is the
+  verbatim source from the call's start, so for `Task::new(..)\n    .deadline(..)`
+  the request went to a column past the end of the FIRST line and silently never
+  resolved. The position now advances one line per newline before the
+  identifier and counts the column from the last one. Reported as a regression
+  between two dy-wcet measurements; it was not one — the edges that disappeared
+  had come from speculative argument sites that #294 removed by design, and
+  every multi-line chain site had been unresolved in both graphs. On dy-wcet,
+  13 multi-line chain sites move from unresolved to resolved, none the other
+  way.
+- `lsp_resolve` resolves receiver method calls at all (#267). Measured on
+  dy-wcet: `resolved_count` 0 (615 failed) → 188. Three independent causes: the
+  indexer hardcoded `CallSite.col` to 0 for every call site (every parser now
+  emits the 0-based column LSP positions require); the column pointed at the
+  receiver (`self`), which rust-analyzer resolves to the receiver's binding,
+  not the method (the request now targets the method identifier); and the pass
+  queried before rust-analyzer had loaded its workspace, so every request raced
+  it and got `[]` (the client now waits for `experimental/serverStatus`
+  `quiescent: true`, with a `workDoneProgress` quiet-window fallback for
+  servers that do not send it).
+- `lsp_resolve` inserted zero edges on every run (fleet-watch#18, #261): the
+  definition URI was compared as an absolute percent-encoded path against node
+  keys relative to the codebase root, so every lookup missed. URIs are now
+  decoded (including the RFC 8089 `file://localhost/` form) and both sides
+  canonicalized; definitions outside the root yield nothing rather than a wrong
+  key. Unresolved sites are now selected per call site rather than per caller
+  (a caller with one resolved site used to have its other nine skipped); edge
+  insertion checks the exact `(rel, from, to)` triple so an interrupted or
+  repeated run cannot duplicate edges; the skipped count is the identity
+  `total - resolved - failed` instead of a subtraction that saturated to zero
+  past the first file; and a graph indexed by an older build (no
+  `CallSite.is_resolved` column, or NULL values) is migrated instead of taking
+  the tool down or reporting a successful zero-site run.
+- LSP no longer fabricates edges from a line collision (#271). The definition
+  answer was matched onto graph nodes by (file, line) with a ±3-line fallback;
+  rust-analyzer resolving a call ARGUMENT to its own parameter declaration,
+  which shares a line with the enclosing method's signature, produced a false
+  self-edge (`total → total`, confidence 0.9) — 11 of 119 LSP-derived edges
+  (9.24%) on an external corpus. The fallback is gone, `linkSupport` is
+  declared so the server can return the precise name span, and the resolved
+  node's own name must match the call site's identifier.
+- The LSP client's timeout is real, and it cannot mistake a server request for
+  its own answer (#263, #264). The timeout was consulted between blocking reads,
+  so a server that wrote a partial header and stopped held the whole indexing
+  run for as long as the child lived; reads now happen on a reader thread and
+  the caller waits on a channel that enforces the deadline. Responses are
+  matched by `id` AND the absence of `method` — JSON-RPC's two id spaces are
+  independent, so a server-initiated request sharing our id (e.g.
+  `window/showMessageRequest` during the handshake) used to be taken as the
+  answer. One malformed notification no longer fails a request the server
+  answers a frame later; `shutdown` is bounded; a timeout is classified by an
+  exact prefix rather than by the word "timeout" appearing anywhere in an error.
+- `get_impact` resolves its input before answering (fleet-watch#19, #261). A
+  `src/main.rs::foo` spelling (the README's own form) matched no node and
+  returned empty callers labelled `epistemic: "exact"`. The target is now
+  resolved the way `get_symbol` / `get_context` resolve it, a genuine miss
+  returns `symbol_not_found` with suggestions, File targets
+  (`get_impact("src/main.rs")`) work, and the co-change section and
+  `next_steps` key off the resolved target instead of the raw input.
+- `get_impact`'s `exact` requires positive evidence (#268, #299). The boundary
+  was derived from the ABSENCE of known uncertainty, so a symbol whose call
+  sites were never extracted had nothing unresolved and was reported complete —
+  `get_impact(Response::meets)` answered `exact, 0 callers` for a method with
+  eight call sites, four of them in Kani proof harnesses. `exact` now needs a
+  coverage record and zero gaps across `parse_incomplete`, `skipped`,
+  `quarantined`, `outside_build_targets`, `unlinked_file` and `feature_gated`,
+  and any unresolved call site naming the target downgrades it too. The rule
+  can only weaken a claim.
+- Rust extraction, both directions (#272, #294). Calls inside a macro's
+  arguments were invisible — tree-sitter does not expand macros, so
+  `assert_eq!(s.slack_of(1), None)` yielded only the `assert_eq!` site; they are
+  now reconstructed from the token tree for `x.m(..)`, `T::m(..)` and a method
+  on a call result (`f(..).meets(..)`), with a comma between two tokens refused
+  as a receiver. Conversely, a parameter or `let` binding passed as an argument
+  was emitted as a speculative call site, and one named `t` collided with a real
+  `tests::t` helper to report 20 callers that do not call it; names bound in the
+  enclosing function (including shorthand struct-pattern fields) are no longer
+  emitted.
+- A struct field and a method sharing a qualified name are both kept (#269,
+  #270). Node dedup was keyed on the qualified name alone, so
+  `TaskSet::len` the field silently replaced `TaskSet::len()` the method, which
+  was then invisible to every tool. Dedup is now keyed on (label, qualified
+  name), and the label lookup records every label per name, so a legal Rust
+  namespace collision (`mod foo` beside `fn foo`) is treated as ambiguous
+  instead of routing an edge into whichever label was parsed last.
+- `analyze_codebase` persists its coverage receipt and surfaces an optional LSP
+  phase's failure in `lsp_status` instead of dropping it (#273).
+- Verification tools no longer return false-clean results (#276).
+  `check_security_gates` ignored unresolved imports because it queried a
+  property that does not exist, and `verify_semantic_diff` counted every
+  `Import` node whether or not its resolution changed. Both now read the actual
+  unresolved status and propagate query errors instead of reading them as
+  "nothing found"; a newly unresolved import scores at least `concerning`.
+  Semantic-diff evidence is sorted before truncation, so the details returned
+  are reproducible.
+- `query_graph` no longer refuses queries over this schema's own `Import` table
+  (#261): the keyword gate treated the node label `:Import` as the `IMPORT`
+  statement. A keyword introduced by `:` or `.` is a label, relationship type or
+  property, never a clause.
+- `query_graph` bounds a query whose only `limit`/`order by` is inside a string
+  literal or comment (#263). `WHERE n.name = 'limit'` looked like a query that
+  had declared its own `LIMIT`, so none was injected and the `MATCH` ran
+  unbounded; a literal `order by` advertised `order_stable` for a page with no
+  ordering at all.
+- Community and process lookups agree across tools (#263, #264): an empty
+  community id or process name is not an answer at any of the readers, and a
+  real community always wins over a degenerate one, so `get_impact`,
+  `get_context`, `cluster_graph` and `query_graph` report the same membership
+  for one symbol.
+- A use-after-free on shutdown of the graph store (#312): the lbug `Database`
+  was dropped before the `Connection` and prepared statements pointing into it,
+  which a cold build on a new CI runner image turned into a deterministic
+  SIGSEGV.
 
 ### Security
 
@@ -151,6 +470,41 @@ adheres to [Semantic Versioning](https://semver.org/).
   paths of ordinary components, which is what the indexer has always written;
   anything else is refused before the `stat` and counted as unverifiable rather
   than silently treated as evidence of freshness.
+
+- `query_graph`'s read-only guarantee is enforced at two layers, because
+  neither covers the other (fleet-watch#15, #261, #263). The engine's own
+  `is_read_only()` now refuses database mutations however they are spelled. It
+  does NOT refuse filesystem writes: lbug's read/write analyzer leaves
+  `COPY … TO`, `EXPORT DATABASE`, `IMPORT DATABASE`, `ATTACH`, `DETACH` and
+  `USE` at a no-op, so on a read-only handle `COPY (…) TO 'file'` executes and
+  writes an attacker-named file (measured on lbug 0.19.1). The lexical gate
+  therefore refuses all six — `DETACH` and `USE` passed both gates before a
+  re-audit from lbug's own headers. The lexical gate and the engine are
+  differential-tested against each other on quoting, escaping and comment
+  grammar, so a future lbug lexer change breaks a test instead of opening a
+  hole. `CALL` is admitted per procedure only: the engine classifies
+  `CALL threads = 8`, a configuration write, as read-only, so relaxing the
+  keyword wholesale would leave nothing standing in front of it. Queries carry
+  a 30-second bound, applied before prepare so binding and planning are bounded
+  too.
+- Cypher injection closed on the lookups that still interpolated a caller value
+  (fleet-watch#16, #261, #263). `lookup_community` / `lookup_processes` built
+  `= '{node_id}'` by string formatting; the hot read lookups (community
+  membership, impact-target file resolution, LSP caller-label lookup) now bind
+  the value as a parameter instead of escaping it into the text. The mechanical
+  guard `tests/no_naive_cypher_escape.rs` now also rejects the `CONTAINS` /
+  `STARTS WITH` / `ENDS WITH` / `IN` forms, one of which the impact-target
+  lookup was using.
+
+### Dependencies
+
+- `tree-sitter` 0.26.11 → 0.27.0 (#306), `lbug` 0.19.1 → 0.20.4 (#308), `zstd`
+  0.13.3 → 0.14.0 (#307); patch bumps of `blake3`, `tantivy` and `clap` (#274,
+  #313). The `graph_accuracy` gate passes on this release with all of them.
+  `tree-sitter` 0.27's `Node::child_count()` returns `u32`, which only removed
+  a now-redundant cast in a test. `lbug` 0.20
+  reversed its Windows OpenSSL link-library naming; the Windows build and
+  release workflows now provide both names.
 
 ## [0.11.1] — Ingestion must never abort on graph size
 
