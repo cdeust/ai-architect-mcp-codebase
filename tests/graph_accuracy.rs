@@ -471,8 +471,17 @@ fn print_populated_tables(table_counts: &BTreeMap<String, usize>) {
 fn collect_observed_edges(store: &GraphStore) -> BTreeMap<String, BTreeSet<(String, String)>> {
     let mut edges_by_kind: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
     let mut table_counts: BTreeMap<String, usize> = BTreeMap::new();
-    for (name, _from, _to) in REL_TABLES {
+    for (name, from, _to) in REL_TABLES {
         if name.contains("AstNode") {
+            continue;
+        }
+        // `Calls_CallSite_*` (issue #335) restate each resolved symbol-level
+        // `Calls_*` edge once per call site. The relaxed CallSite-sourced
+        // `Calls` expectations are already counted against the symbol-level
+        // edges, so folding the per-site rows into the same bucket would count
+        // one resolution twice. Their own contract (one row per resolved site,
+        // same target and provenance) is tests/callsite_target_rows_335.rs.
+        if *from == "CallSite" {
             continue;
         }
         fold_relation_table(store, name, &mut edges_by_kind, &mut table_counts);
