@@ -168,3 +168,48 @@ fn len_of(x: &str) -> usize {
         assert_eq!(hint_of(src, callee), None, "{callee} must carry no hint");
     }
 }
+
+// Issue #329: a receiver bound once in the enclosing FUNCTION and used inside
+// a closure of that function. Measured on DYResearch/dy-wcet v4.1.2
+// (`examples/rta_probe.rs:85`, `|i| encode(set.response_of(i))`): the hint was
+// empty because the binding walk started at the closure, not the function.
+
+#[test]
+fn single_binding_used_inside_a_closure_keeps_its_hint() {
+    let src = "fn f() { let x = T::new(); let v: Vec<u64> = (0..3).map(|i| x.m(i)).collect(); }";
+    assert_eq!(hint_of(src, "x.m"), Some("T".to_string()));
+}
+
+#[test]
+fn closure_parameter_shadowing_the_outer_binding_yields_no_hint() {
+    let src =
+        "fn f() { let x = T::new(); let v: Vec<u64> = ys.into_iter().map(|x| x.m(1)).collect(); }";
+    assert_eq!(hint_of(src, "x.m"), None);
+}
+
+/// Decision (#329): a name bound once outside a closure and once again inside
+/// its body is bound twice in the function, so it carries no hint, the same
+/// as two `let`s in one function body.
+#[test]
+fn rebinding_inside_the_closure_body_counts_as_a_second_binding() {
+    let src = "fn f() { let s = W::new(); let v: Vec<u64> = (0..3).map(|i| { let s = W::new(); s.z(i) }).collect(); }";
+    assert_eq!(hint_of(src, "s.z"), None);
+}
+
+#[test]
+fn double_binding_used_inside_a_closure_yields_no_hint() {
+    let src = "fn f() { let x = A::new(); let x = T::new(); let v: Vec<u64> = (0..3).map(|i| x.m(i)).collect(); }";
+    assert_eq!(hint_of(src, "x.m"), None);
+}
+
+#[test]
+fn untypable_initializer_used_inside_a_closure_yields_no_hint() {
+    let src = "fn f() { let x = make(); let v: Vec<u64> = (0..3).map(|i| x.m(i)).collect(); }";
+    assert_eq!(hint_of(src, "x.m"), None);
+}
+
+#[test]
+fn typed_closure_parameter_still_yields_its_type() {
+    let src = "fn f(ys: &[T]) { let v: Vec<u64> = ys.iter().map(|s: &T| s.m(1)).collect(); }";
+    assert_eq!(hint_of(src, "s.m"), Some("T".to_string()));
+}

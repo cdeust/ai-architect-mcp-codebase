@@ -318,3 +318,21 @@ fn keywords_definitions_and_attributes_inside_a_macro_are_not_calls() {
         );
     }
 }
+
+/// Issue #329, same scope walk as the receiver hint: inside a closure, a name
+/// bound by the enclosing function (`n`) or by the closure's own untyped
+/// parameter (`i`) is a value, not a function reference. Measured with
+/// v0.12.0: `g(n)` inside `|_| ..` emitted a `n` CallSite that resolved to an
+/// unrelated `fn n` as a false caller.
+#[test]
+fn names_bound_by_the_function_or_an_untyped_closure_parameter_are_not_calls() {
+    let sites = call_sites(
+        "fn probe() {\n    let n = 1u64;\n    let v: Vec<u64> = (0..3).map(|i| g(n) + g(i)).collect();\n}\n",
+    );
+    for name in ["n", "i"] {
+        assert!(
+            !sites.iter().any(|s| s == name),
+            "`{name}` emitted as a call site; got {sites:?}"
+        );
+    }
+}

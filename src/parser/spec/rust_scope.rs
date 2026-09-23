@@ -9,14 +9,28 @@ use tree_sitter::Node;
 
 use crate::parser::node_text;
 
-/// Node kinds that open a new binding scope for this analysis.
+/// The node kind that bounds a binding scope for this analysis. A closure
+/// does NOT: its body sees every name its enclosing function binds, so
+/// stopping there hid those bindings from a call inside the closure (issue
+/// #329, measured on DYResearch/dy-wcet v4.1.2 `examples/rta_probe.rs:85`).
 /// source: tree-sitter-rust 0.24.2 src/node-types.json.
-const SCOPE_KINDS: [&str; 2] = ["function_item", "closure_expression"];
+const FUNCTION_KIND: &str = "function_item";
+
+/// A closure, the scope root only when no function encloses it (a closure
+/// in a `const`/`static` initializer).
+const CLOSURE_KIND: &str = "closure_expression";
 
 /// Node kinds that introduce bindings through a `pattern` field.
 /// source: tree-sitter-rust 0.24.2 src/node-types.json (`parameter` and
 /// `let_declaration` both declare a required `pattern` field).
 const BINDING_KINDS: [&str; 2] = ["parameter", "let_declaration"];
+
+/// A closure's parameter list. Its children are `parameter` (typed, `|x: T|`,
+/// already a `BINDING_KINDS` node) or a bare `_pattern` (untyped, `|x|`),
+/// which has no `pattern` field because it IS the pattern.
+/// source: tree-sitter-rust 0.24.2 src/node-types.json (`closure_parameters`
+/// children: `_pattern` | `parameter`).
+const CLOSURE_PARAMETERS_KIND: &str = "closure_parameters";
 
 /// The `pattern` field name shared by both binding kinds.
 const PATTERN_FIELD: &str = "pattern";
@@ -27,43 +41,61 @@ const PATTERN_FIELD: &str = "pattern";
 /// source: tree-sitter-rust 0.24.2 src/node-types.json.
 const BINDING_LEAF_KINDS: [&str; 2] = ["identifier", "shorthand_field_identifier"];
 
-/// Every name bound by the function or closure enclosing `call_node`: its
-/// parameters and its `let` declarations.
+/// Every name bound by the function enclosing `call_node`: its parameters,
+/// its `let` declarations, and those of every closure inside it.
 ///
 /// precondition: `call_node` is a node inside a parsed Rust tree.
 /// postcondition: the returned set contains only identifier texts read from
-/// `source`; an empty set when `call_node` sits outside any function.
-/// Scope is approximated at function granularity by design; see ADR-9836.
+/// `source`; an empty set when `call_node` sits outside any function or
+/// closure. Scope is approximated at function granularity by design; see
+/// ADR-9836.
 pub(super) fn bound_names_in_scope(source: &str, call_node: Node) -> HashSet<String> {
     let mut names = HashSet::new();
-    let Some(scope) = enclosing_scope(call_node) else {
-        return names;
-    };
-    let mut stack = vec![scope];
-    while let Some(node) = stack.pop() {
-        if BINDING_KINDS.contains(&node.kind()) {
-            if let Some(pattern) = node.child_by_field_name(PATTERN_FIELD) {
-                collect_identifiers(source, pattern, &mut names);
-            }
-        }
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            stack.push(child);
+    if let Some(scope) = enclosing_scope(call_node) {
+        for (_, pattern) in binding_patterns(scope) {
+            collect_identifiers(source, pattern, &mut names);
         }
     }
     names
 }
 
-/// The nearest ancestor that opens a binding scope, `call_node` itself
-/// included.
+/// The nearest enclosing `function_item`, `call_node` itself included; when
+/// none encloses it, the outermost enclosing closure.
 fn enclosing_scope(call_node: Node) -> Option<Node> {
-    let mut node = call_node;
-    loop {
-        if SCOPE_KINDS.contains(&node.kind()) {
-            return Some(node);
+    let mut outermost_closure = None;
+    let mut node = Some(call_node);
+    while let Some(current) = node {
+        match current.kind() {
+            FUNCTION_KIND => return Some(current),
+            CLOSURE_KIND => outermost_closure = Some(current),
+            _ => {}
         }
-        node = node.parent()?;
+        node = current.parent();
     }
+    outermost_closure
+}
+
+/// Every `(declaring node, pattern)` pair under `scope`: a `parameter` or
+/// `let_declaration` with its `pattern` field, and each untyped closure
+/// parameter, which is its own declaring node and pattern.
+fn binding_patterns(scope: Node) -> Vec<(Node, Node)> {
+    let mut out = Vec::new();
+    let mut stack = vec![scope];
+    while let Some(node) = stack.pop() {
+        if BINDING_KINDS.contains(&node.kind()) {
+            if let Some(pattern) = node.child_by_field_name(PATTERN_FIELD) {
+                out.push((node, pattern));
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if node.kind() == CLOSURE_PARAMETERS_KIND && !BINDING_KINDS.contains(&child.kind()) {
+                out.push((child, child));
+            }
+            stack.push(child);
+        }
+    }
+    out
 }
 
 /// Harvests every `identifier` leaf inside one pattern, so destructuring
@@ -92,7 +124,7 @@ fn collect_identifiers(source: &str, pattern: Node, out: &mut HashSet<String>) {
 // needs a strictly stronger answer — "is this name bound EXACTLY ONCE, and
 // if so by a plain identifier pattern carrying a determinable type" — so it
 // is a second, richer read of the SAME binding walk rather than a second
-// traversal: reusing `enclosing_scope`/`BINDING_KINDS`/`PATTERN_FIELD`/
+// traversal: reusing `enclosing_scope`/`binding_patterns`/
 // `collect_identifiers` verbatim is what keeps the two passes from ever
 // disagreeing about what "bound" means (ADR-9836's own rationale).
 // ---------------------------------------------------------------------------
@@ -112,17 +144,19 @@ const PATH_FIELD: &str = "path";
 /// The final-segment field shared by the same two node kinds.
 const NAME_FIELD: &str = "name";
 
-/// Every name bound EXACTLY ONCE in the function/closure enclosing
-/// `call_node`, by a plain (optionally `mut`) identifier pattern, mapped to
+/// Every name bound EXACTLY ONCE in the function enclosing `call_node`
+/// (closures included, issue #329), by a plain (optionally `mut`) identifier pattern, mapped to
 /// its simplified type (generics stripped, reduced to the last `::`
 /// segment) — the receiver-hint-eligible subset of `bound_names_in_scope`'s
 /// broader name set.
 ///
 /// precondition: `call_node` is a node inside a parsed Rust tree.
 /// postcondition: `name` is a key iff it is bound EXACTLY ONCE anywhere in
-/// the enclosing scope — by a `parameter`/`let_declaration` of ANY pattern
-/// shape, simple or destructured (a second binding under a destructuring
-/// pattern still counts and still disqualifies) — AND that one binding is
+/// the enclosing scope — by a `parameter`/`let_declaration`/untyped closure
+/// parameter of ANY pattern shape, simple or destructured (a second binding
+/// under a destructuring pattern, or a closure parameter or `let` inside a
+/// closure that shadows an outer name, still counts and still disqualifies)
+/// — AND that one binding is
 /// itself a plain identifier pattern with a type derivable from one of the
 /// three plan §2.2 palier-3 forms: a typed parameter, a typed `let`, or a
 /// `let x = T::assoc(...)` constructor call. A name bound more than once,
@@ -135,25 +169,16 @@ pub(super) fn typed_local_bindings(source: &str, call_node: Node) -> HashMap<Str
     let Some(scope) = enclosing_scope(call_node) else {
         return HashMap::new();
     };
-    let mut stack = vec![scope];
-    while let Some(node) = stack.pop() {
-        if BINDING_KINDS.contains(&node.kind()) {
-            if let Some(pattern) = node.child_by_field_name(PATTERN_FIELD) {
-                let mut names = HashSet::new();
-                collect_identifiers(source, pattern, &mut names);
-                for name in &names {
-                    *counts.entry(name.clone()).or_insert(0) += 1;
-                }
-                if let Some(simple_name) = simple_identifier_name(source, pattern) {
-                    if let Some(ty) = binding_declared_type(source, node) {
-                        typed.insert(simple_name, ty);
-                    }
-                }
-            }
+    for (node, pattern) in binding_patterns(scope) {
+        let mut names = HashSet::new();
+        collect_identifiers(source, pattern, &mut names);
+        for name in &names {
+            *counts.entry(name.clone()).or_insert(0) += 1;
         }
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            stack.push(child);
+        if let Some(simple_name) = simple_identifier_name(source, pattern) {
+            if let Some(ty) = binding_declared_type(source, node) {
+                typed.insert(simple_name, ty);
+            }
         }
     }
     counts
