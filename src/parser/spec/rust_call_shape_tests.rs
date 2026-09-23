@@ -178,3 +178,143 @@ fn a_module_level_initializer_yields_no_call_sites() {
         "module-level initializers are outside the call walk; got {sites:?}"
     );
 }
+
+// ---- #328: a bare `f(..)` inside macro arguments ---------------------------
+//
+// Measured on DYResearch/dy-wcet v4.1.2 on 2026-09-23:
+// `assert_eq!(old_response_of(&s, 1), Some(9));` produced no CallSite, so
+// `get_impact(old_response_of)` reported 1 caller where the source has 2, with
+// `unresolved_callsites_naming_target = 0`: the graph read as complete.
+
+/// The call-site names of `source` that carry a `.` or `::`, i.e. the sites
+/// the receiver/path arms of the macro scan reconstruct.
+fn joined_call_sites(source: &str) -> Vec<String> {
+    call_sites(source)
+        .into_iter()
+        .filter(|s| !s.ends_with('!') && (s.contains('.') || s.contains("::")))
+        .collect()
+}
+
+/// Issue #328. A bare function call inside a macro argument is a real call
+/// and must be extracted.
+#[test]
+fn a_bare_function_call_inside_a_macro_is_extracted() {
+    let sites =
+        call_sites("fn helper(a: i32) -> i32 { a }\n#[test] fn t() { assert_eq!(helper(1), 2); }");
+    assert!(
+        sites.iter().any(|s| s == "helper"),
+        "no call site for `helper`; got {sites:?}"
+    );
+}
+
+/// Pins the receiver-chain output of the pre-#328 scan: the chain links are
+/// unchanged by the bare-call arm, which only adds the chain's head `build`.
+#[test]
+fn a_chain_on_a_bare_call_keeps_its_links_and_gains_its_head() {
+    let source = "fn probe() {\n    assert!(build(1).first().second());\n}\n";
+    assert_eq!(joined_call_sites(source), ["(1).first", "().second"]);
+    let sites = call_sites(source);
+    assert!(
+        sites.iter().any(|s| s == "build"),
+        "the chain's head `build` is a bare call; got {sites:?}"
+    );
+}
+
+/// Pins the exact sites of the #295 `.meets` shape: nothing is added, since
+/// the head `Response::Unbounded` is a path call the scan already emitted.
+#[test]
+fn the_method_on_a_path_call_result_shape_is_unchanged() {
+    let sites = call_sites(
+        "fn probe(d: u64) {\n    assert!(!Response::Unbounded(Unbounded::NonConvergent).meets(d));\n}\n",
+    );
+    assert_eq!(
+        sites,
+        [
+            "assert!",
+            "Response::Unbounded",
+            "(Unbounded::NonConvergent).meets"
+        ]
+    );
+}
+
+/// Pins the exact sites of the plain receiver shape `s.m(..)`: the method
+/// name after the `.` is not also emitted as a bare call.
+#[test]
+fn a_receiver_call_inside_a_macro_is_not_also_a_bare_call() {
+    let sites = call_sites("fn probe(s: S) {\n    assert_eq!(s.slack_of(1), None);\n}\n");
+    assert_eq!(sites, ["assert_eq!", "s.slack_of"]);
+}
+
+/// The #294/#295 guard: a bound name NOT followed by `(` is a value.
+#[test]
+fn a_bound_value_inside_a_macro_is_not_a_call() {
+    let sites = call_sites("fn probe() {\n    let x = 1;\n    assert_eq!(x, 1);\n}\n");
+    assert_eq!(sites, ["assert_eq!"]);
+}
+
+/// A bound name followed by `(` calls a closure or fn pointer, which is not a
+/// graph node. Measured on a fixture with v0.12.0: the resolver binds a bare
+/// `t(1)` to an unrelated top-level `fn t` by name, so emitting it would make
+/// that function a false caller target. It is skipped, as #87 skips bound
+/// argument names.
+#[test]
+fn a_closure_bound_name_called_inside_a_macro_is_not_a_call() {
+    let sites = call_sites("fn probe() {\n    let t = |x: i32| x;\n    assert_eq!(t(1), 1);\n}\n");
+    assert_eq!(sites, ["assert_eq!"]);
+}
+
+/// A nested macro, an index and a brace group are not calls: only an
+/// identifier directly followed by a `(` group is.
+#[test]
+fn a_nested_macro_or_an_index_inside_a_macro_is_not_a_bare_call() {
+    let sites = call_sites(
+        "fn probe(p: Point) {\n    assert!(vec![1].len() > 0);\n    assert_eq!(TABLE[0], 1);\n    assert!(v!(1));\n    assert_eq!(Point { x: 1 }, p);\n}\n",
+    );
+    for name in ["vec", "TABLE", "v", "Point"] {
+        assert!(
+            !sites.iter().any(|s| s == name),
+            "`{name}` emitted as a call site; got {sites:?}"
+        );
+    }
+}
+
+/// A bare call nested inside a nested macro's arguments is still found.
+#[test]
+fn a_bare_call_inside_a_nested_macro_is_extracted() {
+    let sites = call_sites("fn probe() {\n    assert!(format!(\"{}\", render(1)).len() > 0);\n}\n");
+    assert!(
+        sites.iter().any(|s| s == "render"),
+        "no call site for `render`; got {sites:?}"
+    );
+}
+
+/// A method or path segment is not a bare function, whatever precedes it:
+/// a tuple field, a primitive type, a qualified path, or `self`/`super`.
+#[test]
+fn a_segment_after_a_dot_or_path_separator_is_not_a_bare_call() {
+    let sites = call_sites(
+        "fn probe(s: S) {\n    assert!(s.0.foo(1));\n    assert!(u8::from(1) > 0);\n    assert!(<T as Tr>::m(1));\n    assert!(super::b(1));\n}\n",
+    );
+    for name in ["foo", "from", "m", "b"] {
+        assert!(
+            !sites.iter().any(|s| s == name),
+            "`{name}` emitted as a bare call site; got {sites:?}"
+        );
+    }
+}
+
+/// Inside a macro body, keywords that lex as `identifier` (`in`, `yield`),
+/// item definitions (`fn foo(..)`, `struct A(..)`) and attributes
+/// (`#[cfg(test)]`) are not calls.
+#[test]
+fn keywords_definitions_and_attributes_inside_a_macro_are_not_calls() {
+    let sites = call_sites(
+        "fn probe() {\n    m!(for i in (0..3) {});\n    m!(yield (1));\n    m! { #[cfg(test)] fn foo(x: u8) {} struct A(u8); }\n}\n",
+    );
+    for name in ["in", "yield", "cfg", "foo", "A"] {
+        assert!(
+            !sites.iter().any(|s| s == name),
+            "`{name}` emitted as a call site; got {sites:?}"
+        );
+    }
+}
