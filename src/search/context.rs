@@ -197,6 +197,12 @@ fn find_related_out(store: &GraphStore, escaped: &str, prefix: &str) -> Vec<Rela
         if to_label == crate::graph_store::NODE_STDLIB_SYMBOL {
             continue;
         }
+        // A `CallSite` is not a symbol: its `Calls_CallSite_*` rows (issue
+        // #335) are the per-site twins of the symbol-level `Calls_*` edges
+        // this list already reports. Same exclusion as clustering::impact.
+        if from_label == crate::graph_store::NODE_CALL_SITE {
+            continue;
+        }
         // LIMIT bounds the per-relation result so an unbounded fan-out cannot
         // flood the accumulated Vec or the downstream MCP response.
         let cypher = format!(
@@ -231,8 +237,10 @@ fn find_related_in(store: &GraphStore, escaped: &str, prefix: &str) -> Vec<Relat
         if !rel.starts_with(prefix) {
             continue;
         }
-        // source: see find_related_out — symmetric exclusion.
-        if to_label == crate::graph_store::NODE_STDLIB_SYMBOL {
+        // source: see find_related_out — symmetric exclusions.
+        if to_label == crate::graph_store::NODE_STDLIB_SYMBOL
+            || from_label == crate::graph_store::NODE_CALL_SITE
+        {
             continue;
         }
         // LIMIT bounds the per-relation result; see find_related_out.
