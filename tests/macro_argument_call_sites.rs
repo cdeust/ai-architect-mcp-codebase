@@ -97,27 +97,23 @@ fn assert_macro_argument_followed_by_a_message_yields_a_speculative_call_site() 
 }
 
 #[test]
-fn bare_function_call_inside_a_macro_argument_is_not_misidentified_as_a_method_call() {
-    // A single identifier immediately followed by a token_tree (`helper(x)`)
-    // is genuinely ambiguous — it could be a plain function call OR a nested
-    // macro invocation (`vec![...]`) — so it must NOT be extracted as a
-    // two-identifier method/path call.
+fn bare_function_call_inside_a_macro_argument_is_extracted_as_a_bare_call() {
+    // A single identifier immediately followed by a `(` group (`helper(x)`)
+    // is a bare function call (issue #328: dy-wcet v4.1.2's
+    // `assert_eq!(old_response_of(&s, 1), Some(9))` produced no CallSite).
+    // It is emitted under its own name, never fused with its argument into a
+    // receiver call. This test pinned the pre-#328 exclusion (1 CallSite);
+    // the nested-macro look-alike it guarded against (`vec![...]`) is told
+    // apart by the `!` between name and group, see
+    // `rust_call_shape_tests::a_nested_macro_or_an_index_inside_a_macro_is_not_a_bare_call`.
     let src = "fn f(x: i32) {\n    assert!(helper(x));\n}\n";
     let r = parse(src, "d.rs");
     assert!(
-        callsite(&r, "helper").is_none() && callsite(&r, "helper.x").is_none(),
-        "a bare function call inside a macro argument must not be \
-         misidentified as a receiver call; got callees {:?}",
+        callsite(&r, "helper.x").is_none(),
+        "a bare function call must not be fused with its argument; got callees {:?}",
         callees(&r)
     );
-    // Only the macro's own CallSite is expected — the speculative scan finds
-    // nothing to extract from a single-identifier argument.
-    assert_eq!(
-        r.nodes.iter().filter(|n| n.label == "CallSite").count(),
-        1,
-        "got callees {:?}",
-        callees(&r)
-    );
+    assert_eq!(callees(&r), ["assert!", "helper"]);
 }
 
 #[test]
@@ -139,16 +135,9 @@ fn two_separate_macro_arguments_are_not_misidentified_as_a_method_call() {
          fabricated callee; got callees {:?}",
         callees(&r)
     );
-    // `format_error(ctx)` is a bare function call (single identifier +
-    // token_tree) — deliberately left unextracted, same as
-    // `bare_function_call_inside_a_macro_argument_is_not_misidentified_as_a_method_call`.
-    // Only the macro's own CallSite (`assert!`) is expected.
-    assert_eq!(
-        r.nodes.iter().filter(|n| n.label == "CallSite").count(),
-        1,
-        "got callees {:?}",
-        callees(&r)
-    );
+    // `format_error(ctx)` is a bare function call, extracted under its own
+    // name since issue #328; `flag` is a bound parameter and stays a value.
+    assert_eq!(callees(&r), ["assert!", "format_error"]);
 }
 
 #[test]
