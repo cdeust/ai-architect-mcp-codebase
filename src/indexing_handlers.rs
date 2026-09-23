@@ -321,6 +321,12 @@ pub(crate) const COVERAGE_CAVEAT: &str = "Best-effort signal, NOT a completeness
     sit inside a compiled target, but every `mod` declaration reaching them is \
     behind a `#[cfg]` false under the package's default features, so the default \
     build and the language server compile them out; the reason names the gate. \
+    'cargo_attribution' (issue #316) says whether those two Cargo-derived buckets \
+    carry information: 'known' (cargo metadata answered; empty means none found), \
+    'unknown' (a Cargo.toml exists but cargo metadata failed or cargo is not on \
+    PATH; empty means NOT DETERMINED, and 'detail' says why), 'not_applicable' \
+    (no root Cargo.toml or no .rs file), or 'not_recorded' (a record older than \
+    the field). \
     source: DeusData/codebase-memory-mcp coverage wording.";
 
 // ---------------------------------------------------------------------------

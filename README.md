@@ -119,6 +119,15 @@ options are evaluated: a `cfg(test)`, `cfg(unix)`, or any other predicate the
 feature table cannot decide never flags a file, and a module another crate
 root compiles without the gate is not flagged.
 
+Both buckets come from the same `cargo metadata` call, so the report says once
+whether that call answered (issue #316): `cargo_attribution.status` is `known`
+when it did (empty buckets then mean nothing was found), `unknown` when a root
+`Cargo.toml` exists but the call failed or `cargo` is not on PATH (empty
+buckets then mean nothing was determined; `detail` carries cargo's own error),
+and `not_applicable` when there is no root `Cargo.toml` or no `.rs` file. A
+coverage record written before this field existed reads `not_recorded`. An
+`unknown` status keeps `get_impact` from reporting `exact`.
+
 Graphs created before entry metadata was stored require a full reindex:
 `analyze_codebase` rebuilds them, and `index_codebase` automatically falls back
 to a full index when its incremental compatibility check detects the old schema.
