@@ -6,6 +6,42 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A bare function call inside macro arguments is now extracted (#328).
+  `assert_eq!(helper(1), 2)` produced no `CallSite`, so `get_impact` on `helper`
+  missed the test and reported no gap. The macro token-tree reconstruction now
+  also matches an identifier directly followed by a `(` group. Look-alikes are
+  rejected, each checked against the pinned tree-sitter-rust grammar: a nested
+  macro (`vec![..]`), an index or block group, a name after `.` or `::`, an item
+  being defined, an attribute body, and keywords that parse as names inside
+  macros. A name bound locally and called like a closure inside a macro is
+  deliberately not emitted, because the resolver binds a closure call to an
+  unrelated top-level function of the same name. Calls headed by `self`,
+  `super` or `crate`, and bare turbofish calls, are still not extracted inside
+  macros.
+- A `fn` declared inside a function body is now indexed (#327). It got no node,
+  and its calls were credited to the enclosing function. A nested fn is a
+  `Function` named `{enclosing qualified name}::{name}` (for example
+  `src/lib.rs::S::m::gcd`), and calls in its body belong to it. This also removes
+  a false caller edge: when the file imported a function of the same name, calls
+  to the nested one resolved to the import. The resolver now lets an unqualified
+  call reach a nested fn only from the function that declares it or one that
+  encloses it, as Rust shadowing does, and removes nested fns from every other
+  candidate set. A `#[test]` on a nested fn is not an entry point (rustc never
+  runs it). Fn-local `impl`, `struct`, `mod` and `const` items are still not
+  indexed.
+- A receiver bound once and used inside a closure now keeps its
+  `receiver_hint` (#329), so `(0..3).map(|i| x.m(i))` resolves statically to
+  `T::m` when `x` is bound once by `let x = T::new()`. The scope search stopped
+  at the nearest closure, and untyped closure parameters (`|x|`) were not counted
+  as bindings, so a closure parameter that shadows an outer name would have
+  received a false hint had only the first cause been fixed. A name bound once
+  outside a closure and again inside it counts as bound twice and gets no hint.
+  Closure parameters such as `i` are no longer emitted as call sites by the
+  argument scan, which removes false caller edges to unrelated functions of the
+  same name.
+
 ## [0.12.0] — Honest coverage for Rust builds; static receiver-call resolution; read-tool freshness receipt
 
 Minor, not patch: this release adds backward-compatible functionality — new
@@ -125,8 +161,9 @@ shape):
   not found; a receiver-shaped callee never falls back to a bare-name lookup,
   which is what keeps the false-caller count at zero. Measured on dy-wcet:
   `response_of` call sites resolved 3/52 → 44/52, distinct callers found
-  3/38 → 35/38, zero false positives. The 8 still unresolved sit inside a
-  `proptest!` macro body, a receiver shape the local-binding tier does not
+  3/38 → 35/38, zero false positives. The 8 still unresolved bind their
+  receiver with `let s = generate(&mut rng, n);`, a free-function initializer
+  that carries no type name, a receiver shape the local-binding tier does not
   claim.
 - The same receiver resolution for Python `self.m()` and TypeScript `this.m()`
   (#290). Both languages share Rust's `{type_qn}::{name}` method naming, so the
