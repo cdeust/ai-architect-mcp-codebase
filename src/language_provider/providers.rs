@@ -96,6 +96,11 @@ impl LanguageProvider for PythonProvider {
     fn language(&self) -> &'static str {
         "python"
     }
+    fn bare_call_binds_methods(&self) -> bool {
+        // source: see the trait doc — class scope is invisible to method
+        // bodies (Python Language Reference §4.2.2).
+        false
+    }
     fn import_separator(&self) -> &'static str {
         // The Python parser normalizes source `.` to `::` in stored import
         // paths (parser/python.rs `replace('.', "::")`), so the resolver sees

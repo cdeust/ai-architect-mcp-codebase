@@ -111,6 +111,19 @@ pub trait LanguageProvider: Send + Sync {
         None
     }
 
+    /// Whether an unqualified call `f()` inside a function or method body can
+    /// name a method of a class. `true` keeps every language's pre-existing
+    /// candidate set. Python overrides it to `false`: a bare name is looked
+    /// up in the local, enclosing-function, module and builtin scopes, never
+    /// in a class body, so a method is reachable only through a receiver
+    /// (`self.m()`, `C.m()`), which the receiver gate resolves separately.
+    // source: Python Language Reference §4.2.2 "Resolution of names": "The
+    // scope of names defined in a class block is limited to the class block;
+    // it does not extend to the code blocks of methods".
+    fn bare_call_binds_methods(&self) -> bool {
+        true
+    }
+
     /// Package/module grouping for a file id (PackageProximity evidence +
     /// package-keyed ImportMatch, issue #29). `None` is the honest default —
     /// returning `None` for a language is what preserves its pre-issue-#29
