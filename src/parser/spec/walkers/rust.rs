@@ -11,8 +11,10 @@
 // `walk_defs` delegates here whenever a `LangSpec` carries
 // `rust_family: Some(_)` — the #109 (`clike`) / #125 (`cpp`) precedent. The seven
 // languages riding `walk_defs`/`clike`/`cpp` stay untouched. Calls and imports
-// still route through the SHARED generic walkers (`calls::walk_calls`,
-// `imports::walk_imports`) and supertraits through the shared
+// still route through the SHARED generic walkers (`calls::emit_call_sites`,
+// driven per function body by `rust_body` so a nested `fn` item is emitted
+// rather than walked through — #327 — and `imports::walk_imports`) and
+// supertraits through the shared
 // `types::collect_bases`; only the definition shapes are Rust-specific.
 //
 // This file is the walker SPINE: the dispatcher, the derive-attribute
@@ -34,7 +36,7 @@ use tree_sitter::Node;
 
 use super::super::lang_spec::{LangSpec, RustFamilySpec};
 use super::{
-    call_scan_of, calls, end_line_of, imports, kind_in, line_of, rust_types, type_uses, WalkCtx,
+    call_scan_of, end_line_of, imports, kind_in, line_of, rust_body, rust_types, type_uses, WalkCtx,
 };
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_FUNCTION,
@@ -328,7 +330,7 @@ fn emit_function(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope: &str) {
         },
     );
     if let Some(body) = call_scan_of(spec, node) {
-        calls::walk_calls(spec, ctx, body, &qn);
+        rust_body::walk_fn_body(specs, ctx, body, &qn);
     }
 }
 

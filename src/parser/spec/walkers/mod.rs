@@ -30,6 +30,7 @@ mod embedded;
 mod imports;
 mod objc;
 mod rust;
+mod rust_body;
 mod rust_types;
 mod type_uses;
 mod types;

@@ -16,7 +16,7 @@ use super::rust::{
     decl_list_body, emit_derive_implements, has_async, implements_props, push_def, Def,
     DeriveScope, RustSpecs,
 };
-use super::{call_scan_of, calls, kind_in, type_uses, types, WalkCtx};
+use super::{call_scan_of, kind_in, rust_body, type_uses, types, WalkCtx};
 use crate::parser::{
     node_field_text, qual, ExtractedRef, LABEL_ENUM, LABEL_FIELD, LABEL_METHOD, LABEL_STRUCT,
     LABEL_TRAIT, LABEL_VARIANT,
@@ -273,7 +273,7 @@ fn emit_trait_methods(specs: RustSpecs, ctx: &mut WalkCtx, trait_node: Node, tra
         // reach the graph keyed by the method's own QN; a bodiless requirement
         // (`function_signature_item`) yields `None` here and stays call-free.
         if let Some(body) = call_scan_of(spec, child) {
-            calls::walk_calls(spec, ctx, body, &mqn);
+            rust_body::walk_fn_body(specs, ctx, body, &mqn);
         }
     }
 }
@@ -345,6 +345,6 @@ fn emit_impl_method(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, target: &Im
         },
     );
     if let Some(body) = call_scan_of(spec, node) {
-        calls::walk_calls(spec, ctx, body, &mqn);
+        rust_body::walk_fn_body(specs, ctx, body, &mqn);
     }
 }

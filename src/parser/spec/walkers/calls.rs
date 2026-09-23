@@ -27,31 +27,41 @@ use crate::parser::{ExtractedNode, ExtractedRef, LABEL_CALL_SITE};
 pub(super) fn walk_calls(spec: &LangSpec, ctx: &mut WalkCtx, root: Node, caller_qn: &str) {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
-        if kind_in(spec.call_node_kinds, n.kind()) {
-            if let Some(callee) = spec.conventions.call_callee(ctx.source, n) {
-                let seq = ctx.next_seq();
-                let entry = spec
-                    .conventions
-                    .call_entry(ctx.source, n, caller_qn, &callee, seq);
-                push_call(ctx, entry, caller_qn);
-                for extra in spec
-                    .conventions
-                    .extra_call_entries(ctx.source, n, caller_qn)
-                {
-                    push_call(ctx, extra, caller_qn);
-                }
-                for extra in spec
-                    .conventions
-                    .macro_argument_call_entries(ctx.source, n, caller_qn)
-                {
-                    push_call(ctx, extra, caller_qn);
-                }
-            }
-        }
+        emit_call_sites(spec, ctx, n, caller_qn);
         let mut cursor = n.walk();
         for c in n.children(&mut cursor) {
             stack.push(c);
         }
+    }
+}
+
+/// Emits the call site(s) `n` yields when it is an accepted call node, and
+/// nothing otherwise. The per-node step of `walk_calls`, shared with the Rust
+/// function-body walker (`rust_body`), whose DFS must stop at a nested `fn`
+/// item that `walk_calls`'s blind DFS would descend into (issue #327).
+pub(super) fn emit_call_sites(spec: &LangSpec, ctx: &mut WalkCtx, n: Node, caller_qn: &str) {
+    if !kind_in(spec.call_node_kinds, n.kind()) {
+        return;
+    }
+    let Some(callee) = spec.conventions.call_callee(ctx.source, n) else {
+        return;
+    };
+    let seq = ctx.next_seq();
+    let entry = spec
+        .conventions
+        .call_entry(ctx.source, n, caller_qn, &callee, seq);
+    push_call(ctx, entry, caller_qn);
+    for extra in spec
+        .conventions
+        .extra_call_entries(ctx.source, n, caller_qn)
+    {
+        push_call(ctx, extra, caller_qn);
+    }
+    for extra in spec
+        .conventions
+        .macro_argument_call_entries(ctx.source, n, caller_qn)
+    {
+        push_call(ctx, extra, caller_qn);
     }
 }
 
