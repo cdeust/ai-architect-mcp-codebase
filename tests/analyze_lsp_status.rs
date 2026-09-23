@@ -161,6 +161,38 @@ fn rust_analyzer_unlinked_file_verdict_reaches_the_coverage_report() {
     );
 }
 
+/// Issue #315 (probe E): analyse the PARENT — a virtual `[workspace]
+/// members = []` root, no `.git` — whose one child crate is not a member.
+/// Every unresolved site is attributed outside the compiled targets, none
+/// resolves, and `state` must say so instead of reporting `completed`.
+#[test]
+#[ignore = "requires rust-analyzer; run explicitly with --ignored"]
+fn workspace_root_whose_every_site_is_outside_targets_reports_completed_unresolved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+    fixture(&root);
+    let result = analyze(&root, &tmp.path().join("out"), true, None);
+    assert_eq!(result["status"], "ok", "{result}");
+    let counts = &result["lsp_resolve"];
+    assert_eq!(counts["resolved_count"], 0, "{result}");
+    assert_eq!(counts["failed_count"], 0, "{result}");
+    assert_eq!(counts["skipped_count"], 0, "{result}");
+    assert!(
+        counts["outside_targets_count"].as_u64().unwrap() > 0,
+        "{result}"
+    );
+    assert_eq!(
+        result["lsp_status"]["state"], "completed_unresolved",
+        "{result}"
+    );
+}
+
 /// Issue #282, the measured symptom: a crate that sits under a parent Cargo
 /// workspace which does not list it as a member. `cargo metadata` refuses
 /// the target ("current package believes it's in a workspace when it's

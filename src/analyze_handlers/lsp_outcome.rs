@@ -46,17 +46,21 @@ impl LspOutcome {
 /// something" and "ran and resolved NOTHING" — indistinguishable to a
 /// caller that only reads `state`. A pass that answered zero sites while at
 /// least one site was actually attempted (`failed` or `skipped` non-zero) is
-/// `completed_unresolved`; `resolved == 0` with nothing attempted at all
-/// (`failed == 0 && skipped == 0`) stays `completed` — there was nothing to
-/// resolve, which is not a failure.
-/// Issue #284 (lot 5): `outside_targets` deliberately does NOT feed this
-/// check -- a site skipped because its file sits outside every compiled
-/// Cargo target was never "attempted" in the sense this state
-/// distinguishes (no request was ever issued, so there is no answer to
-/// call negative); it surfaces as its own structured count
-/// (`outside_targets_count`), not as a variant of failure.
+/// `completed_unresolved`; a pass with nothing to resolve stays `completed`,
+/// which is not a failure.
+/// Issue #315: "nothing to resolve" means the pass entered with zero sites
+/// (`resolved + failed + skipped + outside_targets == 0`, the `pass.rs`
+/// counter identity). A pass that entered with sites and attributed every
+/// one outside the compiled Cargo targets (#284, lot 5 — no request was
+/// ever issued for them) still resolved nothing, so it is
+/// `completed_unresolved` too; the cause stays readable from
+/// `outside_targets_count`. Any resolution keeps `completed`: an
+/// outside-targets site next to resolved ones (a Kani harness beside a
+/// working crate) is not by itself a failure.
 pub(super) fn completed_state(result: &LspResolutionResult) -> &'static str {
-    if result.resolved_count == 0 && (result.failed_count > 0 || result.skipped_count > 0) {
+    let unresolved_sites =
+        result.failed_count + result.skipped_count + result.outside_targets_count;
+    if result.resolved_count == 0 && unresolved_sites > 0 {
         "completed_unresolved"
     } else {
         "completed"
@@ -120,17 +124,25 @@ mod tests {
         assert_eq!(completed_state(&result(0, 0, 4)), "completed_unresolved");
     }
 
-    /// Issue #284 (lot 5): a pass whose every unresolved site sits outside
-    /// the compiled Cargo targets attempted nothing in the §1.2 sense (no
-    /// `textDocument/definition` request was ever issued) and must stay
-    /// `completed`, not flip to `completed_unresolved` — a mutant that folds
-    /// `outside_targets_count` into the `failed || skipped` check would fail
-    /// this test.
+    /// Issue #284 (lot 5) intent kept under #315: outside-targets sites next
+    /// to resolved ones do not flip the state.
     #[test]
-    fn outside_targets_alone_does_not_flip_to_completed_unresolved() {
-        let mut r = result(0, 0, 0);
+    fn outside_targets_beside_a_resolution_stays_completed() {
+        let mut r = result(2, 0, 0);
         r.outside_targets_count = 5;
         assert_eq!(completed_state(&r), "completed");
+    }
+
+    /// Issue #315 (probe E): a `[workspace] members = []` root analysed with
+    /// its only crate not listed as a member — every one of the 461 sites
+    /// the pass entered with was attributed outside the compiled targets
+    /// and none resolved. That is "ran and resolved nothing", not "nothing
+    /// to resolve".
+    #[test]
+    fn every_site_outside_targets_with_none_resolved_is_completed_unresolved() {
+        let mut r = result(0, 0, 0);
+        r.outside_targets_count = 461;
+        assert_eq!(completed_state(&r), "completed_unresolved");
     }
 
     #[test]

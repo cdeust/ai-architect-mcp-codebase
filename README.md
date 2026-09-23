@@ -63,7 +63,8 @@ partial LSP results. `lsp_resolve` retains the pass's counts;
 `resolve.phase = "static"` identifies the separate static-resolution receipt.
 Completion does not mean every call was resolved — `completed_unresolved`
 (issue #282) is the explicit signal for "the pass ran and resolved nothing"
-(at least one site was attempted), as opposed to `completed`, which also
+(at least one site needed resolving, even when every one sat outside the
+compiled Cargo targets: issue #315), as opposed to `completed`, which also
 covers "there was nothing to resolve." A target that sits under a parent
 Cargo workspace which does not list it as a member — or any other condition
 the language server itself reports as `health: "error"` — fails the phase
