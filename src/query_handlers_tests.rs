@@ -3,7 +3,7 @@ use crate::{handle_tool_call, tool_profile, tools_list, ToolProfile};
 
 #[test]
 fn limit_injection_appends_when_absent() {
-    let (q, injected) = inject_limit_if_absent("MATCH (n) RETURN n");
+    let (q, injected) = inject_limit_if_absent("MATCH (n) RETURN n", QUERY_GRAPH_ROW_LIMIT as u64);
     assert!(injected);
     assert_eq!(
         q,
@@ -13,7 +13,7 @@ fn limit_injection_appends_when_absent() {
 
 #[test]
 fn limit_injection_strips_trailing_semicolon() {
-    let (q, injected) = inject_limit_if_absent("MATCH (n) RETURN n;");
+    let (q, injected) = inject_limit_if_absent("MATCH (n) RETURN n;", QUERY_GRAPH_ROW_LIMIT as u64);
     assert!(injected);
     assert_eq!(
         q,
@@ -23,11 +23,13 @@ fn limit_injection_strips_trailing_semicolon() {
 
 #[test]
 fn limit_injection_respects_existing_limit() {
-    let (q, injected) = inject_limit_if_absent("MATCH (n) RETURN n LIMIT 5");
+    let (q, injected) =
+        inject_limit_if_absent("MATCH (n) RETURN n LIMIT 5", QUERY_GRAPH_ROW_LIMIT as u64);
     assert!(!injected);
     assert_eq!(q, "MATCH (n) RETURN n LIMIT 5");
     // Case-insensitive.
-    let (q2, injected2) = inject_limit_if_absent("MATCH (n) RETURN n limit 5");
+    let (q2, injected2) =
+        inject_limit_if_absent("MATCH (n) RETURN n limit 5", QUERY_GRAPH_ROW_LIMIT as u64);
     assert!(!injected2);
     assert_eq!(q2, "MATCH (n) RETURN n limit 5");
 }
@@ -35,7 +37,10 @@ fn limit_injection_respects_existing_limit() {
 #[test]
 fn limit_word_boundary_not_fooled_by_identifier() {
     // `node_limit` is an identifier, not a LIMIT clause → still inject.
-    let (_q, injected) = inject_limit_if_absent("MATCH (n) RETURN n.node_limit");
+    let (_q, injected) = inject_limit_if_absent(
+        "MATCH (n) RETURN n.node_limit",
+        QUERY_GRAPH_ROW_LIMIT as u64,
+    );
     assert!(injected);
     // A real LIMIT after an identifier-named field is still detected.
     assert!(has_limit_clause("MATCH (n) RETURN n.node_limit LIMIT 3"));
@@ -233,8 +238,10 @@ fn limit_detection_ignores_the_word_inside_a_literal() {
     assert!(!has_limit_clause("MATCH (n) RETURN n /* LIMIT 5 */"));
 
     // …and the injector therefore still bounds it.
-    let (injected, was_injected) =
-        inject_limit_if_absent("MATCH (n:Function) WHERE n.name = 'limit' RETURN n");
+    let (injected, was_injected) = inject_limit_if_absent(
+        "MATCH (n:Function) WHERE n.name = 'limit' RETURN n",
+        QUERY_GRAPH_ROW_LIMIT as u64,
+    );
     assert!(was_injected, "an unbounded query must still get a LIMIT");
     assert!(injected
         .trim_end()
@@ -284,7 +291,7 @@ fn limit_detection_ignores_a_property_or_alias_named_limit() {
             "a sigil-introduced `limit` is an identifier, not a clause: {query}"
         );
         assert!(
-            inject_limit_if_absent(query).1,
+            inject_limit_if_absent(query, QUERY_GRAPH_ROW_LIMIT as u64).1,
             "so the query must still be bounded: {query}"
         );
     }

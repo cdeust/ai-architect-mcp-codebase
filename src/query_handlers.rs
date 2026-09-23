@@ -16,6 +16,8 @@ use crate::indexing_handlers::*;
 
 mod graph_paths;
 mod read_only_gate;
+#[cfg(test)]
+mod row_limit_tests;
 
 pub(crate) use graph_paths::{
     remove_stale_graph_artifact, validate_graph_path_safe, write_graph_meta,
@@ -91,7 +93,8 @@ fn run_gated_cypher(graph_path: &Path, query: &str, offset: u64) -> Result<Value
     // Bound caller-supplied Cypher: if it has no LIMIT clause, inject one so an
     // unbounded MATCH cannot return enough rows to blow the host's MCP
     // tool-result cap. Queries that already declare a LIMIT are left untouched.
-    let (effective_query, limit_injected) = inject_limit_if_absent(query);
+    let (effective_query, limit_injected) =
+        inject_limit_if_absent(query, injected_fetch_limit(offset));
 
     let start = std::time::Instant::now();
     // Read-only tool: reuse the process-local cached handle instead of
@@ -102,7 +105,8 @@ fn run_gated_cypher(graph_path: &Path, query: &str, offset: u64) -> Result<Value
     // behind the lexical pre-filter above, covering a disjoint family of
     // statements; the division of labor is documented on
     // FORBIDDEN_CYPHER_KEYWORDS. source: fleet-watch#15.
-    let qr = store.execute_read_only_query(&effective_query, READ_QUERY_TIMEOUT_MS)?;
+    let mut qr = store.execute_read_only_query(&effective_query, READ_QUERY_TIMEOUT_MS)?;
+    let row_limit_reached = limit_injected && clip_probe_row(&mut qr.rows, offset);
 
     Ok(paged_query_response(
         &qr,
@@ -114,8 +118,33 @@ fn run_gated_cypher(graph_path: &Path, query: &str, offset: u64) -> Result<Value
             // unsafe cursor — see paged_query_response.
             order_stable: has_order_by_clause(query),
             limit_injected,
+            row_limit_reached,
         },
     ))
+}
+
+/// The LIMIT injected for a page starting at `offset`: the page window ends at
+/// `offset + QUERY_GRAPH_ROW_LIMIT`, plus ONE probe row past it.
+///
+/// The probe is how a cut is detected without a second COUNT query: if the
+/// engine returns it, the result continues beyond the window (issue #334 —
+/// with a bare `LIMIT 500` a 519-row result came back as 500 rows reported
+/// `truncated: false`). The window follows `offset` because the offset cursor
+/// is applied to the rows the engine returned; a fixed bound would make every
+/// row past it unreachable by paging.
+fn injected_fetch_limit(offset: u64) -> u64 {
+    offset.saturating_add(QUERY_GRAPH_ROW_LIMIT as u64 + 1)
+}
+
+/// Drops the probe row fetched by [`injected_fetch_limit`], keeping at most
+/// `offset + QUERY_GRAPH_ROW_LIMIT` rows. Returns whether the probe was present,
+/// i.e. whether the injected bound cut rows off the result.
+fn clip_probe_row<T>(rows: &mut Vec<T>, offset: u64) -> bool {
+    let window_end =
+        usize::try_from(offset.saturating_add(QUERY_GRAPH_ROW_LIMIT as u64)).unwrap_or(usize::MAX);
+    let reached = rows.len() > window_end;
+    rows.truncate(window_end);
+    reached
 }
 
 /// Extracts and gates the Cypher request: `query` is required and must pass
@@ -162,6 +191,8 @@ struct QueryPageMeta {
     elapsed_ms: u64,
     order_stable: bool,
     limit_injected: bool,
+    /// The injected bound cut rows off the result (its probe row came back).
+    row_limit_reached: bool,
 }
 
 /// Builds the paged `query_graph` response envelope.
@@ -181,6 +212,13 @@ struct QueryPageMeta {
 /// serializing whole nodes) can exceed the byte budget. Page by serialized
 /// size from `offset` so the caller can pace through a large result set; the
 /// page is cursor-safe only when `order_stable` is true.
+///
+/// `truncated` means "more rows exist after this page": either the byte budget
+/// stopped the page early, or the injected row bound cut the result
+/// (`row_limit_reached`). In the second case `next_offset` is the end of the
+/// row window and `total_count` counts only the rows up to it, a lower bound.
+/// A caller-declared LIMIT is the caller's own bound: nothing past it is
+/// reported as truncated.
 fn paged_query_response(qr: &crate::graph_store::QueryResult, meta: QueryPageMeta) -> Value {
     let all_rows: Vec<Value> = qr
         .rows
@@ -217,11 +255,15 @@ fn paged_query_response(qr: &crate::graph_store::QueryResult, meta: QueryPageMet
         "total_count": page.total_count,
         "returned_count": returned_rows.len(),
         "offset": meta.offset,
-        "truncated": page.truncated,
+        "truncated": page.truncated || meta.row_limit_reached,
         "order_stable": meta.order_stable,
         "limit_injected": meta.limit_injected,
     });
-    if let Some(next) = page.next_offset {
+    if meta.limit_injected {
+        out["row_limit"] = json!(QUERY_GRAPH_ROW_LIMIT);
+    }
+    let row_window_end = meta.row_limit_reached.then_some(qr.rows.len() as u64);
+    if let Some(next) = page.next_offset.or(row_window_end) {
         out["next_offset"] = json!(next);
     }
     out
@@ -276,7 +318,9 @@ fn shape_token_surface(args: &serde_json::Map<String, Value>, out: &mut Value) {
     }
 }
 
-/// Maximum rows injected into a caller's Cypher when it declares no LIMIT.
+/// Maximum rows in one page window when `query_graph` bounds a caller's Cypher
+/// that declares no LIMIT. The LIMIT actually injected is this window, shifted
+/// by `offset`, plus one probe row (see [`injected_fetch_limit`]).
 ///
 /// source: derived from the response budget — `MAX_RESPONSE_CHARS / typical
 /// row chars`. A typical structured row in this graph serializes to ~90–140
@@ -286,15 +330,15 @@ fn shape_token_surface(args: &serde_json::Map<String, Value>, out: &mut Value) {
 /// byte-budget pass above as the exact backstop.
 pub(crate) const QUERY_GRAPH_ROW_LIMIT: usize = 500;
 
-/// Appends `LIMIT <QUERY_GRAPH_ROW_LIMIT>` to `query` when no LIMIT clause is
-/// already present. Returns the (possibly rewritten) query and whether a limit
-/// was injected.
+/// Appends `LIMIT <limit>` to `query` when no LIMIT clause is already present.
+/// Returns the (possibly rewritten) query and whether a limit was injected.
+/// `query_graph` passes [`injected_fetch_limit`], the page window plus a probe.
 ///
 /// precondition: `query` has already passed `forbidden_cypher_keyword` (it is a
 /// read-only query).
 /// postcondition: the returned query contains a LIMIT clause; if the input
 /// already had one the input is returned verbatim (`limit_injected == false`).
-pub(crate) fn inject_limit_if_absent(query: &str) -> (String, bool) {
+pub(crate) fn inject_limit_if_absent(query: &str, limit: u64) -> (String, bool) {
     if has_limit_clause(query) {
         return (query.to_string(), false);
     }
@@ -306,7 +350,7 @@ pub(crate) fn inject_limit_if_absent(query: &str) -> (String, bool) {
     // response still reported `limit_injected: true`. A guard that reports
     // success while doing nothing is worse than no guard.
     let executable = executable_prefix(query);
-    (format!("{executable}\nLIMIT {QUERY_GRAPH_ROW_LIMIT}"), true)
+    (format!("{executable}\nLIMIT {limit}"), true)
 }
 
 /// `query` truncated just past its last EXECUTABLE byte, with one trailing

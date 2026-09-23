@@ -166,7 +166,7 @@ fn the_injected_limit_binds_on_a_comment_terminated_query() {
         "MATCH (n:Function) RETURN n.id ; // trailing terminator then a comment",
         "MATCH (n:Function) RETURN n.id /* block */",
     ] {
-        let (injected, was_injected) = inject_limit_if_absent(query);
+        let (injected, was_injected) = inject_limit_if_absent(query, QUERY_GRAPH_ROW_LIMIT as u64);
         assert!(was_injected, "no LIMIT declared in {query:?}");
 
         let qr = store
@@ -203,7 +203,7 @@ fn a_declared_limit_is_left_alone_behind_a_comment() {
         .expect("seed");
 
     let query = "MATCH (n:Function) RETURN n.id LIMIT 4 // keep mine";
-    let (injected, was_injected) = inject_limit_if_absent(query);
+    let (injected, was_injected) = inject_limit_if_absent(query, QUERY_GRAPH_ROW_LIMIT as u64);
     assert!(!was_injected, "the caller's LIMIT must be detected");
     let qr = store
         .execute_read_only_query(&injected, 30_000)
@@ -270,7 +270,7 @@ fn a_real_limit_after_a_backticked_alias_is_honoured() {
             2,
         ),
     ] {
-        let (injected, was_injected) = inject_limit_if_absent(query);
+        let (injected, was_injected) = inject_limit_if_absent(query, QUERY_GRAPH_ROW_LIMIT as u64);
         assert!(
             !was_injected,
             "the caller's LIMIT must be seen through the masked alias: {query}"
