@@ -43,9 +43,18 @@ impl UnresolvedCallSite {
     ///   starting at `col` (every `call_callee`/`call_entry` in
     ///   `src/parser/spec/*.rs` reads it straight from the source file), so
     ///   that offset is exactly the identifier's column.
+    /// - A chain split across lines (`Task::new(a)\n    .deadline`) carries
+    ///   its newlines in that verbatim substring, so the identifier sits on a
+    ///   later line than the stored one: advance one line per newline before
+    ///   it, and count the column from the last of them (issue #317).
     pub(super) fn lsp_position(&self) -> (u64, u64) {
-        let line0 = self.line.saturating_sub(1);
-        let col = self.col + last_segment_offset(&self.callee_name) as u64;
+        let offset = last_segment_offset(&self.callee_name);
+        let receiver = &self.callee_name[..offset];
+        let line0 = self.line.saturating_sub(1) + receiver.matches('\n').count() as u64;
+        let col = match receiver.rfind('\n') {
+            Some(newline) => (offset - newline - 1) as u64,
+            None => self.col + offset as u64,
+        };
         (line0, col)
     }
 
@@ -435,6 +444,60 @@ mod tests {
             assert_eq!(
                 lsp_col, *expected_col,
                 "identifier column for callee_name={callee_name:?}"
+            );
+        }
+    }
+
+    /// Issue #317. A builder chain split across lines stores its callee_name
+    /// verbatim, newlines included, anchored at the chain's FIRST line:
+    /// `Task::new(wcet, period)\n                .deadline` at (48, 12) in
+    /// dy-wcet's `tests/properties.rs::generate`. The method sits on a later
+    /// line, so adding the byte offset to the start column aimed at column 53
+    /// of line 48, past its end. Measured on that corpus: every single-line
+    /// `Task::new(..).deadline` site resolved through LSP, every multi-line
+    /// one stayed unresolved.
+    #[test]
+    fn lsp_definition_targets_the_method_line_of_a_multi_line_chain() {
+        let cases: &[(&str, u64, u64, u64, u64)] = &[
+            // (callee_name, line, col, expected 0-based line, expected col)
+            (
+                "Task::new(wcet, period)\n                .deadline",
+                48,
+                12,
+                48,
+                17,
+            ),
+            (
+                "Task::new(wcet, period)\n    .deadline(deadline)\n    .jitter",
+                48,
+                12,
+                49,
+                5,
+            ),
+            // A macro-reconstructed receiver, measured in dy-wcet's
+            // `src/lib.rs` at 908:35.
+            (
+                "(Unbounded::NonConvergent)\n            .to_string",
+                908,
+                35,
+                908,
+                13,
+            ),
+        ];
+        for (callee_name, line, col, expected_line, expected_col) in cases {
+            let site = UnresolvedCallSite {
+                id: "src/a.rs::caller::call@x".to_string(),
+                caller_qn: "src/a.rs::caller".to_string(),
+                caller_label: "Function".to_string(),
+                callee_name: callee_name.to_string(),
+                file_path: "src/a.rs".to_string(),
+                line: *line,
+                col: *col,
+            };
+            assert_eq!(
+                site.lsp_position(),
+                (*expected_line, *expected_col),
+                "position for callee_name={callee_name:?}"
             );
         }
     }
