@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 mod common;
+mod graph_accuracy_calls_scoring;
 mod graph_accuracy_receiver_calls;
 use common::TempDirExt;
 use graph_accuracy_receiver_calls::push_method_to_method_calls;
@@ -347,6 +348,9 @@ fn fixture_hash_py() -> Fixture {
 struct Observed {
     nodes: BTreeMap<String, String>, // qn -> label
     edges_by_kind: BTreeMap<String, BTreeSet<(String, String)>>, // kind -> {(from, to)}
+    /// `Calls_CallSite_*` rows as (caller, line, target) — see
+    /// graph_accuracy_calls_scoring.
+    per_site_calls: BTreeSet<graph_accuracy_calls_scoring::SiteTarget>,
 }
 
 /// Runs the real indexer + resolver over `fixture_root` into `graph_path`
@@ -495,6 +499,7 @@ fn index_fixture(fixture_root: &Path, graph_path: &Path) -> Observed {
     Observed {
         nodes: collect_observed_nodes(&store),
         edges_by_kind: collect_observed_edges(&store),
+        per_site_calls: graph_accuracy_calls_scoring::collect_per_site_calls(&store),
     }
 }
 
@@ -590,7 +595,9 @@ fn score_edges_by_kind(
 
     // Group expected by kind. For CallSite-targeting Defines edges and
     // CallSite-source Calls edges we relax matching (count-based) because
-    // the call-site QN suffix is producer-determined.
+    // the call-site QN suffix is producer-determined. `score_edges` then
+    // replaces the Calls score with the identity match against the per-site
+    // rows (graph_accuracy_calls_scoring, #335).
     let mut expected_by_kind: BTreeMap<&str, Vec<&ExpectedEdge>> = BTreeMap::new();
     for ee in expected {
         expected_by_kind.entry(ee.kind).or_default().push(ee);
@@ -740,6 +747,7 @@ fn print_diff(fixture: &Fixture, observed: &Observed) {
     print_observed_summary(fixture, observed);
     print_missing_nodes(fixture, observed);
     print_missing_edges(fixture, observed);
+    print_calls_mismatches(fixture, observed);
 }
 
 // ---------------------------------------------------------------------------
@@ -3642,6 +3650,65 @@ fn assert_regression_floors(fixture: &Fixture, measured: &F1Scores, floors: &Flo
     );
 }
 
+/// Scores every kind, `Calls` by identity against the per-site rows
+/// (graph_accuracy_calls_scoring) and the rest by `score_edges_by_kind`.
+/// Asserts first that the per-site rows restate the symbol-level `Calls`
+/// edges pair for pair (#335): each resolved call site writes both.
+fn score_edges(expected: &[ExpectedEdge], observed: &Observed) -> BTreeMap<String, Score> {
+    let symbol_calls = observed
+        .edges_by_kind
+        .get("Calls")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        graph_accuracy_calls_scoring::per_site_pairs(&observed.per_site_calls),
+        symbol_calls,
+        "every symbol-level Calls edge must have its per-site rows, and no other"
+    );
+    let mut scores = score_edges_by_kind(expected, &observed.edges_by_kind);
+    if let Some(m) = match_expected_calls(expected, observed) {
+        scores.insert("Calls".to_string(), m.score());
+    }
+    scores
+}
+
+/// The identity match of the fixture's `Calls` expectations, or `None` when
+/// it expects no call (then `score_edges_by_kind` scores any observed call
+/// as a false positive of an unexpected kind).
+fn match_expected_calls(
+    expected: &[ExpectedEdge],
+    observed: &Observed,
+) -> Option<graph_accuracy_calls_scoring::CallsMatch> {
+    let calls: Vec<&ExpectedEdge> = expected.iter().filter(|e| e.kind == "Calls").collect();
+    if calls.is_empty() {
+        return None;
+    }
+    let symbol_calls = observed
+        .edges_by_kind
+        .get("Calls")
+        .cloned()
+        .unwrap_or_default();
+    Some(graph_accuracy_calls_scoring::match_calls(
+        &calls,
+        &symbol_calls,
+        &observed.per_site_calls,
+    ))
+}
+
+/// Names each `Calls` miss and surplus of the identity match: the strict
+/// diagnostic above skips every CallSite-sourced expectation.
+fn print_calls_mismatches(fixture: &Fixture, observed: &Observed) {
+    let Some(m) = match_expected_calls(&fixture.edges, observed) else {
+        return;
+    };
+    for (from, to) in &m.missing {
+        println!("    MISSING call  {from} -> {to}");
+    }
+    for (from, to) in &m.unexpected {
+        println!("    UNEXPECTED call  {from} -> {to}");
+    }
+}
+
 fn run_fixture(test_id: &str, fixture: Fixture, floors: Floors) {
     let (tmp, graph_path) = stage_fixture_source(test_id, &fixture);
     let observed = index_fixture(&tmp, &graph_path);
@@ -3649,7 +3716,7 @@ fn run_fixture(test_id: &str, fixture: Fixture, floors: Floors) {
     print_diff(&fixture, &observed);
 
     let node_score = score_nodes(&fixture.nodes, &observed.nodes);
-    let edge_scores = score_edges_by_kind(&fixture.edges, &observed.edges_by_kind);
+    let edge_scores = score_edges(&fixture.edges, &observed);
     print_scores(&node_score, &edge_scores);
 
     let measured = F1Scores {
