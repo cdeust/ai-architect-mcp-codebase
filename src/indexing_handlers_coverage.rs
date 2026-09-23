@@ -104,6 +104,22 @@ fn pruned_dir_sample(report: &indexer::coverage::CoverageReport) -> Value {
     json!(sample)
 }
 
+/// The `cargo_attribution` block (issue #316): whether the two Cargo-derived
+/// buckets (`outside_build_targets`, `feature_gated`) carry information.
+/// `not_recorded` is a sidecar written before the field existed; it is
+/// deliberately distinct from `unknown`, which this binary emits only when it
+/// tried and failed to build the target map.
+fn cargo_attribution_json(report: &indexer::coverage::CoverageReport) -> Value {
+    match &report.cargo_attribution {
+        Some(status) => json!({ "status": status.as_str(), "detail": status.detail() }),
+        None => json!({
+            "status": "not_recorded",
+            "detail": "this coverage record predates cargo-attribution tracking \
+                       (issue #316); re-index to record it",
+        }),
+    }
+}
+
 pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Value {
     let counts = report.counts();
     let b = bucket_coverage_files(report);
@@ -126,6 +142,7 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
             "count": counts.feature_gated,
             "files": b.feature_gated_files
         },
+        "cargo_attribution": cargo_attribution_json(report),
         // Declared policy, NOT a gap: reported so a reader can see what the
         // walk refused to enter, and deliberately outside the gap buckets
         // so `.git`/`target` do not make every graph incomplete.
@@ -181,4 +198,53 @@ pub(crate) fn query_missed_response(graph_path: &Path) -> Value {
         "note": "These files/ranges are where the index is known to be incomplete \
                  — prefer grep for them before trusting a negative graph result.",
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indexer::cargo_attribution::CargoAttributionStatus;
+    use crate::indexer::coverage::CoverageReport;
+
+    fn rendered(status: Option<CargoAttributionStatus>) -> Value {
+        let mut report = CoverageReport::new("full", 1);
+        report.cargo_attribution = status;
+        coverage_summary(&report)["cargo_attribution"].clone()
+    }
+
+    #[test]
+    fn a_known_map_renders_known_with_no_detail() {
+        assert_eq!(
+            rendered(Some(CargoAttributionStatus::Known)),
+            json!({"status": "known", "detail": null})
+        );
+    }
+
+    #[test]
+    fn an_unknown_map_renders_unknown_with_its_cause() {
+        let detail = "cargo metadata failed (exit status: 101): error: current package \
+                      believes it's in a workspace when it's not";
+        assert_eq!(
+            rendered(Some(CargoAttributionStatus::Unknown {
+                detail: detail.into()
+            })),
+            json!({"status": "unknown", "detail": detail})
+        );
+    }
+
+    #[test]
+    fn a_corpus_without_cargo_renders_not_applicable() {
+        assert_eq!(
+            rendered(Some(CargoAttributionStatus::NotApplicable {
+                detail: "no Cargo.toml at the analyzed root".into()
+            })),
+            json!({"status": "not_applicable", "detail": "no Cargo.toml at the analyzed root"})
+        );
+    }
+
+    /// An old sidecar never claims `unknown`: it was not analysed for this.
+    #[test]
+    fn an_old_sidecar_renders_not_recorded_never_unknown() {
+        assert_eq!(rendered(None)["status"], json!("not_recorded"));
+    }
 }

@@ -26,7 +26,8 @@ const GAP_BUCKETS: [&str; 6] = [
 /// precondition: `out` is a `get_impact` response carrying `epistemic` and an
 /// `epistemic_reasons` array; `graph_path` is the graph directory.
 /// postcondition: `epistemic` is `exact` only when a coverage sidecar exists
-/// AND reports zero gaps; every downgrade appends exactly one reason naming
+/// AND reports zero gaps AND its Cargo target map is not `unknown` (issue
+/// #316); every downgrade appends exactly one reason naming
 /// why. A response that is already `lower-bound` is untouched.
 pub(crate) fn require_coverage_evidence(out: &mut Value, graph_path: &Path) {
     if out.get("epistemic").and_then(Value::as_str) != Some(epistemic::Boundary::Exact.as_str()) {
@@ -43,7 +44,9 @@ pub(crate) fn require_coverage_evidence(out: &mut Value, graph_path: &Path) {
 }
 
 /// `None` when the summary is positive evidence of full coverage. `Some(reason)`
-/// when it is absent or reports a gap, with the reason naming which.
+/// when it is absent, reports a gap, or reports that the Cargo target map is
+/// unknown (issue #316) — one reason naming every cause, so a downgrade still
+/// appends exactly one.
 fn missing_evidence_reason(summary: &Value) -> Option<String> {
     if summary.is_null() {
         return Some(
@@ -53,6 +56,18 @@ fn missing_evidence_reason(summary: &Value) -> Option<String> {
                 .to_string(),
         );
     }
+    let causes: Vec<String> = [gap_reason(summary), unknown_target_map_reason(summary)]
+        .into_iter()
+        .flatten()
+        .collect();
+    if causes.is_empty() {
+        return None;
+    }
+    Some(causes.join(" "))
+}
+
+/// The reason when any gap bucket is non-zero.
+fn gap_reason(summary: &Value) -> Option<String> {
     let flagged: Vec<String> = GAP_BUCKETS
         .iter()
         .filter_map(|bucket| named_count(summary, bucket))
@@ -65,6 +80,28 @@ fn missing_evidence_reason(summary: &Value) -> Option<String> {
          them cannot appear in this graph, so the blast radius is a lower bound. \
          Enumerate them with query_graph(graph=\"missed\").",
         flagged.join(", ")
+    ))
+}
+
+/// The reason when `cargo_attribution.status` is `unknown` (issue #316): the
+/// zero `outside_build_targets` / `feature_gated` counts were never computed,
+/// so they are not evidence that every Rust file is compiled. `not_recorded`
+/// (a sidecar older than the field) does not downgrade: this binary cannot
+/// tell what that older run determined, and pre-#316 behaviour is kept.
+fn unknown_target_map_reason(summary: &Value) -> Option<String> {
+    let attribution = summary.get("cargo_attribution")?;
+    if attribution.get("status")?.as_str()? != "unknown" {
+        return None;
+    }
+    let detail = attribution
+        .get("detail")
+        .and_then(Value::as_str)
+        .unwrap_or("no cause recorded");
+    Some(format!(
+        "cargo_attribution is unknown ({detail}), so the zero outside_build_targets \
+         and feature_gated counts are an absence of a signal, not evidence that \
+         every Rust file is compiled; a caller in an uncompiled file may be \
+         missing, so the blast radius is a lower bound."
     ))
 }
 
@@ -141,6 +178,53 @@ mod tests {
                 "the reason must name {bucket}, got {reason}"
             );
         }
+    }
+
+    fn clean_summary_with(attribution: Value) -> Value {
+        json!({
+            "parse_incomplete": { "count": 0 },
+            "skipped": { "count": 0 },
+            "quarantined": { "count": 0 },
+            "outside_build_targets": { "count": 0 },
+            "unlinked_file": { "count": 0 },
+            "feature_gated": { "count": 0 },
+            "cargo_attribution": attribution,
+        })
+    }
+
+    /// Issue #316: an unknown Cargo target map means the two Cargo-derived
+    /// buckets were never computed, so their zeros cannot support `exact`.
+    #[test]
+    fn an_unknown_cargo_target_map_blocks_exact_and_names_its_cause() {
+        let summary =
+            clean_summary_with(json!({"status": "unknown", "detail": "cargo not found on PATH"}));
+        let reason = missing_evidence_reason(&summary).expect("unknown must block exact");
+        assert!(reason.contains("cargo_attribution is unknown"), "{reason}");
+        assert!(reason.contains("cargo not found on PATH"), "{reason}");
+    }
+
+    #[test]
+    fn known_not_applicable_and_not_recorded_leave_exact_standing() {
+        for attribution in [
+            json!({"status": "known", "detail": null}),
+            json!({"status": "not_applicable", "detail": "no Cargo.toml at the analyzed root"}),
+            json!({"status": "not_recorded", "detail": "predates"}),
+        ] {
+            let summary = clean_summary_with(attribution.clone());
+            assert!(
+                missing_evidence_reason(&summary).is_none(),
+                "{attribution} must not block exact"
+            );
+        }
+    }
+
+    /// A gap AND an unknown map still append exactly one reason, naming both.
+    #[test]
+    fn a_gap_and_an_unknown_map_combine_into_one_reason() {
+        let mut summary = clean_summary_with(json!({"status": "unknown", "detail": "x"}));
+        summary["skipped"]["count"] = json!(2);
+        let reason = missing_evidence_reason(&summary).expect("a reason");
+        assert!(reason.contains("skipped 2") && reason.contains("cargo_attribution is unknown"));
     }
 
     /// A response that is already a lower bound is not touched, and no second

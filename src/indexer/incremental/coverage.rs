@@ -9,9 +9,9 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
+use super::super::cargo_attribution;
 use super::super::cargo_targets;
 use super::super::coverage::{self, FileCoverage};
-use super::super::feature_gated;
 use super::{ChangeSet, Discovered};
 use std::collections::BTreeMap;
 
@@ -90,48 +90,37 @@ struct CarryForward<'a> {
 /// stronger existing gap (parse_partial/skipped/quarantined, carried forward
 /// or freshly reparsed) is never downgraded — mirrors
 /// `CoverageCollector::record_outside_targets`'s same rule on the full-index
-/// path. Costs one `cargo metadata` subprocess per incremental pass, gated
-/// (like the full-index path) on "a root `Cargo.toml` exists and at least one
-/// `.rs` file is in the current tree". The same map then recomputes the
-/// `FeatureGated` gaps (issue #291), under the same `or_insert` rule.
+/// path. The same map then recomputes the `FeatureGated` gaps (issue #291),
+/// under the same `or_insert` rule, and the report's `cargo_attribution`
+/// status (issue #316) is overwritten with this pass's, never carried
+/// forward. `cargo_attribution::attribute` spawns `cargo metadata` only when
+/// a root `Cargo.toml` exists and the tree holds a `.rs` file.
 fn overlay_cargo_attributions(
     report: &mut coverage::CoverageReport,
     codebase: &Path,
     current: &[Discovered],
 ) {
-    let has_rust_file = current.iter().any(|d| d.rel.ends_with(".rs"));
-    if !has_rust_file || !codebase.join("Cargo.toml").is_file() {
-        return;
+    let rust_files: BTreeSet<PathBuf> = current
+        .iter()
+        .filter(|d| d.rel.ends_with(".rs"))
+        .map(|d| PathBuf::from(&d.rel))
+        .collect();
+    let found = cargo_attribution::attribute(codebase, &rust_files);
+    for rel in found.outside_targets {
+        report.files.entry(rel).or_insert_with(|| FileCoverage {
+            kind: coverage::CoverageKind::OutsideBuildTargets,
+            detail: cargo_targets::OUTSIDE_TARGETS_DETAIL.to_string(),
+            error_ranges: Vec::new(),
+        });
     }
-    let map = cargo_targets::discover(codebase);
-    if matches!(map, cargo_targets::TargetMap::Unknown) {
-        return;
-    }
-    let mut rust_files = BTreeSet::new();
-    for d in current {
-        if !d.rel.ends_with(".rs") {
-            continue;
-        }
-        rust_files.insert(PathBuf::from(&d.rel));
-        if map.is_outside_targets(Path::new(&d.rel)) {
-            report
-                .files
-                .entry(d.rel.clone())
-                .or_insert_with(|| FileCoverage {
-                    kind: coverage::CoverageKind::OutsideBuildTargets,
-                    detail: cargo_targets::OUTSIDE_TARGETS_DETAIL.to_string(),
-                    error_ranges: Vec::new(),
-                });
-        }
-    }
-    for (rel, detail) in feature_gated::find_feature_gated(codebase, &map, &rust_files) {
-        let rel = rel.to_string_lossy().replace('\\', "/");
+    for (rel, detail) in found.feature_gated {
         report.files.entry(rel).or_insert(FileCoverage {
             kind: coverage::CoverageKind::FeatureGated,
             detail,
             error_ranges: Vec::new(),
         });
     }
+    report.cargo_attribution = Some(found.status);
 }
 
 /// Builds and writes the coverage sidecar for an incremental pass or bootstrap
@@ -229,5 +218,25 @@ mod tests {
             merged.files["src/partial.rs"].kind,
             coverage::CoverageKind::ParsePartial
         );
+    }
+
+    /// Issue #316: a prior sidecar's status is never carried forward; the
+    /// incremental pass records its own, so a tree that stopped being a
+    /// Cargo project stops claiming `known`.
+    #[test]
+    fn the_incremental_pass_records_its_own_cargo_attribution_status() {
+        let mut prior = coverage::CoverageReport::new("full", 1);
+        prior.cargo_attribution = Some(cargo_attribution::CargoAttributionStatus::Known);
+        let current: HashSet<String> = ["m.py".to_string()].into_iter().collect();
+        let carry = CarryForward {
+            prior: Some(&prior),
+            reparsed_rels: &HashSet::new(),
+            current_rels: &current,
+        };
+        let mut merged = merge_coverage(&carry, BTreeMap::new(), "incremental", 1);
+        let dir = tempfile::tempdir().expect("temp dir");
+        overlay_cargo_attributions(&mut merged, dir.path(), &[]);
+        let status = merged.cargo_attribution.expect("always set by this binary");
+        assert_eq!(status.as_str(), "not_applicable");
     }
 }

@@ -63,8 +63,13 @@ pub const OUTSIDE_TARGETS_DETAIL: &str = "not in any Cargo target (cargo metadat
 pub enum TargetMap {
     /// Nothing could be determined: no `Cargo.toml` at the queried root,
     /// `cargo` not on PATH, or `cargo metadata` failed (including a workspace
-    /// that refuses to load, issue #282). Carries no target information.
-    Unknown,
+    /// that refuses to load, issue #282). Carries no target information,
+    /// only why (issue #316): the coverage report surfaces it so an unknown
+    /// map is never mistaken for a clean one.
+    Unknown {
+        /// The cause: cargo's own stderr, "cargo not found on PATH", …
+        detail: String,
+    },
     /// A successfully parsed target set.
     Known {
         /// Root-relative directories that hold at least one compiled
@@ -129,7 +134,8 @@ impl TargetMap {
 /// Discovers `root`'s compiled Cargo targets by shelling out to
 /// `cargo metadata --no-deps --offline --format-version 1 --manifest-path
 /// <root>/Cargo.toml`. Every failure mode collapses to `TargetMap::Unknown`
-/// (see the type doc) — this function never panics and never guesses.
+/// carrying its cause (issue #316: "cargo not found on PATH", cargo's own
+/// stderr, …) — this function never panics and never guesses.
 ///
 /// Precondition: none (safe to call speculatively — callers gate this on
 /// "a `Cargo.toml` exists and at least one `.rs` file was indexed" for cost,
@@ -157,27 +163,47 @@ impl TargetMap {
 pub fn discover(root: &Path) -> TargetMap {
     let manifest = root.join("Cargo.toml");
     if !manifest.is_file() {
-        return TargetMap::Unknown;
+        return unknown(format!("no Cargo.toml at {}", root.display()));
     }
-    let output = Command::new("cargo")
+    let output = match run_cargo_metadata(&manifest) {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return unknown("cargo not found on PATH".to_string());
+        }
+        Err(e) => return unknown(format!("cargo metadata could not be spawned: {e}")),
+    };
+    if !output.status.success() {
+        // The whole stderr, trimmed: cargo's first line names the error, the
+        // following ones name the manifests and the fix (measured on the
+        // #282 nested shape: 5 lines, under 1 KiB), and the text is
+        // deterministic for a given tree.
+        return unknown(format!(
+            "cargo metadata failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let Ok(text) = String::from_utf8(output.stdout) else {
+        return unknown("cargo metadata printed non-UTF-8 output".to_string());
+    };
+    parse_metadata_json(&text, root)
+}
+
+fn unknown(detail: String) -> TargetMap {
+    TargetMap::Unknown { detail }
+}
+
+/// The fixed, argument-injection-safe `cargo metadata` invocation.
+fn run_cargo_metadata(manifest: &Path) -> std::io::Result<std::process::Output> {
+    Command::new("cargo")
         .arg("metadata")
         .arg("--no-deps")
         .arg("--offline")
         .arg("--format-version")
         .arg("1")
         .arg("--manifest-path")
-        .arg(&manifest)
-        .output();
-    let Ok(output) = output else {
-        return TargetMap::Unknown;
-    };
-    if !output.status.success() {
-        return TargetMap::Unknown;
-    }
-    let Ok(text) = String::from_utf8(output.stdout) else {
-        return TargetMap::Unknown;
-    };
-    parse_metadata_json(&text, root)
+        .arg(manifest)
+        .output()
 }
 
 /// The subset of `cargo metadata --format-version 1`'s schema this module
@@ -213,8 +239,9 @@ struct CargoTarget {
 /// `target_dirs`/`target_files` cannot flag any in-root file as outside, so
 /// this is safe by construction, not merely convenient).
 pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
-    let Ok(meta) = serde_json::from_str::<CargoMetadata>(json) else {
-        return TargetMap::Unknown;
+    let meta = match serde_json::from_str::<CargoMetadata>(json) {
+        Ok(meta) => meta,
+        Err(e) => return unknown(format!("cargo metadata output did not parse: {e}")),
     };
     let mut target_dirs = BTreeSet::new();
     let mut target_files = BTreeSet::new();
@@ -340,7 +367,10 @@ mod tests {
     #[test]
     fn malformed_json_is_unknown_not_a_panic() {
         let map = parse_metadata_json("{ not json", Path::new(FIXTURE_ROOT));
-        assert_eq!(map, TargetMap::Unknown);
+        let TargetMap::Unknown { detail } = &map else {
+            panic!("malformed JSON must be Unknown, got {map:?}");
+        };
+        assert!(detail.contains("did not parse"), "detail: {detail}");
         assert!(!map.is_outside_targets(Path::new("kani/x.rs")));
     }
 
@@ -350,7 +380,19 @@ mod tests {
             .prefix("cargo_targets_no_manifest_")
             .tempdir()
             .expect("temp dir");
-        assert_eq!(discover(dir.path()), TargetMap::Unknown);
+        let map = discover(dir.path());
+        let TargetMap::Unknown { detail } = &map else {
+            panic!("no manifest must be Unknown, got {map:?}");
+        };
+        assert!(detail.starts_with("no Cargo.toml"), "detail: {detail}");
+    }
+
+    /// Issue #316's boundary with #315: a workspace listing zero packages is a
+    /// valid, KNOWN, empty map, not an unknown one.
+    #[test]
+    fn a_workspace_with_zero_packages_is_known_and_empty() {
+        let map = parse_metadata_json(r#"{"packages":[]}"#, Path::new(FIXTURE_ROOT));
+        assert!(matches!(map, TargetMap::Known { .. }), "got {map:?}");
     }
 
     #[test]
@@ -360,7 +402,7 @@ mod tests {
             .tempdir()
             .expect("temp dir");
         std::fs::write(dir.path().join("Cargo.toml"), "this is not [[valid toml").unwrap();
-        assert_eq!(discover(dir.path()), TargetMap::Unknown);
+        assert!(matches!(discover(dir.path()), TargetMap::Unknown { .. }));
     }
 
     #[test]
@@ -374,7 +416,7 @@ mod tests {
             TargetMap::Known { .. } => {
                 assert!(!map.is_outside_targets(Path::new("src/lib.rs")));
             }
-            TargetMap::Unknown => {
+            TargetMap::Unknown { .. } => {
                 // cargo/network unavailable in this sandbox — do not fail the
                 // suite over an environment precondition this test cannot
                 // control; the dedicated Unknown-path tests above already

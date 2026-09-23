@@ -98,5 +98,12 @@ fn an_unknown_target_map_classifies_nothing() {
         ("src/lib.rs", "#[cfg(feature = \"extra\")]\nmod extra;\n"),
         ("src/extra.rs", "\n"),
     ]);
-    assert!(find_feature_gated(dir.path(), &TargetMap::Unknown, &indexed).is_empty());
+    assert!(find_feature_gated(
+        dir.path(),
+        &TargetMap::Unknown {
+            detail: "test fixture".into()
+        },
+        &indexed
+    )
+    .is_empty());
 }

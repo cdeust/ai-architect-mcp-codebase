@@ -35,6 +35,11 @@
 // mode a version bump would produce, without forcing every consumer through a
 // migration for an addition nothing existing depended on.
 //
+// The same rule covers `cargo_attribution` (issue #316), an additive
+// `#[serde(default)]` report field: an old sidecar loads it as `None` ("not
+// recorded by the binary that wrote this"), never as `unknown`, and an older
+// binary ignores it (no `deny_unknown_fields`).
+//
 // Storage decision (documented per the issue's "decide from what exists"):
 // coverage lives in a DEDICATED `index_coverage.json` sidecar beside the graph,
 // NOT inside the graph and NOT folded into the change-detection manifest —
@@ -50,6 +55,7 @@
 // the indexer detected no gap (a file keyed to a subtly wrong grammar can still
 // parse "clean"). Every tool that surfaces this repeats that caveat.
 
+use super::cargo_attribution::CargoAttributionStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -115,6 +121,12 @@ pub struct CoverageReport {
     /// source: ADR-9841.
     #[serde(default)]
     pub pruned_dirs: BTreeMap<String, String>,
+    /// Whether the Cargo-derived buckets (`OutsideBuildTargets`,
+    /// `FeatureGated`) carry information (issue #316). `None` only on a
+    /// sidecar written before this field existed: every write path of this
+    /// binary sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo_attribution: Option<CargoAttributionStatus>,
 }
 
 impl CoverageReport {
@@ -125,6 +137,7 @@ impl CoverageReport {
             files_indexed,
             files: BTreeMap::new(),
             pruned_dirs: BTreeMap::new(),
+            cargo_attribution: None,
         }
     }
 
@@ -206,6 +219,7 @@ pub struct CoverageCollector {
     files: BTreeMap<String, FileCoverage>,
     files_indexed: u64,
     pruned_dirs: BTreeMap<String, String>,
+    cargo_attribution: Option<CargoAttributionStatus>,
 }
 
 impl CoverageCollector {
@@ -281,6 +295,17 @@ impl CoverageCollector {
             detail,
             error_ranges: Vec::new(),
         });
+    }
+
+    /// Records whether this pass's Cargo attribution carried information
+    /// (issue #316).
+    pub fn set_cargo_attribution(&mut self, status: CargoAttributionStatus) {
+        self.cargo_attribution = Some(status);
+    }
+
+    /// The status `set_cargo_attribution` recorded, if the pass reached it.
+    pub fn cargo_attribution(&self) -> Option<CargoAttributionStatus> {
+        self.cargo_attribution.clone()
     }
 
     pub fn files_indexed(&self) -> u64 {
@@ -409,6 +434,34 @@ mod tests {
     }
 
     const OUTSIDE_TARGETS_DETAIL_FOR_TEST: &str = "not in any Cargo target (test fixture)";
+
+    /// Issue #316: a sidecar written before `cargo_attribution` existed loads
+    /// with `None`, which means "not recorded", never "unknown".
+    #[test]
+    fn an_old_sidecar_loads_with_no_cargo_attribution_recorded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = coverage_path(dir.path());
+        fs::write(
+            &path,
+            r#"{"schema_version":1,"index_mode":"full","files_indexed":2,"files":{}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path).expect("an old sidecar still loads");
+        assert_eq!(loaded.cargo_attribution, None);
+    }
+
+    #[test]
+    fn cargo_attribution_round_trips_through_the_sidecar() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = coverage_path(dir.path());
+        let mut report = CoverageReport::new("full", 1);
+        report.cargo_attribution = Some(CargoAttributionStatus::Unknown {
+            detail: "cargo not found on PATH".into(),
+        });
+        save(&path, &report).expect("save");
+        let loaded = load(&path).expect("load");
+        assert_eq!(loaded.cargo_attribution, report.cargo_attribution);
+    }
 
     #[test]
     fn unlinked_file_round_trips_and_never_overwrites_an_existing_gap() {

@@ -11,7 +11,7 @@ use std::path::Path;
 
 /// What the cargo target map says about `rel`.
 pub(super) fn cargo_attribution(map: &TargetMap, rel: &str) -> CargoAttribution {
-    if matches!(map, TargetMap::Unknown) {
+    if matches!(map, TargetMap::Unknown { .. }) {
         CargoAttribution::Unknown
     } else if map.is_outside_targets(Path::new(rel)) {
         CargoAttribution::OutsideBuildTargets

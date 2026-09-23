@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 mod batch;
+pub mod cargo_attribution;
 mod cargo_features;
 pub mod cargo_targets;
 mod cfg_expr;
@@ -284,6 +285,7 @@ pub fn index_codebase_with_language(
 
     let mut coverage = CoverageReport::new("full", files_indexed);
     coverage.pruned_dirs = collector.pruned_dirs().clone();
+    coverage.cargo_attribution = collector.cargo_attribution();
     coverage.files = collector.into_files();
 
     Ok(IndexResult {
@@ -321,45 +323,31 @@ fn record_iac_gaps(
 /// Flags each indexed `.rs` file that sits outside every compiled Cargo
 /// target (issue #284): a proof harness under `kani/`, a `fuzz/` directory
 /// excluded from the workspace, or any directory Cargo's target discovery
-/// does not walk. Runs once per full index, and only when the codebase has a
-/// root `Cargo.toml` AND at least one `.rs` file was walked — every other
-/// corpus (Python/TypeScript-only, or a Rust corpus with no manifest) pays
-/// nothing (no subprocess spawned). `TargetMap::Unknown` (no `Cargo.toml` /
-/// no `cargo` / a failed `cargo metadata`, including the #282
-/// "workspace failed to load" case) attributes NOTHING — absence of the map
-/// is never evidence a file is uncompiled. Then flags each file the default
-/// build compiles out through a `#[cfg(feature)]` on its `mod` declaration
-/// (issue #291, `feature_gated.rs`), from the same map.
+/// does not walk; then each file the default build compiles out through a
+/// `#[cfg(feature)]` on its `mod` declaration (issue #291), from the same map.
+/// Records whether that map was known (issue #316): a Python/TypeScript-only
+/// corpus, or one with no root `Cargo.toml`, is `not_applicable` and pays no
+/// subprocess; a failed `cargo metadata` (the #282 nested-workspace case) or
+/// a missing `cargo` is `unknown` and attributes NOTHING — absence of the map
+/// is never evidence a file is uncompiled. See `cargo_attribution.rs`.
 fn record_cargo_attributions(
     collector: &mut CoverageCollector,
     codebase_path: &Path,
     source_files: &[PathBuf],
 ) {
-    let has_rust_file = source_files
+    let rust_files: BTreeSet<PathBuf> = source_files
         .iter()
-        .any(|f| f.extension().and_then(|e| e.to_str()) == Some("rs"));
-    if !has_rust_file || !codebase_path.join("Cargo.toml").is_file() {
-        return;
+        .filter(|f| f.extension().and_then(|e| e.to_str()) == Some("rs"))
+        .map(|f| relative_path(codebase_path, f))
+        .collect();
+    let found = cargo_attribution::attribute(codebase_path, &rust_files);
+    for rel in &found.outside_targets {
+        collector.record_outside_targets(rel, cargo_targets::OUTSIDE_TARGETS_DETAIL);
     }
-    let map = cargo_targets::discover(codebase_path);
-    if matches!(map, cargo_targets::TargetMap::Unknown) {
-        return;
+    for (rel, detail) in found.feature_gated {
+        collector.record_feature_gated(&rel, detail);
     }
-    let mut rust_files = BTreeSet::new();
-    for file_path in source_files {
-        if file_path.extension().and_then(|e| e.to_str()) != Some("rs") {
-            continue;
-        }
-        let rel = relative_path(codebase_path, file_path);
-        if map.is_outside_targets(&rel) {
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            collector.record_outside_targets(&rel_str, cargo_targets::OUTSIDE_TARGETS_DETAIL);
-        }
-        rust_files.insert(rel);
-    }
-    for (rel, detail) in feature_gated::find_feature_gated(codebase_path, &map, &rust_files) {
-        collector.record_feature_gated(&rel.to_string_lossy().replace('\\', "/"), detail);
-    }
+    collector.set_cargo_attribution(found.status);
 }
 
 /// Records each IaC parse gap into the collector: incomplete parses become

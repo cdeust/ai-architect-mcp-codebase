@@ -128,12 +128,10 @@ fn resolve_with_client_fails_before_issuing_a_definition_request() {
     let mut client = spawn_fake(script, log.path(), &fixture.root);
 
     let node_index = build_node_position_index(&fixture.store).expect("index");
-    let plan = plan_for(
-        &fixture,
-        &node_index,
-        Duration::from_secs(5),
-        &TargetMap::Unknown,
-    );
+    let target_map = TargetMap::Unknown {
+        detail: "test fixture".into(),
+    };
+    let plan = plan_for(&fixture, &node_index, Duration::from_secs(5), &target_map);
 
     // `LspPass` carries no `Debug` impl (nothing else needs one), so drop the
     // `Ok` payload before `expect_err` — its bound is on `T`, not on `E`.
@@ -182,12 +180,10 @@ fn a_healthy_server_is_not_gated() {
     let mut client = spawn_fake(script, log.path(), &fixture.root);
 
     let node_index = build_node_position_index(&fixture.store).expect("index");
-    let plan = plan_for(
-        &fixture,
-        &node_index,
-        Duration::from_secs(2),
-        &TargetMap::Unknown,
-    );
+    let target_map = TargetMap::Unknown {
+        detail: "test fixture".into(),
+    };
+    let plan = plan_for(&fixture, &node_index, Duration::from_secs(2), &target_map);
 
     resolve_with_client(&fixture.store, &mut client, &plan, &unresolved)
         .expect("a healthy server must not be gated");
