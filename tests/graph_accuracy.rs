@@ -2077,15 +2077,15 @@ const PG_STORE_MEMORY_STORE_CLASS: ExpectedClassInput = ExpectedClassInput {
 /// Post-build: cross-class/cross-kind calls the builder's resolved_calls
 /// doesn't model directly, as relaxed CallSite-bearing expectations.
 ///
-/// Both Calls entries are real calls of the source. `__init__` (line 111)
-/// calls the module-level `_get_database_url` (line 43, sole definition);
-/// the resolver emits it. `insert_memory` (line 343) calls the bare
-/// `_now_iso()`, which Python scoping binds to the module function (line
-/// 96), never to the same-named method (line 320); the resolver drops it as
-/// ambiguous by the #30 policy (see `resolve_single_call` in
-/// src/resolver/calls.rs), so it is an expected false negative. The first
-/// was missing until #335: count-based matching let it fill the second's
-/// slot, which is how the Calls floor read 1.0.
+/// All three Calls entries are real calls of the source, each checked
+/// against the file. `__init__` (line 111) calls the module-level
+/// `_get_database_url` (line 43, sole definition). `insert_memory` (line 343)
+/// and the static method `_now_iso` (line 321) call the bare `_now_iso()`,
+/// which Python binds to the module function (line 96), never to the
+/// same-named method: class scope does not reach method bodies (Python
+/// Language Reference §4.2.2). Until #335 the fixture listed only the 343
+/// call; count-based matching hid the two missing annotations and the
+/// resolver's drop of the `_now_iso()` calls as ambiguous.
 fn push_pg_store_cross_kind_edges(f: &mut Fixture) {
     f.edges.push(ExpectedEdge {
         kind: "Uses",
@@ -2106,6 +2106,12 @@ fn push_pg_store_cross_kind_edges(f: &mut Fixture) {
         from_qn: "infrastructure/pg_store.py::PgMemoryStore::__init__::callsite::__resolved__::1"
             .to_string(),
         to_qn: "infrastructure/pg_store.py::_get_database_url".to_string(),
+    });
+    f.edges.push(ExpectedEdge {
+        kind: "Calls",
+        from_qn: "infrastructure/pg_store.py::PgMemoryStore::_now_iso::callsite::__resolved__::2"
+            .to_string(),
+        to_qn: "infrastructure/pg_store.py::_now_iso".to_string(),
     });
 }
 
@@ -3990,12 +3996,7 @@ fn infrastructure_pg_store_py() {
         Floors {
             nodes: 1.0,
             defines: 1.0,
-            // source: measured 2026-09-23 with the missing `__init__ ->
-            // _get_database_url` annotation added: tp=41 fp=0 fn=1, F1 0.988.
-            // The fn is `insert_memory -> _now_iso`, dropped by the #30
-            // ambiguity policy (push_pg_store_cross_kind_edges). The earlier
-            // 1.0 came from a count match that hid both facts.
-            calls: 0.98,
+            calls: 1.0,
         },
     );
 }
