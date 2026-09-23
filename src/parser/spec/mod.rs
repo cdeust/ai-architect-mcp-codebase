@@ -94,6 +94,8 @@ mod python_parity_tests;
 #[cfg(test)]
 mod rust_call_shape_tests;
 #[cfg(test)]
+mod rust_nested_fn_tests;
+#[cfg(test)]
 mod rust_parity_corpus;
 #[cfg(test)]
 mod rust_parity_tests;
