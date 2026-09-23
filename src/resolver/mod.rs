@@ -17,6 +17,7 @@ mod calls;
 mod extends;
 mod implements;
 mod imports;
+mod nested_scope;
 mod phases;
 mod receiver;
 mod uses;

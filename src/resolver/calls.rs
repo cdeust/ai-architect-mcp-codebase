@@ -389,6 +389,16 @@ fn resolve_single_call(
         Some(c) => c,
         None => return PolicyResolution::NotFound,
     };
+    // Rust block-scoped fn items (issue #327): a nested fn shadows every
+    // other candidate inside its enclosing callable and is invisible outside.
+    let scoped: Vec<SymbolEntry>;
+    let candidates: &[SymbolEntry] = if ctx.provider.language() == "rust" {
+        scoped =
+            nested_scope::visible_candidates(ctx.idx, candidates, site.caller_qn, last != callee);
+        &scoped
+    } else {
+        candidates
+    };
     let ev = crate::call_evidence::CallEvidence {
         imports_hint: &imports_hint,
         caller_file: file_id,
