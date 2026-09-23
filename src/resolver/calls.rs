@@ -242,29 +242,34 @@ fn stage_call_edge(
     *tally.resolved += 1;
 }
 
-/// Rust `self.<m>` / `Self::<m>` on a Method caller: resolved against the
-/// enclosing impl's type BEFORE `resolve_single_call`'s by-name lookup,
-/// which would otherwise try (and always fail) to find a symbol literally
-/// named "self.<m>" — see receiver.rs's module doc and issue #283.
+/// Same-class receiver call on a Method caller — Rust `self.<m>` /
+/// `Self::<m>` (issue #283), Python `self.<m>` and TypeScript `this.<m>`
+/// (issue #290): resolved against the caller's enclosing type BEFORE
+/// `resolve_single_call`'s by-name lookup, which would otherwise try (and
+/// always fail) to find a symbol literally named "self.<m>" / "this.<m>" —
+/// see receiver/mod.rs's module doc. Which languages take part is decided by
+/// `LanguageProvider::self_value_prefix`/`self_type_prefix`, not here.
 ///
 /// precondition: `site.callee`/`site.caller_qn`/`site.caller_label` come
 /// from the same `CallSite` row `resolve_single_call` was called with.
-/// postcondition: `None` when the gate does not apply (non-Rust caller, not
-/// a Method, or the callee isn't `self`/`Self`-shaped) — the caller must
-/// fall through to the pre-existing by-name path. `Some(_)` is a final
-/// answer for a self/Self-shaped callee and is NEVER a bare-name-lookup
-/// fallback: `resolve_receiver_bound` returns `Some(NotFound)` /
-/// `Some(Ambiguous)` rather than `None` for those outcomes (receiver.rs
-/// postcondition) — this is what preserves the zero-false-callers property
-/// this module's tests defend.
-fn rust_receiver_gate(
+/// postcondition: `None` when the gate does not apply (the language has no
+/// same-class receiver spelling, the caller is not a Method, or the callee
+/// isn't receiver-shaped) — the caller must fall through to the
+/// pre-existing by-name path. `Some(_)` is a final answer for a
+/// receiver-shaped callee and is NEVER a bare-name-lookup fallback:
+/// `resolve_receiver_bound` returns `Some(NotFound)` / `Some(Ambiguous)`
+/// rather than `None` for those outcomes (receiver/mod.rs postcondition) —
+/// this is what preserves the zero-false-callers property this module's
+/// tests defend.
+fn same_class_receiver_gate(
     ctx: &ResolveContext,
     site: &CallSite,
 ) -> Option<PolicyResolution<SymbolEntry>> {
-    if ctx.provider.language() != "rust" || site.caller_label != "Method" {
+    let spelling = receiver::ReceiverSpelling::of(ctx.provider);
+    if !spelling.binds_same_class_receiver() || site.caller_label != "Method" {
         return None;
     }
-    let form = receiver::classify(site.callee);
+    let form = receiver::classify(site.callee, &spelling);
     if !matches!(
         form,
         receiver::ReceiverForm::SelfValue(_) | receiver::ReceiverForm::SelfType(_)
@@ -290,7 +295,7 @@ fn rust_receiver_gate(
 /// attached, meaning the parser found no once-bound-and-typed local) — the
 /// caller must fall through to the pre-existing by-name path. `Some(_)` is a
 /// final answer for a hinted local receiver and is NEVER a bare-name-lookup
-/// fallback, mirroring `rust_receiver_gate`'s zero-false-callers discipline.
+/// fallback, mirroring `same_class_receiver_gate`'s zero-false-callers discipline.
 fn rust_local_receiver_gate(
     ctx: &ResolveContext,
     site: &CallSite,
@@ -299,7 +304,7 @@ fn rust_local_receiver_gate(
     if ctx.provider.language() != "rust" || site.receiver_hint.is_empty() {
         return None;
     }
-    let form = receiver::classify(site.callee);
+    let form = receiver::classify(site.callee, &receiver::ReceiverSpelling::of(ctx.provider));
     let receiver::ReceiverForm::Local { m, .. } = form else {
         return None;
     };
@@ -343,14 +348,14 @@ fn rust_local_receiver_gate(
 /// parser/kotlin/extract/g2.rs::qualifier_or_tail — but never a
 /// value-receiver, which the parser strips back to a bare name before it
 /// reaches here); `file_id` is the caller's file path; `site.caller_qn`/
-/// `site.caller_label` identify the calling symbol (used only by the Rust
-/// `self`/`Self` receiver gate below); `site.receiver_hint` is the
+/// `site.caller_label` identify the calling symbol (used only by the
+/// same-class receiver gate below); `site.receiver_hint` is the
 /// parser-attached issue #283 palier 3 hint (used only by the local-receiver
 /// gate below).
 /// postcondition: the returned `Resolution` depends only on the candidate
 /// set and the evidence context — never directly on whether the callee was
-/// spelled qualified or unqualified — EXCEPT for the two Rust receiver
-/// gates, each of which is itself evidence (the callee's own receiver
+/// spelled qualified or unqualified — EXCEPT for the two receiver gates,
+/// each of which is itself evidence (the callee's own receiver
 /// spelling, or the parser's derived local-binding type), not a
 /// spelling-dependent shortcut around the policy.
 fn resolve_single_call(
@@ -359,7 +364,7 @@ fn resolve_single_call(
     file_id: &str,
 ) -> PolicyResolution<SymbolEntry> {
     let callee = site.callee;
-    if let Some(res) = rust_receiver_gate(ctx, site) {
+    if let Some(res) = same_class_receiver_gate(ctx, site) {
         return res;
     }
     if let Some(res) = rust_local_receiver_gate(ctx, site, file_id) {

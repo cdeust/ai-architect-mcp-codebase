@@ -6,18 +6,22 @@
 
 use crate::graph_store::GraphStore;
 use crate::parser::Language;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 mod batch;
+mod cargo_features;
 pub mod cargo_targets;
+mod cfg_expr;
 pub mod coverage;
+mod feature_gated;
 mod iac;
 mod incremental;
 mod light_link;
 pub mod manifest;
 mod persist;
+mod rust_mod_decls;
 mod walk;
 
 // Re-exported so sibling submodules (persist, incremental) keep referring to
@@ -270,8 +274,9 @@ pub fn index_codebase_with_language(
     // harness, a `fuzz/` dir excluded from the workspace, …). Runs last so a
     // stronger existing gap (parse_partial/skipped/quarantined, including one
     // the IaC pass just added) is never downgraded — `record_outside_targets`
-    // is `or_insert`, see `coverage.rs`.
-    record_outside_target_files(&mut collector, codebase_path, &source_files);
+    // is `or_insert`, see `coverage.rs`. The same `cargo metadata` map also
+    // drives the feature-gated attribution (issue #291).
+    record_cargo_attributions(&mut collector, codebase_path, &source_files);
 
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;
@@ -322,8 +327,10 @@ fn record_iac_gaps(
 /// nothing (no subprocess spawned). `TargetMap::Unknown` (no `Cargo.toml` /
 /// no `cargo` / a failed `cargo metadata`, including the #282
 /// "workspace failed to load" case) attributes NOTHING — absence of the map
-/// is never evidence a file is uncompiled.
-fn record_outside_target_files(
+/// is never evidence a file is uncompiled. Then flags each file the default
+/// build compiles out through a `#[cfg(feature)]` on its `mod` declaration
+/// (issue #291, `feature_gated.rs`), from the same map.
+fn record_cargo_attributions(
     collector: &mut CoverageCollector,
     codebase_path: &Path,
     source_files: &[PathBuf],
@@ -338,6 +345,7 @@ fn record_outside_target_files(
     if matches!(map, cargo_targets::TargetMap::Unknown) {
         return;
     }
+    let mut rust_files = BTreeSet::new();
     for file_path in source_files {
         if file_path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
@@ -347,6 +355,10 @@ fn record_outside_target_files(
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             collector.record_outside_targets(&rel_str, cargo_targets::OUTSIDE_TARGETS_DETAIL);
         }
+        rust_files.insert(rel);
+    }
+    for (rel, detail) in feature_gated::find_feature_gated(codebase_path, &map, &rust_files) {
+        collector.record_feature_gated(&rel.to_string_lossy().replace('\\', "/"), detail);
     }
 }
 

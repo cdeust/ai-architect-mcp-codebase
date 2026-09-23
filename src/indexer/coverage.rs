@@ -19,6 +19,11 @@
 //   * UnlinkedFile (issue #292) — rust-analyzer's own `unlinked-file` verdict,
 //     recorded by the LSP pass (only for files it opened), never by the walk.
 //     source: ADR-9845.
+//   * FeatureGated (issue #291) — the file WAS indexed and sits inside a
+//     compiled target's directory, but every `mod` declaration reaching it
+//     carries a `#[cfg]` that is false under the package's default features,
+//     so the default build (and rust-analyzer) compiles it out. See
+//     `feature_gated.rs`. Additive like OutsideBuildTargets (schema note below).
 //
 // Schema note (issue #284, arbitrage #5 — not bumping `COVERAGE_SCHEMA_VERSION`
 // for this addition): the change is purely additive (a new enum variant with a
@@ -75,6 +80,9 @@ pub enum CoverageKind {
     /// rust-analyzer answered `unlinked-file` for it (issue #292): the file is
     /// in no crate of the server's crate graph. source: ADR-9845.
     UnlinkedFile,
+    /// Indexed, inside a compiled target's directory, but compiled out by a
+    /// `#[cfg(feature)]` false under default features (issue #291).
+    FeatureGated,
 }
 
 /// One uncovered file's record.
@@ -132,6 +140,7 @@ impl CoverageReport {
                 CoverageKind::Quarantined => counts.quarantined += 1,
                 CoverageKind::OutsideBuildTargets => counts.outside_build_targets += 1,
                 CoverageKind::UnlinkedFile => counts.unlinked_file += 1,
+                CoverageKind::FeatureGated => counts.feature_gated += 1,
             }
         }
         counts
@@ -157,6 +166,7 @@ pub struct CoverageCounts {
     pub quarantined: u64,
     pub outside_build_targets: u64,
     pub unlinked_file: u64,
+    pub feature_gated: u64,
 }
 
 /// The coverage sidecar path for a given tool `output_dir` (sibling of `graph/`).
@@ -253,12 +263,22 @@ impl CoverageCollector {
     /// and a file that is ALSO parse-incomplete/skipped/quarantined already
     /// carries the stronger signal (its declarations may be missing outright,
     /// which subsumes "declarations present but unresolved calls"). Called
-    /// after the main walk (`mod.rs`'s `record_outside_target_files`) and
+    /// after the main walk (`mod.rs`'s `record_cargo_attributions`) and
     /// after `record_iac_gaps`, so any prior record for the same file wins.
     pub fn record_outside_targets(&mut self, rel: &str, detail: &str) {
         self.files.entry(rel.to_string()).or_insert(FileCoverage {
             kind: CoverageKind::OutsideBuildTargets,
             detail: detail.to_string(),
+            error_ranges: Vec::new(),
+        });
+    }
+
+    /// Records a file compiled out by a default-disabled feature (issue
+    /// #291). `or_insert`, for the reason `record_outside_targets` gives.
+    pub fn record_feature_gated(&mut self, rel: &str, detail: String) {
+        self.files.entry(rel.to_string()).or_insert(FileCoverage {
+            kind: CoverageKind::FeatureGated,
+            detail,
             error_ranges: Vec::new(),
         });
     }

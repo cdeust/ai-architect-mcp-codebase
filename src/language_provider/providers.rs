@@ -74,6 +74,16 @@ impl LanguageProvider for RustProvider {
     fn derive_macro_key(&self) -> Option<&'static str> {
         Some("rust")
     }
+    fn self_value_prefix(&self) -> Option<&'static str> {
+        // `self.method()` — the value receiver. source: Rust Reference,
+        // "Method-call expressions"; issue #283.
+        Some("self.")
+    }
+    fn self_type_prefix(&self) -> Option<&'static str> {
+        // `Self::assoc()` — the type alias for the implementing type.
+        // source: Rust Reference, "Self types"; issue #283.
+        Some("Self::")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +142,16 @@ impl LanguageProvider for PythonProvider {
             "None", "True", "False", "Any", "List", "Dict", "Tuple", "Set", "Optional",
         ]
     }
+    fn self_value_prefix(&self) -> Option<&'static str> {
+        // `self.method()`. `self` is a convention, not a keyword — it is
+        // merely the first positional parameter of an instance method. The
+        // receiver gate is narrowed to a `Method` caller (i.e. a `def` inside
+        // a class body), which is exactly the scope where the convention is
+        // load-bearing; a module-level function's local named `self` never
+        // reaches the gate. source: docs.python.org/3/tutorial/classes.html
+        // §9.3.2 "there is nothing special about the name self"; issue #290.
+        Some("self.")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +193,17 @@ impl LanguageProvider for TypeScriptProvider {
             "Array", "Promise", "Map", "Set", "Record", "Partial", "Readonly", "Object", "String",
             "Number", "Boolean", "Date",
         ]
+    }
+    fn self_value_prefix(&self) -> Option<&'static str> {
+        // `this.method()`. Inside a class method body TypeScript types `this`
+        // as the containing class (the `ThisType` of the method), which is
+        // what makes the enclosing-class binding sound. A `function`
+        // expression nested in that body rebinds `this` dynamically; the
+        // parser attributes its calls to the enclosing method, so such a
+        // `this.x()` is a known residual imprecision, recorded on issue #290
+        // rather than guessed around. source: TypeScript Handbook, "this
+        // types" / "this parameters"; issue #290.
+        Some("this.")
     }
 }
 

@@ -9,14 +9,15 @@ use serde_json::{json, Value};
 use crate::epistemic;
 use crate::indexing_handlers;
 
-/// The five gap buckets `indexing_handlers::coverage_summary` reports. Any
+/// The six gap buckets `indexing_handlers::coverage_summary` reports. Any
 /// non-zero count means the index knows it did not cover something.
-const GAP_BUCKETS: [&str; 5] = [
+const GAP_BUCKETS: [&str; 6] = [
     "parse_incomplete",
     "skipped",
     "quarantined",
     "outside_build_targets",
     "unlinked_file",
+    "feature_gated",
 ];
 
 /// Downgrades an `exact` blast radius to `lower-bound` unless the graph carries
@@ -114,12 +115,13 @@ mod tests {
             "quarantined": { "count": 0 },
             "outside_build_targets": { "count": 0 },
             "unlinked_file": { "count": 0 },
+            "feature_gated": { "count": 0 },
         });
         assert!(missing_evidence_reason(&summary).is_none());
     }
 
     /// Every bucket must block on its own. A test that only covered one would
-    /// pass while the other four silently kept fabricating `exact`.
+    /// pass while the others silently kept fabricating `exact`.
     #[test]
     fn each_gap_bucket_blocks_exact_on_its_own() {
         for bucket in GAP_BUCKETS {
@@ -129,6 +131,7 @@ mod tests {
                 "quarantined": { "count": 0 },
                 "outside_build_targets": { "count": 0 },
                 "unlinked_file": { "count": 0 },
+                "feature_gated": { "count": 0 },
             });
             summary[bucket]["count"] = json!(3);
             let reason = missing_evidence_reason(&summary)

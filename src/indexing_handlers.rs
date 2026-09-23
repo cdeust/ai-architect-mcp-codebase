@@ -317,7 +317,10 @@ pub(crate) const COVERAGE_CAVEAT: &str = "Best-effort signal, NOT a completeness
     are in the graph — but sit outside every compiled Cargo target, so calls out of \
     them cannot be resolved by the language server. 'unlinked_file' files (issue \
     #292) are ones rust-analyzer itself reported as in no crate, checked only for \
-    files an LSP pass opened. \
+    files an LSP pass opened. 'feature_gated' files (issue #291) WERE indexed and \
+    sit inside a compiled target, but every `mod` declaration reaching them is \
+    behind a `#[cfg]` false under the package's default features, so the default \
+    build and the language server compile them out; the reason names the gate. \
     source: DeusData/codebase-memory-mcp coverage wording.";
 
 // ---------------------------------------------------------------------------

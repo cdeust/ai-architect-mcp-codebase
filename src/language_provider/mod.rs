@@ -84,6 +84,33 @@ pub trait LanguageProvider: Send + Sync {
         None
     }
 
+    /// The spelling that names "the instance the enclosing method is running
+    /// on", INCLUDING its member separator: `self.` (Rust, Python), `this.`
+    /// (TypeScript). `resolver::receiver` binds such a callee to the caller's
+    /// own enclosing type instead of looking up a symbol literally named
+    /// `self.<m>`.
+    ///
+    /// `None` — the default — means this language does not opt in, and the
+    /// receiver gate never fires for it: every non-overriding provider keeps
+    /// its pre-issue-#283/#290 resolution behavior byte for byte. Opting a
+    /// language in is a deliberate act that owes the gate's evidence
+    /// discipline (never fall back to a bare-name lookup) and an end-to-end
+    /// regression suite. source: issues #283 (Rust) and #290 (Python,
+    /// TypeScript).
+    fn self_value_prefix(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// The TYPE-relative receiver spelling, including its separator: Rust's
+    /// `Self::`. `None` for every other language today — Python's `cls.` and
+    /// TypeScript's `super.` are NOT this form (`cls`/`super` do not denote
+    /// the enclosing type itself: `cls` is the *runtime* class of the
+    /// instance under inheritance, `super.` resolves to a BASE type) and were
+    /// deliberately left out of issue #290's scope rather than guessed at.
+    fn self_type_prefix(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Package/module grouping for a file id (PackageProximity evidence +
     /// package-keyed ImportMatch, issue #29). `None` is the honest default —
     /// returning `None` for a language is what preserves its pre-issue-#29

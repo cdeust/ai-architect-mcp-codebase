@@ -106,6 +106,18 @@ an unresolved call site are opened, so absence of the flag is not a
 completeness claim. An incremental `index_codebase` drops `unlinked_file`
 entries (the verdict can change when another file adds a `mod`); the next
 LSP pass records them again.
+
+The report also carries `feature_gated` (issue #291): `.rs` files that sit
+inside a compiled target's directory but are reached only through `mod`
+declarations whose `#[cfg(...)]` is false under the package's default
+features (`[features] default` from the same `cargo metadata` call, followed
+transitively). The default build compiles them out, and so does
+rust-analyzer, so calls in them cannot be resolved by the language server;
+each entry's reason names the gating attribute. Only `feature = "..."`
+options are evaluated: a `cfg(test)`, `cfg(unix)`, or any other predicate the
+feature table cannot decide never flags a file, and a module another crate
+root compiles without the gate is not flagged.
+
 Graphs created before entry metadata was stored require a full reindex:
 `analyze_codebase` rebuilds them, and `index_codebase` automatically falls back
 to a full index when its incremental compatibility check detects the old schema.

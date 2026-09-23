@@ -2,15 +2,16 @@
 //
 // Carries forward unchanged files' coverage gaps, overlays the freshly
 // reparsed files' fresh gaps, and recomputes the outside-build-targets gap
-// class fresh every pass (issue #284). Separable from the change-detection
+// class (issue #284) and the feature-gated one (issue #291) fresh every pass. Separable from the change-detection
 // path: this module only ever reads a `ChangeSet`/`Discovered` slice, never
 // mutates the graph.
 
-use std::collections::HashSet;
-use std::path::Path;
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
 use super::super::cargo_targets;
 use super::super::coverage::{self, FileCoverage};
+use super::super::feature_gated;
 use super::{ChangeSet, Discovered};
 use std::collections::BTreeMap;
 
@@ -21,12 +22,13 @@ use std::collections::BTreeMap;
 /// file clears its flag once it becomes parseable (issue #57 item 5). Deleted
 /// and renamed-old files are absent from `current_rels`, so their gaps drop too.
 ///
-/// `OutsideBuildTargets` entries (issue #284) are DELIBERATELY EXCLUDED from
+/// `OutsideBuildTargets` entries (issue #284) and `FeatureGated` entries
+/// (issue #291, a `[features] default` edit flips them) are DELIBERATELY EXCLUDED from
 /// the carry-forward: the compiled-target set can flip with zero `.rs` files
 /// touched (a `[[test]]` added to `Cargo.toml`), so carrying a prior file's
 /// verdict forward would let it go stale silently. The caller
 /// (`save_incremental_coverage`) recomputes them fresh every pass via
-/// `overlay_outside_targets`. `UnlinkedFile` entries (issue #292) are
+/// `overlay_cargo_attributions`. `UnlinkedFile` entries (issue #292) are
 /// excluded for the same reason — a `mod` added in another file links an
 /// untouched one — but only the next LSP pass can recompute them (ADR-9845).
 fn merge_coverage(
@@ -42,13 +44,18 @@ fn merge_coverage(
     } = *carry;
     let mut report = coverage::CoverageReport::new(index_mode, files_indexed);
     // Carry forward prior gaps for files that still exist and were not
-    // reparsed — except OutsideBuildTargets and UnlinkedFile (see doc).
+    // reparsed — except the cargo-derived kinds and UnlinkedFile, all
+    // recomputed every pass (see doc).
     if let Some(prior) = prior {
         for (rel, cov) in &prior.files {
             if current_rels.contains(rel)
                 && !reparsed_rels.contains(rel)
-                && cov.kind != coverage::CoverageKind::OutsideBuildTargets
-                && cov.kind != coverage::CoverageKind::UnlinkedFile
+                && !matches!(
+                    cov.kind,
+                    coverage::CoverageKind::OutsideBuildTargets
+                        | coverage::CoverageKind::UnlinkedFile
+                        | coverage::CoverageKind::FeatureGated
+                )
             {
                 report.files.insert(rel.clone(), cov.clone());
             }
@@ -85,8 +92,9 @@ struct CarryForward<'a> {
 /// `CoverageCollector::record_outside_targets`'s same rule on the full-index
 /// path. Costs one `cargo metadata` subprocess per incremental pass, gated
 /// (like the full-index path) on "a root `Cargo.toml` exists and at least one
-/// `.rs` file is in the current tree".
-fn overlay_outside_targets(
+/// `.rs` file is in the current tree". The same map then recomputes the
+/// `FeatureGated` gaps (issue #291), under the same `or_insert` rule.
+fn overlay_cargo_attributions(
     report: &mut coverage::CoverageReport,
     codebase: &Path,
     current: &[Discovered],
@@ -99,10 +107,12 @@ fn overlay_outside_targets(
     if matches!(map, cargo_targets::TargetMap::Unknown) {
         return;
     }
+    let mut rust_files = BTreeSet::new();
     for d in current {
         if !d.rel.ends_with(".rs") {
             continue;
         }
+        rust_files.insert(PathBuf::from(&d.rel));
         if map.is_outside_targets(Path::new(&d.rel)) {
             report
                 .files
@@ -113,6 +123,14 @@ fn overlay_outside_targets(
                     error_ranges: Vec::new(),
                 });
         }
+    }
+    for (rel, detail) in feature_gated::find_feature_gated(codebase, &map, &rust_files) {
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        report.files.entry(rel).or_insert(FileCoverage {
+            kind: coverage::CoverageKind::FeatureGated,
+            detail,
+            error_ranges: Vec::new(),
+        });
     }
 }
 
@@ -159,7 +177,7 @@ pub(super) fn save_incremental_coverage(
     // than carried forward: the pruned set changes the moment a directory is
     // added or removed. source: ADR-9841.
     report.pruned_dirs = pruned_dirs;
-    overlay_outside_targets(&mut report, codebase, current);
+    overlay_cargo_attributions(&mut report, codebase, current);
     if let Err(e) = coverage::save(&cov_path, &report) {
         eprintln!("[ap] coverage sidecar write failed: {e}");
     }

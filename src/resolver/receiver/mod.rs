@@ -1,11 +1,12 @@
-// resolver::receiver — Rust `self`/`Self`/local-variable receiver-call
-// static binding.
+// resolver::receiver — same-class (`self`/`Self`/`this`) and
+// local-variable receiver-call static binding.
 //
 // source: tasks/plan-issues-282-283-284.md §2.2/§2.3 (lots 4 and 6) and
 // ADR-9840 (paliers 1-2) / ADR-<pending> (palier 3, content in the lot-6 PR
-// body — coordinator note 2026-09-09: wiki_adr unavailable this session).
+// body — coordinator note 2026-09-09: wiki_adr unavailable this session);
+// issue #290 for the Python/TypeScript extension of paliers 1-2.
 //
-// Paliers 1-2 (`self.<m>` / `Self::<m>` on a `Method` caller,
+// Paliers 1-2 (`self.<m>` / `Self::<m>` / `this.<m>` on a `Method` caller,
 // `resolve_receiver_bound`, this file) and palier 3 (`s.<m>` where `s` is a
 // once-bound-and-typed local, ANY caller, `resolve_local_receiver_bound`,
 // the `local` submodule — split out to keep this file under the §4.1
@@ -13,21 +14,68 @@
 // does not require a `Method` caller (a free function's local variable
 // qualifies exactly as well as a method's), and it consumes the
 // parser-attached `CallSite.receiver_hint` rather than the caller's own
-// enclosing `impl`.
+// enclosing type.
+//
+// Paliers 1-2 are language-parameterized and NOTHING else about them is:
+// the only per-language fact is how the receiver is SPELLED
+// (`LanguageProvider::self_value_prefix` / `self_type_prefix`). The
+// qualified-name shape they key on is identical across the opted-in
+// languages — Rust `walkers/rust_types.rs::emit_impl_method`, Python
+// `walkers/defs.rs::emit_def` (the `enclosing_class` arm) and TypeScript
+// `walkers/typescript::emit_method` all build `{type_qn}::{name}` through
+// `parser::qual` and all label the node `Method` — which is why this is one
+// generalized module and not three sibling ones. Palier 3 stays Rust-only:
+// it consumes a Rust-only parser artifact (`CallSite.receiver_hint`), and
+// issue #290 deliberately does not ask for it.
 
 use super::*;
 
 mod local;
 pub(super) use local::resolve_local_receiver_bound;
 
+#[cfg(test)]
+mod spelling_tests;
+
+/// How one language spells a receiver that denotes the caller's own type,
+/// read off the `LanguageProvider` so `classify` stays a pure function of
+/// (callee text, spelling) — see the module header for why this is the ONLY
+/// per-language fact paliers 1-2 need.
+///
+/// A `None` field means the language has no such form and `classify` can
+/// never return the matching `ReceiverForm` variant for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ReceiverSpelling {
+    /// e.g. `self.` (Rust, Python) or `this.` (TypeScript).
+    value: Option<&'static str>,
+    /// e.g. `Self::` (Rust).
+    ty: Option<&'static str>,
+}
+
+impl ReceiverSpelling {
+    /// postcondition: `ReceiverSpelling { value: None, ty: None }` for every
+    /// language that has not opted in — `classify` then yields only `Local`
+    /// or `None`, so the palier-1/2 gate cannot fire.
+    pub(super) fn of(provider: &dyn crate::language_provider::LanguageProvider) -> Self {
+        ReceiverSpelling {
+            value: provider.self_value_prefix(),
+            ty: provider.self_type_prefix(),
+        }
+    }
+
+    /// True when this language opts into the same-class receiver paliers.
+    pub(super) fn binds_same_class_receiver(&self) -> bool {
+        self.value.is_some() || self.ty.is_some()
+    }
+}
+
 /// The receiver shape of a callee as spelled at the call site. `classify`
 /// never inspects surrounding context (types, scope) — only the callee
 /// text itself; it is spelling analysis, not resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ReceiverForm {
-    /// `self.<m>` — value receiver.
+    /// The language's value receiver (`self.<m>`, `this.<m>`).
     SelfValue(String),
-    /// `Self::<m>` — type-relative associated call.
+    /// The language's type-relative associated call (`Self::<m>`).
     SelfType(String),
     /// `<ident>.<m>` where `ident` is a plain identifier (not `self`) —
     /// resolved by palier 3 (lot 6) via the parser-attached `receiver_hint`
@@ -40,20 +88,25 @@ pub(super) enum ReceiverForm {
 }
 
 /// precondition: `callee` is the raw callee spelling `call_callee` parsed
-/// (e.g. `self.response_of`, `Self::new`, `sets[0].response_of`).
+/// (e.g. `self.response_of`, `Self::new`, `this.fetch`,
+/// `sets[0].response_of`); `spelling` is the caller's language's receiver
+/// spelling (`ReceiverSpelling::of`).
 /// postcondition: returns the receiver form implied by that spelling alone.
 /// A malformed or chained receiver (anything containing `(`, `[`, or a
 /// second `.` in the member position) always classifies as `None` — the
-/// classifier never guesses at a receiver it cannot parse outright.
-pub(super) fn classify(callee: &str) -> ReceiverForm {
-    if let Some(m) = callee.strip_prefix("self.") {
+/// classifier never guesses at a receiver it cannot parse outright, and in
+/// particular a `self.`/`this.` prefix whose member is NOT a plain
+/// identifier falls to `None` rather than to the `Local` arm below (that
+/// would re-admit exactly the chained shapes this refuses).
+pub(super) fn classify(callee: &str, spelling: &ReceiverSpelling) -> ReceiverForm {
+    if let Some(m) = spelling.value.and_then(|p| callee.strip_prefix(p)) {
         return if is_plain_ident(m) {
             ReceiverForm::SelfValue(m.to_string())
         } else {
             ReceiverForm::None
         };
     }
-    if let Some(m) = callee.strip_prefix("Self::") {
+    if let Some(m) = spelling.ty.and_then(|p| callee.strip_prefix(p)) {
         return if is_plain_ident(m) {
             ReceiverForm::SelfType(m.to_string())
         } else {
@@ -84,11 +137,14 @@ fn is_plain_ident(s: &str) -> bool {
 }
 
 /// precondition: `caller_qn` is a `Method`'s qualified name (e.g.
-/// `src/lib.rs::TaskSet::total`).
-/// postcondition: `Some(impl_qn)` is everything before the last `::`
-/// segment (the enclosing `impl`'s type QN); `None` when `caller_qn` has no
-/// `::` separator (never happens for an indexed `Method`, but this stays
-/// total rather than panicking on an unexpected caller shape).
+/// `src/lib.rs::TaskSet::total`, `pkg/tasks.py::TaskSet::total`,
+/// `src/tasks.ts::TaskSet::total` — the shape is the same for every
+/// opted-in language, see the module header).
+/// postcondition: `Some(owner_qn)` is everything before the last `::`
+/// segment (the enclosing type's QN: the Rust `impl` target, the Python or
+/// TypeScript class); `None` when `caller_qn` has no `::` separator (never
+/// happens for an indexed `Method`, but this stays total rather than
+/// panicking on an unexpected caller shape).
 pub(super) fn impl_qn_of(caller_qn: &str) -> Option<&str> {
     caller_qn.rsplit_once("::").map(|(impl_qn, _)| impl_qn)
 }
@@ -102,11 +158,12 @@ pub(super) fn strip_generics(s: &str) -> &str {
     }
 }
 
-/// Resolves a `self`/`Self` receiver call against the enclosing `impl`'s
-/// type, per plan §2.2 paliers 1-2.
+/// Resolves a same-class receiver call (`self.`/`Self::`/`this.`) against
+/// the caller's enclosing type, per plan §2.2 paliers 1-2 (issues #283,
+/// #290).
 ///
 /// precondition: `form` is the callee's classified receiver shape;
-/// `impl_qn` is the caller's enclosing impl-type QN (`impl_qn_of` on the
+/// `impl_qn` is the caller's enclosing type QN (`impl_qn_of` on the
 /// caller), when known.
 /// postcondition: `None` when `form` is not `SelfValue`/`SelfType`, or when
 /// `impl_qn` is `None` — the caller must fall back to the pre-existing
@@ -209,12 +266,16 @@ mod tests {
         }
     }
 
+    fn spelling(language: &str) -> ReceiverSpelling {
+        ReceiverSpelling::of(crate::language_provider::provider_for(language))
+    }
+
     // --- classify ---------------------------------------------------------
 
     #[test]
     fn classify_self_value() {
         assert_eq!(
-            classify("self.response_of"),
+            classify("self.response_of", &spelling("rust")),
             ReceiverForm::SelfValue("response_of".to_string())
         );
     }
@@ -222,7 +283,7 @@ mod tests {
     #[test]
     fn classify_self_type() {
         assert_eq!(
-            classify("Self::new"),
+            classify("Self::new", &spelling("rust")),
             ReceiverForm::SelfType("new".to_string())
         );
     }
@@ -230,7 +291,7 @@ mod tests {
     #[test]
     fn classify_local_binding_candidate() {
         assert_eq!(
-            classify("trial.response_of"),
+            classify("trial.response_of", &spelling("rust")),
             ReceiverForm::Local {
                 ident: "trial".to_string(),
                 m: "response_of".to_string(),
@@ -242,17 +303,26 @@ mod tests {
     fn classify_chained_self_call_is_none() {
         // self.tasks.get — a second `.` in the member position: not a
         // plain method name, must not be guessed at.
-        assert_eq!(classify("self.tasks.get"), ReceiverForm::None);
+        assert_eq!(
+            classify("self.tasks.get", &spelling("rust")),
+            ReceiverForm::None
+        );
     }
 
     #[test]
     fn classify_index_expression_receiver_is_none() {
-        assert_eq!(classify("sets[0].response_of"), ReceiverForm::None);
+        assert_eq!(
+            classify("sets[0].response_of", &spelling("rust")),
+            ReceiverForm::None
+        );
     }
 
     #[test]
     fn classify_chained_method_call_receiver_is_none() {
-        assert_eq!(classify("x.trim().len"), ReceiverForm::None);
+        assert_eq!(
+            classify("x.trim().len", &spelling("rust")),
+            ReceiverForm::None
+        );
     }
 
     // --- impl_qn_of / strip_generics --------------------------------------

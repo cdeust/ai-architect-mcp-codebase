@@ -24,7 +24,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 mod common;
+mod graph_accuracy_receiver_calls;
 use common::TempDirExt;
+use graph_accuracy_receiver_calls::push_method_to_method_calls;
 
 // ---------------------------------------------------------------------------
 // Expected graph for each fixture file
@@ -1819,7 +1821,7 @@ fn fixture_file_io_py() -> Fixture {
 }
 
 fn fixture_embedding_engine_py() -> Fixture {
-    build_core_fixture(&CoreFixtureInputs {
+    let mut f = build_core_fixture(&CoreFixtureInputs {
         name: "embedding_engine.py",
         category: "infrastructure",
         rel_path: "infrastructure/embedding_engine.py",
@@ -1864,13 +1866,20 @@ fn fixture_embedding_engine_py() -> Fixture {
             ],
         }],
         // No intra-file Function→Function calls — all calls go to methods of
-        // the singleton via the get_embedding_engine factory.
+        // the singleton via the get_embedding_engine factory. The same-class
+        // `self.m()` Method→Method calls are added below (issue #290).
         resolved_calls: &[],
-    })
+    });
+    push_method_to_method_calls(
+        &mut f.edges,
+        "infrastructure/embedding_engine.py",
+        graph_accuracy_receiver_calls::EMBEDDING_ENGINE,
+    );
+    f
 }
 
 fn fixture_mcp_client_py() -> Fixture {
-    build_core_fixture(&CoreFixtureInputs {
+    let mut f = build_core_fixture(&CoreFixtureInputs {
         name: "mcp_client.py",
         category: "infrastructure",
         rel_path: "infrastructure/mcp_client.py",
@@ -1911,7 +1920,13 @@ fn fixture_mcp_client_py() -> Fixture {
             ],
         }],
         resolved_calls: &[],
-    })
+    });
+    push_method_to_method_calls(
+        &mut f.edges,
+        "infrastructure/mcp_client.py",
+        graph_accuracy_receiver_calls::MCP_CLIENT,
+    );
+    f
 }
 
 fn pg_store_imports() -> &'static [(&'static str, u64)] {
@@ -2078,6 +2093,11 @@ fn fixture_pg_store_py() -> Fixture {
         resolved_calls: &[],
     });
     push_pg_store_cross_kind_edges(&mut f);
+    push_method_to_method_calls(
+        &mut f.edges,
+        "infrastructure/pg_store.py",
+        graph_accuracy_receiver_calls::PG_STORE,
+    );
     f
 }
 
@@ -3429,6 +3449,11 @@ fn fixture_test_http_server_py() -> Fixture {
         &mut f.edges,
         "tests_py/server/test_http_server.py",
         TEST_HTTP_SERVER_METHOD_TO_FN,
+    );
+    push_method_to_method_calls(
+        &mut f.edges,
+        "tests_py/server/test_http_server.py",
+        graph_accuracy_receiver_calls::TEST_HTTP_SERVER,
     );
     f
 }
