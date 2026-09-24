@@ -804,41 +804,54 @@ jobs:
 
       # A green `mcp-publisher publish` is not proof. Query the registry's
       # own API and fail the job if it never agrees with what was published.
-      # One early query is not evidence either way: on v0.13.0 the registry
-      # answered HTTP 500 to the first request, seconds after a successful
-      # publish, and served the new version minutes later. So poll, and treat
-      # an HTTP error or an unreadable body as "not yet".
+      # One early query is not evidence either way: after v0.13.0 the first
+      # request, seconds after a successful publish, got HTTP 500. On the
+      # three earlier releases the new version was served within 30 seconds.
+      # So poll, and treat an HTTP error, an unreadable body or a missing
+      # latest entry as "not yet". The bound is a judgment, not a measurement:
+      # at most 9 sleeps of 30 s plus 10 requests of at most 20 s, under 8
+      # minutes.
       - name: Verify the registry now serves the published version
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           set -uo pipefail
           VERSION=$(python3 -c "import json; print(json.load(open('server.runtime.json'))['version'])")
+          if [ -z "$VERSION" ]; then
+            echo "::error::cannot read the published version from server.runtime.json, so nothing can be verified"
+            exit 1
+          fi
           URL="https://registry.modelcontextprotocol.io/v0/servers?search=ai-architect-mcp-codebase"
           LATEST_PY='
           import json, sys
           try:
-              servers = json.load(sys.stdin)["servers"]
+              servers = json.load(open(sys.argv[1]))["servers"]
               print(next(
                   s["server"]["version"] for s in servers
                   if s["server"]["name"] == "io.github.cdeust/ai-architect-mcp-codebase"
                   and s["_meta"]["io.modelcontextprotocol.registry/official"]["isLatest"]
               ))
-          except (ValueError, KeyError, TypeError, StopIteration):
+          except (OSError, ValueError, KeyError, TypeError, StopIteration):
               pass
           '
+          BODY=$(mktemp)
           ATTEMPTS=10
           DELAY=30
           ACTUAL=""
+          STATUS=""
           for attempt in $(seq 1 "$ATTEMPTS"); do
-            ACTUAL=$(curl -fsSL --max-time 30 "$URL" | python3 -c "$LATEST_PY") || ACTUAL=""
-            echo "attempt ${attempt}/${ATTEMPTS} at ${SECONDS}s: registry reports latest '${ACTUAL:-none}' (expected ${VERSION})"
-            if [ "$ACTUAL" = "$VERSION" ]; then
+            STATUS=$(curl -sL --max-time 20 -o "$BODY" -w '%{http_code}' "$URL") || STATUS="curl-failed"
+            ACTUAL=""
+            if [ "$STATUS" = "200" ]; then
+              ACTUAL=$(python3 -c "$LATEST_PY" "$BODY")
+            fi
+            echo "attempt ${attempt}/${ATTEMPTS} at ${SECONDS}s: HTTP ${STATUS}, registry reports latest '${ACTUAL:-none}' (expected ${VERSION})"
+            if [ -n "$ACTUAL" ] && [ "$ACTUAL" = "$VERSION" ]; then
               exit 0
             fi
             if [ "$attempt" -lt "$ATTEMPTS" ]; then
               sleep "$DELAY"
             fi
           done
-          echo "::error::MCP Registry did not serve ${VERSION} after ${ATTEMPTS} attempts over ${SECONDS}s (last observed: ${ACTUAL:-none})"
+          echo "::error::MCP Registry did not serve ${VERSION} after ${ATTEMPTS} attempts over ${SECONDS}s (last HTTP status ${STATUS}, last observed version ${ACTUAL:-none})"
           exit 1
