@@ -815,6 +815,8 @@ jobs:
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
         run: |
+          # GitHub runs this with `bash -e`; -e stays on, and every command that
+          # may fail below is handled (`||`, an `if`, or a python that catches).
           set -uo pipefail
           VERSION=$(python3 -c "import json; print(json.load(open('server.runtime.json'))['version'])")
           if [ -z "$VERSION" ]; then
@@ -835,6 +837,10 @@ jobs:
               pass
           '
           BODY=$(mktemp)
+          if [ -z "$BODY" ]; then
+            echo "::error::cannot create a temporary file for the registry response"
+            exit 1
+          fi
           ATTEMPTS=10
           DELAY=30
           ACTUAL=""
