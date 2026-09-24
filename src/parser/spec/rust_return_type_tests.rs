@@ -251,3 +251,123 @@ fn a_call_inside_a_macro_argument_carries_the_same_hint() {
         with_set("fn make() -> Set { Set }\nfn run() { let s = make(); assert_eq!(s.m(), ()); }");
     assert_eq!(hint_of(&src, "s.m"), derived("Set"));
 }
+
+// A name rebound by any binding form must not keep the hint of an earlier
+// `let s = make();`: the call would go to the wrong receiver type.
+const REBIND_HEAD: &str =
+    "struct Other;\nimpl Other { fn m(&self) {} }\nfn make() -> Set { Set }\n";
+
+fn rebound_in(body: &str) -> (Option<String>, Option<String>) {
+    let src = with_set(&format!("{REBIND_HEAD}{body}"));
+    hint_of(&src, "s.m")
+}
+
+#[test]
+fn a_name_rebound_by_if_let_gives_no_hint() {
+    let body = "fn f(o: Option<Other>) { let s = make(); if let Some(s) = o { s.m(); } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_while_let_gives_no_hint() {
+    let body = "fn f(mut it: std::vec::IntoIter<Other>) { let s = make(); \
+                while let Some(s) = it.next() { s.m(); } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_match_arm_gives_no_hint() {
+    let body =
+        "fn f(o: Option<Other>) { let s = make(); match o { Some(s) => s.m(), None => {} } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_for_pattern_gives_no_hint() {
+    let body = "fn f(v: Vec<Other>) { let s = make(); for s in v { s.m(); } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_closure_parameter_gives_no_hint() {
+    let body = "fn f(v: Vec<Other>) { let s = make(); v.iter().for_each(|s| s.m()); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_nested_fn_parameter_gives_no_hint() {
+    let body = "fn f() { let s = make(); fn g(_s: Other) {} fn h(s: Other) { let _ = s; } g(Other); s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_let_in_a_nested_block_gives_no_hint() {
+    let body = "fn f(o: Other) { let s = make(); { let s = o; s.m(); } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_tuple_or_struct_pattern_gives_no_hint() {
+    let body = "fn f(o: (Other, u8)) { let s = make(); let (s, _n) = o; s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+    let body = "struct P { s: Other }\nfn f(p: P) { let s = make(); let P { s } = p; s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_an_at_or_ref_binding_gives_no_hint() {
+    let body = "fn f(o: Option<Other>) { let s = make(); if let Some(s @ _) = o { s.m(); } }";
+    assert_eq!(rebound_in(body), NONE);
+    let body = "fn f(o: Option<Other>) { let s = make(); if let Some(ref s) = o { s.m(); } }";
+    assert_eq!(rebound_in(body), NONE);
+    let body =
+        "fn f(mut o: Option<Other>) { let s = make(); if let Some(ref mut s) = o { s.m(); } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_that_a_macro_may_rebind_gives_no_hint() {
+    let body = "macro_rules! bind { ($n:ident, $e:expr) => { let $n = $e; } }\n\
+                fn f(o: Other) { let s = make(); bind!(s, o); s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+    let body = "fn f(o: Option<Other>) { let s = make(); \
+                dbg!(if let Some(s) = o { s.m(); }); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_macro_argument_that_only_uses_the_name_keeps_the_hint() {
+    let body = "fn f() { let s = make(); assert_eq!(s.m(), ()); }";
+    assert_eq!(rebound_in(body), derived("Set"));
+}
+
+// The same hole existed in the tiers that read a written type: a typed
+// parameter or typed `let` shadowed by a pattern kept its hint.
+#[test]
+fn a_typed_parameter_rebound_by_a_pattern_gives_no_hint() {
+    let src = with_set(&format!(
+        "{REBIND_HEAD}fn f(s: &Set, o: Option<Other>) {{ if let Some(s) = o {{ s.m(); }} }}"
+    ));
+    assert_eq!(hint_of(&src, "s.m"), NONE);
+    let src = with_set(&format!(
+        "{REBIND_HEAD}fn f(o: Vec<Other>) {{ let s: Set = Set; for s in o {{ s.m(); }} }}"
+    ));
+    assert_eq!(hint_of(&src, "s.m"), NONE);
+}
+
+// The path of a return type is part of its identity.
+#[test]
+fn a_scoped_return_type_gives_no_hint() {
+    let src = with_set(
+        "mod other { pub struct Set; }\nfn make() -> other::Set { other::Set }\n\
+         fn run() { let s = make(); s.m(); }",
+    );
+    assert_eq!(hint_of(&src, "s.m"), NONE);
+}
+
+#[test]
+fn a_return_type_that_is_an_alias_of_the_file_gives_no_hint() {
+    let src =
+        with_set("type S = Set;\nfn make() -> S { Set }\nfn run() { let s = make(); s.m(); }");
+    assert_eq!(hint_of(&src, "s.m"), NONE);
+}

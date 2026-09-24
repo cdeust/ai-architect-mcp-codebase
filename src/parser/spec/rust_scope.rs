@@ -25,6 +25,17 @@ const CLOSURE_KIND: &str = "closure_expression";
 /// `let_declaration` both declare a required `pattern` field).
 const BINDING_KINDS: [&str; 2] = ["parameter", "let_declaration"];
 
+/// Node kinds that bind names through a `pattern` field in addition to
+/// `BINDING_KINDS`: `if let` / `while let` (`let_condition`), a `match` arm and
+/// a `for` loop. Counted only where a name must be bound EXACTLY ONCE
+/// (`typed_local_map`, `once_bound_bindings`), so that a name rebound by one of
+/// them cannot keep the type of an earlier binding. `bound_names_in_scope`
+/// keeps its narrower set: adding names there would change which by-value
+/// arguments count as function references.
+/// source: tree-sitter-rust 0.24.2 src/node-types.json (`let_condition`,
+/// `match_arm` and `for_expression` each declare a `pattern` field).
+const EXTRA_BINDING_KINDS: [&str; 3] = ["let_condition", "match_arm", "for_expression"];
+
 /// A closure's parameter list. Its children are `parameter` (typed, `|x: T|`,
 /// already a `BINDING_KINDS` node) or a bare `_pattern` (untyped, `|x|`),
 /// which has no `pattern` field because it IS the pattern.
@@ -52,7 +63,7 @@ const BINDING_LEAF_KINDS: [&str; 2] = ["identifier", "shorthand_field_identifier
 pub(super) fn bound_names_in_scope(source: &str, call_node: Node) -> HashSet<String> {
     let mut names = HashSet::new();
     if let Some(scope) = enclosing_scope(call_node) {
-        for (_, pattern) in binding_patterns(scope) {
+        for (_, pattern) in binding_patterns(scope, false) {
             collect_identifiers(source, pattern, &mut names);
         }
     }
@@ -106,11 +117,13 @@ fn enclosing_scope(call_node: Node) -> Option<Node> {
 /// Every `(declaring node, pattern)` pair under `scope`: a `parameter` or
 /// `let_declaration` with its `pattern` field, and each untyped closure
 /// parameter, which is its own declaring node and pattern.
-fn binding_patterns(scope: Node) -> Vec<(Node, Node)> {
+fn binding_patterns(scope: Node, every_form: bool) -> Vec<(Node, Node)> {
     let mut out = Vec::new();
     let mut stack = vec![scope];
     while let Some(node) = stack.pop() {
-        if BINDING_KINDS.contains(&node.kind()) {
+        if BINDING_KINDS.contains(&node.kind())
+            || (every_form && EXTRA_BINDING_KINDS.contains(&node.kind()))
+        {
             if let Some(pattern) = node.child_by_field_name(PATTERN_FIELD) {
                 out.push((node, pattern));
             }
@@ -208,7 +221,7 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
     let Some(scope) = enclosing_scope(call_node) else {
         return HashMap::new();
     };
-    for (node, pattern) in binding_patterns(scope) {
+    for (node, pattern) in binding_patterns(scope, true) {
         let mut names = HashSet::new();
         collect_identifiers(source, pattern, &mut names);
         for name in &names {
@@ -220,9 +233,10 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
             }
         }
     }
+    let rebound_by_macros = super::rust_macro_binds::names_macros_may_rebind(source, scope);
     counts
         .into_iter()
-        .filter(|(_, n)| *n == 1)
+        .filter(|(name, n)| *n == 1 && !rebound_by_macros.contains(name))
         .filter_map(|(name, _)| typed.remove(&name).map(|ty| (name, ty)))
         .collect()
 }
@@ -246,7 +260,7 @@ pub(super) fn once_bound_bindings<'t>(source: &str, call_node: Node<'t>) -> Vec<
     };
     let mut counts: HashMap<String, u32> = HashMap::new();
     let mut sites: Vec<(String, Node<'t>, Node<'t>)> = Vec::new();
-    for (declaration, pattern) in binding_patterns(scope) {
+    for (declaration, pattern) in binding_patterns(scope, true) {
         let mut names = HashSet::new();
         collect_identifiers(source, pattern, &mut names);
         for name in names {
@@ -254,9 +268,10 @@ pub(super) fn once_bound_bindings<'t>(source: &str, call_node: Node<'t>) -> Vec<
             sites.push((name, declaration, pattern));
         }
     }
+    let rebound_by_macros = super::rust_macro_binds::names_macros_may_rebind(source, scope);
     sites
         .into_iter()
-        .filter(|(name, _, _)| counts.get(name) == Some(&1))
+        .filter(|(name, _, _)| counts.get(name) == Some(&1) && !rebound_by_macros.contains(name))
         .map(|(name, declaration, pattern)| OnceBound {
             name,
             declaration,

@@ -328,8 +328,10 @@ fn push_reconstructed(ctx: &ScanCtx, receiver: Node, method: Node, out: &mut Vec
     out.push(RustConventions::with_hint_origin(
         &callee,
         receiver,
-        method.end_byte() as u64,
         ctx.caller_qn,
-        derived,
+        super::rust_call_site::HintedSpan {
+            end_byte: method.end_byte() as u64,
+            derived,
+        },
     ));
 }

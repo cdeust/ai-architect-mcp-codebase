@@ -292,3 +292,56 @@ fn a_second_resolve_adds_no_per_site_row_for_the_return_type_tier() {
     resolver::resolve_graph(&store).expect("second resolve");
     assert_eq!(all_rows(&store), first);
 }
+
+/// A return type that is a type alias declared in ANOTHER file names a
+/// different type; the lookup by last segment would match an unrelated `S`
+/// that owns an `answer`. It must stay without an edge.
+#[test]
+fn a_return_type_that_is_an_alias_elsewhere_in_the_repository_gets_no_edge() {
+    let tmp = tempfile::Builder::new()
+        .prefix("receiver_from_return_type_alias_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let src = tmp.path().join("fixture/src");
+    fs::create_dir_all(&src).expect("mkdir src");
+    fs::write(src.join("lib.rs"), "pub struct Real;\n").expect("write lib");
+    fs::write(src.join("alias.rs"), "pub type S = crate::Real;\n").expect("write alias");
+    fs::write(
+        src.join("other.rs"),
+        "pub struct S;\nimpl S {\n    pub fn answer(&self) -> u32 {\n        9\n    }\n}\n",
+    )
+    .expect("write other");
+    fs::write(
+        src.join("user.rs"),
+        "use crate::alias::S;\n\npub fn make() -> S {\n    todo!()\n}\n\n\
+         pub fn run() -> u32 {\n    let x = make();\n    x.answer()\n}\n",
+    )
+    .expect("write user");
+    let graph_dir = tmp.path().join("graph");
+    indexer::index_codebase(&tmp.path().join("fixture"), &graph_dir).expect("index");
+    let store = GraphStore::open_or_create(&graph_dir).expect("open graph");
+    resolver::resolve_graph(&store).expect("resolve");
+    let qr = store
+        .execute_query(
+            "MATCH (cs:CallSite)-[r:Calls_CallSite_Method]->(t) WHERE cs.callee_name = 'x.answer' \
+             RETURN t.id, r.resolution_method",
+        )
+        .expect("query rows");
+    assert!(
+        qr.rows.is_empty(),
+        "an alias return type got an edge: {:?}",
+        qr.rows
+    );
+    let site = store
+        .execute_query(
+            "MATCH (cs:CallSite) WHERE cs.callee_name = 'x.answer' \
+             RETURN cs.receiver_hint, cs.receiver_hint_via",
+        )
+        .expect("query site");
+    assert_eq!(
+        site.rows,
+        vec![vec!["S".to_string(), "return-type".to_string()]],
+        "the parser sees an alias only in its own file, so the hint is read here"
+    );
+}

@@ -98,7 +98,22 @@ pub(super) fn return_type_hint(source: &str, call_node: Node, receiver: Node) ->
     }
     let function = unique_visible_function(source, call, &callee_name)?;
     let ty = pick_type(source, shape, unwrapped, returned_type(source, function)?)?;
-    (!is_own_generic(source, function, &ty)).then_some(ty)
+    (!is_own_generic(source, function, &ty) && !file_declares_alias(source, call, &ty))
+        .then_some(ty)
+}
+
+/// True when the file declares `type <ty> = ..`: the return type then names
+/// another type, which the last-segment lookup would not find.
+fn file_declares_alias(source: &str, node: Node, ty: &str) -> bool {
+    let mut stack = vec![root_of(node)];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "type_item" && declares(source, current, ty) {
+            return true;
+        }
+        let mut cursor = current.walk();
+        stack.extend(current.named_children(&mut cursor));
+    }
+    false
 }
 
 /// How `binding` takes its value, from its pattern and the `else` of its
@@ -208,7 +223,8 @@ fn plain_type(source: &str, node: Node) -> Option<String> {
             plain_type(source, node.child_by_field_name(TYPE_FIELD)?)
         }
         "type_identifier" => Some(node_text(source, node)),
-        "scoped_type_identifier" => Some(node_text(source, node.child_by_field_name(NAME_FIELD)?)),
+        // A path before the name (`other::Set`) says which type is meant; the
+        // resolver keeps the last segment only, so it could pick a namesake.
         _ => None,
     }
 }

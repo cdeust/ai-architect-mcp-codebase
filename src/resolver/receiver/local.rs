@@ -53,6 +53,15 @@ pub(in crate::resolver) fn resolve_local_receiver_bound(
     }
 }
 
+/// True when any symbol of the graph named like the last segment of `hint`
+/// is a `TypeAlias`: the hint then names another type.
+pub(in crate::resolver) fn names_a_type_alias(idx: &SymbolIndex, hint: &str) -> bool {
+    let name = strip_generics(last_segment(hint));
+    idx.by_name
+        .get(name)
+        .is_some_and(|entries| entries.iter().any(|e| e.label == "TypeAlias"))
+}
+
 /// A palier-3 resolution whose hint the parser read off a free function's
 /// return type instead of off the binding (issues #348 and #349): same target,
 /// the weaker `ReceiverReturnType` evidence. A `NotFound` or `Ambiguous`

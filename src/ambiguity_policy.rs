@@ -95,12 +95,15 @@ pub fn confidence_for(evidence: Evidence) -> f64 {
         Evidence::ReceiverBound => 0.93,
         Evidence::ImportMatch => 0.9,
         Evidence::ReceiverLocalBinding => 0.87,
-        // source: issues #348 and #349 — one inference step below the
-        // local-binding tier (0.87), which reads a type written at the
-        // binding; a tier below is what "one hop further from the call" means
-        // for every tier above it. It stays above the by-name tiers a
-        // qualified callee would need, and equals the fixed-expansion macro
-        // tier, which is also one step from a documented signature.
+        // source: issues #348 and #349, measured and not derived. On dy-wcet
+        // v4.1.6 (statics only) the tier added 43 per-site rows, every one to
+        // the target the language-server pass names, none wrong, none of the
+        // existing rows changed. That supports a tier close to the
+        // local-binding one (0.87), which reads a type written at the binding,
+        // and the extra inference step (the callee's signature is read, not the
+        // binding) puts it below. It ties `SameFileUnique` at 0.85; the two
+        // never compete for one site, because this tier applies only to a
+        // receiver call (`x.m()`) and that one to a bare-name lookup.
         Evidence::ReceiverReturnType => 0.85,
         Evidence::SameFileUnique => 0.85,
         Evidence::PackageProximity => 0.7,

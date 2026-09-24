@@ -321,15 +321,20 @@ fn rust_local_receiver_gate(
     let receiver::ReceiverForm::Local { m, .. } = form else {
         return None;
     };
+    let via_return_type =
+        site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE;
+    if via_return_type && receiver::names_a_type_alias(ctx.idx, site.receiver_hint) {
+        // A return type that is an alias names another type; the lookup by
+        // last segment would match a namesake (issues #348 and #349).
+        return Some(PolicyResolution::NotFound);
+    }
     let resolution =
         receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id);
-    Some(
-        if site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE {
-            receiver::relabel_as_return_type(resolution)
-        } else {
-            resolution
-        },
-    )
+    Some(if via_return_type {
+        receiver::relabel_as_return_type(resolution)
+    } else {
+        resolution
+    })
 }
 
 /// Resolves one callee reference via the shared ambiguity policy (issue

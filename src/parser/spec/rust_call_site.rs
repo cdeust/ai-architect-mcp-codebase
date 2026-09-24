@@ -14,6 +14,13 @@ use tree_sitter::Node;
 use super::conventions::CallEntry;
 use super::rust::RustConventions;
 
+/// The end of a call's span and the receiver hint derived for it, grouped so
+/// `with_hint_origin` stays within the four-parameter cap.
+pub(super) struct HintedSpan {
+    pub(super) end_byte: u64,
+    pub(super) derived: Option<super::rust_receiver::DerivedHint>,
+}
+
 impl RustConventions {
     /// Shapes one `CallSite` keyed on `span_node`'s source span. Chained calls
     /// share a start byte (`input.trim().to_string()`), so the (start, end) byte
@@ -37,9 +44,11 @@ impl RustConventions {
         Self::with_hint_origin(
             callee,
             span_node,
-            span_node.end_byte() as u64,
             caller_qn,
-            derived,
+            HintedSpan {
+                end_byte: span_node.end_byte() as u64,
+                derived,
+            },
         )
     }
 
@@ -48,17 +57,16 @@ impl RustConventions {
     pub(super) fn with_hint_origin(
         callee: &str,
         start_node: Node,
-        end_byte: u64,
         caller_qn: &str,
-        derived: Option<super::rust_receiver::DerivedHint>,
+        hinted: HintedSpan,
     ) -> CallEntry {
-        let via_return_type = derived.as_ref().is_some_and(|d| d.via_return_type);
+        let via_return_type = hinted.derived.as_ref().is_some_and(|d| d.via_return_type);
         let mut entry = Self::call_site_spanning(
             callee,
             start_node,
-            end_byte,
+            hinted.end_byte,
             caller_qn,
-            derived.map(|d| d.ty),
+            hinted.derived.map(|d| d.ty),
         );
         if via_return_type {
             entry.properties.push((
