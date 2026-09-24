@@ -88,8 +88,9 @@ impl GraphStore {
     }
 
     /// Deletes every macro-expansion row of every `Calls_*_StdlibSymbol`
-    /// table, and clears `is_resolved` on every Rust macro `CallSite`
-    /// (`rust_macro_site_predicate`) so the pass decides it again.
+    /// table, clears `is_resolved` on every Rust macro `CallSite`
+    /// (`rust_macro_site_predicate`) so the pass decides it again, and removes
+    /// the `StdlibSymbol` nodes the purge left with no relationship.
     pub(crate) fn reset_macro_expansion(&self) -> Result<(), String> {
         self.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
         for &(rel, _, to) in REL_TABLES {
@@ -105,6 +106,40 @@ impl GraphStore {
         self.run(&format!(
             "MATCH (cs:CallSite) WHERE {pred} SET cs.is_resolved = false"
         ))?;
+        self.delete_orphan_stdlib_symbols()
+    }
+
+    /// Deletes the `StdlibSymbol` nodes that no relationship points at. The
+    /// purge above leaves such a node behind when a rule dropped its only
+    /// target (`Arguments::new_v1`, `core::panicking::panic`, issue #344). A
+    /// node any table still points at, `Implements_*_StdlibSymbol` included,
+    /// is never touched, and a pass that needs a node creates it again.
+    fn delete_orphan_stdlib_symbols(&self) -> Result<(), String> {
+        let mut orphans: std::collections::BTreeSet<String> = self
+            .execute_query("MATCH (s:StdlibSymbol) RETURN s.id")?
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next())
+            .collect();
+        for &(rel, _, to) in REL_TABLES {
+            if to != NODE_STDLIB_SYMBOL {
+                continue;
+            }
+            let used = self.execute_query(&format!(
+                "MATCH ()-[r:{rel}]->(s:StdlibSymbol) RETURN DISTINCT s.id"
+            ))?;
+            for row in used.rows {
+                if let Some(id) = row.first() {
+                    orphans.remove(id);
+                }
+            }
+        }
+        for id in orphans {
+            self.run(&format!(
+                "MATCH (s:StdlibSymbol {{id: {}}}) DELETE s",
+                cypher_str(&id)
+            ))?;
+        }
         Ok(())
     }
 }

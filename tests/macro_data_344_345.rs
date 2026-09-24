@@ -20,7 +20,7 @@ mod common;
 mod macro_339_support;
 use macro_339_support::{index_files, is_resolved, macro_rows, reason_on_line, rows_on_line};
 
-const NO_STABLE: &str = "no stable target for this expansion";
+const BY_ARGUMENTS: &str = "callee depends on the arguments of the macro";
 
 /// Line numbers below are 1-based lines of this fixture.
 const LIB: &str = "pub fn prints(a: u32) {
@@ -112,7 +112,7 @@ fn a_macro_whose_callee_depends_on_its_arguments_gets_no_guessed_target() {
         assert!(!is_resolved(&store, "src/lib.rs", line), "line {line}");
         assert_eq!(
             reason_on_line(&res, "src/lib.rs", line).as_deref(),
-            Some(NO_STABLE),
+            Some(BY_ARGUMENTS),
             "line {line}"
         );
     }
@@ -171,6 +171,90 @@ fn a_call_inside_the_arguments_of_matches_is_still_a_call_site() {
     assert_eq!(qr.rows.len(), 1, "one call to helper: {:?}", qr.rows);
     assert!(qr.rows[0][0].contains("a_call_in_the_arguments"));
     assert_eq!(qr.rows[0][1], "true", "the call resolved to helper");
+}
+
+const GUARD: &str = "fn pred(v: u32) -> bool { v > 1 }
+
+pub fn guarded(x: Option<u32>) -> bool {
+    matches!(x, Some(v) if pred(v))
+}
+
+pub fn nested(a: u32) -> usize {
+    include_str!(concat!(\"li\", \"b.rs\")).len() + a as usize
+}
+";
+
+/// `matches!(x, Some(v) if pred(v))` calls `pred` in its guard: the call is a
+/// call site of the enclosing function and resolves, while the `matches!` site
+/// itself is not a reference. (rustc expands it to a `match` with the guard.)
+#[test]
+fn a_call_in_a_matches_guard_is_still_a_call_site() {
+    let (store, res, _tmp) = index_files(&[("lib.rs", GUARD)]);
+    let qr = store
+        .execute_query(
+            "MATCH (cs:CallSite) WHERE cs.callee_name = 'pred' RETURN cs.id, cs.is_resolved",
+        )
+        .expect("query");
+    assert_eq!(qr.rows.len(), 1, "one call to pred: {:?}", qr.rows);
+    assert!(qr.rows[0][0].contains("guarded"), "{:?}", qr.rows);
+    assert_eq!(qr.rows[0][1], "true", "the guard call resolved to pred");
+    assert!(res.unresolved.iter().all(|u| u.target_text != "matches!"));
+}
+
+/// The extractor emits no site for a macro nested in the arguments of another
+/// (#328), so `include_str!(concat!(..))` is one site: the outer macro. It is
+/// counted as no-call and reported unresolved by nothing.
+#[test]
+fn a_no_call_macro_with_a_nested_macro_is_one_counted_site() {
+    let (_store, res, _tmp) = index_files(&[("lib.rs", GUARD)]);
+    assert_eq!(res.no_call_macro_sites, 2, "matches! and include_str!");
+    assert!(res.unresolved.iter().all(|u| !u.target_text.ends_with('!')));
+}
+
+/// A graph written before #344 carries `Arguments::new_v1` and
+/// `core::panicking::panic` edges and nodes. The next resolve removes the
+/// rows, and now the nodes they leave orphaned; a node a non-macro edge still
+/// points at stays.
+#[test]
+fn an_orphaned_stdlib_symbol_of_an_older_build_is_deleted_and_a_used_one_kept() {
+    let (store, _res, _tmp) = index_files(&[("lib.rs", LIB)]);
+    let mut made = std::collections::HashSet::new();
+    for path in [
+        "std::fmt::Arguments::new_v1",
+        "core::panicking::panic",
+        "std::keep::Me",
+    ] {
+        ai_architect_mcp::resolver_layers::ensure_stdlib_symbol(&store, &mut made, path, "rust")
+            .expect("symbol");
+    }
+    for (line, target) in [
+        (2, "std::fmt::Arguments::new_v1"),
+        (13, "core::panicking::panic"),
+    ] {
+        store
+            .execute_query(&format!(
+                "MATCH (cs:CallSite), (s:StdlibSymbol {{id: '{target}'}}) \
+                 WHERE cs.id STARTS WITH 'src/lib.rs' AND cs.line = {line} \
+                 CREATE (cs)-[:Calls_CallSite_StdlibSymbol \
+                 {{confidence: 0.85, resolution_method: 'macro-expansion'}}]->(s)"
+            ))
+            .expect("seed an old row");
+    }
+    store
+        .execute_query(
+            "MATCH (f:Function {name: 'prints'}), (s:StdlibSymbol {id: 'std::keep::Me'}) \
+             CREATE (f)-[:Calls_Function_StdlibSymbol \
+             {confidence: 0.95, resolution_method: 'stdlib-index'}]->(s)",
+        )
+        .expect("seed a used node");
+    assert_eq!(count_rows_to(&store, "std::fmt::Arguments::new_v1"), 1);
+
+    resolver::resolve_graph(&store).expect("second resolve");
+
+    assert_eq!(count_rows_to(&store, "std::fmt::Arguments::new_v1"), 0);
+    assert_eq!(count_rows_to(&store, "core::panicking::panic"), 0);
+    assert_eq!(count_rows_to(&store, "std::keep::Me"), 1, "still used");
+    assert_eq!(count_rows_to(&store, "std::io::_print"), 1, "recreated");
 }
 
 /// A second resolve of the same graph finds the same no-call sites.

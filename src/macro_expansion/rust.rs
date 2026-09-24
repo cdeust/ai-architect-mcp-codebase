@@ -33,15 +33,17 @@ pub const VEC_MACROS: &[&str] = &["vec"];
 
 // source: issue #344, checked against the expansion of rustc 1.93 (nightly of
 // 2025-11-20), 1.94, 1.95 (the toolchain this repository pins) and 1.98
-// (`RUSTC_BOOTSTRAP=1 rustc -Zunpretty=expanded`), which call the same
-// functions, and the std source of 1.95 (core/src/panic.rs,
-// core/src/macros/mod.rs, std/src/macros.rs).
-// These macros call `core::panicking::panic` or `core::panicking::panic_fmt`
-// depending on the arguments they are given (`panic!()` and `assert!(c)` call
-// `panic`; `panic!("{}", x)` and `assert!(c, "{}", x)` call `panic_fmt`) and on
-// the edition, and `core::panicking` is gated behind `feature(panic_internals)`.
-// No one target is the callee of every site, so none is listed: a site of one
-// of these is reported unresolved with "no stable target for this expansion".
+// (`RUSTC_BOOTSTRAP=1 rustc -Zunpretty=expanded`) and the std source of 1.95
+// (core/src/panic.rs, core/src/macros/mod.rs, std/src/macros.rs).
+// The rule for the table: an entry names the ONE callee that every form of the
+// macro reaches. These macros fail it. `panic!()` and `assert!(c)` call
+// `core::panicking::panic`; `panic!("{}", x)` and `assert!(c, "{}", x)` call
+// `core::panicking::panic_fmt` (`panic!` on edition 2015 and 2018 with a single
+// non-literal argument calls another function again); `todo!()`,
+// `unimplemented!()` and `unreachable!()` call `panic` with a fixed message and
+// `panic_fmt` when given one. Listing one of them would name a callee the site
+// may not call, so none is listed and the site says its callee depends on the
+// arguments.
 pub const FORM_DEPENDENT_MACROS: &[&str] = &[
     "panic",
     "assert",
@@ -56,7 +58,11 @@ pub const FORM_DEPENDENT_MACROS: &[&str] = &[
 // literal or a compiler constant and calls no function (`matches!` is a
 // `match`; `include_str!`, `include_bytes!`, `concat!`, `stringify!`, `env!`,
 // `option_env!`, `cfg!`, `line!`, `file!`, `column!` and `module_path!` are
-// replaced by a literal at expansion). A site of one is not a call reference.
+// replaced by a literal at expansion; measured: `cfg!(unix)` is `true`,
+// `option_env!("X")` is `None::<&'static str>`, `env!("X")` is a string
+// literal). A site of one is not a call reference. `include!` is left out on
+// purpose: it splices the code of another file into the caller, and that code
+// can call.
 pub const NO_CALL_MACROS: &[&str] = &[
     "matches",
     "include_str",
@@ -73,18 +79,14 @@ pub const NO_CALL_MACROS: &[&str] = &[
 ];
 
 // source: the 1.95 library sources, the same callees in the expansion of 1.93 to
-// 1.98, the only callee of every form of the
-// macros that list it in `RUST_MACROS`:
-//   std::io::_print / _eprint  std/src/macros.rs (`print!`, `println!` call
-//     `$crate::io::_print`, `eprint!`, `eprintln!` and `dbg!` call `_eprint`);
-//     `#[unstable(feature = "print_internals")]`, so the symbol is an
-//     implementation detail of the pinned toolchain, but every form of these
-//     macros calls it.
-//   std::fmt::format  alloc/src/macros.rs (`format!` calls `$crate::fmt::format`),
-//     `#[stable(since = "1.0.0")]`, re-exported by std.
-//   core::panicking::assert_failed  core/src/macros/mod.rs, all four arms of
+// 1.98. Each path below is the callee every form of the macros that list it
+// reaches (the rule above):
+//   std::io::_print / _eprint  std/src/macros.rs: `print!` and `println!` call
+//     `$crate::io::_print`; `eprint!`, `eprintln!` and `dbg!` call `_eprint`.
+//   std::fmt::format  alloc/src/macros.rs: `format!` calls `$crate::fmt::format`.
+//   core::panicking::assert_failed  core/src/macros/mod.rs: all four arms of
 //     `assert_eq!`, `assert_ne!`, `debug_assert_eq!` and `debug_assert_ne!`
-//     (with and without a message), `#[doc(hidden)]`.
+//     (with and without a message) call it, and no arm calls another function.
 // A path may enter `RUST_MACROS` only through this list.
 #[cfg(test)]
 pub const VERIFIED_CALL_TARGETS: &[&str] = &[

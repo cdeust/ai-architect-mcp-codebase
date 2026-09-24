@@ -33,7 +33,7 @@ pub enum Dispatch {
     /// may call, not what the destination is.
     ReceiverType(&'static [Alternative]),
     /// By the argument shape the parser recorded (`macro_arg_shape`); a shape
-    /// with no entry has no stable target.
+    /// with no entry has no target the graph can name.
     ArgShape(&'static [(&'static str, &'static str)]),
     /// The callee depends on the arguments or the edition (`panic!`,
     /// `assert!`): no one target is called by every site (issue #344).
@@ -57,9 +57,12 @@ pub enum Decision {
         canonical: &'static str,
         basis: Basis,
     },
-    /// The expansion has no stable target whatever the site is (the list form
-    /// of `vec!`).
+    /// The expansion calls compiler internals whose paths change between
+    /// versions and are in no stdlib index (the list form of `vec!`).
     NoStableTarget,
+    /// The callee depends on the arguments or the edition (`panic!`,
+    /// `assert!`): no one target is reached by every form.
+    CalleeByArguments,
     /// The site's expansion has a target, but the destination's type is not
     /// determined: not nameable, not std, unplaced or of two origins.
     TypeNotDetermined,

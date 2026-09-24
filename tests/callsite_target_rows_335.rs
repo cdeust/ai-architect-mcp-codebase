@@ -182,8 +182,12 @@ fn a_second_resolve_duplicates_no_per_site_row() {
     let res = resolver::resolve_graph(&store).expect("second resolve");
     assert_eq!(row_counts(&store), first, "per-site rows are idempotent");
     // `total_edges` counts resolved references, not rows: the per-site rows
-    // must not enter it (3 calls + 2 println! expansion targets).
-    assert_eq!(res.total_edges, 5);
+    // must not enter it on top. This fixture has no import, impl or extends, so
+    // every resolved reference is one call site to one target and has exactly
+    // one per-site row: the count is the number of those rows, however many
+    // targets the `println!` expansion lists (it lists one since #344).
+    let rows: usize = first.iter().sum();
+    assert_eq!(res.total_edges, rows as u64);
 }
 
 #[test]

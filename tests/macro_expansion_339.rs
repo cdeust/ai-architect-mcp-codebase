@@ -164,7 +164,7 @@ fn vec_targets_follow_the_argument_shape_and_a_list_has_none() {
     assert_eq!(empty[0].target, "std::vec::Vec::new");
     assert!(
         rows_on_line(&rows, 29).is_empty(),
-        "vec![1, 2] has no stable target"
+        "vec![1, 2] calls compiler internals, so it has no target"
     );
     assert!(!is_resolved(&store, "src/lib.rs", 29));
     assert!(is_resolved(&store, "src/lib.rs", 21));
@@ -245,7 +245,8 @@ fn a_ruby_bang_call_is_never_handled_as_a_rust_macro() {
     let macro_reasons = [
         "no macro-expansion table entry",
         "expansion has no emit_calls entries",
-        "no stable target for this expansion",
+        "expansion calls compiler internals whose paths change between versions",
+        "callee depends on the arguments of the macro",
     ];
     let hit = first
         .unresolved

@@ -18,7 +18,9 @@ use std::collections::{HashMap, HashSet};
 const REASON_NOT_CALLABLE: &str = "caller is not a callable (Function|Method)";
 const REASON_NO_TABLE_ENTRY: &str = "no macro-expansion table entry";
 const REASON_NO_EMIT_CALLS: &str = "expansion has no emit_calls entries";
-const REASON_NO_STABLE_TARGET: &str = "no stable target for this expansion";
+const REASON_INTERNAL_CALLEES: &str =
+    "expansion calls compiler internals whose paths change between versions";
+const REASON_CALLEE_BY_ARGUMENTS: &str = "callee depends on the arguments of the macro";
 const REASON_TYPE_NOT_DETERMINED: &str = "destination type not determined";
 
 /// Entry point for Layer 4 (macros + derives).
@@ -222,9 +224,8 @@ impl MacroPass<'_> {
                 dispatch::decide_by_receiver(alternatives, &dest, imports)
             }
             Dispatch::ArgShape(rules) => dispatch::decide_by_shape(rules, &row.arg_shape),
-            Dispatch::FormDependent | Dispatch::NoCall => Decision::NoStableTarget,
+            Dispatch::FormDependent | Dispatch::NoCall => Decision::CalleeByArguments,
         };
-        let target = &row.macro_name;
         match decision {
             Decision::Target { canonical, basis } => {
                 self.ensure_symbol(canonical)?;
@@ -234,22 +235,20 @@ impl MacroPass<'_> {
                     None => (1, 1, Vec::new()),
                 })
             }
-            Decision::NoStableTarget => Ok((
-                0,
-                1,
-                vec![unresolved_ref(row, target, REASON_NO_STABLE_TARGET)],
-            )),
-            Decision::TypeNotDetermined => Ok((
-                0,
-                1,
-                vec![unresolved_ref(row, target, REASON_TYPE_NOT_DETERMINED)],
-            )),
+            Decision::NoStableTarget => Ok(unresolved_unit(row, REASON_INTERNAL_CALLEES)),
+            Decision::CalleeByArguments => Ok(unresolved_unit(row, REASON_CALLEE_BY_ARGUMENTS)),
+            Decision::TypeNotDetermined => Ok(unresolved_unit(row, REASON_TYPE_NOT_DETERMINED)),
         }
     }
 
     fn ensure_symbol(&mut self, canonical: &str) -> Result<(), String> {
         ensure_stdlib_symbol(self.store, &mut self.created, canonical, "rust")
     }
+}
+
+/// One unresolved unit: the macro's site, with the reason it has no target.
+fn unresolved_unit(row: &MacroRow, reason: &str) -> (u64, u64, Vec<UnresolvedRef>) {
+    (0, 1, vec![unresolved_ref(row, &row.macro_name, reason)])
 }
 
 fn unresolved_ref(row: &MacroRow, macro_name: &str, reason: &str) -> UnresolvedRef {
