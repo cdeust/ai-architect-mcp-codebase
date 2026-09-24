@@ -162,7 +162,7 @@ missing. A plain source checkout still gets the freshness rebuild
 live-mount layout nothing rebuilds the binary; the bootstrap uses the
 already-built binary the symlink resolves to, as it is.
 
-Threat model. The flag is an explicit opt-in that the user sets, and packaged
+The flag is an explicit opt-in that the user sets, and packaged
 metadata cannot trigger it. An attacker who can already write to your plugin
 cache, and could replace the installed binary with a symlink to force this
 path, could just as easily replace `bin/ensure-binary.sh` or
@@ -177,7 +177,7 @@ ai-architect-mcp-codebase: bootstrap verification skipped (source-checkout mode)
 ai-architect-mcp-codebase: live-mounted dev symlink: <plugin-cache>/target/release/ai-architect-mcp-codebase -> <resolved dev path> (source checkout at <resolved .git root>)
 ```
 
-Diagnosing the failure without the flag. If a marketplace-cache binary is
+If a marketplace-cache binary is
 replaced by a live-mount symlink and `AI_ARCHITECT_SOURCE_CHECKOUT` is not
 set, Claude Code shows only `MCP error -32000: Connection closed`. The real
 cause is on stderr, which Claude Code does not surface for a failed MCP

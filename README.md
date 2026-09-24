@@ -39,8 +39,8 @@ uses) in an embedded LadybugDB graph database on your machine, and exposes
 that graph to an agent through MCP tools. An agent can search the graph, look
 up a symbol with its callers and callees, list the reverse dependencies of a
 symbol, follow execution flows from entry points, map a git diff onto the
-symbols it changes, and compare two graphs of the same code. Every answer
-carries source locations and the limits of the analysis behind it.
+symbols it changes, and compare two graphs of the same code. Answers about
+symbols carry source locations and the limits of the analysis behind them.
 
 The server does not edit the files it indexes. It writes its graph and
 sidecar files under the `output_dir` you pass, plus a snapshot in the
@@ -48,16 +48,17 @@ repository only when you ask for the team-shared artifact. Indexing and queries
 run locally without network calls, no language model reads the code, and
 nothing is uploaded. The graph is a directory you own.
 
-What it cannot see. The graph comes from static parsing of source text, so a
-call made through reflection, dynamic dispatch, generated code, or a macro the
-parser does not expand has no edge unless an optional language-server pass
-(`lsp: true`) or runtime traces (`ingest_traces`) supply one. Method calls
-through a receiver are resolved statically only for the receiver shapes listed
-[below](#static-receiver-call-resolution); the rest need the language-server
-pass. Ruby gets a shallow extraction with no imports or visibility. Process
-flows are reachability in the graph from declared entry points, capped at
-depth 20, with no observation of execution. An empty answer can mean "no such relationship"
-or "not indexed", and the coverage report exists to tell those apart.
+The graph comes from static parsing of source text, so some things stay out
+of it. A call made through reflection, dynamic dispatch, generated code, or a
+macro the parser does not expand has no edge unless an optional
+language-server pass (`lsp: true`) or runtime traces (`ingest_traces`) supply
+one. Method calls through a receiver are resolved statically only for the
+receiver shapes listed [below](#static-receiver-call-resolution); the rest need
+the language-server pass. Ruby gets a shallow extraction with no imports or
+visibility. Process flows are reachability in the graph from declared entry
+points, capped at depth 20, with no observation of execution. An empty answer
+can mean "no such relationship" or "not indexed", and the coverage report
+exists to tell those apart.
 
 ## Install and register
 
@@ -212,7 +213,7 @@ produce or check JSON artifacts on disk under the `output_dir` a call names. A s
 [ai-architect-mcp-spec](#related-projects), or any other consumer, can read
 them; the server itself has no dependency on the consumer.
 
-What the verification verdicts mean. `check_security_gates` returns
+The verification verdicts have narrow meanings. `check_security_gates` returns
 `gates_passed: true` when no check raised a critical flag, and
 `report.assessment_complete` separately; the latter is false for an empty
 symbol list, a skipped check, or changed symbols that could not be resolved.
@@ -227,7 +228,8 @@ establish that the finding is true.
 ## How answers state their limits
 
 The read tools report what they could not see next to what they found. The
-[CHANGELOG](CHANGELOG.md) has the detail for each item below.
+0.12.0 entry of the [CHANGELOG](CHANGELOG.md) has the detail for the coverage,
+impact, language-server, receiver-resolution and freshness items below.
 
 ### Coverage report
 
@@ -300,9 +302,10 @@ per-language spec: definitions, calls and imports, plus visibility and type
 relationships where the spec records them. Ruby is a shallow tier
 ([ADR-0056](docs/adr/ADR-0056-shallow-spec-language-breadth.md)): functions,
 methods, classes and modules, and calls, with no visibility and no import
-edges (`require` appears as a call). Documentation and configuration files
-are indexed as `File` nodes, and their text is searchable through BM25. The
-language-server pass supports Rust, Python and TypeScript.
+edges (`require` appears as a call). Other files, documentation and
+configuration included, are indexed as `File` nodes. The text of documentation
+files (`md`, `markdown`, `mdx`, `txt`, `rst`, `adoc`, up to 256 KiB) is
+searchable through BM25. The language-server pass supports Rust, Python and TypeScript.
 
 ## Security model
 
@@ -365,7 +368,7 @@ Inherited from
 | Rational | Is it useful? |
 | Essential | Is it necessary? |
 
-In this codebase it means five things.
+In this codebase:
 
 1. Every algorithm traces to a source. Louvain: Blondel et al. 2008. Leiden
    C2 repair: Traag et al. 2019. RRF: Cormack, Clarke and Büttcher 2009.
