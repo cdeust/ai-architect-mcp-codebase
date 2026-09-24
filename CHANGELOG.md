@@ -32,6 +32,15 @@ adheres to [Semantic Versioning](https://semver.org/).
   empty otherwise; a graph written by an older build reads it as empty. On
   dy-wcet v4.1.6 the static run resolves 96 of the 99 `response_of` sites
   instead of 82, with no wrong target.
+- The release workflow no longer fails after a successful registry publish (v0.13.0).
+  The last step checked the MCP Registry once, seconds after `mcp-publisher publish`,
+  and the registry answered HTTP 500 to that single request: the empty body broke the
+  JSON decoding and the job exited 1 although the version was published and served
+  minutes later. The step now polls up to 10 times, 30 seconds apart (under 8
+  minutes in the worst case), treats an HTTP error, an unreadable body or a
+  missing latest entry as "not yet", prints the HTTP status and the observed
+  version of every attempt, and still fails the job when the registry never
+  serves the published version or when the published version cannot be read. The tag and `workflow_dispatch` paths share this step.
 
 ## [0.13.0] — Per-site call rows, one edge count, one target per macro call
 
