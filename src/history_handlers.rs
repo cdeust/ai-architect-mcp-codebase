@@ -463,11 +463,8 @@ pub(crate) fn graph_counts(graph_dir: &Path) -> graph_store::GraphCounts {
     try_graph_counts(graph_dir).unwrap_or_default()
 }
 
-/// `graph_counts` without the zero fallback: `None` when the graph cannot be
-/// opened or queried.
-pub(crate) fn try_graph_counts(graph_dir: &Path) -> Option<graph_store::GraphCounts> {
-    graph_store::GraphStore::open_or_create(graph_dir)
-        .ok()?
-        .graph_counts()
-        .ok()
+/// `graph_counts` without the zero fallback: the reason when the graph cannot
+/// be opened or queried.
+pub(crate) fn try_graph_counts(graph_dir: &Path) -> Result<graph_store::GraphCounts, String> {
+    graph_store::GraphStore::open_or_create(graph_dir)?.graph_counts()
 }

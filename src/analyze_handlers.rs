@@ -126,16 +126,16 @@ fn lsp_phase(req: &AnalyzeRequest, store: &graph_store::GraphStore) -> LspOutcom
 /// Node and relationship totals of the finished graph, read after the last
 /// phase. `index.*` above is the snapshot the index phase took before resolve
 /// wrote its edges, so it is not the size of the graph `index_status` reports;
-/// this block is, field for field (issue #338). `null` when the graph cannot
-/// be read back.
+/// this block is, field for field (issue #338). When the graph cannot be read
+/// back the block carries the reason under `error` instead of counts.
 fn graph_totals(graph_dir: &std::path::Path) -> Value {
     match crate::history_handlers::try_graph_counts(graph_dir) {
-        Some(c) => json!({
+        Ok(c) => json!({
             "node_count": c.nodes,
             "edge_count": c.edges,
             "call_site_target_count": c.call_site_targets,
         }),
-        None => Value::Null,
+        Err(e) => json!({ "error": e }),
     }
 }
 
