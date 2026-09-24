@@ -166,7 +166,7 @@ impl GraphStore {
     /// issue #25 production default — see that function's doc comment for
     /// the precedence rule).
     pub fn open_or_create(path: &Path) -> Result<Self, String> {
-        release_open_handles(path);
+        release_open_handles(path)?;
         Self::open_or_create_with_config(path, system_config()?)
     }
 

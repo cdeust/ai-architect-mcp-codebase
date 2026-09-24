@@ -19,6 +19,7 @@ use crate::query_handlers::*;
 use crate::resolver;
 
 mod lsp_coverage;
+mod lsp_durability;
 mod lsp_outcome;
 use lsp_outcome::LspOutcome;
 
@@ -123,6 +124,26 @@ fn lsp_phase(req: &AnalyzeRequest, store: &graph_store::GraphStore) -> LspOutcom
     }
 }
 
+/// Closes the analysis handle. When the LSP phase completed, reopens the graph
+/// and compares its `lsp-definition` rows with what the phase wrote; a loss
+/// turns the phase into `Failed("lsp_rows_not_durable: ...")` so the response
+/// says so instead of reporting `completed`.
+fn confirm_lsp_rows(
+    outcome: LspOutcome,
+    store: graph_store::GraphStore,
+    graph_path: &Path,
+) -> LspOutcome {
+    match outcome {
+        LspOutcome::Completed(result) => {
+            match lsp_durability::verify_after_reopen(store, graph_path) {
+                Ok(_) => LspOutcome::Completed(result),
+                Err(error) => LspOutcome::Failed(error),
+            }
+        }
+        other => other,
+    }
+}
+
 /// Node and relationship totals of the finished graph, read after the last
 /// phase. `index.*` above is the snapshot the index phase took before resolve
 /// wrote its edges, so it is not the size of the graph `index_status` reports;
@@ -205,6 +226,9 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     // Phase 3: cluster. Phase 4: build the BM25 + TF-IDF search index.
     let cluster_result = clustering::cluster_graph(&store, req.gamma)?;
     let search_index_result = search::build_search_index(&store, &req.output_dir, &req.codebase)?;
+    // Issue #352: the same durability check `lsp_resolve` makes, at the end of
+    // the analysis, when nothing else will write through this handle.
+    let lsp_result = confirm_lsp_rows(lsp_result, store, &index_result.graph_path);
 
     let mut response = analyze_envelope(
         &index_result,
@@ -377,3 +401,86 @@ pub(crate) fn detect_changes_next_steps(analysis: &git_diff::DiffAnalysis) -> Va
 // ---------------------------------------------------------------------------
 // Stage 4 — prepare_prd_input (bundle verified finding + graph intel)
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod confirm_lsp_rows_tests {
+    use super::*;
+    use crate::lsp_client::{LspResolutionResult, ServerHealth, UnlinkedFileCheck};
+
+    // The LSP phase of analyze_codebase does not go through `do_lsp_resolve`,
+    // so it has its own call of the durability check (issue #352).
+
+    fn completed() -> LspOutcome {
+        LspOutcome::Completed(LspResolutionResult {
+            resolved_count: 0,
+            failed_count: 0,
+            skipped_count: 0,
+            outside_targets_count: 0,
+            macro_sites_count: 0,
+            elapsed_ms: 0,
+            server_health: ServerHealth::not_probed(),
+            unlinked_check: UnlinkedFileCheck::default(),
+        })
+    }
+
+    fn graph() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        graph_store::GraphStore,
+    ) {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let path = tmp.path().join("g");
+        let store = graph_store::GraphStore::open_or_create(&path).expect("open");
+        store.create_schema().expect("schema");
+        (tmp, path, store)
+    }
+
+    #[test]
+    fn a_completed_phase_whose_rows_are_durable_stays_completed() {
+        let (_tmp, path, store) = graph();
+        for id in ["a", "b"] {
+            store
+                .execute_query(&format!("CREATE (:Function {{id: '{id}', name: '{id}'}})"))
+                .expect("node");
+        }
+        store
+            .insert_edge_if_absent(
+                "Calls_Function_Function",
+                "a",
+                "b",
+                &[
+                    ("confidence", "0.9"),
+                    ("resolution_method", "'lsp-definition'"),
+                ],
+            )
+            .expect("edge");
+        assert!(matches!(
+            confirm_lsp_rows(completed(), store, &path),
+            LspOutcome::Completed(_)
+        ));
+    }
+
+    #[test]
+    fn a_phase_that_did_not_complete_passes_through_and_releases_the_handle() {
+        let (_tmp, path, store) = graph();
+        assert!(matches!(
+            confirm_lsp_rows(LspOutcome::Disabled, store, &path),
+            LspOutcome::Disabled
+        ));
+        let (_tmp2, path2, store2) = graph();
+        match confirm_lsp_rows(LspOutcome::Failed("boom".into()), store2, &path2) {
+            LspOutcome::Failed(e) => assert_eq!(e, "boom"),
+            _ => panic!("a failure must pass through unchanged"),
+        }
+    }
+
+    #[test]
+    fn a_completed_phase_on_a_graph_that_cannot_be_read_back_fails_loudly() {
+        let (tmp, path, store) = graph();
+        drop(tmp); // the graph directory is gone before the check reopens it
+        match confirm_lsp_rows(completed(), store, &path) {
+            LspOutcome::Failed(e) => assert!(!e.is_empty()),
+            _ => panic!("an unreadable graph must not read as completed"),
+        }
+    }
+}

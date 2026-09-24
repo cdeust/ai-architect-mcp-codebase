@@ -15,8 +15,10 @@
 //!
 //! 1. **The MCP server is strictly single-threaded and sequential.** `main()`
 //!    reads stdin line by line (`stdin.lock().lines()`) and runs each request to
-//!    completion before reading the next. There is no `thread::spawn`, no
-//!    `tokio`, no `rayon` anywhere in `src/`. Therefore two requests can NEVER
+//!    completion before reading the next. The one thread in `src/` is the LSP
+//!    frame reader (`lsp_client/frames.rs`), which never touches a graph, and
+//!    there is no `tokio` or `rayon`; `tests/single_thread_graph_handles.rs`
+//!    enforces both. Therefore two requests can NEVER
 //!    miss the cache simultaneously — "single-flight the concurrent load" is
 //!    satisfied for free by the runtime, and exactly one open happens per
 //!    (path, generation). A `thread_local!` cache is the correct primitive: it
@@ -254,6 +256,11 @@ impl GraphCache {
     }
 }
 
+// SINGLE-THREAD INVARIANT (issue #352). The cache and the release hook that
+// `graph_store::handles` calls are per thread, so a graph opened on another
+// thread would neither see nor release this cache's handle. The server runs
+// every request on one thread; `tests/single_thread_graph_handles.rs` fails if
+// production code starts a thread outside its allowlist.
 thread_local! {
     static CACHE: RefCell<GraphCache> = RefCell::new(GraphCache::new());
 }
@@ -274,18 +281,44 @@ pub fn open_cached(path: &Path) -> Result<Rc<GraphStore>, String> {
     CACHE.with(|c| c.borrow_mut().get(path))
 }
 
-/// Drops the cached handle of the graph at `path`. Called before anything
-/// opens, rewrites or deletes that graph (issue #352, see
+/// Drops the cached handle of the graph at `path`, or refuses. Called before
+/// anything opens, rewrites or removes that graph (issue #352, see
 /// `graph_store::handles`): a handle kept across a write closes on stale pages
-/// and undoes it. Skips silently when the cache is being modified right now,
-/// which only the cache's own open can cause and which does not release.
-fn release(path: &Path) {
+/// and undoes it.
+///
+/// Refuses (an error naming the graph) when a running request still holds the
+/// handle (`Rc::strong_count > 1`): dropping the cache's own reference would
+/// not close it, so its later close would still overwrite the write. Also
+/// refuses when the cache is borrowed at this moment, which only a re-entrant
+/// call from inside the cache's own open could cause. `path` is canonicalised
+/// like the cache key, so a symlink, a relative path or a trailing slash reach
+/// the same entry.
+fn release(path: &Path) -> Result<(), String> {
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let _ = CACHE.try_with(|c| {
-        if let Ok(mut cache) = c.try_borrow_mut() {
-            cache.entries.remove(&key);
-        }
-    });
+    // `try_with` fails only while the thread's storage is being destroyed, when
+    // no request can run any more: nothing to release.
+    CACHE
+        .try_with(|c| {
+            let Ok(mut cache) = c.try_borrow_mut() else {
+                return Err(format!(
+                    "graph_cache_busy: the handle cache was borrowed while releasing {}",
+                    path.display()
+                ));
+            };
+            match cache.entries.get(&key) {
+                Some(entry) if Rc::strong_count(&entry.store) > 1 => Err(format!(
+                    "graph_handle_in_use: {} is held by a running request, and a \
+                     write through another handle would be overwritten when it closes",
+                    path.display()
+                )),
+                Some(_) => {
+                    cache.entries.remove(&key);
+                    Ok(())
+                }
+                None => Ok(()),
+            }
+        })
+        .unwrap_or(Ok(()))
 }
 
 #[cfg(test)]
