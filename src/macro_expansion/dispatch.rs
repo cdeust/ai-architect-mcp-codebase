@@ -23,15 +23,14 @@ pub struct Alternative {
     /// Declared type names (last path segment) of a destination that selects
     /// this target.
     pub receiver_types: &'static [&'static str],
-    /// Import path suffixes that bring the trait in scope; empty when only a
-    /// receiver type can select this target.
-    pub import_markers: &'static [&'static str],
 }
 
 /// How a macro's target is decided.
 #[derive(Debug, Clone, Copy)]
 pub enum Dispatch {
-    /// By the destination's declared type, then by the imports in scope.
+    /// By the destination's declared type, placed in the scope of its file.
+    /// No import decides a target: a write trait in scope says what the file
+    /// may call, not what the destination is.
     ReceiverType(&'static [Alternative]),
     /// By the argument shape the parser recorded (`macro_arg_shape`); a shape
     /// with no entry has no stable target.
@@ -42,7 +41,6 @@ pub enum Dispatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Basis {
     ReceiverType,
-    ImportScope,
     ArgShape,
 }
 
@@ -78,12 +76,10 @@ const WRITE_FMT_ALTERNATIVES: &[Alternative] = &[
     Alternative {
         canonical: "core::fmt::Formatter::write_fmt",
         receiver_types: &["Formatter"],
-        import_markers: &[],
     },
     Alternative {
         canonical: "std::fmt::Write::write_fmt",
         receiver_types: &["String"],
-        import_markers: &["fmt::Write"],
     },
     Alternative {
         canonical: "std::io::Write::write_fmt",
@@ -102,7 +98,6 @@ const WRITE_FMT_ALTERNATIVES: &[Alternative] = &[
             "ChildStdin",
             "Sink",
         ],
-        import_markers: &["io::Write", "io::prelude"],
     },
 ];
 
@@ -122,67 +117,42 @@ pub struct Destination<'a> {
     /// `File`, `std::fs::File`); empty when the binding is untyped or the
     /// destination is not a plain local.
     pub declared: &'a str,
-    /// The destination is a plain local rather than a field, call or other
-    /// expression. Only a local's type is ever recorded.
-    pub plain_local: bool,
     /// The file that holds the site defines a type named like `declared`.
     pub defined_in_file: bool,
 }
 
 /// Decides a receiver-typed macro from the destination's type in the scope of
-/// its file, then from the imports in scope.
+/// its file.
 ///
-/// A destination that is not a plain local is undetermined: its type is not
-/// recorded, and an import cannot stand in for it (`Formatter` needs no import
-/// at all). A type that is not std is undetermined, and so is a type with a std
-/// name that nothing in the file places (`Unknown`): guessing std for either is
-/// how a tokio `File` or a repository `Formatter` got a std target.
+/// Only a type that resolves to std and names one alternative decides. A
+/// destination with no nameable type (a field, `impl Trait`, `dyn Trait`, a
+/// generic parameter, a local with no declaration), a type that is not std, a
+/// name that nothing in the file places and a name with two origins are all
+/// undetermined. The write traits a file imports are not consulted: what is in
+/// scope says what the file may call, not what the destination is, so a
+/// heuristic on it names a wrong single target for a type that implements the
+/// other trait.
 pub fn decide_by_receiver(
     alternatives: &[Alternative],
     dest: &Destination,
     imports: &[Import],
 ) -> Decision {
-    let all = Decision::Undetermined {
+    let undetermined = Decision::Undetermined {
         candidates: alternatives.len(),
     };
-    if !dest.plain_local {
-        return all;
+    if type_origin(dest.declared, imports, dest.defined_in_file) != TypeOrigin::Std {
+        return undetermined;
     }
     let name = original_name(dest.declared, imports);
-    match type_origin(dest.declared, imports, dest.defined_in_file) {
-        TypeOrigin::Std => {}
-        TypeOrigin::Unknown if dest.declared.is_empty() => {}
-        _ => return all,
-    }
-    let by_type: Vec<&Alternative> = alternatives
+    let mut by_type = alternatives
         .iter()
-        .filter(|a| a.receiver_types.contains(&name))
-        .collect();
-    if let [only] = by_type.as_slice() {
-        return Decision::Target {
+        .filter(|a| a.receiver_types.contains(&name));
+    match (by_type.next(), by_type.next()) {
+        (Some(only), None) => Decision::Target {
             canonical: only.canonical,
             basis: Basis::ReceiverType,
-        };
-    }
-    decide_by_imports(alternatives, imports)
-}
-
-fn decide_by_imports(alternatives: &[Alternative], imports: &[Import]) -> Decision {
-    let imported: Vec<&Alternative> = alternatives
-        .iter()
-        .filter(|a| a.import_markers.iter().any(|m| is_imported(imports, m)))
-        .collect();
-    match imported.as_slice() {
-        [only] => Decision::Target {
-            canonical: only.canonical,
-            basis: Basis::ImportScope,
         },
-        [] => Decision::Undetermined {
-            candidates: alternatives.len(),
-        },
-        several => Decision::Undetermined {
-            candidates: several.len(),
-        },
+        _ => undetermined,
     }
 }
 
@@ -195,12 +165,6 @@ pub fn decide_by_shape(rules: &[(&str, &'static str)], shape: &str) -> Decision 
         },
         None => Decision::Undetermined { candidates: 0 },
     }
-}
-
-fn is_imported(imports: &[Import], marker: &str) -> bool {
-    imports
-        .iter()
-        .any(|i| i.path == marker || i.path.ends_with(&format!("::{marker}")))
 }
 
 #[cfg(test)]
@@ -217,7 +181,6 @@ mod tests {
     fn dest(declared: &str) -> Destination<'_> {
         Destination {
             declared,
-            plain_local: true,
             defined_in_file: false,
         }
     }
@@ -226,16 +189,21 @@ mod tests {
         paths.iter().map(|p| Import::new(p, "", false)).collect()
     }
 
-    fn target(canonical: &'static str, basis: Basis) -> Decision {
-        Decision::Target { canonical, basis }
+    fn target(canonical: &'static str) -> Decision {
+        Decision::Target {
+            canonical,
+            basis: Basis::ReceiverType,
+        }
     }
+
+    const NONE: Decision = Decision::Undetermined { candidates: 3 };
 
     #[test]
     fn a_formatter_destination_reaches_only_the_inherent_write_fmt() {
         let all = imports(&["std::fmt::Formatter", "std::fmt::Write", "std::io::Write"]);
         assert_eq!(
             decide_by_receiver(alts(), &dest("Formatter"), &all),
-            target("core::fmt::Formatter::write_fmt", Basis::ReceiverType)
+            target("core::fmt::Formatter::write_fmt")
         );
     }
 
@@ -244,81 +212,36 @@ mod tests {
         let imp = imports(&["std::io::BufWriter", "std::fmt::Write"]);
         assert_eq!(
             decide_by_receiver(alts(), &dest("BufWriter"), &imp),
-            target("std::io::Write::write_fmt", Basis::ReceiverType)
+            target("std::io::Write::write_fmt")
         );
     }
 
+    /// The write traits a file imports never decide a target, whatever the
+    /// destination: an untyped local, an unnameable type, a name nothing places.
     #[test]
-    fn an_untyped_local_is_decided_by_the_one_imported_trait() {
-        let imp = imports(&["std::io", "std::io::Write"]);
-        assert_eq!(
-            decide_by_receiver(alts(), &dest(""), &imp),
-            target("std::io::Write::write_fmt", Basis::ImportScope)
-        );
-    }
-
-    #[test]
-    fn an_untyped_local_with_both_traits_imported_is_ambiguous() {
+    fn no_imported_write_trait_decides_a_destination() {
+        let one = imports(&["std::io", "std::io::Write"]);
         let both = imports(&["std::fmt::Write", "std::io::Write"]);
-        assert_eq!(
-            decide_by_receiver(alts(), &dest(""), &both),
-            Decision::Undetermined { candidates: 2 }
-        );
-    }
-
-    #[test]
-    fn an_untyped_local_with_no_trait_imported_is_ambiguous_across_all() {
-        assert_eq!(
-            decide_by_receiver(alts(), &dest(""), &imports(&["std::collections::HashMap"])),
-            Decision::Undetermined { candidates: 3 }
-        );
-    }
-
-    /// A named type nothing in the file places (a generic `W`, a name from a
-    /// glob) is not decided by which write trait happens to be imported.
-    #[test]
-    fn a_named_type_that_nothing_places_is_undetermined_whatever_is_imported() {
-        for name in ["W", "Custom", "File"] {
-            assert_eq!(
-                decide_by_receiver(alts(), &dest(name), &imports(&["std::io::Write"])),
-                Decision::Undetermined { candidates: 3 },
-                "{name}"
-            );
+        let prelude = [Import::new("std::io::prelude", "", true)];
+        for declared in ["", "W", "Custom", "File"] {
+            for imp in [&one[..], &both[..], &prelude[..], &[][..]] {
+                assert_eq!(
+                    decide_by_receiver(alts(), &dest(declared), imp),
+                    NONE,
+                    "{declared:?}"
+                );
+            }
         }
     }
 
     #[test]
-    fn a_glob_import_of_the_io_prelude_brings_io_write_into_scope() {
-        let glob = [Import::new("std::io::prelude", "", true)];
-        assert_eq!(
-            decide_by_receiver(alts(), &dest(""), &glob),
-            target("std::io::Write::write_fmt", Basis::ImportScope)
-        );
-    }
-
-    #[test]
-    fn a_destination_that_is_not_a_plain_local_is_undetermined_whatever_is_imported() {
-        let not_local = Destination {
-            declared: "",
-            plain_local: false,
-            defined_in_file: false,
-        };
-        assert_eq!(
-            decide_by_receiver(alts(), &not_local, &imports(&["std::io::Write"])),
-            Decision::Undetermined { candidates: 3 }
-        );
-    }
-
-    #[test]
-    fn a_type_defined_in_the_file_is_undetermined_unless_std_is_imported_by_name() {
+    fn a_type_defined_in_the_file_is_undetermined() {
         let own = Destination {
             defined_in_file: true,
             ..dest("Formatter")
         };
-        assert_eq!(
-            decide_by_receiver(alts(), &own, &imports(&["std::io::Write"])),
-            Decision::Undetermined { candidates: 3 }
-        );
+        let imp = imports(&["std::fmt::Formatter"]);
+        assert_eq!(decide_by_receiver(alts(), &own, &imp), NONE);
     }
 
     #[test]
@@ -326,16 +249,18 @@ mod tests {
         let imp = vec![
             Import::new("tokio::fs::File", "F", false),
             Import::new("std::fs::File", "SF", false),
-            Import::new("std::io::Write", "", false),
         ];
-        assert_eq!(
-            decide_by_receiver(alts(), &dest("F"), &imp),
-            Decision::Undetermined { candidates: 3 }
-        );
+        assert_eq!(decide_by_receiver(alts(), &dest("F"), &imp), NONE);
         assert_eq!(
             decide_by_receiver(alts(), &dest("SF"), &imp),
-            target("std::io::Write::write_fmt", Basis::ReceiverType)
+            target("std::io::Write::write_fmt")
         );
+    }
+
+    #[test]
+    fn a_std_type_with_no_write_fmt_target_of_its_own_is_undetermined() {
+        let imp = imports(&["std::net::UdpSocket"]);
+        assert_eq!(decide_by_receiver(alts(), &dest("UdpSocket"), &imp), NONE);
     }
 
     #[test]

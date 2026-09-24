@@ -69,10 +69,6 @@ pub enum Evidence {
     /// like `ReceiverLocalBinding`, but through a closed list of std types.
     /// Issue #339.
     MacroReceiverType,
-    /// The same macro resolved only because exactly one of the candidate
-    /// traits is imported in the file: the destination's type is unknown, so
-    /// this is weaker than `MacroReceiverType`. Issue #339.
-    MacroImportScope,
 }
 
 /// Heuristic ordinal trust tiers — NOT measured probabilities. These are
@@ -91,10 +87,9 @@ pub fn confidence_for(evidence: Evidence) -> f64 {
         Evidence::PackageProximity => 0.7,
         // source: issue #339 — the macro tiers sit at or below the
         // local-binding tier they are as indirect as: a fixed expansion keeps
-        // 0.85, a receiver-type decision 0.8, an import-scope decision 0.75.
+        // 0.85 and a receiver-type decision is 0.8.
         Evidence::MacroExpansion => 0.85,
         Evidence::MacroReceiverType => 0.8,
-        Evidence::MacroImportScope => 0.75,
     }
 }
 
@@ -189,7 +184,6 @@ pub fn resolution_label(evidence: Evidence) -> &'static str {
         // labels; every one starts with "macro-expansion" (issue #339).
         Evidence::MacroExpansion => "macro-expansion",
         Evidence::MacroReceiverType => "macro-expansion-receiver-type",
-        Evidence::MacroImportScope => "macro-expansion-import-scope",
     }
 }
 

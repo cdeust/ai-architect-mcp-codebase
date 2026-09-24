@@ -14,34 +14,36 @@ adheres to [Semantic Versioning](https://semver.org/).
   `writeln!` on a `BufWriter` also got `fmt::Write::write_fmt`, and `vec![0; n]`
   got `Vec::new`, `Vec::push` and `Vec::with_capacity`, all at 0.85 on a site
   marked resolved. `write!` and `writeln!` are now decided by the declared type
-  of their first argument (confidence 0.8, method `macro-expansion-receiver-type`),
-  then by the one write trait imported in the file (0.75,
-  `macro-expansion-import-scope`). `vec![]` is `Vec::new` and `vec![x; n]` is
-  `vec::from_elem`; a `vec![a, b]` list has no stable target. A site with no
-  determined target gets no edge and no per-site row, stays unresolved and is
-  reported as `ambiguous (N candidates)` or `no stable target for this
-  expansion`. Every resolve first deletes the macro-expansion rows of earlier
-  runs, so a graph written by an older build is corrected on its next resolve.
-  Macro sites are no longer sent to the language server, which answered with the
-  macro's own definition; `lsp_resolve` and `lsp_status` report them as
-  `macro_sites_count`. The CallSite table gains a `macro_arg_shape` column.
-  The type of a `write!` destination is resolved in the scope of the file that
-  holds the site: a type defined there, or imported from a path that is not std
-  or core (tokio `File`, futures `Sink`), is never the std one, a name imported
-  from std or core, or written as a std path (`std::fs::File`, `fmt::Formatter`
-  with `use std::fmt`), is, an alias resolves through its original path, a
-  prelude name (`String`, `Vec`) is std unless the file redefines it, and any
-  other named type that nothing in the file places (a generic parameter, a
-  name from a glob) is left undetermined, as is a name that two `use` items
-  bind to different origins and a destination whose function body holds a
-  `use` mentioning its type. A `Formatter` defined in one file does not affect a std
-  `Formatter` in another. A destination that is not a plain local (a field) is
-  undetermined. Only Rust sites are macros: Ruby keeps the `!` of `user.save!`
-  in its callee name, and the plain call phase, the reset and the language
-  server query no longer take such a call for a Rust macro. A graph indexed
-  before this change records the last segment of the type only, so its
-  qualified `fmt::Formatter` destinations lose their edge until the next
-  index and never gain a wrong one.
+  of their first argument, placed in the scope of the file that holds the site
+  (confidence 0.8, method `macro-expansion-receiver-type`). A type defined in the
+  file, or imported from a path that is not std or core (tokio `File`, futures
+  `Sink`), is never the std one; a name imported from std or core, or written as
+  a std path (`std::fs::File`, `fmt::Formatter` with `use std::fmt`), is; an
+  alias resolves through its original path; a prelude name (`String`, `Vec`) is
+  std unless the file redefines it. A `Formatter` defined in one file does not
+  affect a std `Formatter` in another. Everything else is undetermined: a field,
+  `impl Trait`, `dyn Trait`, a generic parameter, a local with no declared type,
+  a name that nothing in the file places, a name that two `use` items bind to
+  different origins, and a destination whose function body holds a `use`
+  mentioning its type. The write traits a file imports do not decide anything:
+  what is in scope says what the file may call, not what the destination is, and
+  no class of sites makes that guess right by construction. `vec![]` is
+  `Vec::new` and `vec![x; n]` is `vec::from_elem`; a `vec![a, b]` list has no
+  stable target. A site with no determined target gets no edge and no per-site
+  row, stays unresolved and is reported as `ambiguous (N candidates)` or `no
+  stable target for this expansion`. Every resolve first deletes the
+  macro-expansion rows of earlier runs, so a graph written by an older build is
+  corrected on its next resolve. Macro sites are no longer sent to the language
+  server, which answered with the macro's own definition; `lsp_resolve` and
+  `lsp_status` report them as `macro_sites_count`. The CallSite table gains a
+  `macro_arg_shape` column. Only Rust sites are macros: Ruby keeps the `!` of
+  `user.save!` in its callee name, and the plain call phase, the reset and the
+  language server query no longer take such a call for a Rust macro. A graph
+  indexed before this change stores the last segment of the type only: its
+  qualified destinations such as `fmt::Formatter` lose their edge until the next
+  index, and a bare name can still be placed wrongly, for example a `File` read
+  as std because the file imports `std::fs::File`, when the source wrote
+  `tokio::fs::File` in full. Re-index to get the qualified type.
 - `edge_count` no longer counts the per-call-site rows (#338). Since #335 filled
   the `Calls_CallSite_*` tables, `index_status.edge_count` summed them and grew
   by about 3 percent with no new call in the code, while `analyze_codebase`

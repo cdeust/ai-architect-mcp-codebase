@@ -7,10 +7,9 @@
 //     method of `fmt::Write`, of `io::Write`, or inherent to `fmt::Formatter`,
 //     chosen by the type of `dst`;
 //   - `vec![]`, `vec![x; n]` and `vec![a, b]` expand to three different calls.
-// The parser sees both facts, so it records them: `receiver_hint` (the declared
-// type of a simple local destination, the same value `rust_receiver` computes
-// for a method receiver) and `macro_arg_shape` (`empty`, `repeat` or `list` for
-// `vec!`; `local` or `expr` for the destination of `write!`).
+// The parser sees both facts, so it records them: `receiver_hint` (the type of a
+// plain local destination as written, path included) and `macro_arg_shape`
+// (`empty`, `repeat` or `list` for `vec!`).
 //
 // source: https://doc.rust-lang.org/std/macro.write.html and
 // https://doc.rust-lang.org/std/macro.vec.html (expansions);
@@ -31,9 +30,6 @@ const SHAPE_PROPERTY: &str = "macro_arg_shape";
 const SHAPE_EMPTY: &str = "empty";
 const SHAPE_REPEAT: &str = "repeat";
 const SHAPE_LIST: &str = "list";
-// A `write!` destination that is a plain local, or anything else.
-const SHAPE_LOCAL: &str = "local";
-const SHAPE_EXPR: &str = "expr";
 
 impl RustConventions {
     /// The `CallSite` of one macro invocation, with the macro facts the
@@ -48,24 +44,9 @@ impl RustConventions {
         let token_tree = call_node
             .children(&mut call_node.walk())
             .find(|c| c.kind() == RUST_FAMILY.token_tree_kind);
-        let dest = token_tree
+        let hint = token_tree
             .filter(|_| DEST_MACROS.contains(&name))
-            .map(|tt| plain_local_destination(source, tt));
-        // The hint of a macro site carries the type as written (`fmt::Formatter`):
-        // the macro pass resolves it in the scope of the file (issue #339).
-        let hint = dest
-            .flatten()
-            .and_then(|d| super::rust_receiver::receiver_type_path(source, d));
-        // A `use` in the function body may rebind the type name where the
-        // index cannot see it: the destination is then not reliably typed.
-        let shadowed = hint
-            .as_deref()
-            .is_some_and(|h| super::rust_scope::scope_use_mentions(source, call_node, h));
-        let (dest, hint) = if shadowed {
-            (Some(None), None)
-        } else {
-            (dest, hint)
-        };
+            .and_then(|tt| destination_type_path(source, tt));
         let mut entry = Self::call_site_spanning(
             callee,
             call_node,
@@ -73,16 +54,10 @@ impl RustConventions {
             caller_qn,
             hint,
         );
-        let shape = match (dest, token_tree) {
-            (Some(Some(_)), _) => Some(SHAPE_LOCAL),
-            (Some(None), _) => Some(SHAPE_EXPR),
-            (None, Some(tt)) if VEC_MACROS.contains(&name) => Some(vec_shape(tt)),
-            _ => None,
-        };
-        if let Some(shape) = shape {
+        if let Some(tt) = token_tree.filter(|_| VEC_MACROS.contains(&name)) {
             entry
                 .properties
-                .push((SHAPE_PROPERTY.to_string(), shape.to_string()));
+                .push((SHAPE_PROPERTY.to_string(), vec_shape(tt).to_string()));
         }
         entry
     }
@@ -95,9 +70,22 @@ fn macro_base_name(callee: &str) -> &str {
     bare.rsplit("::").next().unwrap_or(bare)
 }
 
-/// The first macro argument when it is a plain local (`f`, `&mut f`); `None`
-/// for a field, a call or any other expression, whose type no `let` or
-/// parameter declares.
+/// The type of the first macro argument as written (`fmt::Formatter`), when
+/// that argument is a plain local (`f`, `&mut f`) with a declared type. `None`
+/// for a field, a call or any other expression, for a local with no nameable
+/// type (`impl Trait`, `dyn Trait`, no declaration), and when a `use` in the
+/// function body mentions the type: the index does not record those, so the
+/// name may not mean what the file-level imports say.
+fn destination_type_path(source: &str, token_tree: Node) -> Option<String> {
+    let destination = plain_local_destination(source, token_tree)?;
+    let path = super::rust_receiver::receiver_type_path(source, destination)?;
+    if super::rust_scope::scope_use_mentions(source, token_tree, &path) {
+        return None;
+    }
+    Some(path)
+}
+
+/// The first macro argument when it is a plain local (`f`, `&mut f`).
 fn plain_local_destination<'t>(source: &str, token_tree: Node<'t>) -> Option<Node<'t>> {
     let mut cursor = token_tree.walk();
     let mut destination: Option<Node> = None;
@@ -171,19 +159,6 @@ mod tests {
         let all = sites(src);
         let (_, props) = all.iter().find(|(n, _)| n == "write!").expect("write!");
         assert_eq!(prop(props, "receiver_hint"), None);
-    }
-
-    #[test]
-    fn a_plain_local_destination_and_an_expression_destination_are_told_apart() {
-        let src = "struct S { w: Vec<u8> }\nimpl S {\n    fn go(&mut self, mut o: Vec<u8>) {\n        write!(o, \"a\").ok();\n        write!(self.w, \"b\").ok();\n    }\n}\n";
-        let shapes: Vec<String> = sites(src)
-            .iter()
-            .filter(|(n, _)| n == "write!")
-            .filter_map(|(_, p)| prop(p, "macro_arg_shape").map(str::to_string))
-            .collect();
-        let mut sorted = shapes.clone();
-        sorted.sort();
-        assert_eq!(sorted, vec!["expr", "local"], "{shapes:?}");
     }
 
     #[test]

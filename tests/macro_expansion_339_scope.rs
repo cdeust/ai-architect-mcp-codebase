@@ -6,7 +6,7 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::resolver;
 mod common;
 mod macro_339_support;
-use macro_339_support::{index_files, macro_rows, rows_on_line};
+use macro_339_support::{index_files, is_resolved, macro_rows, rows_on_line};
 
 /// `File` is an alias of the tokio type, `SF` of the std one, and `Custom`
 /// comes from a glob of another crate; `io::Write` is imported in all three.
@@ -55,6 +55,8 @@ pub fn a(f: &mut File) {
 ";
 
 /// One `write!` on a std `Formatter`, imported by module.
+const OLD_SHAPE_IMPORTED: &str = "use std::fmt::Formatter;\npub fn go(f: &mut Formatter<'_>) -> std::fmt::Result {\n    write!(f, \"x\")\n}\n";
+
 const OLD_SHAPE: &str = "use std::fmt;\npub fn go(f: &mut fmt::Formatter<'_>) -> fmt::Result {\n    write!(f, \"x\")\n}\n";
 
 fn index_shadowing() -> (GraphStore, resolver::ResolutionResult, common::TestTempDir) {
@@ -105,27 +107,90 @@ fn a_use_inside_the_function_body_makes_the_destination_undetermined() {
 }
 
 /// A graph indexed before the type path was recorded holds the last segment
-/// of the type. This test measures what that does to one site: the edge is
-/// lost and no other target replaces it.
+/// of the type. This test measures what that does to one site: a bare
+/// `Formatter` that nothing in the file places loses its edge, and the same
+/// stored hint keeps it when the file imports the std type by name.
 #[test]
 fn a_graph_indexed_with_a_bare_hint_loses_the_edge_and_gains_no_false_one() {
+    let rewrite = "MATCH (cs:CallSite) WHERE cs.callee_name = 'write!' \
+                   SET cs.receiver_hint = 'Formatter'";
     let (store, _res, _tmp) = index_files(&[("lib.rs", OLD_SHAPE)]);
     assert_eq!(rows_on_line(&macro_rows(&store, "src/lib.rs"), 3).len(), 1);
-    store
-        .execute_query(
-            "MATCH (cs:CallSite) WHERE cs.callee_name = 'write!' AND cs.id STARTS WITH 'src/lib.rs' \
-             SET cs.receiver_hint = 'Formatter'",
-        )
-        .expect("rewrite the hint as an older build stored it");
+    store.execute_query(rewrite).expect("store the bare hint");
+    resolver::resolve_graph(&store).expect("re-resolve");
+    assert!(
+        rows_on_line(&macro_rows(&store, "src/lib.rs"), 3).is_empty(),
+        "a bare Formatter that the file does not place is not decided"
+    );
+
+    let (store, _res, _tmp) = index_files(&[("lib.rs", OLD_SHAPE_IMPORTED)]);
+    store.execute_query(rewrite).expect("store the bare hint");
     resolver::resolve_graph(&store).expect("re-resolve");
     let rows = macro_rows(&store, "src/lib.rs");
-    assert!(
-        rows_on_line(&rows, 8).is_empty(),
-        "bare Formatter is not placed"
-    );
-    assert!(
-        rows.iter()
-            .all(|r| r.target != "std::io::Write::write_fmt" || r.line != 3),
-        "and no wrong target replaces it"
-    );
+    let kept = rows_on_line(&rows, 3);
+    assert_eq!(kept.len(), 1, "positive control: the import places it");
+    assert_eq!(kept[0].target, "core::fmt::Formatter::write_fmt");
+}
+
+/// Types the extractor cannot name, and locals with no declared type: the
+/// imported write trait says nothing about what they are.
+const UNNAMEABLE: &str = "use std::fmt;
+use std::io::Write;
+
+pub fn a(w: &mut impl std::fmt::Write) {
+    write!(w, \"x\").ok();
+}
+
+pub fn b(w: &mut dyn fmt::Write) {
+    write!(w, \"x\").ok();
+}
+
+pub fn c<W: fmt::Write>(w: &mut W) {
+    write!(w, \"x\").ok();
+}
+
+pub fn d() {
+    let mut w = make_writer();
+    write!(w, \"x\").ok();
+}
+";
+
+/// An untyped local, `io::Write` at the top of the file and a `use` of
+/// `fmt::Write` in the function body, which the index does not record.
+const UNTYPED_LOCAL_USE: &str = "use std::io::Write;
+
+pub fn a() {
+    use std::fmt::Write;
+    let mut w = make_writer();
+    write!(w, \"x\").ok();
+}
+";
+
+#[test]
+fn a_destination_the_extractor_cannot_name_is_never_decided_by_an_imported_trait() {
+    let (store, res, _tmp) = index_files(&[("unnameable.rs", UNNAMEABLE)]);
+    let rows = macro_rows(&store, "src/unnameable.rs");
+    for (line, what) in [
+        (5, "impl fmt::Write"),
+        (9, "dyn fmt::Write"),
+        (13, "a generic parameter"),
+        (18, "a local with no declaration"),
+    ] {
+        assert!(
+            rows_on_line(&rows, line).is_empty(),
+            "{what}: {rows:?}",
+            rows = rows.len()
+        );
+        assert!(!is_resolved(&store, "src/unnameable.rs", line), "{what}");
+    }
+    assert!(res
+        .unresolved
+        .iter()
+        .any(|u| u.from_id.starts_with("src/unnameable.rs")));
+}
+
+#[test]
+fn an_untyped_local_with_a_function_local_use_is_not_decided_by_the_module_import() {
+    let (store, _res, _tmp) = index_files(&[("untyped.rs", UNTYPED_LOCAL_USE)]);
+    assert!(macro_rows(&store, "src/untyped.rs").is_empty());
 }

@@ -189,7 +189,6 @@ impl MacroPass<'_> {
                 let name = row.receiver_hint.rsplit("::").next().unwrap_or_default();
                 let dest = Destination {
                     declared: &row.receiver_hint,
-                    plain_local: row.arg_shape != "expr",
                     defined_in_file: !name.is_empty()
                         && (self.ctx.is_type_defined_in_file)(&file, name),
                 };
@@ -235,7 +234,6 @@ fn unresolved_ref(row: &MacroRow, macro_name: &str, reason: &str) -> UnresolvedR
 fn evidence_of(basis: Basis) -> Evidence {
     match basis {
         Basis::ReceiverType => Evidence::MacroReceiverType,
-        Basis::ImportScope => Evidence::MacroImportScope,
         Basis::ArgShape => Evidence::MacroExpansion,
     }
 }

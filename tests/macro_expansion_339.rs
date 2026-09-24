@@ -140,15 +140,14 @@ fn writeln_on_a_buf_writer_never_gets_the_fmt_trait_method() {
     assert_eq!(on[0].target, "std::io::Write::write_fmt");
 }
 
+/// An import of `io::Write` says what is in scope, not what the destination
+/// is: an untyped destination gets no target.
 #[test]
-fn write_on_an_unknown_destination_is_decided_by_the_imported_trait() {
+fn write_on_an_untyped_destination_is_undetermined_even_with_one_write_trait_imported() {
     let (store, _res, _tmp) = index_and_resolve();
     let rows = macro_rows(&store, "src/lib.rs");
-    let on = rows_on_line(&rows, 17);
-    assert_eq!(on.len(), 1);
-    assert_eq!(on[0].target, "std::io::Write::write_fmt");
-    assert_eq!(on[0].method, "macro-expansion-import-scope");
-    assert!((on[0].confidence - 0.75).abs() < 1e-9);
+    assert!(rows_on_line(&rows, 17).is_empty());
+    assert!(!is_resolved(&store, "src/lib.rs", 17));
 }
 
 #[test]
@@ -180,7 +179,7 @@ fn an_ambiguous_write_gets_no_row_stays_unresolved_and_says_why() {
         .find(|u| u.from_id.starts_with("src/amb.rs") && u.target_text == "write!")
         .map(|u| u.reason.clone())
         .expect("the ambiguous write! is reported unresolved");
-    assert_eq!(reason, "ambiguous (2 candidates)");
+    assert_eq!(reason, "ambiguous (3 candidates)");
 }
 
 #[test]
