@@ -67,7 +67,9 @@ pub(super) fn run_phases(
         &crate::resolver_layers::MacroContext {
             file_imports,
             caller_label_of: &|qn: &str| determine_caller_label(idx, qn),
-            is_user_type: &|name: &str| is_user_type(idx, name),
+            is_type_defined_in_file: &|file: &str, name: &str| {
+                is_type_defined_in_file(idx, file, name)
+            },
         },
     )?
     .into();

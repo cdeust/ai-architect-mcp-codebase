@@ -51,9 +51,11 @@ impl RustConventions {
         let dest = token_tree
             .filter(|_| DEST_MACROS.contains(&name))
             .map(|tt| plain_local_destination(source, tt));
+        // The hint of a macro site carries the type as written (`fmt::Formatter`):
+        // the macro pass resolves it in the scope of the file (issue #339).
         let hint = dest
             .flatten()
-            .and_then(|d| super::rust_receiver::receiver_hint(source, d));
+            .and_then(|d| super::rust_receiver::receiver_type_path(source, d));
         let mut entry = Self::call_site_spanning(
             callee,
             call_node,
@@ -142,7 +144,7 @@ mod tests {
         let src = "use std::fmt;\nfn show(f: &mut fmt::Formatter<'_>) -> fmt::Result {\n    write!(f, \"x\")\n}\n";
         let all = sites(src);
         let (_, props) = all.iter().find(|(n, _)| n == "write!").expect("write!");
-        assert_eq!(prop(props, "receiver_hint"), Some("Formatter"));
+        assert_eq!(prop(props, "receiver_hint"), Some("fmt::Formatter"));
     }
 
     #[test]

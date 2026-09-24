@@ -61,6 +61,18 @@ pub(super) fn receiver_hint(source: &str, node: Node) -> Option<String> {
     super::rust_scope::typed_local_bindings(source, node).remove(&name)
 }
 
+/// `receiver_hint` with the type as written, path included (`fmt::Formatter`).
+/// Only the macro-destination lookup uses it (issue #339): the qualifier is
+/// what tells a std type from a namesake.
+pub(super) fn receiver_type_path(source: &str, node: Node) -> Option<String> {
+    let receiver = receiver_identifier(node)?;
+    let name = node_text(source, receiver);
+    if name.is_empty() {
+        return None;
+    }
+    super::rust_scope::typed_local_paths(source, node).remove(&name)
+}
+
 /// The receiver's `identifier` node, when `node`'s shape names one plainly:
 ///   - `node` itself, when it already IS an `identifier` (the
 ///     macro-reconstructed-call shape).

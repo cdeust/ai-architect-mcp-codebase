@@ -6,7 +6,7 @@
 // "what node lives at this (file, line)". It performs no LSP I/O and inserts
 // nothing.
 
-use crate::graph_store::{GraphStore, RUST_MACRO_SITE};
+use crate::graph_store::{rust_macro_site_predicate, GraphStore};
 use crate::language_provider::extract_file_prefix_or_self;
 use lbug::Value;
 use std::collections::HashMap;
@@ -102,10 +102,11 @@ fn last_segment_offset(callee_name: &str) -> usize {
 /// say nothing about the resolver.
 pub(super) fn count_unresolved_macro_sites(store: &GraphStore) -> Result<u64, String> {
     store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
+    let pred = rust_macro_site_predicate();
     let qr = store.execute_query(&format!(
         "MATCH (cs:CallSite) \
          WHERE (cs.is_resolved IS NULL OR cs.is_resolved = false) \
-         AND {RUST_MACRO_SITE} \
+         AND {pred} \
          RETURN count(cs)"
     ))?;
     Ok(qr
@@ -146,10 +147,11 @@ pub(super) fn collect_unresolved_callsites(
     // migrated here too, on the same no-op-when-present terms as
     // `is_resolved` above.
     store.ensure_node_column("CallSite", "unresolved_reason", "STRING DEFAULT ''")?;
+    let pred = rust_macro_site_predicate();
     let qr = store.execute_query(&format!(
         "MATCH (cs:CallSite) \
          WHERE (cs.is_resolved IS NULL OR cs.is_resolved = false) \
-         AND NOT ({RUST_MACRO_SITE}) \
+         AND NOT ({pred}) \
          RETURN cs.id, cs.callee_name, cs.line, cs.col"
     ))?;
 

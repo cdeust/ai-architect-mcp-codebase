@@ -338,3 +338,107 @@ fn a_ruby_bang_call_is_never_handled_as_a_rust_macro() {
     assert_eq!(second.total_refs, first.total_refs);
     assert_eq!(is_resolved(&store, "src/bang.rb", 7), before);
 }
+
+/// A `File`, `Sink` and `Cursor` that come from other crates: not std, though
+/// `io::Write` is imported and the names match std types.
+const EXTERNAL: &str = "use futures::Sink;
+use my_crate::io::Cursor;
+use std::io::Write;
+use tokio::fs::File;
+
+pub fn a(mut f: File) {
+    write!(f, \"x\").ok();
+}
+
+pub fn b(mut s: Sink) {
+    write!(s, \"x\").ok();
+}
+
+pub fn c(mut c: Cursor<Vec<u8>>) {
+    write!(c, \"x\").ok();
+}
+";
+
+/// A `Formatter` of the repository, in a file of its own.
+const OWN_FORMATTER: &str = "pub struct Formatter;
+pub fn go(f: &mut Formatter) {
+    write!(f, \"x\").ok();
+}
+";
+
+/// The std `Formatter`, in another file of the same repository.
+const STD_FORMATTER: &str = "use std::fmt;
+pub fn go(f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, \"x\")
+}
+";
+
+/// Std types named by an imported name and by a written path.
+const STD_NAMED: &str = "use std::fs::File;
+pub fn a(mut f: File) {
+    write!(f, \"x\").ok();
+}
+
+pub fn b(mut f: std::fs::File) {
+    write!(f, \"x\").ok();
+}
+";
+
+/// A bare `File` that only a glob import of an unknown crate could provide.
+const GLOB_UNKNOWN: &str = "use some_crate::*;
+pub fn a(mut f: File) {
+    write!(f, \"x\").ok();
+}
+";
+
+fn index_scope() -> (GraphStore, resolver::ResolutionResult, common::TestTempDir) {
+    index_files(&[
+        ("external.rs", EXTERNAL),
+        ("own_fmt.rs", OWN_FORMATTER),
+        ("std_fmt.rs", STD_FORMATTER),
+        ("std_named.rs", STD_NAMED),
+        ("glob.rs", GLOB_UNKNOWN),
+    ])
+}
+
+#[test]
+fn a_std_named_type_from_another_crate_gets_no_std_target() {
+    let (store, res, _tmp) = index_scope();
+    assert!(
+        macro_rows(&store, "src/external.rs").is_empty(),
+        "tokio File, futures Sink and an external Cursor are not std"
+    );
+    for line in [7, 11, 15] {
+        assert!(!is_resolved(&store, "src/external.rs", line), "line {line}");
+    }
+    assert!(reason_of(&res, "src/external.rs").is_some());
+}
+
+#[test]
+fn a_formatter_of_the_repository_does_not_decide_the_std_formatter_of_another_file() {
+    let (store, _res, _tmp) = index_scope();
+    assert!(macro_rows(&store, "src/own_fmt.rs").is_empty());
+    let std_rows = macro_rows(&store, "src/std_fmt.rs");
+    assert_eq!(std_rows.len(), 1, "the std Formatter keeps its target");
+    assert_eq!(std_rows[0].target, "core::fmt::Formatter::write_fmt");
+}
+
+#[test]
+fn a_std_type_named_by_import_or_by_path_resolves_to_std() {
+    let (store, _res, _tmp) = index_scope();
+    let rows = macro_rows(&store, "src/std_named.rs");
+    let imported = rows_on_line(&rows, 3);
+    let by_path = rows_on_line(&rows, 7);
+    assert_eq!(imported.len(), 1, "use std::fs::File");
+    assert_eq!(by_path.len(), 1, "std::fs::File written in full");
+    assert_eq!(imported[0].target, "std::io::Write::write_fmt");
+    assert_eq!(by_path[0].target, "std::io::Write::write_fmt");
+    assert_eq!(imported[0].method, "macro-expansion-receiver-type");
+}
+
+#[test]
+fn a_bare_std_name_that_only_a_glob_of_an_unknown_crate_could_provide_is_undetermined() {
+    let (store, _res, _tmp) = index_scope();
+    assert!(macro_rows(&store, "src/glob.rs").is_empty());
+    assert!(!is_resolved(&store, "src/glob.rs", 3));
+}

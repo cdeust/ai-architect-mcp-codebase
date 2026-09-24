@@ -25,6 +25,17 @@ adheres to [Semantic Versioning](https://semver.org/).
   Macro sites are no longer sent to the language server, which answered with the
   macro's own definition; `lsp_resolve` and `lsp_status` report them as
   `macro_sites_count`. The CallSite table gains a `macro_arg_shape` column.
+  The type of a `write!` destination is resolved in the scope of the file that
+  holds the site: a type defined there, or imported from a path that is not std
+  or core (tokio `File`, futures `Sink`), is never the std one, a name imported
+  from std or core, or written as a std path (`std::fs::File`, `fmt::Formatter`
+  with `use std::fmt`), is, a prelude name (`String`, `Vec`) is unless the file
+  redefines it, and a bare std name that nothing in the file places is left
+  undetermined. A `Formatter` defined in one file does not affect a std
+  `Formatter` in another. A destination that is not a plain local (a field) is
+  undetermined. Only Rust sites are macros: Ruby keeps the `!` of `user.save!`
+  in its callee name, and the plain call phase, the reset and the language
+  server query no longer take such a call for a Rust macro.
 - `edge_count` no longer counts the per-call-site rows (#338). Since #335 filled
   the `Calls_CallSite_*` tables, `index_status.edge_count` summed them and grew
   by about 3 percent with no new call in the code, while `analyze_codebase`

@@ -4,7 +4,7 @@
 // new passes are added. source: stages/stage-3b-v2.md §5.
 
 use crate::ambiguity_policy::{confidence_for, resolution_label, Evidence};
-use crate::graph_store::RUST_MACRO_SITE;
+use crate::graph_store::rust_macro_site_predicate;
 use crate::graph_store::{call_site_rel_table, cypher_str, GraphStore, NODE_STDLIB_SYMBOL};
 use crate::language_provider::extract_file_prefix_or_self;
 use crate::macro_expansion::dispatch::{self, Basis, Decision, Destination, Dispatch};
@@ -39,9 +39,9 @@ pub fn run_macro_expansion(
 pub struct MacroContext<'a> {
     pub file_imports: &'a HashMap<String, Vec<String>>,
     pub caller_label_of: &'a dyn Fn(&str) -> String,
-    /// True when the repository defines a struct, enum, trait or alias of
-    /// that name.
-    pub is_user_type: &'a dyn Fn(&str) -> bool,
+    /// True when the file (first argument) defines a struct, enum, trait or
+    /// alias of that name (second argument).
+    pub is_type_defined_in_file: &'a dyn Fn(&str, &str) -> bool,
 }
 
 /// One macro-marker `CallSite` (`callee_name` ending in `!`) as the graph
@@ -103,8 +103,9 @@ impl MacroPass<'_> {
             .ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
         self.store
             .ensure_node_column("CallSite", "macro_arg_shape", "STRING DEFAULT ''")?;
+        let pred = rust_macro_site_predicate();
         let qr = self.store.execute_query(&format!(
-            "MATCH (cs:CallSite) WHERE {RUST_MACRO_SITE} \
+            "MATCH (cs:CallSite) WHERE {pred} \
              RETURN cs.id, cs.callee_name, cs.receiver_hint, cs.macro_arg_shape"
         ))?;
         let mut rows = Vec::new();
@@ -168,11 +169,12 @@ impl MacroPass<'_> {
                     .file_imports
                     .get(&file)
                     .map_or(&[][..], Vec::as_slice);
+                let name = row.receiver_hint.rsplit("::").next().unwrap_or_default();
                 let dest = Destination {
-                    declared_type: &row.receiver_hint,
+                    declared: &row.receiver_hint,
                     plain_local: row.arg_shape != "expr",
-                    user_type: !row.receiver_hint.is_empty()
-                        && (self.ctx.is_user_type)(&row.receiver_hint),
+                    defined_in_file: !name.is_empty()
+                        && (self.ctx.is_type_defined_in_file)(&file, name),
                 };
                 dispatch::decide_by_receiver(alternatives, &dest, imports)
             }

@@ -430,14 +430,16 @@ pub(crate) fn extract_caller_from_callsite_id(cs_id: &str) -> String {
     }
 }
 
-/// True when the repository defines a type (struct, enum, trait or alias) of
-/// that name. The macro pass uses it so a user type named like a std one
-/// (`Formatter`, `File`) is not taken for the std type (issue #339).
-fn is_user_type(idx: &SymbolIndex, name: &str) -> bool {
+/// True when `file` defines a type (struct, enum, trait or alias) of that
+/// name. The macro pass resolves a `write!` destination's type in the scope of
+/// the file that holds the site, so a namesake defined elsewhere in the
+/// repository does not count (issue #339).
+fn is_type_defined_in_file(idx: &SymbolIndex, file: &str, name: &str) -> bool {
     idx.by_name.get(name).is_some_and(|entries| {
-        entries
-            .iter()
-            .any(|e| matches!(e.label.as_str(), "Struct" | "Enum" | "Trait" | "TypeAlias"))
+        entries.iter().any(|e| {
+            matches!(e.label.as_str(), "Struct" | "Enum" | "Trait" | "TypeAlias")
+                && extract_file_prefix_or_self(&e.qualified_name) == file
+        })
     })
 }
 
