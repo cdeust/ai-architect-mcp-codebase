@@ -256,6 +256,7 @@ pub(crate) fn do_resolve_graph(arguments: &Value) -> Result<Value, String> {
         "uses_resolved": result.uses_resolved,
         "total_edges": result.total_edges,
         "total_refs": result.total_refs,
+        "no_call_macro_sites": result.no_call_macro_sites,
         "resolution_rate": format!("{:.2}", rate),
         "unresolved_count": result.unresolved.len(),
         "elapsed_ms": result.elapsed_ms,

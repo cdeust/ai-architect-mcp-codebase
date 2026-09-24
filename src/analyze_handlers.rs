@@ -162,6 +162,7 @@ fn analyze_envelope(
         "resolve": {
             "phase": "static",
             "total_edges": resolve_result.total_edges,
+            "no_call_macro_sites": resolve_result.no_call_macro_sites,
             "resolution_rate": format!("{:.2}",
                 if resolve_result.total_refs > 0 {
                     resolve_result.total_edges as f64 / resolve_result.total_refs as f64

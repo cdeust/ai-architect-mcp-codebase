@@ -13,12 +13,14 @@ use crate::resolver::{EdgeBuffer, PhaseResult, UnresolvedRef};
 use std::collections::{HashMap, HashSet};
 
 // The reasons this pass gives an expansion that gets no edge. The last two are
-// the outcomes of a decided expansion (issue #339): its shape has no target, or
-// its destination's type is not determined.
+// the outcomes of a decided expansion (issues #339, #344): its shape or its
+// form has no one target, or its destination's type is not determined.
 const REASON_NOT_CALLABLE: &str = "caller is not a callable (Function|Method)";
 const REASON_NO_TABLE_ENTRY: &str = "no macro-expansion table entry";
 const REASON_NO_EMIT_CALLS: &str = "expansion has no emit_calls entries";
-const REASON_NO_STABLE_TARGET: &str = "no stable target for this expansion";
+const REASON_INTERNAL_CALLEES: &str =
+    "expansion calls compiler internals whose paths change between versions";
+const REASON_CALLEE_BY_ARGUMENTS: &str = "callee depends on the arguments of the macro";
 const REASON_TYPE_NOT_DETERMINED: &str = "destination type not determined";
 
 /// Entry point for Layer 4 (macros + derives).
@@ -31,15 +33,28 @@ pub fn run_macro_expansion(
     store: &GraphStore,
     buf: &mut EdgeBuffer,
     ctx: &MacroContext,
-) -> PhaseResult {
+) -> Result<MacroOutcome, String> {
     let mut pass = MacroPass {
         store,
         buf,
         ctx,
         created: HashSet::new(),
         imports: HashMap::new(),
+        no_call: 0,
     };
-    pass.run()
+    let phase = pass.run()?;
+    Ok(MacroOutcome {
+        phase,
+        no_call_sites: pass.no_call,
+    })
+}
+
+/// What the macro pass reports: the usual phase triple, and the number of
+/// sites of macros that call nothing (issue #345), which are in none of the
+/// triple's counts.
+pub struct MacroOutcome {
+    pub phase: (u64, u64, Vec<UnresolvedRef>),
+    pub no_call_sites: u64,
 }
 
 /// What the macro pass reads from the rest of the resolver.
@@ -66,6 +81,8 @@ struct MacroPass<'a> {
     created: HashSet<String>,
     /// The `use` items of each file: name bound and path, aliases included.
     imports: HashMap<String, Vec<Import>>,
+    /// Sites of macros that call nothing, seen so far (issue #345).
+    no_call: u64,
 }
 
 /// The macro-marker `CallSite` one expansion belongs to, its caller, and the
@@ -151,6 +168,13 @@ impl MacroPass<'_> {
 
     fn resolve_one(&mut self, row: &MacroRow) -> PhaseResult {
         let none = |reason: &str| (0, 1, vec![unresolved_ref(row, &row.macro_name, reason)]);
+        let rule = dispatch::dispatch_for(&row.macro_name);
+        // A macro that calls nothing is not a call reference: it is neither
+        // resolved nor unresolved, whatever its caller is (issue #345).
+        if matches!(rule, Some(Dispatch::NoCall)) {
+            self.no_call += 1;
+            return Ok((0, 0, Vec::new()));
+        }
         let caller_qn = caller_from_callsite(&row.cs_id);
         let caller_label = (self.ctx.caller_label_of)(&caller_qn);
         // source: stages/stage-3b.md §2 — Calls_*_StdlibSymbol is defined for
@@ -164,7 +188,7 @@ impl MacroPass<'_> {
             caller_qn: &caller_qn,
             rel: &rel,
         };
-        if let Some(rule) = dispatch::dispatch_for(&row.macro_name) {
+        if let Some(rule) = rule {
             return self.resolve_decided(row, &site, rule);
         }
         let Some(expansion) = crate::macro_expansion::lookup("rust", &row.macro_name) else {
@@ -200,8 +224,8 @@ impl MacroPass<'_> {
                 dispatch::decide_by_receiver(alternatives, &dest, imports)
             }
             Dispatch::ArgShape(rules) => dispatch::decide_by_shape(rules, &row.arg_shape),
+            Dispatch::FormDependent | Dispatch::NoCall => Decision::CalleeByArguments,
         };
-        let target = &row.macro_name;
         match decision {
             Decision::Target { canonical, basis } => {
                 self.ensure_symbol(canonical)?;
@@ -211,22 +235,20 @@ impl MacroPass<'_> {
                     None => (1, 1, Vec::new()),
                 })
             }
-            Decision::NoStableTarget => Ok((
-                0,
-                1,
-                vec![unresolved_ref(row, target, REASON_NO_STABLE_TARGET)],
-            )),
-            Decision::TypeNotDetermined => Ok((
-                0,
-                1,
-                vec![unresolved_ref(row, target, REASON_TYPE_NOT_DETERMINED)],
-            )),
+            Decision::NoStableTarget => Ok(unresolved_unit(row, REASON_INTERNAL_CALLEES)),
+            Decision::CalleeByArguments => Ok(unresolved_unit(row, REASON_CALLEE_BY_ARGUMENTS)),
+            Decision::TypeNotDetermined => Ok(unresolved_unit(row, REASON_TYPE_NOT_DETERMINED)),
         }
     }
 
     fn ensure_symbol(&mut self, canonical: &str) -> Result<(), String> {
         ensure_stdlib_symbol(self.store, &mut self.created, canonical, "rust")
     }
+}
+
+/// One unresolved unit: the macro's site, with the reason it has no target.
+fn unresolved_unit(row: &MacroRow, reason: &str) -> (u64, u64, Vec<UnresolvedRef>) {
+    (0, 1, vec![unresolved_ref(row, &row.macro_name, reason)])
 }
 
 fn unresolved_ref(row: &MacroRow, macro_name: &str, reason: &str) -> UnresolvedRef {

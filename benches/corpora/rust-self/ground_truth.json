@@ -1012,6 +1012,7 @@
           "uses_resolved",
           "total_edges",
           "total_refs",
+          "no_call_macro_sites",
           "unresolved",
           "elapsed_ms"
         ]

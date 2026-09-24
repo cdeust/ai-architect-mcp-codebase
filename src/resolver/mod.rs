@@ -120,6 +120,9 @@ pub struct ResolutionResult {
     pub uses_resolved: u64,
     pub total_edges: u64,
     pub total_refs: u64,
+    /// Sites of macros that call nothing (`matches!`, `include_str!`): not
+    /// references, so in neither `total_refs` nor `unresolved` (issue #345).
+    pub no_call_macro_sites: u64,
     pub unresolved: Vec<UnresolvedRef>,
     pub elapsed_ms: u64,
 }

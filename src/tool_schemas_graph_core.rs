@@ -134,7 +134,7 @@ pub(super) fn get_symbol_schema() -> Value {
 pub(super) fn resolve_graph_schema() -> Value {
     json!({
         "name": "resolve_graph",
-        "description": "Stage 3b — Resolve cross-file edges in the code graph. Runs AFTER index_codebase. Adds Imports, Calls, Implements, Extends, and Uses edges by matching string references to concrete target nodes. Returns resolution statistics including edge counts and resolution rate.",
+        "description": "Stage 3b — Resolve cross-file edges in the code graph. Runs AFTER index_codebase. Adds Imports, Calls, Implements, Extends, and Uses edges by matching string references to concrete target nodes. Returns resolution statistics including edge counts and resolution rate. `total_refs` counts the references the resolver attempted; `no_call_macro_sites` (issue #345) is the sites of macros that call nothing (`matches!`, `include_str!`, `concat!`, `line!`, ...), which are not references and are in neither `total_edges` nor `total_refs`, so they do not lower `resolution_rate`. A macro whose callee depends on its arguments (`panic!`, `assert!`) is an unresolved reference with the reason \"callee depends on the arguments of the macro\" (issue #344).",
         "annotations": { "destructiveHint": true },
         "inputSchema": {
             "type": "object",

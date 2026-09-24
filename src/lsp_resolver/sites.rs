@@ -8,6 +8,7 @@
 
 use crate::graph_store::{rust_macro_site_predicate, GraphStore};
 use crate::language_provider::extract_file_prefix_or_self;
+use crate::macro_expansion::rust::NO_CALL_MACROS;
 use lbug::Value;
 use std::collections::HashMap;
 
@@ -99,22 +100,10 @@ fn last_segment_offset(callee_name: &str) -> usize {
 /// `collect_unresolved_callsites` leaves them out: a language server answers a
 /// `textDocument/definition` on `write!` with the macro's own definition, never
 /// with the call the expansion makes, so asking would only add failures that
-/// say nothing about the resolver.
+/// say nothing about the resolver. A macro that calls nothing (`matches!`,
+/// `include_str!`, issue #345) is not counted: it is not an unresolved call.
 pub(super) fn count_unresolved_macro_sites(store: &GraphStore) -> Result<u64, String> {
-    store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
-    let pred = rust_macro_site_predicate();
-    let qr = store.execute_query(&format!(
-        "MATCH (cs:CallSite) \
-         WHERE (cs.is_resolved IS NULL OR cs.is_resolved = false) \
-         AND {pred} \
-         RETURN count(cs)"
-    ))?;
-    Ok(qr
-        .rows
-        .first()
-        .and_then(|r| r.first())
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0))
+    store.count_unresolved_macro_sites(NO_CALL_MACROS)
 }
 
 /// Every call site the static 3b resolver left open.
