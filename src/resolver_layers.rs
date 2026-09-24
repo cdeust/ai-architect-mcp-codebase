@@ -4,9 +4,10 @@
 // new passes are added. source: stages/stage-3b-v2.md §5.
 
 use crate::ambiguity_policy::{confidence_for, resolution_label, Evidence};
+use crate::graph_store::RUST_MACRO_SITE;
 use crate::graph_store::{call_site_rel_table, cypher_str, GraphStore, NODE_STDLIB_SYMBOL};
 use crate::language_provider::extract_file_prefix_or_self;
-use crate::macro_expansion::dispatch::{self, Basis, Decision, Dispatch};
+use crate::macro_expansion::dispatch::{self, Basis, Decision, Destination, Dispatch};
 use crate::resolver::{EdgeBuffer, PhaseResult, UnresolvedRef};
 use std::collections::{HashMap, HashSet};
 
@@ -23,17 +24,24 @@ const REASON_NO_STABLE_TARGET: &str = "no stable target for this expansion";
 pub fn run_macro_expansion(
     store: &GraphStore,
     buf: &mut EdgeBuffer,
-    file_imports: &HashMap<String, Vec<String>>,
-    caller_label_of: &dyn Fn(&str) -> String,
+    ctx: &MacroContext,
 ) -> PhaseResult {
     let mut pass = MacroPass {
         store,
         buf,
-        file_imports,
-        caller_label_of,
+        ctx,
         created: HashSet::new(),
     };
     pass.run()
+}
+
+/// What the macro pass reads from the rest of the resolver.
+pub struct MacroContext<'a> {
+    pub file_imports: &'a HashMap<String, Vec<String>>,
+    pub caller_label_of: &'a dyn Fn(&str) -> String,
+    /// True when the repository defines a struct, enum, trait or alias of
+    /// that name.
+    pub is_user_type: &'a dyn Fn(&str) -> bool,
 }
 
 /// One macro-marker `CallSite` (`callee_name` ending in `!`) as the graph
@@ -48,8 +56,7 @@ struct MacroRow {
 struct MacroPass<'a> {
     store: &'a GraphStore,
     buf: &'a mut EdgeBuffer,
-    file_imports: &'a HashMap<String, Vec<String>>,
-    caller_label_of: &'a dyn Fn(&str) -> String,
+    ctx: &'a MacroContext<'a>,
     created: HashSet<String>,
 }
 
@@ -96,9 +103,10 @@ impl MacroPass<'_> {
             .ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
         self.store
             .ensure_node_column("CallSite", "macro_arg_shape", "STRING DEFAULT ''")?;
-        let qr = self.store.execute_query(
-            "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.receiver_hint, cs.macro_arg_shape",
-        )?;
+        let qr = self.store.execute_query(&format!(
+            "MATCH (cs:CallSite) WHERE {RUST_MACRO_SITE} \
+             RETURN cs.id, cs.callee_name, cs.receiver_hint, cs.macro_arg_shape"
+        ))?;
         let mut rows = Vec::new();
         for r in qr.rows.iter().filter(|r| r.len() >= 4) {
             let Some(path) = r[1].strip_suffix('!') else {
@@ -117,7 +125,7 @@ impl MacroPass<'_> {
     fn resolve_one(&mut self, row: &MacroRow) -> PhaseResult {
         let none = |reason: &str| (0, 1, vec![unresolved_ref(row, &row.macro_name, reason)]);
         let caller_qn = caller_from_callsite(&row.cs_id);
-        let caller_label = (self.caller_label_of)(&caller_qn);
+        let caller_label = (self.ctx.caller_label_of)(&caller_qn);
         // source: stages/stage-3b.md §2 — Calls_*_StdlibSymbol is defined for
         // Function|Method callers only.
         if caller_label != "Function" && caller_label != "Method" {
@@ -155,8 +163,18 @@ impl MacroPass<'_> {
         let decision = match rule {
             Dispatch::ReceiverType(alternatives) => {
                 let file = extract_file_prefix_or_self(&row.cs_id);
-                let imports = self.file_imports.get(&file).map_or(&[][..], Vec::as_slice);
-                dispatch::decide_by_receiver(alternatives, &row.receiver_hint, imports)
+                let imports = self
+                    .ctx
+                    .file_imports
+                    .get(&file)
+                    .map_or(&[][..], Vec::as_slice);
+                let dest = Destination {
+                    declared_type: &row.receiver_hint,
+                    plain_local: row.arg_shape != "expr",
+                    user_type: !row.receiver_hint.is_empty()
+                        && (self.ctx.is_user_type)(&row.receiver_hint),
+                };
+                dispatch::decide_by_receiver(alternatives, &dest, imports)
             }
             Dispatch::ArgShape(rules) => dispatch::decide_by_shape(rules, &row.arg_shape),
         };

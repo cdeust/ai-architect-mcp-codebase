@@ -6,7 +6,7 @@
 // "what node lives at this (file, line)". It performs no LSP I/O and inserts
 // nothing.
 
-use crate::graph_store::GraphStore;
+use crate::graph_store::{GraphStore, RUST_MACRO_SITE};
 use crate::language_provider::extract_file_prefix_or_self;
 use lbug::Value;
 use std::collections::HashMap;
@@ -102,12 +102,12 @@ fn last_segment_offset(callee_name: &str) -> usize {
 /// say nothing about the resolver.
 pub(super) fn count_unresolved_macro_sites(store: &GraphStore) -> Result<u64, String> {
     store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
-    let qr = store.execute_query(
+    let qr = store.execute_query(&format!(
         "MATCH (cs:CallSite) \
          WHERE (cs.is_resolved IS NULL OR cs.is_resolved = false) \
-         AND cs.callee_name ENDS WITH '!' \
-         RETURN count(cs)",
-    )?;
+         AND {RUST_MACRO_SITE} \
+         RETURN count(cs)"
+    ))?;
     Ok(qr
         .rows
         .first()
@@ -146,12 +146,12 @@ pub(super) fn collect_unresolved_callsites(
     // migrated here too, on the same no-op-when-present terms as
     // `is_resolved` above.
     store.ensure_node_column("CallSite", "unresolved_reason", "STRING DEFAULT ''")?;
-    let qr = store.execute_query(
+    let qr = store.execute_query(&format!(
         "MATCH (cs:CallSite) \
          WHERE (cs.is_resolved IS NULL OR cs.is_resolved = false) \
-         AND NOT cs.callee_name ENDS WITH '!' \
-         RETURN cs.id, cs.callee_name, cs.line, cs.col",
-    )?;
+         AND NOT ({RUST_MACRO_SITE}) \
+         RETURN cs.id, cs.callee_name, cs.line, cs.col"
+    ))?;
 
     let mut sites = Vec::new();
     for row in &qr.rows {
@@ -284,12 +284,25 @@ mod tests {
     }
 
     fn insert_site_named(store: &GraphStore, id: &str, callee: &str, resolved: Option<&str>) {
+        let site = SiteSpec {
+            callee,
+            language: "rust",
+        };
+        insert_site_in(store, id, &site, resolved);
+    }
+
+    struct SiteSpec<'a> {
+        callee: &'a str,
+        language: &'a str,
+    }
+
+    fn insert_site_in(store: &GraphStore, id: &str, site: &SiteSpec, resolved: Option<&str>) {
         let mut props = vec![
             ("id", format!("'{id}'")),
-            ("callee_name", format!("'{callee}'")),
+            ("callee_name", format!("'{}'", site.callee)),
             ("line", "5".to_string()),
             ("col", "4".to_string()),
-            ("language", "'rust'".to_string()),
+            ("language", format!("'{}'", site.language)),
         ];
         if let Some(v) = resolved {
             props.push(("is_resolved", v.to_string()));
@@ -336,6 +349,27 @@ mod tests {
         let ids: Vec<&str> = sites.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["src/a.rs::caller::call@5:4"]);
         assert_eq!(count_unresolved_macro_sites(&store).expect("count"), 1);
+    }
+
+    /// Ruby keeps the `!` in `callee_name` (`user.save!` indexes as `save!`),
+    /// so a bare `ends_with('!')` filter took every Ruby bang method for a
+    /// Rust macro: never sent to the server and counted as a macro site.
+    #[test]
+    fn a_ruby_bang_method_site_is_still_collected_for_the_server() {
+        let (_dir, store) = store_with_schema("lsp_ruby_bang_test");
+        let ruby = SiteSpec {
+            callee: "save!",
+            language: "ruby",
+        };
+        insert_site_in(&store, "app/u.rb::U::go::call@3:4", &ruby, Some("false"));
+
+        let sites = collect_unresolved_callsites(&store).expect("collect");
+        assert_eq!(
+            sites.len(),
+            1,
+            "a Ruby `save!` is a method call, not a macro"
+        );
+        assert_eq!(count_unresolved_macro_sites(&store).expect("count"), 0);
     }
 
     #[test]

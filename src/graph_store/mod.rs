@@ -14,6 +14,7 @@ mod columns;
 mod config;
 mod ddl;
 mod macro_reset;
+pub(crate) use macro_reset::RUST_MACRO_SITE;
 mod membership;
 mod recovery;
 mod schema;

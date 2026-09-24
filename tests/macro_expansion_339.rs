@@ -57,6 +57,52 @@ pub fn either<W>(w: &mut W) {
 }
 ";
 
+/// A user type named like a std one must not get the std target.
+const USER_TYPE: &str = "use std::io::Write;
+pub struct Formatter;
+impl Formatter {
+    pub fn write_str(&mut self, _s: &str) {}
+}
+pub fn go(f: &mut Formatter) {
+    write!(f, \"x\").ok();
+}
+";
+
+/// Only `io::Write` is imported, but the destination is a field holding a
+/// `fmt::Formatter`: the import says nothing about it.
+const FIELD: &str = "use std::fmt;
+use std::io::Write;
+pub struct S<'a> {
+    f: &'a mut fmt::Formatter<'a>,
+}
+impl<'a> S<'a> {
+    pub fn go(&mut self) {
+        write!(self.f, \"x\").ok();
+    }
+}
+";
+
+/// Two destinations of different types in one caller.
+const TWO: &str = "use std::fmt;
+use std::io::BufWriter;
+pub fn both(f: &mut fmt::Formatter<'_>, w: &mut BufWriter<Vec<u8>>) {
+    write!(f, \"a\").ok();
+    write!(w, \"b\").ok();
+}
+";
+
+/// Ruby keeps the `!` of `save!` in the callee name.
+const RUBY: &str = "class U
+  def save!
+    1
+  end
+
+  def go
+    self.save!
+  end
+end
+";
+
 struct Row {
     callee: String,
     line: u64,
@@ -66,6 +112,24 @@ struct Row {
 }
 
 fn index_and_resolve() -> (GraphStore, resolver::ResolutionResult, common::TestTempDir) {
+    index_files(&[
+        ("lib.rs", LIB),
+        ("amb.rs", AMBIGUOUS),
+        ("field.rs", FIELD),
+        ("two.rs", TWO),
+        ("bang.rb", RUBY),
+    ])
+}
+
+/// A graph of its own: the user-type check is by name across the repository,
+/// so the user-defined `Formatter` must not share a graph with the std one.
+fn index_user_type() -> (GraphStore, resolver::ResolutionResult, common::TestTempDir) {
+    index_files(&[("user.rs", USER_TYPE)])
+}
+
+fn index_files(
+    files: &[(&str, &str)],
+) -> (GraphStore, resolver::ResolutionResult, common::TestTempDir) {
     let tmp = tempfile::Builder::new()
         .prefix("macro_expansion_339_")
         .tempdir()
@@ -73,8 +137,9 @@ fn index_and_resolve() -> (GraphStore, resolver::ResolutionResult, common::TestT
         .keep_managed();
     let src = tmp.path().join("fixture/src");
     fs::create_dir_all(&src).expect("mkdir src");
-    fs::write(src.join("lib.rs"), LIB).expect("write lib");
-    fs::write(src.join("amb.rs"), AMBIGUOUS).expect("write amb");
+    for (name, text) in files {
+        fs::write(src.join(name), text).expect("write fixture file");
+    }
     let graph_dir = tmp.path().join("graph");
     indexer::index_codebase(&tmp.path().join("fixture"), &graph_dir).expect("index");
     let store = GraphStore::open_or_create(&graph_dir).expect("open graph");
@@ -205,4 +270,71 @@ fn a_macro_row_from_an_earlier_run_is_purged_by_the_next_resolve() {
     let on = rows_on_line(&rows, 13);
     assert_eq!(on.len(), 1, "the stale fmt::Write row must be gone");
     assert_eq!(on[0].target, "std::io::Write::write_fmt");
+}
+
+fn reason_of(res: &resolver::ResolutionResult, file: &str) -> Option<String> {
+    res.unresolved
+        .iter()
+        .find(|u| u.from_id.starts_with(file) && u.target_text == "write!")
+        .map(|u| u.reason.clone())
+}
+
+#[test]
+fn a_user_type_named_formatter_never_gets_the_std_target() {
+    let (store, res, _tmp) = index_user_type();
+    assert!(macro_rows(&store, "src/user.rs").is_empty());
+    assert!(!is_resolved(&store, "src/user.rs", 7));
+    let reason = reason_of(&res, "src/user.rs").expect("reported unresolved");
+    assert!(reason.starts_with("ambiguous"), "{reason}");
+}
+
+#[test]
+fn write_on_a_formatter_field_is_not_decided_by_an_unrelated_import() {
+    let (store, res, _tmp) = index_and_resolve();
+    assert!(
+        macro_rows(&store, "src/field.rs").is_empty(),
+        "io::Write is imported but the destination is a Formatter field"
+    );
+    assert!(!is_resolved(&store, "src/field.rs", 8));
+    assert!(reason_of(&res, "src/field.rs").is_some());
+}
+
+#[test]
+fn two_writes_in_one_function_keep_their_own_targets() {
+    let (store, _res, _tmp) = index_and_resolve();
+    let rows = macro_rows(&store, "src/two.rs");
+    let a = rows_on_line(&rows, 4);
+    let b = rows_on_line(&rows, 5);
+    assert_eq!(a.len(), 1);
+    assert_eq!(b.len(), 1);
+    assert_eq!(a[0].target, "core::fmt::Formatter::write_fmt");
+    assert_eq!(b[0].target, "std::io::Write::write_fmt");
+}
+
+/// A Ruby `self.save!` is a method call. The macro filter used to take it for
+/// a Rust macro: the plain call phase skipped it, the macro pass reported it
+/// as an unknown macro, and the macro reset cleared its `is_resolved`.
+#[test]
+fn a_ruby_bang_call_is_never_handled_as_a_rust_macro() {
+    let (store, first, _tmp) = index_and_resolve();
+    let macro_reasons = [
+        "no macro-expansion table entry",
+        "expansion has no emit_calls entries",
+        "no stable target for this expansion",
+    ];
+    let hit = first
+        .unresolved
+        .iter()
+        .filter(|u| u.from_id.starts_with("src/bang.rb"))
+        .find(|u| macro_reasons.contains(&u.reason.as_str()) || u.reason.starts_with("ambiguous"));
+    assert!(
+        hit.is_none(),
+        "a Ruby call got a macro reason: {:?}",
+        hit.map(|u| u.reason.clone())
+    );
+
+    let before = is_resolved(&store, "src/bang.rb", 7);
+    let second = resolver::resolve_graph(&store).expect("second resolve");
+    assert_eq!(second.total_refs, first.total_refs);
+    assert_eq!(is_resolved(&store, "src/bang.rb", 7), before);
 }

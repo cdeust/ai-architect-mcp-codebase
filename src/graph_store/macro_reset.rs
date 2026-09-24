@@ -14,10 +14,17 @@ use super::GraphStore;
 // source: resolver_layers — every macro-expansion method label starts with it.
 const MACRO_METHOD_PREFIX: &str = "macro-expansion";
 
+/// The `CallSite` rows that are Rust macro invocations. The `!` alone is not
+/// enough: Ruby keeps it in the callee name (`user.save!` indexes as `save!`),
+/// and only the Rust extractor writes `!` for a macro, so the language decides.
+/// source: `parser::spec::rust` `call_callee` appends `!` for a
+/// `macro_invocation`; Ruby measured on `user.save!` / `user.update!`.
+pub(crate) const RUST_MACRO_SITE: &str = "cs.language = 'rust' AND cs.callee_name ENDS WITH '!'";
+
 impl GraphStore {
     /// Deletes every macro-expansion row of every `Calls_*_StdlibSymbol`
-    /// table, and clears `is_resolved` on every macro-marker `CallSite`
-    /// (`callee_name` ending in `!`) so the pass decides it again.
+    /// table, and clears `is_resolved` on every Rust macro `CallSite`
+    /// (`RUST_MACRO_SITE`) so the pass decides it again.
     pub(crate) fn reset_macro_expansion(&self) -> Result<(), String> {
         self.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
         for &(rel, _, to) in REL_TABLES {
@@ -29,9 +36,9 @@ impl GraphStore {
                 cypher_str(MACRO_METHOD_PREFIX)
             ))?;
         }
-        self.run(
-            "MATCH (cs:CallSite) WHERE cs.callee_name ENDS WITH '!' SET cs.is_resolved = false",
-        )?;
+        self.run(&format!(
+            "MATCH (cs:CallSite) WHERE {RUST_MACRO_SITE} SET cs.is_resolved = false"
+        ))?;
         Ok(())
     }
 }

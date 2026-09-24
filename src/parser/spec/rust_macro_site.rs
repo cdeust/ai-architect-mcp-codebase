@@ -9,7 +9,8 @@
 //   - `vec![]`, `vec![x; n]` and `vec![a, b]` expand to three different calls.
 // The parser sees both facts, so it records them: `receiver_hint` (the declared
 // type of a simple local destination, the same value `rust_receiver` computes
-// for a method receiver) and `macro_arg_shape` (`empty`, `repeat` or `list`).
+// for a method receiver) and `macro_arg_shape` (`empty`, `repeat` or `list` for
+// `vec!`; `local` or `expr` for the destination of `write!`).
 //
 // source: https://doc.rust-lang.org/std/macro.write.html and
 // https://doc.rust-lang.org/std/macro.vec.html (expansions);
@@ -30,6 +31,9 @@ const SHAPE_PROPERTY: &str = "macro_arg_shape";
 const SHAPE_EMPTY: &str = "empty";
 const SHAPE_REPEAT: &str = "repeat";
 const SHAPE_LIST: &str = "list";
+// A `write!` destination that is a plain local, or anything else.
+const SHAPE_LOCAL: &str = "local";
+const SHAPE_EXPR: &str = "expr";
 
 impl RustConventions {
     /// The `CallSite` of one macro invocation, with the macro facts the
@@ -44,10 +48,12 @@ impl RustConventions {
         let token_tree = call_node
             .children(&mut call_node.walk())
             .find(|c| c.kind() == RUST_FAMILY.token_tree_kind);
-        let hint = match token_tree {
-            Some(tt) if DEST_MACROS.contains(&name) => destination_hint(source, tt),
-            _ => None,
-        };
+        let dest = token_tree
+            .filter(|_| DEST_MACROS.contains(&name))
+            .map(|tt| plain_local_destination(source, tt));
+        let hint = dest
+            .flatten()
+            .and_then(|d| super::rust_receiver::receiver_hint(source, d));
         let mut entry = Self::call_site_spanning(
             callee,
             call_node,
@@ -55,10 +61,16 @@ impl RustConventions {
             caller_qn,
             hint,
         );
-        if let Some(tt) = token_tree.filter(|_| VEC_MACROS.contains(&name)) {
+        let shape = match (dest, token_tree) {
+            (Some(Some(_)), _) => Some(SHAPE_LOCAL),
+            (Some(None), _) => Some(SHAPE_EXPR),
+            (None, Some(tt)) if VEC_MACROS.contains(&name) => Some(vec_shape(tt)),
+            _ => None,
+        };
+        if let Some(shape) = shape {
             entry
                 .properties
-                .push((SHAPE_PROPERTY.to_string(), vec_shape(tt).to_string()));
+                .push((SHAPE_PROPERTY.to_string(), shape.to_string()));
         }
         entry
     }
@@ -71,9 +83,10 @@ fn macro_base_name(callee: &str) -> &str {
     bare.rsplit("::").next().unwrap_or(bare)
 }
 
-/// The declared type of the destination when the first macro argument is a
-/// plain local (`f`, `&mut f`), through the same lookup a method receiver uses.
-fn destination_hint(source: &str, token_tree: Node) -> Option<String> {
+/// The first macro argument when it is a plain local (`f`, `&mut f`); `None`
+/// for a field, a call or any other expression, whose type no `let` or
+/// parameter declares.
+fn plain_local_destination<'t>(source: &str, token_tree: Node<'t>) -> Option<Node<'t>> {
     let mut cursor = token_tree.walk();
     let mut destination: Option<Node> = None;
     for child in token_tree.children(&mut cursor).skip(1) {
@@ -84,7 +97,7 @@ fn destination_hint(source: &str, token_tree: Node) -> Option<String> {
             _ => return None,
         }
     }
-    super::rust_receiver::receiver_hint(source, destination?)
+    destination
 }
 
 /// `empty`, `repeat` or `list`, read from the macro's own delimiters.
@@ -146,6 +159,19 @@ mod tests {
         let all = sites(src);
         let (_, props) = all.iter().find(|(n, _)| n == "write!").expect("write!");
         assert_eq!(prop(props, "receiver_hint"), None);
+    }
+
+    #[test]
+    fn a_plain_local_destination_and_an_expression_destination_are_told_apart() {
+        let src = "struct S { w: Vec<u8> }\nimpl S {\n    fn go(&mut self, mut o: Vec<u8>) {\n        write!(o, \"a\").ok();\n        write!(self.w, \"b\").ok();\n    }\n}\n";
+        let shapes: Vec<String> = sites(src)
+            .iter()
+            .filter(|(n, _)| n == "write!")
+            .filter_map(|(_, p)| prop(p, "macro_arg_shape").map(str::to_string))
+            .collect();
+        let mut sorted = shapes.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["expr", "local"], "{shapes:?}");
     }
 
     #[test]

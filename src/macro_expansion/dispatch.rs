@@ -114,13 +114,38 @@ const VEC_BY_SHAPE: &[(&str, &str)] = &[
     ("repeat", "std::vec::from_elem"),
 ];
 
+/// What the parser and the graph say about a `write!` destination.
+#[derive(Debug, Clone, Copy)]
+pub struct Destination<'a> {
+    /// Declared type (last path segment) of a plain local; empty when the
+    /// binding is untyped or the destination is not a plain local.
+    pub declared_type: &'a str,
+    /// The destination is a plain local rather than a field, call or other
+    /// expression. Only a local's type is ever recorded.
+    pub plain_local: bool,
+    /// The graph defines a type of that name in the repository.
+    pub user_type: bool,
+}
+
 /// Decides a receiver-typed macro from the destination's declared type, then
 /// from the imports in scope.
+///
+/// A destination that is not a plain local is undetermined: its type is not
+/// recorded, and an import cannot stand in for it (`Formatter` needs no import
+/// at all). A declared type the repository defines itself is undetermined too,
+/// unless the file imports the std type of that name.
 pub fn decide_by_receiver(
     alternatives: &[Alternative],
-    receiver_type: &str,
+    dest: &Destination,
     imports: &[String],
 ) -> Decision {
+    let all = Decision::Undetermined {
+        candidates: alternatives.len(),
+    };
+    if !dest.plain_local || (dest.user_type && !std_imported(imports, dest.declared_type)) {
+        return all;
+    }
+    let receiver_type = dest.declared_type;
     let by_type: Vec<&Alternative> = alternatives
         .iter()
         .filter(|a| !receiver_type.is_empty() && a.receiver_types.contains(&receiver_type))
@@ -160,6 +185,16 @@ pub fn decide_by_shape(rules: &[(&str, &'static str)], shape: &str) -> Decision 
     }
 }
 
+/// True when an import brings the std type `name` into scope.
+fn std_imported(imports: &[String], name: &str) -> bool {
+    imports.iter().any(|p| {
+        ["std::", "core::", "alloc::"]
+            .iter()
+            .any(|root| p.starts_with(root))
+            && p.rsplit("::").next() == Some(name)
+    })
+}
+
 fn is_imported(imports: &[String], marker: &str) -> bool {
     imports
         .iter()
@@ -177,6 +212,14 @@ mod tests {
         }
     }
 
+    fn local(ty: &str) -> Destination<'_> {
+        Destination {
+            declared_type: ty,
+            plain_local: true,
+            user_type: false,
+        }
+    }
+
     fn imports(paths: &[&str]) -> Vec<String> {
         paths.iter().map(|p| p.to_string()).collect()
     }
@@ -185,7 +228,7 @@ mod tests {
     fn a_formatter_destination_reaches_only_the_inherent_write_fmt() {
         let both = imports(&["std::fmt::Write", "std::io::Write"]);
         assert_eq!(
-            decide_by_receiver(alts(), "Formatter", &both),
+            decide_by_receiver(alts(), &local("Formatter"), &both),
             Decision::Target {
                 canonical: "core::fmt::Formatter::write_fmt",
                 basis: Basis::ReceiverType
@@ -195,7 +238,7 @@ mod tests {
 
     #[test]
     fn an_io_destination_never_gets_the_fmt_trait_method() {
-        let d = decide_by_receiver(alts(), "BufWriter", &imports(&["std::fmt::Write"]));
+        let d = decide_by_receiver(alts(), &local("BufWriter"), &imports(&["std::fmt::Write"]));
         assert_eq!(
             d,
             Decision::Target {
@@ -207,7 +250,7 @@ mod tests {
 
     #[test]
     fn an_unknown_destination_is_decided_by_the_one_imported_trait() {
-        let d = decide_by_receiver(alts(), "", &imports(&["std::io", "std::io::Write"]));
+        let d = decide_by_receiver(alts(), &local(""), &imports(&["std::io", "std::io::Write"]));
         assert_eq!(
             d,
             Decision::Target {
@@ -221,7 +264,7 @@ mod tests {
     fn an_unknown_destination_with_both_traits_imported_is_ambiguous() {
         let both = imports(&["std::fmt::Write", "std::io::Write"]);
         assert_eq!(
-            decide_by_receiver(alts(), "MyWriter", &both),
+            decide_by_receiver(alts(), &local("MyWriter"), &both),
             Decision::Undetermined { candidates: 2 }
         );
     }
@@ -229,7 +272,7 @@ mod tests {
     #[test]
     fn an_unknown_destination_with_no_trait_imported_is_ambiguous_across_all() {
         assert_eq!(
-            decide_by_receiver(alts(), "", &imports(&["std::collections::HashMap"])),
+            decide_by_receiver(alts(), &local(""), &imports(&["std::collections::HashMap"])),
             Decision::Undetermined { candidates: 3 }
         );
     }
@@ -256,6 +299,51 @@ mod tests {
         assert_eq!(
             decide_by_shape(rules, "list"),
             Decision::Undetermined { candidates: 0 }
+        );
+    }
+
+    /// The parser stores `use std::io::prelude::*` as the path without the
+    /// `::*` (`rust_walker_tests`: `use a::b::*` is `a::b`), so the marker is
+    /// the module path itself.
+    #[test]
+    fn a_glob_import_of_the_io_prelude_brings_io_write_into_scope() {
+        let d = decide_by_receiver(alts(), &local(""), &imports(&["std::io::prelude"]));
+        assert_eq!(
+            d,
+            Decision::Target {
+                canonical: "std::io::Write::write_fmt",
+                basis: Basis::ImportScope
+            }
+        );
+    }
+
+    #[test]
+    fn a_destination_that_is_not_a_plain_local_is_undetermined_whatever_is_imported() {
+        let dest = Destination {
+            declared_type: "",
+            plain_local: false,
+            user_type: false,
+        };
+        assert_eq!(
+            decide_by_receiver(alts(), &dest, &imports(&["std::io::Write"])),
+            Decision::Undetermined { candidates: 3 }
+        );
+    }
+
+    #[test]
+    fn a_repository_type_named_like_a_std_one_is_undetermined_unless_std_is_imported() {
+        let mut dest = local("Formatter");
+        dest.user_type = true;
+        assert_eq!(
+            decide_by_receiver(alts(), &dest, &imports(&["std::io::Write"])),
+            Decision::Undetermined { candidates: 3 }
+        );
+        assert_eq!(
+            decide_by_receiver(alts(), &dest, &imports(&["std::fmt::Formatter"])),
+            Decision::Target {
+                canonical: "core::fmt::Formatter::write_fmt",
+                basis: Basis::ReceiverType
+            }
         );
     }
 

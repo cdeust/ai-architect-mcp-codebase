@@ -430,6 +430,17 @@ pub(crate) fn extract_caller_from_callsite_id(cs_id: &str) -> String {
     }
 }
 
+/// True when the repository defines a type (struct, enum, trait or alias) of
+/// that name. The macro pass uses it so a user type named like a std one
+/// (`Formatter`, `File`) is not taken for the std type (issue #339).
+fn is_user_type(idx: &SymbolIndex, name: &str) -> bool {
+    idx.by_name.get(name).is_some_and(|entries| {
+        entries
+            .iter()
+            .any(|e| matches!(e.label.as_str(), "Struct" | "Enum" | "Trait" | "TypeAlias"))
+    })
+}
+
 fn determine_caller_label(idx: &SymbolIndex, caller_qn: &str) -> String {
     idx.by_qn
         .get(caller_qn)
