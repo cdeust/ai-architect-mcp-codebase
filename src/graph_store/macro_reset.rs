@@ -7,6 +7,7 @@
 // resolved, so they would survive every re-run. Clearing them first makes the
 // graph a function of the current rules and the source, not of what ran before.
 
+use super::cypher_str;
 use super::schema::{NODE_STDLIB_SYMBOL, REL_TABLES};
 use super::GraphStore;
 
@@ -24,7 +25,8 @@ impl GraphStore {
                 continue;
             }
             self.run(&format!(
-                "MATCH ()-[r:{rel}]->() WHERE r.resolution_method STARTS WITH '{MACRO_METHOD_PREFIX}' DELETE r"
+                "MATCH ()-[r:{rel}]->() WHERE r.resolution_method STARTS WITH {} DELETE r",
+                cypher_str(MACRO_METHOD_PREFIX)
             ))?;
         }
         self.run(

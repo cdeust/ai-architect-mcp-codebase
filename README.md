@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-26-orange" alt="26 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-1800+_passing-brightgreen" alt="1800+ tests">
+  <img src="https://img.shields.io/badge/Tests-1900+_passing-brightgreen" alt="1900+ tests">
   <img src="https://img.shields.io/badge/Coverage-91%25-brightgreen" alt="91% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
@@ -394,7 +394,7 @@ In this codebase:
 
 ```bash
 cargo build --release
-cargo test                                            # full suite (1800+ tests)
+cargo test                                            # full suite (1900+ tests)
 cargo test --test graph_accuracy                      # structural accuracy gate
 cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
 python3 scripts/check_doc_claims.py                   # README numbers against their sources
