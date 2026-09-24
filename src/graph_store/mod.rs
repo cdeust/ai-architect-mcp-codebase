@@ -14,6 +14,7 @@ mod columns;
 mod config;
 mod counts;
 mod ddl;
+mod handles;
 mod import_roots;
 mod macro_reset;
 pub(crate) use columns::{RECEIVER_HINT_VIA_IMPORT_PREFIX, RECEIVER_HINT_VIA_RETURN_TYPE};
@@ -28,6 +29,7 @@ use columns::*;
 pub use config::*;
 pub use counts::GraphCounts;
 use ddl::*;
+pub use handles::{register_release_hook, release_open_handles};
 pub use membership::{community_ids, community_of, process_names, CommunityRow, SymbolMatch};
 // Only `tests.rs` reaches these via `use super::*` (production code calls
 // `Self::recover_from_stale_sidecars`/`is_stale_sidecar_db_id_error` through
@@ -164,6 +166,14 @@ impl GraphStore {
     /// issue #25 production default — see that function's doc comment for
     /// the precedence rule).
     pub fn open_or_create(path: &Path) -> Result<Self, String> {
+        release_open_handles(path);
+        Self::open_or_create_with_config(path, system_config()?)
+    }
+
+    /// `open_or_create` for the read cache only: it does not release the cached
+    /// handles of `path`, because it is the cache that is opening one (issue
+    /// #352, see `handles`).
+    pub fn open_for_cache(path: &Path) -> Result<Self, String> {
         Self::open_or_create_with_config(path, system_config()?)
     }
 

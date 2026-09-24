@@ -18,7 +18,7 @@
 
 use super::schema::{NODE_CALL_SITE, REL_TABLES};
 use super::serialize::value_to_u64;
-use super::GraphStore;
+use super::{cypher_str, GraphStore};
 
 /// How a relationship table is counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +69,26 @@ impl GraphStore {
             edges,
             call_site_targets,
         })
+    }
+
+    /// Rows written by `method` (the `resolution_method` column) across every
+    /// relationship table that has that column; a table without it counts as
+    /// empty. Lets a pass compare what it wrote with what is durable (#352).
+    pub fn count_edges_by_method(&self, method: &str) -> Result<u64, String> {
+        let mut total = 0_u64;
+        for &(rel, _, _) in REL_TABLES {
+            let cypher = format!(
+                "MATCH ()-[r:{rel}]->() WHERE r.resolution_method = {} RETURN count(r)",
+                cypher_str(method)
+            );
+            let Ok(mut result) = self.run(&cypher) else {
+                continue;
+            };
+            if let Some(row) = result.next() {
+                total += value_to_u64(&row[0]);
+            }
+        }
+        Ok(total)
     }
 
     /// `(graph edges, per-site target rows)`. A table that cannot be queried
@@ -131,6 +151,34 @@ mod tests {
             let &(_, from, to) = declared.expect("declared in REL_TABLES");
             assert_eq!((from, to), (NODE_CALL_SITE, target), "{rel}");
         }
+    }
+
+    /// #352: the count reads the method column of every table that has one and
+    /// leaves the others out.
+    #[test]
+    fn rows_are_counted_by_the_method_that_wrote_them() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let store = GraphStore::open_or_create(&tmp.path().join("g")).expect("open");
+        store.create_schema().expect("schema");
+        for id in ["a", "b"] {
+            store
+                .execute_query(&format!("CREATE (:Function {{id: '{id}', name: '{id}'}})"))
+                .expect("node");
+        }
+        let edge = |method: &str| {
+            format!(
+                "MATCH (a:Function {{id: 'a'}}), (b:Function {{id: 'b'}}) \
+                 CREATE (a)-[:Calls_Function_Function {{confidence: 0.9, resolution_method: '{method}'}}]->(b)"
+            )
+        };
+        store.execute_query(&edge("lsp-definition")).expect("edge");
+        store.execute_query(&edge("lsp-definition")).expect("edge");
+        store
+            .execute_query(&edge("import-scope-lookup"))
+            .expect("edge");
+        assert_eq!(store.count_edges_by_method("lsp-definition"), Ok(2));
+        assert_eq!(store.count_edges_by_method("import-scope-lookup"), Ok(1));
+        assert_eq!(store.count_edges_by_method("absent"), Ok(0));
     }
 
     /// A table that has a `CallSite` as target keeps counting as an edge.

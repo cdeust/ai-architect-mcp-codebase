@@ -8,6 +8,20 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A graph queried before `lsp_resolve` no longer loses the rows the pass writes
+  (#352). The read cache keeps a graph handle open between requests, and a
+  write tool opened its own handle to the same graph in the same process.
+  LadybugDB gives each handle its own view of the pages, and a handle that
+  closes later writes that view over what the other one committed. So
+  `lsp_resolve` answered `completed`, and the cache's next refresh or the end of
+  the session removed its edges and per-site rows while every `is_resolved` flag
+  stayed true; a read through the cache also kept answering from the old view.
+  Every open, rewrite or removal of a graph now releases the cached handles for
+  it first, including the artifact import. `lsp_resolve` also closes its handle,
+  reopens the graph and counts its `lsp-definition` rows again: the response
+  carries `persisted.lsp_rows`, and the call fails with `lsp_rows_not_durable`
+  when the count differs from what the pass wrote. That check covers a loss that
+  happens before the call returns; the release is what stops the later one.
 - A Rust receiver initialised by a free function is now resolved statically
   (#348, #349). `let s = make(); s.answer(1)` left the call unresolved although
   `fn make() -> Set` names the type, and so did the `Option` forms

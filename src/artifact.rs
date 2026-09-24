@@ -343,6 +343,9 @@ pub fn import_artifact(repo_path: &Path, graph_path: &Path) -> Result<ArtifactMe
         zstd::Decoder::new(file).map_err(|e| format!("artifact import: zstd init: {e}"))?;
     // Cap the decoded stream so a crafted artifact cannot exhaust disk.
     let mut archive = tar::Archive::new(decoder.take(MAX_DECOMPRESSED_BYTES));
+    // A read handle kept for this graph would close later on the pages the
+    // unpack replaces (issue #352).
+    crate::graph_store::release_open_handles(graph_path);
     // tar-rs rejects absolute paths and `..` components on unpack by default,
     // so a malicious archive cannot escape `dest_parent` (path-traversal safe).
     archive.unpack(dest_parent).map_err(|e| {

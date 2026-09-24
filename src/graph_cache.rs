@@ -173,7 +173,7 @@ impl GraphCache {
     /// with its current fingerprint, and returns it. Exactly one
     /// `open_or_create` runs per (path, on-disk generation).
     fn get(&mut self, path: &Path) -> Result<Rc<GraphStore>, String> {
-        self.get_with_opener(path, GraphStore::open_or_create)
+        self.get_with_opener(path, GraphStore::open_for_cache)
     }
 
     // `get_with_config`, issue #25's test-only seam for opening the cache at
@@ -270,8 +270,27 @@ thread_local! {
 /// state (revalidated by fingerprint on every call); two calls with no
 /// intervening on-disk change return pointer-identical `Rc`s.
 pub fn open_cached(path: &Path) -> Result<Rc<GraphStore>, String> {
+    crate::graph_store::register_release_hook(release);
     CACHE.with(|c| c.borrow_mut().get(path))
 }
+
+/// Drops the cached handle of the graph at `path`. Called before anything
+/// opens, rewrites or deletes that graph (issue #352, see
+/// `graph_store::handles`): a handle kept across a write closes on stale pages
+/// and undoes it. Skips silently when the cache is being modified right now,
+/// which only the cache's own open can cause and which does not release.
+fn release(path: &Path) {
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let _ = CACHE.try_with(|c| {
+        if let Ok(mut cache) = c.try_borrow_mut() {
+            cache.entries.remove(&key);
+        }
+    });
+}
+
+#[cfg(test)]
+#[path = "graph_cache_handles_tests.rs"]
+mod handles_tests;
 
 #[cfg(test)]
 mod tests {

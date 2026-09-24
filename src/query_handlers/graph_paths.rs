@@ -64,6 +64,7 @@ pub(crate) fn validate_graph_path_safe(path: &Path) -> Result<(), String> {
 /// symlinked `graph` is unlinked, not followed.
 /// Caller MUST have run `validate_graph_path_safe` first.
 pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
+    crate::graph_store::release_open_handles(path);
     let meta = fs::symlink_metadata(path).map_err(|e| format!("stat stale graph path: {e}"))?;
     let outcome = if meta.is_dir() {
         fs::remove_dir_all(path)

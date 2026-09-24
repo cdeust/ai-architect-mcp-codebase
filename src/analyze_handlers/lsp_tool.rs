@@ -157,8 +157,39 @@ pub(crate) fn do_lsp_resolve(arguments: &Value) -> Result<Value, String> {
         req.lsp_command,
         req.timeout,
     )?;
+    let persisted = verify_rows_are_durable(store, req.graph_path)?;
     let coverage_merge = lsp_coverage::merge_into_sidecar(req.graph_path, &result.unlinked_check);
-    Ok(lsp_resolve_envelope(&result, coverage_merge))
+    let mut envelope = lsp_resolve_envelope(&result, coverage_merge);
+    envelope["persisted"] = json!({ "lsp_rows": persisted });
+    Ok(envelope)
+}
+
+/// `resolution_method` the LSP pass writes on every edge and per-site row.
+// source: src/lsp_resolver/edges.rs, the `resolution_method` column it writes.
+const LSP_RESOLUTION_METHOD: &str = "lsp-definition";
+
+/// Counts the LSP rows through the handle that wrote them, closes that handle,
+/// reopens the graph and counts again. A difference means rows the pass wrote
+/// are not there for the next reader (issue #352 lost them silently while the
+/// `is_resolved` flags stayed true): an error, never a `completed` answer.
+/// Returns the number of durable rows.
+fn verify_rows_are_durable(
+    store: graph_store::GraphStore,
+    graph_path: &Path,
+) -> Result<u64, String> {
+    let written = store.count_edges_by_method(LSP_RESOLUTION_METHOD)?;
+    drop(store);
+    let durable = graph_store::GraphStore::open_or_create(graph_path)?
+        .count_edges_by_method(LSP_RESOLUTION_METHOD)?;
+    if durable == written {
+        Ok(durable)
+    } else {
+        Err(format!(
+            "lsp_rows_not_durable: the pass holds {written} lsp-definition rows, but only \
+             {durable} are readable after reopening the graph at {}",
+            graph_path.display()
+        ))
+    }
 }
 
 /// Detect the dominant language from file extensions in a codebase.
