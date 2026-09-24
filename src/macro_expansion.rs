@@ -13,6 +13,7 @@
 pub mod dispatch;
 pub mod python;
 pub mod rust;
+pub mod scope;
 pub mod typescript;
 
 /// One expansion rule. `emit_calls` is the canonical-path set implied by a

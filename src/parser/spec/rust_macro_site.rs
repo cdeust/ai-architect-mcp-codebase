@@ -56,6 +56,16 @@ impl RustConventions {
         let hint = dest
             .flatten()
             .and_then(|d| super::rust_receiver::receiver_type_path(source, d));
+        // A `use` in the function body may rebind the type name where the
+        // index cannot see it: the destination is then not reliably typed.
+        let shadowed = hint
+            .as_deref()
+            .is_some_and(|h| super::rust_scope::scope_use_mentions(source, call_node, h));
+        let (dest, hint) = if shadowed {
+            (Some(None), None)
+        } else {
+            (dest, hint)
+        };
         let mut entry = Self::call_site_spanning(
             callee,
             call_node,

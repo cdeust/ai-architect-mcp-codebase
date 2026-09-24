@@ -8,6 +8,7 @@ use crate::graph_store::rust_macro_site_predicate;
 use crate::graph_store::{call_site_rel_table, cypher_str, GraphStore, NODE_STDLIB_SYMBOL};
 use crate::language_provider::extract_file_prefix_or_self;
 use crate::macro_expansion::dispatch::{self, Basis, Decision, Destination, Dispatch};
+use crate::macro_expansion::scope::Import;
 use crate::resolver::{EdgeBuffer, PhaseResult, UnresolvedRef};
 use std::collections::{HashMap, HashSet};
 
@@ -31,13 +32,13 @@ pub fn run_macro_expansion(
         buf,
         ctx,
         created: HashSet::new(),
+        imports: HashMap::new(),
     };
     pass.run()
 }
 
 /// What the macro pass reads from the rest of the resolver.
 pub struct MacroContext<'a> {
-    pub file_imports: &'a HashMap<String, Vec<String>>,
     pub caller_label_of: &'a dyn Fn(&str) -> String,
     /// True when the file (first argument) defines a struct, enum, trait or
     /// alias of that name (second argument).
@@ -58,6 +59,8 @@ struct MacroPass<'a> {
     buf: &'a mut EdgeBuffer,
     ctx: &'a MacroContext<'a>,
     created: HashSet<String>,
+    /// The `use` items of each file: name bound and path, aliases included.
+    imports: HashMap<String, Vec<Import>>,
 }
 
 /// The macro-marker `CallSite` one expansion belongs to, its caller, and the
@@ -82,6 +85,7 @@ impl MacroPass<'_> {
     /// stages/stage-3.md §10.4: a CallSite's `is_resolved` flips when its
     /// callee resolved to a graph target, whichever phase found it (#335).
     fn run(&mut self) -> PhaseResult {
+        self.imports = self.read_imports()?;
         let rows = self.read_rows()?;
         let (mut resolved, mut total, mut unresolved) = (0u64, 0u64, Vec::new());
         let mut resolved_ids: Vec<&str> = Vec::new();
@@ -96,6 +100,23 @@ impl MacroPass<'_> {
         }
         self.store.mark_nodes_resolved("CallSite", &resolved_ids)?;
         Ok((resolved, total, unresolved))
+    }
+
+    /// Every `Import` of the graph grouped by file. `file_imports` keeps the
+    /// path only, which loses `use x::Y as Z`; a type placed by an alias needs
+    /// the bound name too.
+    fn read_imports(&self) -> Result<HashMap<String, Vec<Import>>, String> {
+        let qr = self
+            .store
+            .execute_query("MATCH (i:Import) RETURN i.id, i.path, i.alias, i.is_glob")?;
+        let mut by_file: HashMap<String, Vec<Import>> = HashMap::new();
+        for r in qr.rows.iter().filter(|r| r.len() >= 4) {
+            by_file
+                .entry(extract_file_prefix_or_self(&r[0]))
+                .or_default()
+                .push(Import::new(&r[1], &r[2], r[3] == "true"));
+        }
+        Ok(by_file)
     }
 
     fn read_rows(&self) -> Result<Vec<MacroRow>, String> {
@@ -164,11 +185,7 @@ impl MacroPass<'_> {
         let decision = match rule {
             Dispatch::ReceiverType(alternatives) => {
                 let file = extract_file_prefix_or_self(&row.cs_id);
-                let imports = self
-                    .ctx
-                    .file_imports
-                    .get(&file)
-                    .map_or(&[][..], Vec::as_slice);
+                let imports = self.imports.get(&file).map_or(&[][..], Vec::as_slice);
                 let name = row.receiver_hint.rsplit("::").next().unwrap_or_default();
                 let dest = Destination {
                     declared: &row.receiver_hint,

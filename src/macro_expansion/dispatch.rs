@@ -14,6 +14,7 @@
 // the expansion may not have called.
 
 use super::rust::{DEST_MACROS, VEC_MACROS};
+use super::scope::{original_name, type_origin, Import, TypeOrigin};
 
 /// One target a receiver-decided macro may call, with what selects it.
 #[derive(Debug, Clone, Copy)]
@@ -128,77 +129,6 @@ pub struct Destination<'a> {
     pub defined_in_file: bool,
 }
 
-/// Where a type name comes from, in the scope of one file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypeOrigin {
-    /// std, core or alloc: written as such, imported from there, or a prelude
-    /// name the file does not redefine.
-    Std,
-    /// Defined in the file or brought in from anywhere else (an external
-    /// crate included): a namesake of a std type, never the std one.
-    Other,
-    /// Nothing in the file says. A bare `File` reaches a file through a glob
-    /// import of a module the parser stores without its members, so it may be
-    /// either.
-    Unknown,
-}
-
-// source: the Rust Reference, "Paths" and "Extern crates": `std`, `core` and
-// `alloc` are the standard crates a path can start from.
-const STD_ROOTS: [&str; 3] = ["std", "core", "alloc"];
-// source: https://doc.rust-lang.org/std/prelude/v1/ — the std prelude names
-// that select a `write_fmt` target (`String`, `Vec`).
-const PRELUDE_TYPES: [&str; 2] = ["String", "Vec"];
-
-/// Resolves a declared type in the scope of the file that holds the site:
-/// a path by its root, a bare name by the file's own definitions, then its
-/// imports, then the prelude.
-pub fn type_origin(declared: &str, imports: &[String], defined_in_file: bool) -> TypeOrigin {
-    if declared.is_empty() {
-        return TypeOrigin::Unknown;
-    }
-    if let Some((root, _)) = declared.split_once("::") {
-        return origin_of_root(root, imports);
-    }
-    if defined_in_file {
-        return TypeOrigin::Other;
-    }
-    if let Some(path) = imports.iter().find(|p| last_segment(p) == declared) {
-        return if is_std_path(path) {
-            TypeOrigin::Std
-        } else {
-            TypeOrigin::Other
-        };
-    }
-    if PRELUDE_TYPES.contains(&declared) {
-        TypeOrigin::Std
-    } else {
-        TypeOrigin::Unknown
-    }
-}
-
-/// The first segment of a written path: a std root, an imported module, or
-/// something local (`crate`, `self`, an inline module) that is not std.
-fn origin_of_root(root: &str, imports: &[String]) -> TypeOrigin {
-    if STD_ROOTS.contains(&root) {
-        return TypeOrigin::Std;
-    }
-    match imports.iter().find(|p| last_segment(p) == root) {
-        Some(path) if is_std_path(path) => TypeOrigin::Std,
-        _ => TypeOrigin::Other,
-    }
-}
-
-fn is_std_path(path: &str) -> bool {
-    path.split("::")
-        .next()
-        .is_some_and(|r| STD_ROOTS.contains(&r))
-}
-
-fn last_segment(path: &str) -> &str {
-    path.rsplit("::").next().unwrap_or(path)
-}
-
 /// Decides a receiver-typed macro from the destination's type in the scope of
 /// its file, then from the imports in scope.
 ///
@@ -210,7 +140,7 @@ fn last_segment(path: &str) -> &str {
 pub fn decide_by_receiver(
     alternatives: &[Alternative],
     dest: &Destination,
-    imports: &[String],
+    imports: &[Import],
 ) -> Decision {
     let all = Decision::Undetermined {
         candidates: alternatives.len(),
@@ -218,14 +148,11 @@ pub fn decide_by_receiver(
     if !dest.plain_local {
         return all;
     }
-    let name = last_segment(dest.declared);
-    let std_named = alternatives
-        .iter()
-        .any(|a| a.receiver_types.contains(&name));
+    let name = original_name(dest.declared, imports);
     match type_origin(dest.declared, imports, dest.defined_in_file) {
-        TypeOrigin::Other => return all,
-        TypeOrigin::Unknown if std_named => return all,
-        _ => {}
+        TypeOrigin::Std => {}
+        TypeOrigin::Unknown if dest.declared.is_empty() => {}
+        _ => return all,
     }
     let by_type: Vec<&Alternative> = alternatives
         .iter()
@@ -240,7 +167,7 @@ pub fn decide_by_receiver(
     decide_by_imports(alternatives, imports)
 }
 
-fn decide_by_imports(alternatives: &[Alternative], imports: &[String]) -> Decision {
+fn decide_by_imports(alternatives: &[Alternative], imports: &[Import]) -> Decision {
     let imported: Vec<&Alternative> = alternatives
         .iter()
         .filter(|a| a.import_markers.iter().any(|m| is_imported(imports, m)))
@@ -270,10 +197,10 @@ pub fn decide_by_shape(rules: &[(&str, &'static str)], shape: &str) -> Decision 
     }
 }
 
-fn is_imported(imports: &[String], marker: &str) -> bool {
+fn is_imported(imports: &[Import], marker: &str) -> bool {
     imports
         .iter()
-        .any(|p| p == marker || p.ends_with(&format!("::{marker}")))
+        .any(|i| i.path == marker || i.path.ends_with(&format!("::{marker}")))
 }
 
 #[cfg(test)]
@@ -287,72 +214,127 @@ mod tests {
         }
     }
 
-    fn local(ty: &str) -> Destination<'_> {
+    fn dest(declared: &str) -> Destination<'_> {
         Destination {
-            declared: ty,
+            declared,
             plain_local: true,
             defined_in_file: false,
         }
     }
 
-    fn imports(paths: &[&str]) -> Vec<String> {
-        paths.iter().map(|p| p.to_string()).collect()
+    fn imports(paths: &[&str]) -> Vec<Import> {
+        paths.iter().map(|p| Import::new(p, "", false)).collect()
+    }
+
+    fn target(canonical: &'static str, basis: Basis) -> Decision {
+        Decision::Target { canonical, basis }
     }
 
     #[test]
     fn a_formatter_destination_reaches_only_the_inherent_write_fmt() {
-        let both = imports(&["std::fmt::Formatter", "std::fmt::Write", "std::io::Write"]);
+        let all = imports(&["std::fmt::Formatter", "std::fmt::Write", "std::io::Write"]);
         assert_eq!(
-            decide_by_receiver(alts(), &local("Formatter"), &both),
-            Decision::Target {
-                canonical: "core::fmt::Formatter::write_fmt",
-                basis: Basis::ReceiverType
-            }
+            decide_by_receiver(alts(), &dest("Formatter"), &all),
+            target("core::fmt::Formatter::write_fmt", Basis::ReceiverType)
         );
     }
 
     #[test]
     fn an_io_destination_never_gets_the_fmt_trait_method() {
-        let d = decide_by_receiver(
-            alts(),
-            &local("BufWriter"),
-            &imports(&["std::io::BufWriter", "std::fmt::Write"]),
-        );
+        let imp = imports(&["std::io::BufWriter", "std::fmt::Write"]);
         assert_eq!(
-            d,
-            Decision::Target {
-                canonical: "std::io::Write::write_fmt",
-                basis: Basis::ReceiverType
-            }
+            decide_by_receiver(alts(), &dest("BufWriter"), &imp),
+            target("std::io::Write::write_fmt", Basis::ReceiverType)
         );
     }
 
     #[test]
-    fn an_unknown_destination_is_decided_by_the_one_imported_trait() {
-        let d = decide_by_receiver(alts(), &local(""), &imports(&["std::io", "std::io::Write"]));
+    fn an_untyped_local_is_decided_by_the_one_imported_trait() {
+        let imp = imports(&["std::io", "std::io::Write"]);
         assert_eq!(
-            d,
-            Decision::Target {
-                canonical: "std::io::Write::write_fmt",
-                basis: Basis::ImportScope
-            }
+            decide_by_receiver(alts(), &dest(""), &imp),
+            target("std::io::Write::write_fmt", Basis::ImportScope)
         );
     }
 
     #[test]
-    fn an_unknown_destination_with_both_traits_imported_is_ambiguous() {
+    fn an_untyped_local_with_both_traits_imported_is_ambiguous() {
         let both = imports(&["std::fmt::Write", "std::io::Write"]);
         assert_eq!(
-            decide_by_receiver(alts(), &local("MyWriter"), &both),
+            decide_by_receiver(alts(), &dest(""), &both),
             Decision::Undetermined { candidates: 2 }
         );
     }
 
     #[test]
-    fn an_unknown_destination_with_no_trait_imported_is_ambiguous_across_all() {
+    fn an_untyped_local_with_no_trait_imported_is_ambiguous_across_all() {
         assert_eq!(
-            decide_by_receiver(alts(), &local(""), &imports(&["std::collections::HashMap"])),
+            decide_by_receiver(alts(), &dest(""), &imports(&["std::collections::HashMap"])),
             Decision::Undetermined { candidates: 3 }
+        );
+    }
+
+    /// A named type nothing in the file places (a generic `W`, a name from a
+    /// glob) is not decided by which write trait happens to be imported.
+    #[test]
+    fn a_named_type_that_nothing_places_is_undetermined_whatever_is_imported() {
+        for name in ["W", "Custom", "File"] {
+            assert_eq!(
+                decide_by_receiver(alts(), &dest(name), &imports(&["std::io::Write"])),
+                Decision::Undetermined { candidates: 3 },
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_glob_import_of_the_io_prelude_brings_io_write_into_scope() {
+        let glob = [Import::new("std::io::prelude", "", true)];
+        assert_eq!(
+            decide_by_receiver(alts(), &dest(""), &glob),
+            target("std::io::Write::write_fmt", Basis::ImportScope)
+        );
+    }
+
+    #[test]
+    fn a_destination_that_is_not_a_plain_local_is_undetermined_whatever_is_imported() {
+        let not_local = Destination {
+            declared: "",
+            plain_local: false,
+            defined_in_file: false,
+        };
+        assert_eq!(
+            decide_by_receiver(alts(), &not_local, &imports(&["std::io::Write"])),
+            Decision::Undetermined { candidates: 3 }
+        );
+    }
+
+    #[test]
+    fn a_type_defined_in_the_file_is_undetermined_unless_std_is_imported_by_name() {
+        let own = Destination {
+            defined_in_file: true,
+            ..dest("Formatter")
+        };
+        assert_eq!(
+            decide_by_receiver(alts(), &own, &imports(&["std::io::Write"])),
+            Decision::Undetermined { candidates: 3 }
+        );
+    }
+
+    #[test]
+    fn an_alias_of_a_non_std_type_is_undetermined_and_a_std_alias_resolves() {
+        let imp = vec![
+            Import::new("tokio::fs::File", "F", false),
+            Import::new("std::fs::File", "SF", false),
+            Import::new("std::io::Write", "", false),
+        ];
+        assert_eq!(
+            decide_by_receiver(alts(), &dest("F"), &imp),
+            Decision::Undetermined { candidates: 3 }
+        );
+        assert_eq!(
+            decide_by_receiver(alts(), &dest("SF"), &imp),
+            target("std::io::Write::write_fmt", Basis::ReceiverType)
         );
     }
 
@@ -378,114 +360,6 @@ mod tests {
         assert_eq!(
             decide_by_shape(rules, "list"),
             Decision::Undetermined { candidates: 0 }
-        );
-    }
-
-    /// The parser stores `use std::io::prelude::*` as the path without the
-    /// `::*` (`rust_walker_tests`: `use a::b::*` is `a::b`), so the marker is
-    /// the module path itself.
-    #[test]
-    fn a_glob_import_of_the_io_prelude_brings_io_write_into_scope() {
-        let d = decide_by_receiver(alts(), &local(""), &imports(&["std::io::prelude"]));
-        assert_eq!(
-            d,
-            Decision::Target {
-                canonical: "std::io::Write::write_fmt",
-                basis: Basis::ImportScope
-            }
-        );
-    }
-
-    #[test]
-    fn a_destination_that_is_not_a_plain_local_is_undetermined_whatever_is_imported() {
-        let dest = Destination {
-            declared: "",
-            plain_local: false,
-            defined_in_file: false,
-        };
-        assert_eq!(
-            decide_by_receiver(alts(), &dest, &imports(&["std::io::Write"])),
-            Decision::Undetermined { candidates: 3 }
-        );
-    }
-
-    fn dest(declared: &str, defined_in_file: bool) -> Destination<'_> {
-        Destination {
-            declared,
-            plain_local: true,
-            defined_in_file,
-        }
-    }
-
-    #[test]
-    fn a_type_defined_in_the_file_is_never_the_std_one() {
-        assert_eq!(
-            decide_by_receiver(
-                alts(),
-                &dest("Formatter", true),
-                &imports(&["std::io::Write"])
-            ),
-            Decision::Undetermined { candidates: 3 }
-        );
-        assert_eq!(type_origin("Formatter", &[], true), TypeOrigin::Other);
-    }
-
-    #[test]
-    fn a_std_name_imported_from_another_crate_is_not_std() {
-        for (name, import) in [
-            ("File", "tokio::fs::File"),
-            ("Sink", "futures::Sink"),
-            ("Cursor", "my_crate::io::Cursor"),
-        ] {
-            let imp = imports(&[import, "std::io::Write"]);
-            assert_eq!(type_origin(name, &imp, false), TypeOrigin::Other, "{name}");
-            assert_eq!(
-                decide_by_receiver(alts(), &dest(name, false), &imp),
-                Decision::Undetermined { candidates: 3 },
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_std_name_imported_from_std_or_core_is_std() {
-        let imp = imports(&["std::fs::File", "core::fmt::Formatter"]);
-        assert_eq!(type_origin("File", &imp, false), TypeOrigin::Std);
-        assert_eq!(type_origin("Formatter", &imp, false), TypeOrigin::Std);
-    }
-
-    #[test]
-    fn a_path_is_resolved_by_its_root() {
-        let fmt = imports(&["std::fmt"]);
-        assert_eq!(type_origin("fmt::Formatter", &fmt, false), TypeOrigin::Std);
-        assert_eq!(type_origin("std::fs::File", &[], false), TypeOrigin::Std);
-        assert_eq!(
-            type_origin("tokio::fs::File", &[], false),
-            TypeOrigin::Other
-        );
-        assert_eq!(
-            type_origin("fs::File", &imports(&["tokio::fs"]), false),
-            TypeOrigin::Other
-        );
-    }
-
-    #[test]
-    fn a_prelude_name_is_std_unless_the_file_says_otherwise() {
-        assert_eq!(type_origin("String", &[], false), TypeOrigin::Std);
-        assert_eq!(type_origin("String", &[], true), TypeOrigin::Other);
-        assert_eq!(
-            type_origin("Vec", &imports(&["mylib::Vec"]), false),
-            TypeOrigin::Other
-        );
-    }
-
-    #[test]
-    fn a_bare_std_name_that_nothing_in_the_file_places_is_undetermined() {
-        let glob = imports(&["some_crate::io"]);
-        assert_eq!(type_origin("File", &glob, false), TypeOrigin::Unknown);
-        assert_eq!(
-            decide_by_receiver(alts(), &dest("File", false), &glob),
-            Decision::Undetermined { candidates: 3 }
         );
     }
 

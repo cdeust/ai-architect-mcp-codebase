@@ -59,6 +59,34 @@ pub(super) fn bound_names_in_scope(source: &str, call_node: Node) -> HashSet<Str
     names
 }
 
+/// True when a `use` declaration inside the function that encloses `node`
+/// mentions any `::` segment of `path` as a whole word. The index records the
+/// `use` items of files and modules but not those of function bodies, so such
+/// a declaration may rebind the name in a way the resolver cannot see.
+/// source: measured on tree-sitter-rust 0.24.2 through `parse_file` (issue #339).
+pub(super) fn scope_use_mentions(source: &str, node: Node, path: &str) -> bool {
+    let Some(scope) = enclosing_scope(node) else {
+        return false;
+    };
+    let segments: Vec<&str> = path.split("::").collect();
+    let mut stack = vec![scope];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "use_declaration" {
+            let text = node_text(source, current);
+            let mentioned = text
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|word| segments.contains(&word));
+            if mentioned {
+                return true;
+            }
+            continue;
+        }
+        let mut cursor = current.walk();
+        stack.extend(current.children(&mut cursor));
+    }
+    false
+}
+
 /// The nearest enclosing `function_item`, `call_node` itself included; when
 /// none encloses it, the outermost enclosing closure.
 fn enclosing_scope(call_node: Node) -> Option<Node> {
