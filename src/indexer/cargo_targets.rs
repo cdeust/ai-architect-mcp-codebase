@@ -89,6 +89,13 @@ pub enum TargetMap {
         /// default (issue #291): the roots of the module trees the default
         /// build compiles, for `feature_gated`.
         crate_roots: Vec<CrateRoot>,
+        /// The names other code of the repository writes to import a library
+        /// of the workspace (`use dy_wcet::X`): the `name` of every library
+        /// target, so a `[lib] name` override is honoured, with hyphens
+        /// turned into underscores as Rust does. Read to tell a `use` of a
+        /// crate of this repository from a `use` of a foreign one (issues
+        /// #348 and #349).
+        crate_names: BTreeSet<String>,
     },
 }
 
@@ -225,7 +232,18 @@ struct CargoPackage {
 #[derive(Deserialize)]
 struct CargoTarget {
     src_path: String,
+    /// The target's crate name; absent in an old fixture.
+    #[serde(default)]
+    name: String,
+    /// `["lib"]`, `["bin"]`, `["test"]`, …
+    #[serde(default)]
+    kind: Vec<String>,
 }
+
+// source: cargo-metadata(1), `packages[].targets[].kind`: the kinds a
+// dependency can `use`. A `bin`, `test`, `example` or `bench` target cannot be
+// imported.
+const IMPORTABLE_KINDS: [&str; 6] = ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"];
 
 /// Pure parse of a `cargo metadata --no-deps --format-version 1` JSON payload
 /// into a `TargetMap`, relative to `root` — the SAME (non-canonicalized) path
@@ -246,9 +264,17 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
     let mut target_dirs = BTreeSet::new();
     let mut target_files = BTreeSet::new();
     let mut crate_roots = Vec::new();
+    let mut crate_names = BTreeSet::new();
     for pkg in meta.packages {
         let default_features = cargo_features::default_closure(&pkg.features);
         for t in pkg.targets {
+            if !t.name.is_empty()
+                && t.kind
+                    .iter()
+                    .any(|k| IMPORTABLE_KINDS.contains(&k.as_str()))
+            {
+                crate_names.insert(t.name.replace('-', "_"));
+            }
             let abs = PathBuf::from(&t.src_path);
             let Ok(rel) = abs.strip_prefix(root) else {
                 continue;
@@ -270,6 +296,7 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
         target_dirs,
         target_files,
         crate_roots,
+        crate_names,
     }
 }
 
@@ -425,3 +452,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "cargo_crate_names_tests.rs"]
+mod crate_names_tests;

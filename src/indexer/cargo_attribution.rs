@@ -55,6 +55,9 @@ pub struct CargoAttributions {
     pub status: CargoAttributionStatus,
     pub outside_targets: Vec<String>,
     pub feature_gated: Vec<(String, String)>,
+    /// The library crate names of the workspace (`use <name>::X`), empty
+    /// unless the status is `Known`. Issues #348 and #349.
+    pub crate_names: BTreeSet<String>,
 }
 
 /// Attributes `rust_files` (root-relative `.rs` paths indexed this pass)
@@ -69,6 +72,7 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
         },
         outside_targets: Vec::new(),
         feature_gated: Vec::new(),
+        crate_names: BTreeSet::new(),
     };
     if !codebase.join("Cargo.toml").is_file() {
         return not_applicable("no Cargo.toml at the analyzed root");
@@ -82,8 +86,13 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
             status: CargoAttributionStatus::Unknown { detail },
             outside_targets: Vec::new(),
             feature_gated: Vec::new(),
+            crate_names: BTreeSet::new(),
         };
     }
+    let crate_names = match &map {
+        TargetMap::Known { crate_names, .. } => crate_names.clone(),
+        TargetMap::Unknown { .. } => BTreeSet::new(),
+    };
     let outside_targets = rust_files
         .iter()
         .map(PathBuf::as_path)
@@ -98,6 +107,7 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
         status: CargoAttributionStatus::Known,
         outside_targets,
         feature_gated,
+        crate_names,
     }
 }
 

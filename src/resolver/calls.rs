@@ -321,6 +321,15 @@ fn rust_local_receiver_gate(
     let receiver::ReceiverForm::Local { m, .. } = form else {
         return None;
     };
+    if site
+        .receiver_hint_via
+        .starts_with(crate::graph_store::RECEIVER_HINT_VIA_IMPORT_PREFIX)
+    {
+        // A return type named only by a `use` of a path the indexer could not
+        // show to be a crate of this repository (issues #348 and #349): a
+        // foreign crate's type of that name would match a repository namesake.
+        return Some(PolicyResolution::NotFound);
+    }
     let via_return_type =
         site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE;
     if via_return_type && receiver::names_a_type_alias(ctx.idx, site.receiver_hint) {

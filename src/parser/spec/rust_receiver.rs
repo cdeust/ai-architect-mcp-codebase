@@ -67,6 +67,9 @@ pub(super) struct DerivedHint {
     /// True when the type was read off a free function's declared return type
     /// instead of off the binding (issues #348 and #349).
     pub(super) via_return_type: bool,
+    /// The crate an explicit `use` names the return type through, when that is
+    /// the only thing showing where the type comes from.
+    pub(super) import_root: Option<String>,
 }
 
 /// `receiver_hint`, and when the binding writes no type, the type read off the
@@ -78,13 +81,15 @@ pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<Deri
         return Some(DerivedHint {
             ty,
             via_return_type: false,
+            import_root: None,
         });
     }
     let receiver = receiver_identifier(node)?;
-    let ty = super::rust_return_type::return_type_hint(source, node, receiver)?;
+    let found = super::rust_return_type::return_type_hint(source, node, receiver)?;
     Some(DerivedHint {
-        ty,
+        ty: found.ty,
         via_return_type: true,
+        import_root: found.import_root,
     })
 }
 

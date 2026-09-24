@@ -24,6 +24,7 @@ fn known(roots: &[(&str, &[&str])]) -> TargetMap {
                 default_features: features.iter().map(|f| f.to_string()).collect(),
             })
             .collect(),
+        crate_names: BTreeSet::new(),
     }
 }
 

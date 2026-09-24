@@ -99,7 +99,7 @@ fn overlay_cargo_attributions(
     report: &mut coverage::CoverageReport,
     codebase: &Path,
     current: &[Discovered],
-) {
+) -> BTreeSet<String> {
     let rust_files: BTreeSet<PathBuf> = current
         .iter()
         .filter(|d| d.rel.ends_with(".rs"))
@@ -121,6 +121,19 @@ fn overlay_cargo_attributions(
         });
     }
     report.cargo_attribution = Some(found.status);
+    found.crate_names
+}
+
+/// Promotes the receiver hints that need crate evidence, now that the
+/// workspace's crate names are known (issues #348 and #349). Best-effort: a
+/// failure leaves those hints unverified, which the resolver declines.
+pub(in crate::indexer) fn verify_import_roots(
+    store: &crate::graph_store::GraphStore,
+    crate_names: &BTreeSet<String>,
+) {
+    if let Err(e) = store.verify_repo_crate_roots(crate_names) {
+        eprintln!("[ap] import-root verification skipped: {e}");
+    }
 }
 
 /// Builds and writes the coverage sidecar for an incremental pass or bootstrap
@@ -137,10 +150,10 @@ pub(super) fn save_incremental_coverage(
     reparsed_gaps: BTreeMap<String, FileCoverage>,
     pruned_dirs: BTreeMap<String, String>,
     index_mode: &str,
-) {
+) -> BTreeSet<String> {
     let output_dir = match graph_dir.parent() {
         Some(p) => p,
-        None => return,
+        None => return BTreeSet::new(),
     };
     let cov_path = coverage::coverage_path(output_dir);
     let prior = coverage::load(&cov_path);
@@ -166,10 +179,11 @@ pub(super) fn save_incremental_coverage(
     // than carried forward: the pruned set changes the moment a directory is
     // added or removed. source: ADR-9841.
     report.pruned_dirs = pruned_dirs;
-    overlay_cargo_attributions(&mut report, codebase, current);
+    let crate_names = overlay_cargo_attributions(&mut report, codebase, current);
     if let Err(e) = coverage::save(&cov_path, &report) {
         eprintln!("[ap] coverage sidecar write failed: {e}");
     }
+    crate_names
 }
 
 #[cfg(test)]

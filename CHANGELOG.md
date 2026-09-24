@@ -31,17 +31,30 @@ adheres to [Semantic Versioning](https://semver.org/).
   The name of a return type must be shown by the file, in the module of the
   function, as Rust resolves it: a struct, enum or union of that name defined in
   that module, an explicit `use` of it there, or only `use super::*;` globs
-  leading to one of those in the parent module. A glob of another path
-  (`use a::*;`, `use a::{b::*, c};`, `use crate::x::*;`), no import at all, a
-  homonym defined only in a nested module or at the file root for a function in
-  `mod m`, and `super::*` at the root all decline, since the name may come from
-  somewhere the file does not show and the lookup by last segment would pick any
-  repository type of that name. On dy-wcet v4.1.6 this costs no site. The callee must be in the same
+  leading to one of those in the parent module. An explicit `use` binds the
+  name only by the last segment of its path or the leaf of its list
+  (`use Set::{A, B};` and `use ext::Set::Variant;` do not), and is trusted only
+  with evidence from the repository: a path starting with `crate`, `self` or
+  `super`, or with the name of a library crate of the workspace as
+  `cargo metadata --no-deps` reports it (`[lib] name` honoured, hyphens as
+  underscores, every workspace member). Any other `use` of a path outside the
+  repository, a repository without a readable `Cargo.toml`, and a graph indexed
+  by an older build give no edge. A crate of the repository that re-exports a
+  foreign type, a glob import and `extern crate x as y;` are not seen. A glob of
+  another path (`use a::*;`, `use a::{b::*, c};`, `use crate::x::*;`), no import
+  at all, a homonym defined only in a nested module or at the file root for a
+  function in `mod m`, and `super::*` at the root all decline, since the name
+  may come from somewhere the file does not show and the lookup by last segment
+  would pick any repository type of that name. The callee must be in the same
   file; one in another file still waits for the language server. `CallSite`
-  gains a column, `receiver_hint_via`, that is `return-type` for such a hint and
-  empty otherwise; a graph written by an older build reads it as empty. On
-  dy-wcet v4.1.6 the static run resolves 96 of the 99 `response_of` sites
-  instead of 82, with no wrong target.
+  gains a column, `receiver_hint_via`: `return-type` for such a hint, or
+  `return-type-import:<crate>` while the crate of its `use` is not yet shown to
+  belong to the repository (the indexer promotes it, the resolver declines it
+  otherwise), and empty for a hint written at the binding; a graph written by
+  an older build reads it as empty. On dy-wcet v4.1.6 the static run resolves 96
+  of the 99 `response_of` sites instead of 82, with no wrong target, and all 43
+  hints it adds pass the crate evidence (the package is `dy-wcet`, imported as
+  `dy_wcet`).
 - The release workflow no longer fails after a successful registry publish (v0.13.0).
   The last step checked the MCP Registry once, seconds after `mcp-publisher publish`,
   and the registry answered HTTP 500 to that single request: the empty body broke the

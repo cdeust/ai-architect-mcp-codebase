@@ -151,6 +151,16 @@ pub(crate) const COLS_CALL_SITE: ColTypes = &[
 /// itself; '' for a hint written at the binding (issues #348 and #349).
 /// source: parser::spec::rust_receiver writes it, resolver::calls reads it.
 pub(crate) const RECEIVER_HINT_VIA_RETURN_TYPE: &str = "return-type";
+
+/// The `receiver_hint_via` prefix of a hint whose return type is named by an
+/// explicit `use` of a path outside `crate`, `self` and `super`; the crate the
+/// path starts with follows the colon. Such a hint is unverified: the indexer
+/// turns it into `RECEIVER_HINT_VIA_RETURN_TYPE` only when that crate is a
+/// library of the analysed repository, and the resolver declines it otherwise
+/// (an old graph, an unknown Cargo layout, a foreign crate).
+/// source: parser::spec::rust_return_type writes it, graph_store::import_roots
+/// promotes it, resolver::calls declines what is left.
+pub(crate) const RECEIVER_HINT_VIA_IMPORT_PREFIX: &str = "return-type-import:";
 pub(crate) const COLS_COMMUNITY: ColTypes = &[
     ("id", LogicalType::String),
     ("name", LogicalType::String),

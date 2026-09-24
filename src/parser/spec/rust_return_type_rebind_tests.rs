@@ -201,11 +201,16 @@ fn use_super_glob_in_a_tests_module_keeps_the_hint_for_a_type_of_the_same_file()
 }
 
 #[test]
-fn a_file_without_a_glob_keeps_the_hint_for_an_imported_type() {
+fn a_file_without_a_glob_keeps_the_hint_for_an_imported_type_until_a_crate_is_shown() {
     let src = without_local_set(
         "use dy::Set;\nfn make() -> Set { todo!() }\nfn run() { let s = make(); s.m(); }",
     );
-    assert_eq!(hint_of(&src, "s.m"), derived("Set"));
+    // The hint is recorded, marked unverified with the crate the path starts
+    // with; the indexer promotes it only for a crate of the repository.
+    assert_eq!(
+        hint_of(&src, "s.m"),
+        (Some("Set".into()), Some("return-type-import:dy".into()))
+    );
 }
 
 // ---- fourth review: a definition counts only in the module of the function ----

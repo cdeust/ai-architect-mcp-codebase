@@ -277,7 +277,10 @@ pub fn index_codebase_with_language(
     // the IaC pass just added) is never downgraded — `record_outside_targets`
     // is `or_insert`, see `coverage.rs`. The same `cargo metadata` map also
     // drives the feature-gated attribution (issue #291).
-    record_cargo_attributions(&mut collector, codebase_path, &source_files);
+    let crate_names = record_cargo_attributions(&mut collector, codebase_path, &source_files);
+    // Receiver hints read off a return type named by an external-looking `use`
+    // are kept only for a crate of this workspace (issues #348 and #349).
+    incremental::verify_import_roots(&store, &crate_names);
 
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;
@@ -334,7 +337,7 @@ fn record_cargo_attributions(
     collector: &mut CoverageCollector,
     codebase_path: &Path,
     source_files: &[PathBuf],
-) {
+) -> BTreeSet<String> {
     let rust_files: BTreeSet<PathBuf> = source_files
         .iter()
         .filter(|f| f.extension().and_then(|e| e.to_str()) == Some("rs"))
@@ -348,6 +351,7 @@ fn record_cargo_attributions(
         collector.record_feature_gated(&rel, detail);
     }
     collector.set_cargo_attribution(found.status);
+    found.crate_names
 }
 
 /// Records each IaC parse gap into the collector: incomplete parses become

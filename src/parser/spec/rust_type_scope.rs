@@ -29,12 +29,25 @@ const ROOT_KIND: &str = "source_file";
 /// Upper bound on how many `super::*` hops are followed; a file nests far less.
 const MAX_HOPS: usize = 16;
 
-/// True when the file shows where the type `ty` named in the signature of
+/// What the file shows about the source of a type name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Shown {
+    /// Nothing: the name may come from anywhere.
+    No,
+    /// A definition of the file, or an import of a path of the same crate
+    /// (`crate::`, `self::`, `super::`).
+    Local,
+    /// An explicit `use` of a path that starts with this other name: a crate
+    /// of the repository or a foreign one, which the file cannot tell.
+    Import(String),
+}
+
+/// What the file shows about where the type `ty` named in the signature of
 /// `function` comes from, as described in the module header.
-pub(super) fn type_source_is_shown(source: &str, function: Node, ty: &str) -> bool {
+pub(super) fn type_source(source: &str, function: Node, ty: &str) -> Shown {
     match module_body_of(function) {
         Some(body) => shown_in(source, body, ty, MAX_HOPS),
-        None => false,
+        None => Shown::No,
     }
 }
 
@@ -52,19 +65,18 @@ fn module_body_of(node: Node) -> Option<Node> {
     None
 }
 
-fn shown_in(source: &str, body: Node, ty: &str, hops: usize) -> bool {
+fn shown_in(source: &str, body: Node, ty: &str, hops: usize) -> Shown {
     let mut globs_to_parent = false;
     let mut other_glob = false;
+    let mut imports: Vec<String> = Vec::new();
     let mut cursor = body.walk();
     for item in body.named_children(&mut cursor) {
         match item.kind() {
             "struct_item" | "enum_item" | "union_item" if declares(source, item, ty) => {
-                return true;
+                return Shown::Local;
             }
             "use_declaration" => {
-                if binds_explicitly(source, item, ty) {
-                    return true;
-                }
+                imports.extend(bound_roots(source, item, ty));
                 for glob in wildcards(item) {
                     match node_text(source, glob).replace(' ', "").as_str() {
                         "super::*" => globs_to_parent = true,
@@ -76,10 +88,19 @@ fn shown_in(source: &str, body: Node, ty: &str, hops: usize) -> bool {
             _ => {}
         }
     }
-    if other_glob || !globs_to_parent || hops == 0 {
-        return false;
+    imports.sort();
+    imports.dedup();
+    match imports.as_slice() {
+        [] => {}
+        [root] if ["crate", "self", "super"].contains(&root.as_str()) => return Shown::Local,
+        [root] => return Shown::Import(root.clone()),
+        // Two explicit imports of the name from different roots: in doubt.
+        _ => return Shown::No,
     }
-    module_body_of(body).is_some_and(|parent| shown_in(source, parent, ty, hops - 1))
+    if other_glob || !globs_to_parent || hops == 0 {
+        return Shown::No;
+    }
+    module_body_of(body).map_or(Shown::No, |parent| shown_in(source, parent, ty, hops - 1))
 }
 
 fn declares(source: &str, node: Node, name: &str) -> bool {
@@ -102,37 +123,101 @@ fn wildcards(use_declaration: Node) -> Vec<Node> {
     found
 }
 
-/// True when `use_declaration` binds `ty` by name: the word `ty` appears in it
-/// outside its glob parts (`use ext::Set::*;` binds no `Set`) and outside its
-/// `as` clauses (`use a::Set as Other;` binds `Other`).
-fn binds_explicitly(source: &str, use_declaration: Node, ty: &str) -> bool {
-    let mut skipped: Vec<(usize, usize)> = wildcards(use_declaration)
-        .iter()
-        .map(|n| (n.start_byte(), n.end_byte()))
-        .collect();
-    let mut stack = vec![use_declaration];
-    while let Some(node) = stack.pop() {
-        if node.kind() == "use_as_clause" {
-            skipped.push((node.start_byte(), node.end_byte()));
-            continue;
-        }
-        let mut cursor = node.walk();
-        stack.extend(node.named_children(&mut cursor));
+/// The first path segment of every way `use_declaration` binds exactly the
+/// name `ty` (not an alias, not a glob, not a path segment that is not the
+/// last): `use ext::Set;` gives `ext`, `use ext::{Set, Other};` gives `ext`,
+/// `use ext::Set::{self, A};` gives `ext`, `use ext::Set::Variant;` and
+/// `use Set::{A, B};` give none.
+fn bound_roots(source: &str, use_declaration: Node, ty: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(argument) = use_declaration.child_by_field_name("argument") {
+        collect_bindings(source, argument, None, &mut out);
     }
-    let text = node_text(source, use_declaration);
-    let base = use_declaration.start_byte();
-    let kept: String = text
-        .char_indices()
-        .filter(|(i, _)| !skipped.iter().any(|(s, e)| (*s..*e).contains(&(base + i))))
-        .map(|(_, c)| c)
-        .collect();
-    kept.split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .any(|w| w == ty)
+    out.into_iter()
+        .filter(|(name, _)| name == ty)
+        .map(|(_, root)| root)
+        .collect()
+}
+
+/// Pushes `(bound name, first path segment)` for each name `node`, a node of a
+/// use tree, binds. `prefix_root` is the first segment of the enclosing path.
+fn collect_bindings(
+    source: &str,
+    node: Node,
+    prefix_root: Option<&str>,
+    out: &mut Vec<(String, String)>,
+) {
+    match node.kind() {
+        "identifier" | "self" | "crate" | "super" => {
+            let text = node_text(source, node);
+            out.push((text.clone(), prefix_root.map_or(text, str::to_string)));
+        }
+        "scoped_identifier" => {
+            let Some(name) = node.child_by_field_name("name") else {
+                return;
+            };
+            let root = prefix_root.map_or_else(|| leftmost(source, node), str::to_string);
+            out.push((node_text(source, name), root));
+        }
+        "scoped_use_list" => {
+            let path = node.child_by_field_name("path");
+            let root = match (prefix_root, path) {
+                (Some(r), _) => r.to_string(),
+                (None, Some(p)) => leftmost(source, p),
+                (None, None) => return,
+            };
+            let Some(list) = node.child_by_field_name("list") else {
+                return;
+            };
+            let mut cursor = list.walk();
+            for child in list.named_children(&mut cursor) {
+                if child.kind() == "self" {
+                    // `use a::Set::{self}` binds the last segment of the path.
+                    if let Some(last) = path.and_then(|p| last_segment(source, p)) {
+                        out.push((last, root.clone()));
+                    }
+                } else {
+                    collect_bindings(source, child, Some(&root), out);
+                }
+            }
+        }
+        "use_list" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                collect_bindings(source, child, prefix_root, out);
+            }
+        }
+        // `use_as_clause` binds its alias, `use_wildcard` binds nothing.
+        _ => {}
+    }
+}
+
+/// The first segment of a path node.
+fn leftmost(source: &str, node: Node) -> String {
+    let mut current = node;
+    while let Some(path) = current
+        .child_by_field_name("path")
+        .filter(|_| current.kind() == "scoped_identifier")
+    {
+        current = path;
+    }
+    node_text(source, current)
+}
+
+/// The last segment of a path node.
+fn last_segment(source: &str, node: Node) -> Option<String> {
+    match node.kind() {
+        "scoped_identifier" => node
+            .child_by_field_name("name")
+            .map(|n| node_text(source, n)),
+        "identifier" | "crate" | "self" | "super" => Some(node_text(source, node)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{type_source_is_shown, wildcards};
+    use super::{type_source, wildcards, Shown};
     use tree_sitter::{Node, Parser, Tree};
 
     fn parse(src: &str) -> Tree {
@@ -186,7 +271,7 @@ mod tests {
             assert!(!found.is_empty(), "no `use_wildcard` node in {src}");
             let function = first_of_kind(root, "function_item").expect("a function");
             assert!(
-                !type_source_is_shown(src, function, "Set"),
+                type_source(src, function, "Set") == Shown::No,
                 "a glob form accepted a type it may hide: {src}"
             );
         }
@@ -209,7 +294,7 @@ mod tests {
                     first_of_kind(module, "function_item")
                 })
                 .expect("a function");
-            assert!(type_source_is_shown(src, function, "Set"), "{src}");
+            assert!(type_source(src, function, "Set") != Shown::No, "{src}");
         }
     }
 
@@ -222,7 +307,66 @@ mod tests {
         ] {
             let tree = parse(src);
             let function = first_of_kind(tree.root_node(), "function_item").expect("a function");
-            assert!(!type_source_is_shown(src, function, "Set"), "{src}");
+            assert_eq!(type_source(src, function, "Set"), Shown::No, "{src}");
         }
+    }
+
+    /// What the file shows about `Set` for the only function of `src`.
+    fn shown(src: &str) -> Shown {
+        let tree = parse(src);
+        let function = first_of_kind(tree.root_node(), "function_item").expect("a function");
+        type_source(src, function, "Set")
+    }
+
+    fn import(root: &str) -> Shown {
+        Shown::Import(root.to_string())
+    }
+
+    #[test]
+    fn a_path_that_only_passes_through_the_name_does_not_bind_it() {
+        for src in [
+            "use Set::{A, B};\nfn make() -> Set { todo!() }",
+            "use ext::Set::Variant;\nfn make() -> Set { todo!() }",
+            "use ext::Set::{A, B};\nfn make() -> Set { todo!() }",
+            "use ext::Set as Other;\nfn make() -> Set { todo!() }",
+            "use ext::Other;\nfn make() -> Set { todo!() }",
+        ] {
+            assert_eq!(shown(src), Shown::No, "{src}");
+        }
+    }
+
+    #[test]
+    fn the_leaf_of_a_path_or_a_list_binds_the_name_with_the_first_segment_as_root() {
+        for src in [
+            "use ext::Set;\nfn make() -> Set { todo!() }",
+            "pub use ext::Set;\nfn make() -> Set { todo!() }",
+            "use ext::{Set, Other};\nfn make() -> Set { todo!() }",
+            "use ext::{a::{Set}, Other};\nfn make() -> Set { todo!() }",
+            "use ext::{a::b::Set, c};\nfn make() -> Set { todo!() }",
+            "use ext::Set::{self, A};\nfn make() -> Set { todo!() }",
+            "use ext::x::Set::{self};\nfn make() -> Set { todo!() }",
+        ] {
+            assert_eq!(shown(src), import("ext"), "{src}");
+        }
+    }
+
+    #[test]
+    fn a_path_of_the_same_crate_is_local_evidence() {
+        for src in [
+            "use crate::shapes::Set;\nfn make() -> Set { todo!() }",
+            "use super::Set;\nfn make() -> Set { todo!() }",
+            "use self::inner::Set;\nfn make() -> Set { todo!() }",
+            "use crate::{shapes::Set, other};\nfn make() -> Set { todo!() }",
+        ] {
+            assert_eq!(shown(src), Shown::Local, "{src}");
+        }
+    }
+
+    #[test]
+    fn two_imports_of_the_name_from_different_roots_show_nothing() {
+        let src = "use a::Set;\nuse b::Set;\nfn make() -> Set { todo!() }";
+        assert_eq!(shown(src), Shown::No);
+        let src = "use a::Set;\nuse a::x::Set;\nfn make() -> Set { todo!() }";
+        assert_eq!(shown(src), import("a"), "the same root twice is one root");
     }
 }

@@ -21,6 +21,7 @@
 use tree_sitter::Node;
 
 use super::rust_scope::{bound_names_in_scope, constructor_call, once_bound_bindings, OnceBound};
+use super::rust_type_scope::Shown;
 use crate::parser::node_text;
 
 /// source: tree-sitter-rust 0.24.2 src/node-types.json.
@@ -52,6 +53,14 @@ enum Wrapper {
     Result,
 }
 
+/// A receiver type read off a return type, and the crate its name comes from
+/// when only an explicit `use` shows it: that crate is not known to belong to
+/// the repository, so the hint stays unverified until the indexer says so.
+pub(super) struct ReturnTypeHint {
+    pub(super) ty: String,
+    pub(super) import_root: Option<String>,
+}
+
 /// How the binding takes its value from the initialiser.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shape {
@@ -74,7 +83,11 @@ enum Returned<'t> {
 /// of this file whose return type gives `T` as described in the module
 /// header; `None` on every other shape. `T` is the type's last `::` segment
 /// with generics stripped, like `receiver_hint`.
-pub(super) fn return_type_hint(source: &str, call_node: Node, receiver: Node) -> Option<String> {
+pub(super) fn return_type_hint(
+    source: &str,
+    call_node: Node,
+    receiver: Node,
+) -> Option<ReturnTypeHint> {
     let name = node_text(source, receiver);
     let binding = once_bound_bindings(source, call_node)
         .into_iter()
@@ -101,10 +114,15 @@ pub(super) fn return_type_hint(source: &str, call_node: Node, receiver: Node) ->
     }
     let function = unique_visible_function(source, call, &callee_name)?;
     let ty = pick_type(source, shape, unwrapped, returned_type(source, function)?)?;
-    (!is_own_generic(source, function, &ty)
-        && !file_declares_alias(source, call, &ty)
-        && super::rust_type_scope::type_source_is_shown(source, function, &ty))
-    .then_some(ty)
+    if is_own_generic(source, function, &ty) || file_declares_alias(source, call, &ty) {
+        return None;
+    }
+    let import_root = match super::rust_type_scope::type_source(source, function, &ty) {
+        Shown::No => return None,
+        Shown::Local => None,
+        Shown::Import(root) => Some(root),
+    };
+    Some(ReturnTypeHint { ty, import_root })
 }
 
 /// True when the file declares `type <ty> = ..`: the return type then names

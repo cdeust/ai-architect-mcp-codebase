@@ -60,7 +60,17 @@ impl RustConventions {
         caller_qn: &str,
         hinted: HintedSpan,
     ) -> CallEntry {
-        let via_return_type = hinted.derived.as_ref().is_some_and(|d| d.via_return_type);
+        let via = hinted
+            .derived
+            .as_ref()
+            .and_then(|d| match (d.via_return_type, &d.import_root) {
+                (false, _) => None,
+                (true, Some(root)) => Some(format!(
+                    "{}{root}",
+                    crate::graph_store::RECEIVER_HINT_VIA_IMPORT_PREFIX
+                )),
+                (true, None) => Some(crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE.to_string()),
+            });
         let mut entry = Self::call_site_spanning(
             callee,
             start_node,
@@ -68,11 +78,10 @@ impl RustConventions {
             caller_qn,
             hinted.derived.map(|d| d.ty),
         );
-        if via_return_type {
-            entry.properties.push((
-                "receiver_hint_via".to_string(),
-                crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE.to_string(),
-            ));
+        if let Some(via) = via {
+            entry
+                .properties
+                .push(("receiver_hint_via".to_string(), via));
         }
         entry
     }
