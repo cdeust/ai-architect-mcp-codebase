@@ -1,7 +1,7 @@
 {
   "_comment": "OpenSSF Best Practices answers for the passing and silver levels, read from this file by bestpractices.dev. Every claim here is verifiable from this repository or from a dated measurement recorded in the justification; where a criterion is not met it says so and points at the issue that tracks closing it, rather than being argued around. Gold is not answered here: three of its criteria (bus_factor, contributors_unassociated, two_person_review) need a second maintainer — see GOVERNANCE.md and docs/ROADMAP.md.",
   "description_good_status": "Met",
-  "description_good_justification": "The README's opening states the problem in user-facing terms (an agent asked to change a function hallucinates a renamed symbol, edits the wrong community, or breaks a call chain three modules away, because agents operate on strings while codebases have structure) and then the solution. https://github.com/cdeust/ai-architect-mcp-codebase#readme",
+  "description_good_justification": "The README's opening states what the server does in user-facing terms (it indexes a repository into a local code graph and answers who calls this, what depends on it, what a diff touches, and how execution reaches a function) and gives one paragraph on what the analysis cannot see. https://github.com/cdeust/ai-architect-mcp-codebase#readme",
   "interact_status": "Met",
   "interact_justification": "Obtain and use: https://github.com/cdeust/ai-architect-mcp-codebase#getting-started. Give feedback: https://github.com/cdeust/ai-architect-mcp-codebase/issues. Contribute: https://github.com/cdeust/ai-architect-mcp-codebase/blob/main/CONTRIBUTING.md",
   "contribution_status": "Met",
@@ -15,7 +15,7 @@
   "license_location_status": "Met",
   "license_location_justification": "https://github.com/cdeust/ai-architect-mcp-codebase/blob/main/LICENSE in the standard top-level location, and Cargo.toml declares license = \"MIT\": https://github.com/cdeust/ai-architect-mcp-codebase/blob/main/Cargo.toml",
   "documentation_basics_status": "Met",
-  "documentation_basics_justification": "The README documents what the software is, how to build and register it, the 26 MCP tools, the 10 pipeline stages, the architecture and the storage model: https://github.com/cdeust/ai-architect-mcp-codebase#readme. The per-stage specification lives in https://github.com/cdeust/ai-architect-mcp-codebase/tree/main/stages and the stage-to-tool map in https://github.com/cdeust/ai-architect-mcp-codebase/blob/main/NOTES.md",
+  "documentation_basics_justification": "The README documents what the software is, how to build and register it, the 26 MCP tools and how each answer states its limits: https://github.com/cdeust/ai-architect-mcp-codebase#readme. Installation per host, configuration, the security model, the architecture and storage model, and the evaluation are in https://github.com/cdeust/ai-architect-mcp-codebase/tree/main/docs, and the design specifications in https://github.com/cdeust/ai-architect-mcp-codebase/tree/main/stages",
   "documentation_interface_status": "Met",
   "documentation_interface_justification": "The external interface is the MCP tool surface. All 26 tools, their inputs and their outputs are documented at https://github.com/cdeust/ai-architect-mcp-codebase#26-mcp-tools, and the machine-readable JSON Schemas that the server advertises are in https://github.com/cdeust/ai-architect-mcp-codebase/blob/main/src/tool_schemas.rs",
   "sites_https_status": "Met",

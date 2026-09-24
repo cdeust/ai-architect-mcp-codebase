@@ -44,8 +44,9 @@ Three properties shape the whole threat model:
 There is no network boundary: the crate has no HTTP client, no async runtime,
 and no telemetry. Verified rather than assumed — `cargo tree -e normal` resolves
 172 crates and none of them is `reqwest`, `hyper`, `ureq`, `curl`, `tokio`,
-`async-std`, `rustls` or `openssl` (checked 2026-07-27). The README's dependency
-table states the exclusion as a deliberate decision.
+`async-std`, `rustls` or `openssl` (checked 2026-07-27). The dependency table in
+[architecture.md](architecture.md#dependencies) states the exclusion as a
+deliberate decision.
 
 ## Claim 1 — Untrusted repository content cannot corrupt the graph store through injection
 
