@@ -6,7 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.12.1] — Per-site call rows, one edge count, one target per macro call
+## [0.13.0] — Per-site call rows, one edge count, one target per macro call
+
+This is a minor release: the graph gains a column (`CallSite.macro_arg_shape`), the
+responses gain fields (`call_site_target_count`, `analyze_codebase.graph`,
+`macro_sites_count`, `row_limit`), and `edge_count` is now defined without the
+per-site rows, so it reads lower than 0.12.0 on the same code.
 
 ### Fixed
 
@@ -30,7 +35,6 @@ adheres to [Semantic Versioning](https://semver.org/).
   row past the window, so a continuing result is reported and `next_offset` is
   the end of the window. The response carries `row_limit: 500` whenever the bound
   was injected, and `total_count` is a lower bound in that case.
-
 - A macro call site now gets the one target its expansion calls, or none (#339).
   The macro layer wrote every target of an expansion as a call, whatever the
   receiver: `write!` on a `fmt::Formatter` also got `io::Write::write_fmt`,
