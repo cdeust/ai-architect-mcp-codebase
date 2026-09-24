@@ -137,10 +137,10 @@ cdeust/enterprise-backlog#15 and is not claimed here.
 ### Developer escape hatch (`AI_ARCHITECT_SOURCE_CHECKOUT=1`)
 
 The release-digest pin described above can be opted out of for a local dev
-build — plain source checkout or a live-mounted dev-symlink montage over a
-marketplace cache — via `AI_ARCHITECT_SOURCE_CHECKOUT=1`. Full mechanics in
-[README §Developer escape
-hatch](README.md#developer-escape-hatch-running-a-local-dev-build-in-place-of-the-release).
+build (a plain source checkout, or a live-mounted dev symlink over a
+marketplace cache) with `AI_ARCHITECT_SOURCE_CHECKOUT=1`. Full mechanics are in
+[docs/install.md, developer escape
+hatch](docs/install.md#developer-escape-hatch-running-a-local-dev-build-in-place-of-the-release).
 The relevant security properties:
 
 - **Explicit and local only.** The flag is a shell environment variable the
