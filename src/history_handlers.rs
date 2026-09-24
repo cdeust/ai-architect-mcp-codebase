@@ -169,9 +169,11 @@ pub(crate) fn finish_incremental_response(
         // Whole-graph totals are needed only for the export sidecar; compute
         // them lazily here (a full table scan the incremental pass itself skips)
         // and surface them in the response alongside the artifact stats.
-        let (node_count, edge_count) = graph_counts(graph_dir);
+        let counts = graph_counts(graph_dir);
+        let (node_count, edge_count) = (counts.nodes, counts.edges);
         response["node_count"] = json!(node_count);
         response["edge_count"] = json!(edge_count);
+        response["call_site_target_count"] = json!(counts.call_site_targets);
         let coverage_path = graph_dir.parent().map(indexer::coverage::coverage_path);
         match artifact::export_artifact(
             graph_dir,
@@ -301,15 +303,16 @@ pub(crate) fn bootstrap_import(
     let meta_err = write_graph_meta(output_dir, codebase).err().inspect(|e| {
         eprintln!("[ap] graph meta sidecar write failed (bootstrap succeeded): {e}");
     });
-    let (node_count, edge_count) = graph_counts(graph_dir);
+    let counts = graph_counts(graph_dir);
     let mut resp = json!({
         "stage": 3,
         "status": "ok",
         "tool": "index_codebase",
         "source": "artifact_bootstrap",
         "graph_path": graph_dir.to_string_lossy(),
-        "node_count": node_count,
-        "edge_count": edge_count,
+        "node_count": counts.nodes,
+        "edge_count": counts.edges,
+        "call_site_target_count": counts.call_site_targets,
         "artifact_commit": meta.commit,
         "artifact_tool_version": meta.tool_version,
     });
@@ -379,7 +382,7 @@ pub(crate) fn bootstrap_import_and_fill(
         indexer::FillMethod::GitDiff => "git_diff",
         indexer::FillMethod::ContentHash => "content_hash",
     };
-    let (node_count, edge_count) = graph_counts(graph_dir);
+    let counts = graph_counts(graph_dir);
     let mut resp = json!({
         "stage": 3,
         "status": "ok",
@@ -387,8 +390,9 @@ pub(crate) fn bootstrap_import_and_fill(
         "source": "artifact_bootstrap_fill",
         "graph_state": "filled_to_working_tree",
         "graph_path": graph_dir.to_string_lossy(),
-        "node_count": node_count,
-        "edge_count": edge_count,
+        "node_count": counts.nodes,
+        "edge_count": counts.edges,
+        "call_site_target_count": counts.call_site_targets,
         "artifact_commit": meta.commit,
         "artifact_tool_version": meta.tool_version,
         "head_sha": info.head_sha,
@@ -450,16 +454,20 @@ pub(crate) fn run_cochange(
     }
 }
 
-/// Reads node/edge counts from an on-disk graph. Best-effort: an open/query
-/// failure yields `(0, 0)` rather than aborting the bootstrap response — the
-/// counts are informational and the graph is already in place.
-pub(crate) fn graph_counts(graph_dir: &Path) -> (u64, u64) {
-    match graph_store::GraphStore::open_or_create(graph_dir) {
-        Ok(store) => {
-            let n = store.node_count().unwrap_or(0);
-            let e = store.edge_count().unwrap_or(0);
-            (n, e)
-        }
-        Err(_) => (0, 0),
-    }
+/// Reads node and relationship counts from an on-disk graph. Best-effort: an
+/// open/query failure yields zeros rather than aborting the bootstrap
+/// response, because the counts are informational and the graph is already in
+/// place. A caller that must tell "empty" from "unreadable" uses
+/// `try_graph_counts`.
+pub(crate) fn graph_counts(graph_dir: &Path) -> graph_store::GraphCounts {
+    try_graph_counts(graph_dir).unwrap_or_default()
+}
+
+/// `graph_counts` without the zero fallback: `None` when the graph cannot be
+/// opened or queried.
+pub(crate) fn try_graph_counts(graph_dir: &Path) -> Option<graph_store::GraphCounts> {
+    graph_store::GraphStore::open_or_create(graph_dir)
+        .ok()?
+        .graph_counts()
+        .ok()
 }
