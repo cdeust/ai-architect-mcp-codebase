@@ -34,6 +34,8 @@ pub(super) struct PhaseTallies {
     extends: Tally,
     uses: Tally,
     macros: Tally,
+    /// Sites of macros that call nothing: in no other count (issue #345).
+    no_call_macro_sites: u64,
 }
 
 /// Runs the resolution phases in order against the shared edge buffer.
@@ -61,7 +63,7 @@ pub(super) fn run_phases(
     // `run_macro_expansion` now returns the same (resolved, total,
     // unresolved) shape as every other phase; its total is folded into
     // `total_refs` by `into_result`.
-    let macros = crate::resolver_layers::run_macro_expansion(
+    let macro_outcome = crate::resolver_layers::run_macro_expansion(
         store,
         buf,
         &crate::resolver_layers::MacroContext {
@@ -70,8 +72,7 @@ pub(super) fn run_phases(
                 is_type_defined_in_file(idx, file, name)
             },
         },
-    )?
-    .into();
+    )?;
 
     Ok(PhaseTallies {
         imports,
@@ -79,7 +80,8 @@ pub(super) fn run_phases(
         implements,
         extends,
         uses,
-        macros,
+        macros: macro_outcome.phase.into(),
+        no_call_macro_sites: macro_outcome.no_call_sites,
     })
 }
 
@@ -129,6 +131,7 @@ impl PhaseTallies {
             uses_resolved: self.uses.resolved,
             total_edges,
             total_refs,
+            no_call_macro_sites: self.no_call_macro_sites,
             unresolved,
             elapsed_ms: start.elapsed().as_millis() as u64,
         }

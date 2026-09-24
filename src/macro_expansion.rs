@@ -56,13 +56,16 @@ pub fn lookup(language: &str, macro_name: &str) -> Option<&'static MacroExpansio
 mod tests {
     use super::*;
 
+    /// The table keeps both kinds of entry: the macros whose every form calls
+    /// one verified function, and the derive markers (issue #344 removed the
+    /// entries whose callee depends on the arguments, so no total is pinned).
     #[test]
     fn test_rust_macro_count() {
-        let n = rust::RustMacros.expansions().len();
-        assert!(
-            n >= 20,
-            "rust macro table should have >=20 entries, got {n}"
-        );
+        let all = rust::RustMacros.expansions();
+        let derives = all.iter().filter(|e| !e.emit_implements.is_empty()).count();
+        let calls = all.iter().filter(|e| !e.emit_calls.is_empty()).count();
+        assert!(derives >= 9, "derive markers: {derives}");
+        assert!(calls >= 10, "listed call macros: {calls}");
     }
 
     #[test]
@@ -89,6 +92,67 @@ mod tests {
                         exp.macro_name
                     );
                 }
+            }
+        }
+    }
+
+    /// Issue #344: a target enters the Rust table only through the list of
+    /// callees verified in the std sources, so an internal that changed between
+    /// versions (`Arguments::new_v1`) cannot come back unnoticed.
+    #[test]
+    fn every_rust_emit_call_is_a_verified_call_target() {
+        for exp in rust::RustMacros.expansions() {
+            for path in exp.emit_calls {
+                assert!(
+                    rust::VERIFIED_CALL_TARGETS.contains(path),
+                    "{}: `{path}` is not in VERIFIED_CALL_TARGETS",
+                    exp.macro_name
+                );
+            }
+        }
+    }
+
+    /// The four comparison assert macros call `assert_failed` whatever their
+    /// arguments (core/src/macros/mod.rs); the others of the family and `panic!`
+    /// call `panic` or `panic_fmt` by arguments, so they list no target.
+    #[test]
+    fn the_assert_family_lists_a_target_only_where_every_form_calls_it() {
+        for name in [
+            "assert_eq",
+            "assert_ne",
+            "debug_assert_eq",
+            "debug_assert_ne",
+        ] {
+            let exp = lookup("rust", name).unwrap_or_else(|| panic!("{name} missing"));
+            assert_eq!(exp.emit_calls, ["core::panicking::assert_failed"], "{name}");
+        }
+        for name in rust::FORM_DEPENDENT_MACROS {
+            assert!(lookup("rust", name).is_none(), "{name} must list no target");
+        }
+    }
+
+    /// A macro is in one class only: listed, decided, form dependent or no-call.
+    #[test]
+    fn a_rust_macro_belongs_to_one_class() {
+        let listed: Vec<&str> = rust::RustMacros
+            .expansions()
+            .iter()
+            .filter(|e| !e.emit_calls.is_empty())
+            .map(|e| e.macro_name)
+            .collect();
+        let classes: [(&str, &[&str]); 4] = [
+            ("listed", &listed),
+            ("dest", rust::DEST_MACROS),
+            ("vec", rust::VEC_MACROS),
+            ("form dependent", rust::FORM_DEPENDENT_MACROS),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (class, names) in classes
+            .iter()
+            .chain([("no call", rust::NO_CALL_MACROS)].iter())
+        {
+            for name in *names {
+                assert!(seen.insert(*name), "{name} is in two classes ({class})");
             }
         }
     }

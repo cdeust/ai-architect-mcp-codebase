@@ -8,6 +8,28 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The Rust macro table lists only callees checked in the std sources (#344).
+  `println!` and `eprintln!` also listed `Arguments::new_v1`, an internal the
+  compiler no longer emits, and `assert!`, `debug_assert!`, `panic!`, `todo!`,
+  `unimplemented!` and `unreachable!` listed one `core::panicking` function
+  although the callee is `panic` or `panic_fmt` by the arguments and the edition.
+  Each callee was compared with the expansion of rustc 1.93 to 1.98 and the std
+  source of 1.95. `new_v1` is gone. The six macros whose callee depends on the
+  arguments have no target: a site of one is an unresolved reference with the
+  reason "no stable target for this expansion", not a resolved edge to a guess.
+  The four comparison asserts keep `assert_failed`, which every form calls, and
+  `debug_assert_ne!` gains its entry. `resolution_rate` moves down on code that
+  uses those macros, because their sites were counted resolved before.
+- A macro that calls nothing is no longer an unresolved reference (#345).
+  `matches!`, `include_str!`, `include_bytes!`, `concat!`, `stringify!`, `env!`,
+  `option_env!`, `cfg!`, `line!`, `file!`, `column!` and `module_path!` expand to
+  a `match` or a literal. Their sites had no table entry and counted against
+  `resolution_rate`. They are now in neither `total_refs` nor `unresolved`, get
+  no edge, keep `is_resolved = false`, and are reported as `no_call_macro_sites`
+  in the `resolve_graph` result and the `analyze_codebase` `resolve` block. They
+  no longer count in `lsp_status.macro_sites_count`. A call written inside the
+  arguments (`matches!(f(x), ..)`) is still a call site of the enclosing function.
+
 - A macro call site now gets the one target its expansion calls, or none (#339).
   The macro layer wrote every target of an expansion as a call, whatever the
   receiver: `write!` on a `fmt::Formatter` also got `io::Write::write_fmt`,

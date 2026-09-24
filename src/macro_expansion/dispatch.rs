@@ -13,7 +13,7 @@
 // nothing: an undetermined site gets no edge, so a reader never sees a target
 // the expansion may not have called.
 
-use super::rust::{DEST_MACROS, VEC_MACROS};
+use super::rust::{DEST_MACROS, FORM_DEPENDENT_MACROS, NO_CALL_MACROS, VEC_MACROS};
 use super::scope::{original_name, type_origin, Import, TypeOrigin};
 
 /// One target a receiver-decided macro may call, with what selects it.
@@ -35,6 +35,12 @@ pub enum Dispatch {
     /// By the argument shape the parser recorded (`macro_arg_shape`); a shape
     /// with no entry has no stable target.
     ArgShape(&'static [(&'static str, &'static str)]),
+    /// The callee depends on the arguments or the edition (`panic!`,
+    /// `assert!`): no one target is called by every site (issue #344).
+    FormDependent,
+    /// The macro calls no function (`matches!`, `include_str!`): a site of it
+    /// is not a call reference (issue #345).
+    NoCall,
 }
 
 /// What decided a target.
@@ -65,6 +71,10 @@ pub fn dispatch_for(macro_name: &str) -> Option<Dispatch> {
         Some(Dispatch::ReceiverType(WRITE_FMT_ALTERNATIVES))
     } else if VEC_MACROS.contains(&macro_name) {
         Some(Dispatch::ArgShape(VEC_BY_SHAPE))
+    } else if FORM_DEPENDENT_MACROS.contains(&macro_name) {
+        Some(Dispatch::FormDependent)
+    } else if NO_CALL_MACROS.contains(&macro_name) {
+        Some(Dispatch::NoCall)
     } else {
         None
     }
