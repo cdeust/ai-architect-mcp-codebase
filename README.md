@@ -274,8 +274,12 @@ Since 0.12.0 the static resolver binds `self.m()` and `Self::m()` in Rust,
 `self.m()` in Python and `this.m()` in TypeScript to the enclosing type's
 method (`resolution_method: "receiver-type"`). In Rust it also binds `x.m()`
 when `x` is bound once in the enclosing function by a typed parameter, a typed
-`let`, or `let x = T::assoc(..)` (`"receiver-local-binding"`). A receiver it
-cannot type is left unresolved; it never falls back to a lookup by bare name.
+`let`, or `let x = T::assoc(..)` (`"receiver-local-binding"`). It also
+types `x` from the declared return type of a free function of the same file
+that initialised it (`let x = make();`, and an `Option` or `Result` unwrapped by
+`let Some(x) = .. else`, `.expect(..)`, `.unwrap()` or `?`), at a lower
+confidence (`"receiver-return-type"`, 0.85). A receiver it cannot type is left
+unresolved; it never falls back to a lookup by bare name.
 
 ### Query truncation and paging
 

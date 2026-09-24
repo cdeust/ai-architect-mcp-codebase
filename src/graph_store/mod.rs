@@ -15,6 +15,7 @@ mod config;
 mod counts;
 mod ddl;
 mod macro_reset;
+pub(crate) use columns::RECEIVER_HINT_VIA_RETURN_TYPE;
 pub(crate) use macro_reset::{is_rust_macro_site, rust_macro_site_predicate};
 mod membership;
 mod recovery;

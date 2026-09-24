@@ -31,7 +31,7 @@
 use super::*;
 
 mod local;
-pub(super) use local::resolve_local_receiver_bound;
+pub(super) use local::{relabel_as_return_type, resolve_local_receiver_bound};
 
 #[cfg(test)]
 mod spelling_tests;

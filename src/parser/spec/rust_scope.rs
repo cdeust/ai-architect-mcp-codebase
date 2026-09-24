@@ -227,6 +227,44 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
         .collect()
 }
 
+/// One name bound exactly once in a scope, with the node that declares it and
+/// the pattern that names it.
+pub(super) struct OnceBound<'t> {
+    pub(super) name: String,
+    pub(super) declaration: Node<'t>,
+    pub(super) pattern: Node<'t>,
+}
+
+/// Every name bound EXACTLY ONCE in the function enclosing `call_node`, under
+/// any pattern shape, with its declaring node and pattern. The same count
+/// `typed_local_map` uses, so the two can never disagree about "bound once"
+/// (issues #348 and #349 read the initialiser, which `typed_local_map` does
+/// not keep).
+pub(super) fn once_bound_bindings<'t>(source: &str, call_node: Node<'t>) -> Vec<OnceBound<'t>> {
+    let Some(scope) = enclosing_scope(call_node) else {
+        return Vec::new();
+    };
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    let mut sites: Vec<(String, Node<'t>, Node<'t>)> = Vec::new();
+    for (declaration, pattern) in binding_patterns(scope) {
+        let mut names = HashSet::new();
+        collect_identifiers(source, pattern, &mut names);
+        for name in names {
+            *counts.entry(name.clone()).or_insert(0) += 1;
+            sites.push((name, declaration, pattern));
+        }
+    }
+    sites
+        .into_iter()
+        .filter(|(name, _, _)| counts.get(name) == Some(&1))
+        .map(|(name, declaration, pattern)| OnceBound {
+            name,
+            declaration,
+            pattern,
+        })
+        .collect()
+}
+
 /// The name bound by a pattern that is a plain identifier, optionally
 /// wrapped in `mut` (`mut_pattern`) — the only two pattern shapes plan §2.2
 /// palier 3 considers "a simple identifier". Any other pattern kind
@@ -299,7 +337,7 @@ const RESULT_UNWRAPPERS: [&str; 2] = ["unwrap", "expect"];
 /// destination lookup, issue #339) it looks through `?`, `.unwrap()` and
 /// `.expect(..)` and reports that it did; any other wrapper, `x.map(..)` for
 /// one, ends the search.
-fn constructor_call<'t>(
+pub(super) fn constructor_call<'t>(
     source: &str,
     value: Node<'t>,
     through_results: bool,

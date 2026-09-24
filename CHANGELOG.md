@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A Rust receiver initialised by a free function is now resolved statically
+  (#348, #349). `let s = make(); s.answer(1)` left the call unresolved although
+  `fn make() -> Set` names the type, and so did the `Option` forms
+  `let Some(s) = build() else { .. }` and `build().expect(..)`. The parser now
+  reads the return type of the free function of the same file that initialised
+  the local, and the resolver binds the call at a new tier,
+  `resolution_method: "receiver-return-type"` at 0.85, one step below
+  `"receiver-local-binding"` (0.87). An `Option` or `Result` is unwrapped only
+  through `let Some(..)` or `let Ok(..)` with an `else`, `.expect(..)`,
+  `.unwrap()` or `?`. It declines on doubt: two functions of the name, a `use`,
+  tuple struct, `const` or `static` of that name, a local of that name, a
+  generic, `impl Trait` or `dyn Trait` return, or a name bound more than once in
+  the function all leave the call unresolved. The callee must be in the same
+  file; one in another file still waits for the language server. `CallSite`
+  gains a column, `receiver_hint_via`, that is `return-type` for such a hint and
+  empty otherwise; a graph written by an older build reads it as empty. On
+  dy-wcet v4.1.6 the static run resolves 96 of the 99 `response_of` sites
+  instead of 82, with no wrong target.
+
 ## [0.13.0] — Per-site call rows, one edge count, one target per macro call
 
 This is a minor release: the graph gains a column (`CallSite.macro_arg_shape`), the

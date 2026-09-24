@@ -33,13 +33,40 @@ impl RustConventions {
         caller_qn: &str,
         source: &str,
     ) -> CallEntry {
-        Self::call_site_spanning(
+        let derived = super::rust_receiver::receiver_hint_with_origin(source, span_node);
+        Self::with_hint_origin(
             callee,
             span_node,
             span_node.end_byte() as u64,
             caller_qn,
-            super::rust_receiver::receiver_hint(source, span_node),
+            derived,
         )
+    }
+
+    /// `call_site_spanning` for a hint that may have been read off a return
+    /// type: the origin is recorded beside the hint, as `receiver_hint_via`.
+    pub(super) fn with_hint_origin(
+        callee: &str,
+        start_node: Node,
+        end_byte: u64,
+        caller_qn: &str,
+        derived: Option<super::rust_receiver::DerivedHint>,
+    ) -> CallEntry {
+        let via_return_type = derived.as_ref().is_some_and(|d| d.via_return_type);
+        let mut entry = Self::call_site_spanning(
+            callee,
+            start_node,
+            end_byte,
+            caller_qn,
+            derived.map(|d| d.ty),
+        );
+        if via_return_type {
+            entry.properties.push((
+                "receiver_hint_via".to_string(),
+                crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE.to_string(),
+            ));
+        }
+        entry
     }
 
     /// Same shape as `call_site`, but the span's end byte and the

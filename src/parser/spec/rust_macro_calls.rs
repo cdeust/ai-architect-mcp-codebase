@@ -324,12 +324,12 @@ fn push_reconstructed(ctx: &ScanCtx, receiver: Node, method: Node, out: &mut Vec
     if callee.is_empty() {
         return;
     }
-    let hint = super::rust_receiver::receiver_hint(ctx.source, receiver);
-    out.push(RustConventions::call_site_spanning(
+    let derived = super::rust_receiver::receiver_hint_with_origin(ctx.source, receiver);
+    out.push(RustConventions::with_hint_origin(
         &callee,
         receiver,
         method.end_byte() as u64,
         ctx.caller_qn,
-        hint,
+        derived,
     ));
 }

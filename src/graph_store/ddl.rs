@@ -93,10 +93,14 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // The two are independent: a site can carry either, both, or neither.
         // macro_arg_shape: issue #339 — `empty`/`repeat`/`list` for a `vec!`
         // site, '' for every other site; read by the macro-expansion pass.
+        // receiver_hint_via: issues #348 and #349 — `return-type` when the
+        // hint was read off a free function's declared return type, '' when
+        // it was written at the binding; read by the palier-3 gate.
         (NODE_CALL_SITE,
             "id STRING, callee_name STRING, line INT64, col INT64, \
              is_resolved BOOLEAN, language STRING, unresolved_reason STRING, \
-             receiver_hint STRING, macro_arg_shape STRING"),
+             receiver_hint STRING, macro_arg_shape STRING, \
+             receiver_hint_via STRING"),
         // 3c Community + Process — source: stages/stage-3c.md §4.1
         (NODE_COMMUNITY,
             "id STRING, name STRING, algorithm STRING, \

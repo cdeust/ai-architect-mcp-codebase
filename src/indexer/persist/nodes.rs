@@ -339,6 +339,12 @@ fn append_callsite_properties(props: &mut Vec<(String, String)>, node: &parser::
         "macro_arg_shape".to_string(),
         cypher_str(&find_property(node, "macro_arg_shape")),
     ));
+    // Issues #348 and #349: how the receiver hint was derived, '' when it was
+    // written at the binding.
+    props.push((
+        "receiver_hint_via".to_string(),
+        cypher_str(&find_property(node, "receiver_hint_via")),
+    ));
 }
 
 // Schema awareness — source: graph_store.rs node_table_ddl().

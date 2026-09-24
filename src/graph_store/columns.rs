@@ -139,11 +139,18 @@ pub(crate) const COLS_CALL_SITE: ColTypes = &[
     ("col", LogicalType::Int64),
     ("is_resolved", LogicalType::Bool),
     ("language", LogicalType::String),
-    // These three must mirror the NODE_CALL_SITE DDL (ddl.rs), in its order.
+    // These four must mirror the NODE_CALL_SITE DDL (ddl.rs), in its order.
     ("unresolved_reason", LogicalType::String),
     ("receiver_hint", LogicalType::String),
     ("macro_arg_shape", LogicalType::String),
+    ("receiver_hint_via", LogicalType::String),
 ];
+
+/// The `CallSite.receiver_hint_via` value of a hint the parser read off the
+/// declared return type of a free function instead of off the binding
+/// itself; '' for a hint written at the binding (issues #348 and #349).
+/// source: parser::spec::rust_receiver writes it, resolver::calls reads it.
+pub(crate) const RECEIVER_HINT_VIA_RETURN_TYPE: &str = "return-type";
 pub(crate) const COLS_COMMUNITY: ColTypes = &[
     ("id", LogicalType::String),
     ("name", LogicalType::String),

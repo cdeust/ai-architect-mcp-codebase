@@ -24,8 +24,11 @@ pub(super) fn resolve_calls(
     // that as "no hint"), same precedent as `lsp_resolver/sites.rs:113`'s
     // `is_resolved` column.
     store.ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
+    // Issues #348 and #349: same precedent; '' reads as "written at the binding".
+    store.ensure_node_column("CallSite", "receiver_hint_via", "STRING DEFAULT ''")?;
     let qr = store.execute_query(
-        "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.language, cs.receiver_hint",
+        "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.language, cs.receiver_hint, \
+         cs.receiver_hint_via",
     )?;
     let mut resolved = 0u64;
     let mut total = 0u64;
@@ -34,7 +37,7 @@ pub(super) fn resolve_calls(
     let mut resolved_ids: Vec<String> = Vec::new();
 
     for row in &qr.rows {
-        if row.len() < 4 {
+        if row.len() < 5 {
             continue;
         }
         let callee = &row[1];
@@ -59,6 +62,7 @@ pub(super) fn resolve_calls(
             callee,
             language: &row[2],
             receiver_hint: &row[3],
+            receiver_hint_via: &row[4],
         };
         if resolve_one_call_site(&graph, buf, &row_input, &mut tally) {
             resolved_ids.push(row[0].clone());
@@ -100,6 +104,7 @@ fn resolve_one_call_site(
         caller_qn: &caller_qn,
         caller_label: &caller_label,
         receiver_hint: row.receiver_hint,
+        receiver_hint_via: row.receiver_hint_via,
     };
     let ctx = ResolveContext {
         idx: graph.idx,
@@ -158,6 +163,8 @@ struct CallSite<'a> {
     caller_label: &'a str,
     /// The parser-attached issue #283 palier 3 (lot 6) hint; "" means none.
     receiver_hint: &'a str,
+    /// How the parser derived `receiver_hint`; see `RowInput`.
+    receiver_hint_via: &'a str,
 }
 
 /// Read-only lookup context shared by one `resolve_single_call` invocation
@@ -186,6 +193,10 @@ struct RowInput<'a> {
     language: &'a str,
     /// The parser-attached issue #283 palier 3 (lot 6) hint; "" means none.
     receiver_hint: &'a str,
+    /// `RECEIVER_HINT_VIA_RETURN_TYPE` when the hint was read off a free
+    /// function's return type (issues #348 and #349), "" when it was written
+    /// at the binding, and for a graph indexed before the column existed.
+    receiver_hint_via: &'a str,
 }
 
 /// A resolved callee plus the evidence/confidence the policy attached to it.
@@ -310,12 +321,15 @@ fn rust_local_receiver_gate(
     let receiver::ReceiverForm::Local { m, .. } = form else {
         return None;
     };
-    Some(receiver::resolve_local_receiver_bound(
-        ctx.idx,
-        site.receiver_hint,
-        &m,
-        file_id,
-    ))
+    let resolution =
+        receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id);
+    Some(
+        if site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE {
+            receiver::relabel_as_return_type(resolution)
+        } else {
+            resolution
+        },
+    )
 }
 
 /// Resolves one callee reference via the shared ambiguity policy (issue

@@ -32,6 +32,7 @@ mod rust_call_site;
 mod rust_macro_calls;
 mod rust_macro_site;
 mod rust_receiver;
+mod rust_return_type;
 mod rust_scope;
 mod shallow;
 mod swift;
@@ -102,6 +103,8 @@ mod rust_parity_corpus;
 mod rust_parity_tests;
 #[cfg(test)]
 mod rust_receiver_tests;
+#[cfg(test)]
+mod rust_return_type_tests;
 #[cfg(test)]
 mod rust_walker_tests;
 #[cfg(test)]

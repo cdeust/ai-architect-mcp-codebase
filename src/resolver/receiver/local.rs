@@ -53,6 +53,25 @@ pub(in crate::resolver) fn resolve_local_receiver_bound(
     }
 }
 
+/// A palier-3 resolution whose hint the parser read off a free function's
+/// return type instead of off the binding (issues #348 and #349): same target,
+/// the weaker `ReceiverReturnType` evidence. A `NotFound` or `Ambiguous`
+/// result is unchanged, so the relabel never adds an edge.
+pub(in crate::resolver) fn relabel_as_return_type(
+    resolution: PolicyResolution<SymbolEntry>,
+) -> PolicyResolution<SymbolEntry> {
+    match resolution {
+        PolicyResolution::Resolved { target, .. } => PolicyResolution::Resolved {
+            target,
+            evidence: ambiguity_policy::Evidence::ReceiverReturnType,
+            confidence: ambiguity_policy::confidence_for(
+                ambiguity_policy::Evidence::ReceiverReturnType,
+            ),
+        },
+        other => other,
+    }
+}
+
 /// `Some(entry)` iff EXACTLY ONE of `candidates` is defined in `caller_file`
 /// — the palier-3 same-file tiebreak (plan §2.2), distinct from palier 1-2's
 /// exact-key/parent-match rule: a local's declared type narrows the
