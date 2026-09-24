@@ -91,9 +91,12 @@ per-site rows, so it reads lower than 0.12.0 on the same code.
   target, now with its own reason, "expansion calls compiler internals whose
   paths change between versions". The four comparison asserts keep
   `assert_failed`, which every form calls, and `debug_assert_ne!` gains its
-  entry. `resolution_rate` can go down on code that uses `panic!`, `todo!`,
-  `unimplemented!`, `unreachable!`, `assert!` or `debug_assert!`, because those
-  sites are now reported unresolved instead of resolved to a guess. The next resolve also deletes the
+  entry. `resolution_rate` can move either way on the same code. It goes down
+  where a site that used to be resolved to a guess is now reported unresolved:
+  `panic!`, `todo!`, `unimplemented!`, `unreachable!`, `assert!`,
+  `debug_assert!`, a `write!` or `writeln!` whose destination type is not
+  determined, and a list `vec!`. It goes up where a macro that calls nothing
+  leaves the count (#345 below). The next resolve also deletes the
   `StdlibSymbol` nodes that the purge of old macro rows leaves with no
   relationship, so a graph written by an older build loses `new_v1` and the
   old `panic` node; a node any edge still uses stays.
