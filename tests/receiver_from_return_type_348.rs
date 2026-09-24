@@ -390,3 +390,79 @@ fn a_return_type_renamed_by_use_as_gets_no_edge_to_a_namesake() {
         rows.rows
     );
 }
+
+/// Indexes a repository made of `files` (name, text) and resolves it.
+fn index_files(prefix: &str, files: &[(&str, &str)]) -> (GraphStore, common::TestTempDir) {
+    let tmp = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let src = tmp.path().join("fixture/src");
+    fs::create_dir_all(&src).expect("mkdir src");
+    for (name, text) in files {
+        fs::write(src.join(name), text).expect("write fixture file");
+    }
+    let graph_dir = tmp.path().join("graph");
+    indexer::index_codebase(&tmp.path().join("fixture"), &graph_dir).expect("index");
+    let store = GraphStore::open_or_create(&graph_dir).expect("open graph");
+    resolver::resolve_graph(&store).expect("resolve");
+    (store, tmp)
+}
+
+fn answer_rows(store: &GraphStore, callee: &str) -> Vec<Vec<String>> {
+    store
+        .execute_query(&format!(
+            "MATCH (cs:CallSite)-[r:Calls_CallSite_Method]->(t) \
+             WHERE cs.callee_name = '{callee}' RETURN t.id, r.resolution_method"
+        ))
+        .expect("query rows")
+        .rows
+}
+
+const NAMESAKE: &str =
+    "pub struct Set;\nimpl Set {\n    pub fn answer(&self) -> u32 {\n        9\n    }\n}\n";
+
+/// A glob import may bring the return type from a crate the repository does not
+/// hold. The repository has ONE unrelated `Set`, which owns an `answer`; with a
+/// single candidate the lookup by last segment would pick it.
+#[test]
+fn a_return_type_that_may_come_from_a_glob_gets_no_edge_to_a_namesake() {
+    let (store, _tmp) = index_files(
+        "receiver_from_return_type_glob_",
+        &[
+            ("lib.rs", "pub mod other;\npub mod user;\n"),
+            ("other.rs", NAMESAKE),
+            (
+                "user.rs",
+                "use ext::shapes::*;\n\npub fn make() -> Set {\n    todo!()\n}\n\n\
+                 pub fn run() -> u32 {\n    let x = make();\n    x.answer()\n}\n",
+            ),
+        ],
+    );
+    let rows = answer_rows(&store, "x.answer");
+    assert!(rows.is_empty(), "a glob return type got an edge: {rows:?}");
+}
+
+/// A type defined in the file shadows a glob, so the same file still resolves.
+#[test]
+fn a_type_defined_in_the_file_shadows_a_glob_and_still_resolves() {
+    let (store, _tmp) = index_files(
+        "receiver_from_return_type_glob_own_",
+        &[
+            ("lib.rs", "pub mod own;\n"),
+            (
+                "own.rs",
+                "use ext::shapes::*;\n\npub struct Set;\nimpl Set {\n    pub fn answer(&self) -> u32 {\n        1\n    }\n}\n\n\
+                 pub fn make_own() -> Set {\n    Set\n}\n\npub fn run_own() -> u32 {\n    let y = make_own();\n    y.answer()\n}\n",
+            ),
+        ],
+    );
+    assert_eq!(
+        answer_rows(&store, "y.answer"),
+        vec![vec![
+            "src/own.rs::Set::answer".to_string(),
+            "receiver-return-type".to_string()
+        ]]
+    );
+}

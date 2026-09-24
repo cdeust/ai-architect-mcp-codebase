@@ -21,14 +21,19 @@ adheres to [Semantic Versioning](https://semver.org/).
   tuple struct, `const` or `static` of that name, a local of that name, a
   generic, `impl Trait` or `dyn Trait` return, a return type with a path or that
   is a `type` alias or is renamed by `use x::Real as Local`, or a name bound more
-  than once in the function all leave the call unresolved. "Bound more than once" counts every form: `let`,
-  parameters, closure parameters, `if let`, `while let`, `match` arms, `for`
-  patterns, names a macro may bind, and a `const`, `static`, const generic or
-  `use` of the name; a `let` binds only in its own block and after it. The same
-  count now applies to a typed
-  parameter or typed `let`, which a pattern rebinding the name used to leave
-  typed (`let s: Set = ..; if let Some(s) = o { s.m() }` got an edge to
-  `Set::m`). The callee must be in the same
+  than once in the function all leave the call unresolved. "Bound more than
+  once" counts every form: `let`, parameters, closure parameters, `if let`,
+  `while let`, `match` arms, `for` patterns, names a macro may bind, and a
+  `const`, `static`, const generic or `use` of the name; a `let` binds only in
+  its own block and after it. The same count now applies to a typed parameter or
+  typed `let`, which a pattern rebinding the name used to leave typed
+  (`let s: Set = ..; if let Some(s) = o { s.m() }` got an edge to `Set::m`).
+  A file that holds a glob `use` (`use a::*;`, `use a::{b::*, c};`,
+  `use super::*;`) declines a return type it does not define itself, because
+  the name may come from the glob and the lookup by last segment would pick any
+  repository type of that name; a type defined in the file shadows the glob and
+  stays accepted. On dy-wcet v4.1.6 this costs no site: the crate's only glob is
+  `use super::*;` in a test module of a file that defines its types. The callee must be in the same
   file; one in another file still waits for the language server. `CallSite`
   gains a column, `receiver_hint_via`, that is `return-type` for such a hint and
   empty otherwise; a graph written by an older build reads it as empty. On

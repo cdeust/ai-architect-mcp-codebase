@@ -106,6 +106,8 @@ mod rust_parity_tests;
 #[cfg(test)]
 mod rust_receiver_tests;
 #[cfg(test)]
+mod rust_return_type_rebind_tests;
+#[cfg(test)]
 mod rust_return_type_tests;
 #[cfg(test)]
 mod rust_walker_tests;
