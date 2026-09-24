@@ -12,10 +12,12 @@ use crate::macro_expansion::scope::Import;
 use crate::resolver::{EdgeBuffer, PhaseResult, UnresolvedRef};
 use std::collections::{HashMap, HashSet};
 
-// source: issue #339 — the reasons an expansion gets no edge, next to the
-// others this pass reports ("no macro-expansion table entry", "caller is not a
-// callable"). The first is a decided expansion whose shape has no target, the
-// second one whose destination type is not determined.
+// The reasons this pass gives an expansion that gets no edge. The last two are
+// the outcomes of a decided expansion (issue #339): its shape has no target, or
+// its destination's type is not determined.
+const REASON_NOT_CALLABLE: &str = "caller is not a callable (Function|Method)";
+const REASON_NO_TABLE_ENTRY: &str = "no macro-expansion table entry";
+const REASON_NO_EMIT_CALLS: &str = "expansion has no emit_calls entries";
 const REASON_NO_STABLE_TARGET: &str = "no stable target for this expansion";
 const REASON_TYPE_NOT_DETERMINED: &str = "destination type not determined";
 
@@ -154,7 +156,7 @@ impl MacroPass<'_> {
         // source: stages/stage-3b.md §2 — Calls_*_StdlibSymbol is defined for
         // Function|Method callers only.
         if caller_label != "Function" && caller_label != "Method" {
-            return Ok(none("caller is not a callable (Function|Method)"));
+            return Ok(none(REASON_NOT_CALLABLE));
         }
         let rel = format!("Calls_{caller_label}_StdlibSymbol");
         let site = MacroSite {
@@ -166,10 +168,10 @@ impl MacroPass<'_> {
             return self.resolve_decided(row, &site, rule);
         }
         let Some(expansion) = crate::macro_expansion::lookup("rust", &row.macro_name) else {
-            return Ok(none("no macro-expansion table entry"));
+            return Ok(none(REASON_NO_TABLE_ENTRY));
         };
         if expansion.emit_calls.is_empty() {
-            return Ok(none("expansion has no emit_calls entries"));
+            return Ok(none(REASON_NO_EMIT_CALLS));
         }
         let (mut resolved, mut unresolved) = (0u64, Vec::new());
         for canonical in expansion.emit_calls {

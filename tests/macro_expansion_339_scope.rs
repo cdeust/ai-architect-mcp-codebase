@@ -275,3 +275,78 @@ fn a_destination_whose_type_no_constructor_tells_stays_undetermined() {
         "File::parse(p)? is not a known constructor"
     );
 }
+
+/// Wrappers that are not the constructor's own value (`.await`,
+/// `.unwrap_or_default()`, `.unwrap_or_else(..)`), and two more constructors.
+const CONSTRUCTED_MORE: &str = "use std::fs::File;
+use std::io::Write;
+use std::net::TcpStream;
+
+pub async fn a(p: &str) -> std::io::Result<()> {
+    let mut f = tokio::fs::File::create(p).await?;
+    write!(f, \"x\")?;
+    Ok(())
+}
+
+pub fn b(p: &str) -> std::io::Result<()> {
+    let mut f = File::open(p).unwrap_or_default();
+    write!(f, \"x\")?;
+    Ok(())
+}
+
+pub fn c(p: &str) -> std::io::Result<()> {
+    let mut f = File::open(p).unwrap_or_else(|_| panic!());
+    write!(f, \"x\")?;
+    Ok(())
+}
+
+pub fn d(n: usize) {
+    let mut v = Vec::with_capacity(n);
+    write!(v, \"x\").ok();
+}
+
+pub fn e(a: &str) -> std::io::Result<()> {
+    let mut s = TcpStream::connect(a)?;
+    write!(s, \"x\")?;
+    Ok(())
+}
+";
+
+/// The same `connect`, with a `TcpStream` that is tokio's.
+const TOKIO_TCP: &str = "use tokio::net::TcpStream;
+
+pub fn e(a: &str) -> std::io::Result<()> {
+    let mut s = TcpStream::connect(a)?;
+    write!(s, \"x\")?;
+    Ok(())
+}
+";
+
+#[test]
+fn constructors_and_wrappers_outside_the_known_shapes_get_the_right_answer() {
+    let (store, _res, _tmp) =
+        index_files(&[("more.rs", CONSTRUCTED_MORE), ("tokio_tcp.rs", TOKIO_TCP)]);
+    let rows = macro_rows(&store, "src/more.rs");
+    for (line, what) in [
+        (7, "tokio::fs::File::create(p).await?"),
+        (13, "File::open(p).unwrap_or_default()"),
+        (19, "File::open(p).unwrap_or_else(..)"),
+    ] {
+        assert!(
+            rows_on_line(&rows, line).is_empty(),
+            "{what} must get no target"
+        );
+    }
+    for (line, what) in [
+        (25, "Vec::with_capacity(n)"),
+        (30, "std TcpStream::connect(a)?"),
+    ] {
+        let on = rows_on_line(&rows, line);
+        assert_eq!(on.len(), 1, "{what}");
+        assert_eq!(on[0].target, "std::io::Write::write_fmt", "{what}");
+    }
+    assert!(
+        macro_rows(&store, "src/tokio_tcp.rs").is_empty(),
+        "a tokio TcpStream is not std's"
+    );
+}
