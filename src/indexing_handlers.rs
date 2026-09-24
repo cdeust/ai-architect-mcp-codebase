@@ -357,14 +357,15 @@ pub(crate) fn do_index_status(arguments: &Value) -> Result<Value, String> {
     if !graph_path.exists() {
         return Err(format!("graph_path does not exist: {graph_str}"));
     }
-    let (node_count, edge_count) = graph_counts(graph_path);
+    let counts = graph_counts(graph_path);
     Ok(json!({
         "stage": 3,
         "status": "ok",
         "tool": "index_status",
         "graph_path": graph_str,
-        "node_count": node_count,
-        "edge_count": edge_count,
+        "node_count": counts.nodes,
+        "edge_count": counts.edges,
+        "call_site_target_count": counts.call_site_targets,
         "coverage": coverage_summary_for_graph(graph_path),
     }))
 }

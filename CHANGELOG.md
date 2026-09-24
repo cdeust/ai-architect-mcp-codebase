@@ -25,6 +25,22 @@ adheres to [Semantic Versioning](https://semver.org/).
   Macro sites are no longer sent to the language server, which answered with the
   macro's own definition; `lsp_resolve` and `lsp_status` report them as
   `macro_sites_count`. The CallSite table gains a `macro_arg_shape` column.
+- `edge_count` no longer counts the per-call-site rows (#338). Since #335 filled
+  the `Calls_CallSite_*` tables, `index_status.edge_count` summed them and grew
+  by about 3 percent with no new call in the code, while `analyze_codebase`
+  reported an `index.edge_count` taken before resolve ran, so one graph gave two
+  different totals. An edge is now a relationship row that states a fact of its
+  own; the per-site rows restate a resolution the symbol-level `Calls_*` edge
+  already records and are reported as their own figure, `call_site_target_count`,
+  beside `node_count` and `edge_count` in `index_status`, `analyze_codebase` and
+  the history export. `analyze_codebase` gains a `graph` block read after the
+  last phase, so it agrees with `index_status`; its `index` block stays the
+  snapshot taken at the end of indexing. On a graph written after #335,
+  `edge_count` is lower than the value 0.12.0 reported by the number of
+  per-site rows. `resolve.total_edges` keeps its name and counts resolved
+  references. An artifact sidecar exported before this change still records the
+  old `edge_count`, per-site rows included. A relationship table that cannot be
+  queried counts as empty, so on a damaged graph the totals are a floor.
 - A bare function call inside macro arguments is now extracted (#328).
   `assert_eq!(helper(1), 2)` produced no `CallSite`, so `get_impact` on `helper`
   missed the test and reported no gap. The macro token-tree reconstruction now

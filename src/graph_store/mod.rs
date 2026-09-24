@@ -12,6 +12,7 @@ use std::path::Path;
 
 mod columns;
 mod config;
+mod counts;
 mod ddl;
 mod macro_reset;
 pub(crate) use macro_reset::RUST_MACRO_SITE;
@@ -23,6 +24,7 @@ mod writes;
 pub use columns::label_declares_column;
 use columns::*;
 pub use config::*;
+pub use counts::GraphCounts;
 use ddl::*;
 pub use membership::{community_ids, community_of, process_names, CommunityRow, SymbolMatch};
 // Only `tests.rs` reaches these via `use super::*` (production code calls
@@ -362,23 +364,6 @@ impl GraphStore {
         let mut total: u64 = 0;
         for label in NODE_LABELS {
             let cypher = format!("MATCH (n:{label}) RETURN count(n)");
-            match self.run(&cypher) {
-                Ok(mut r) => {
-                    if let Some(row) = r.next() {
-                        total += value_to_u64(&row[0]);
-                    }
-                }
-                Err(_) => continue,
-            }
-        }
-        Ok(total)
-    }
-
-    /// Returns the total number of edges across all relationship tables.
-    pub fn edge_count(&self) -> Result<u64, String> {
-        let mut total: u64 = 0;
-        for &(rel, _, _) in REL_TABLES {
-            let cypher = format!("MATCH ()-[r:{rel}]->() RETURN count(r)");
             match self.run(&cypher) {
                 Ok(mut r) => {
                     if let Some(row) = r.next() {
