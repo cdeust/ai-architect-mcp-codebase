@@ -103,31 +103,8 @@ pub(super) fn return_type_hint(source: &str, call_node: Node, receiver: Node) ->
     let ty = pick_type(source, shape, unwrapped, returned_type(source, function)?)?;
     (!is_own_generic(source, function, &ty)
         && !file_declares_alias(source, call, &ty)
-        && !may_come_from_a_glob(source, call, &ty))
+        && super::rust_type_scope::type_source_is_shown(source, function, &ty))
     .then_some(ty)
-}
-
-/// True when the file holds a glob `use` (`use a::*;`, `use a::{b::*, c};`,
-/// `use super::*;`) and defines no type named `ty` itself: the name may then
-/// come from that glob, and the lookup by last segment would pick any
-/// repository type of the same name. A type defined in the file shadows a glob,
-/// so it stays accepted.
-fn may_come_from_a_glob(source: &str, node: Node, ty: &str) -> bool {
-    let mut has_glob = false;
-    let mut defined_here = false;
-    let mut stack = vec![root_of(node)];
-    while let Some(current) = stack.pop() {
-        match current.kind() {
-            "use_wildcard" => has_glob = true,
-            "struct_item" | "enum_item" | "union_item" if declares(source, current, ty) => {
-                defined_here = true;
-            }
-            _ => {}
-        }
-        let mut cursor = current.walk();
-        stack.extend(current.named_children(&mut cursor));
-    }
-    has_glob && !defined_here
 }
 
 /// True when the file declares `type <ty> = ..`: the return type then names

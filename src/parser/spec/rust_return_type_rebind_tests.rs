@@ -207,3 +207,63 @@ fn a_file_without_a_glob_keeps_the_hint_for_an_imported_type() {
     );
     assert_eq!(hint_of(&src, "s.m"), derived("Set"));
 }
+
+// ---- fourth review: a definition counts only in the module of the function ----
+
+#[test]
+fn a_homonym_in_a_nested_module_does_not_shadow_a_glob_of_the_function_module() {
+    let src = without_local_set(
+        "use ext::shapes::*;\nmod inner { pub struct Set; }\n\
+         fn make() -> Set { todo!() }\nfn run() { let s = make(); s.m(); }",
+    );
+    assert_eq!(hint_of(&src, "s.m"), NONE);
+}
+
+#[test]
+fn a_definition_in_the_module_of_the_function_beside_a_glob_still_resolves() {
+    let src = with_set(
+        "use ext::shapes::*;\nfn make() -> Set { Set }\nfn run() { let s = make(); s.m(); }",
+    );
+    assert_eq!(hint_of(&src, "s.m"), derived("Set"));
+}
+
+#[test]
+fn a_function_in_a_module_with_its_type_and_a_glob_at_the_root_still_resolves() {
+    let src = without_local_set(
+        "use ext::shapes::*;\nmod m {\n    pub struct Set;\n    impl Set { pub fn m(&self) {} }\n\
+         \x20   pub fn make() -> Set { Set }\n    pub fn run() { let s = make(); s.m(); }\n}",
+    );
+    assert_eq!(hint_of(&src, "s.m"), derived("Set"));
+}
+
+#[test]
+fn a_type_of_the_root_reaches_a_module_only_through_an_import() {
+    // By Rust's rule a bare `Set` inside `mod m` does not see the root's `Set`.
+    let body = |import: &str| {
+        with_set(&format!(
+            "mod m {{\n    {import}\n    pub fn make() -> Set {{ Set }}\n\
+             \x20   pub fn run() {{ let s = make(); s.m(); }}\n}}"
+        ))
+    };
+    assert_eq!(hint_of(&body("use super::Set;"), "s.m"), derived("Set"));
+    assert_eq!(hint_of(&body("use super::*;"), "s.m"), derived("Set"));
+    // Nothing shows where the name comes from: not valid Rust, so not a guess.
+    assert_eq!(hint_of(&body(""), "s.m"), NONE);
+}
+
+#[test]
+fn a_glob_of_the_root_does_not_reach_a_module_that_globs_super() {
+    // The root defines no `Set` and globs a foreign crate; `use super::*` in
+    // `mod m` brings that glob, so the name may be foreign.
+    let src = without_local_set(
+        "use ext::shapes::*;\nmod m {\n    use super::*;\n    pub fn make() -> Set { todo!() }\n\
+         \x20   pub fn run() { let s = make(); s.m(); }\n}",
+    );
+    assert_eq!(hint_of(&src, "s.m"), NONE);
+    // With a definition at the root it shadows that glob.
+    let src = with_set(
+        "use ext::shapes::*;\nmod m {\n    use super::*;\n    pub fn make() -> Set { Set }\n\
+         \x20   pub fn run() { let s = make(); s.m(); }\n}",
+    );
+    assert_eq!(hint_of(&src, "s.m"), derived("Set"));
+}

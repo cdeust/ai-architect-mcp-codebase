@@ -36,6 +36,7 @@ mod rust_macro_site;
 mod rust_receiver;
 mod rust_return_type;
 mod rust_scope;
+mod rust_type_scope;
 mod shallow;
 mod swift;
 mod typescript;

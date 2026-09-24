@@ -28,12 +28,15 @@ adheres to [Semantic Versioning](https://semver.org/).
   its own block and after it. The same count now applies to a typed parameter or
   typed `let`, which a pattern rebinding the name used to leave typed
   (`let s: Set = ..; if let Some(s) = o { s.m() }` got an edge to `Set::m`).
-  A file that holds a glob `use` (`use a::*;`, `use a::{b::*, c};`,
-  `use super::*;`) declines a return type it does not define itself, because
-  the name may come from the glob and the lookup by last segment would pick any
-  repository type of that name; a type defined in the file shadows the glob and
-  stays accepted. On dy-wcet v4.1.6 this costs no site: the crate's only glob is
-  `use super::*;` in a test module of a file that defines its types. The callee must be in the same
+  The name of a return type must be shown by the file, in the module of the
+  function, as Rust resolves it: a struct, enum or union of that name defined in
+  that module, an explicit `use` of it there, or only `use super::*;` globs
+  leading to one of those in the parent module. A glob of another path
+  (`use a::*;`, `use a::{b::*, c};`, `use crate::x::*;`), no import at all, a
+  homonym defined only in a nested module or at the file root for a function in
+  `mod m`, and `super::*` at the root all decline, since the name may come from
+  somewhere the file does not show and the lookup by last segment would pick any
+  repository type of that name. On dy-wcet v4.1.6 this costs no site. The callee must be in the same
   file; one in another file still waits for the language server. `CallSite`
   gains a column, `receiver_hint_via`, that is `return-type` for such a hint and
   empty otherwise; a graph written by an older build reads it as empty. On
