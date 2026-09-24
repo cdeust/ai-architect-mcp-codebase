@@ -13,6 +13,7 @@ use std::path::Path;
 mod columns;
 mod config;
 mod ddl;
+mod macro_reset;
 mod membership;
 mod recovery;
 mod schema;

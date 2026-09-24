@@ -230,6 +230,9 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     let start = Instant::now();
     let idx = build_symbol_index(store)?;
     let file_imports = build_file_import_map(store)?;
+    // Before the existing edges are read: a macro row from an earlier run
+    // must not count as already resolved (issue #339).
+    store.reset_macro_expansion()?;
     let existing = load_existing_edges(store)?;
     let mut buf = EdgeBuffer::new(existing);
 

@@ -334,6 +334,11 @@ fn append_callsite_properties(props: &mut Vec<(String, String)>, node: &parser::
         "receiver_hint".to_string(),
         cypher_str(&find_property(node, "receiver_hint")),
     ));
+    // Issue #339: the `vec!` argument shape, '' for every other site.
+    props.push((
+        "macro_arg_shape".to_string(),
+        cypher_str(&find_property(node, "macro_arg_shape")),
+    ));
 }
 
 // Schema awareness — source: graph_store.rs node_table_ddl().

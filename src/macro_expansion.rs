@@ -10,6 +10,7 @@
 // source: stages/stage-3b-v2.md §5 (Layer 4 — universal strategy,
 // per-language expansion data).
 
+pub mod dispatch;
 pub mod python;
 pub mod rust;
 pub mod typescript;
@@ -67,6 +68,28 @@ mod tests {
     fn test_lookup_println() {
         let exp = lookup("rust", "println").expect("println macro must be indexed");
         assert!(exp.emit_calls.contains(&"std::io::_print"));
+    }
+
+    /// An `emit_calls` set lists calls the expansion makes all together, so two
+    /// paths ending in the same method name are two candidates for one call
+    /// (`fmt::Write::write_fmt` and `io::Write::write_fmt`), never both made.
+    /// That shape belongs in `dispatch`, not here.
+    #[test]
+    fn no_emit_calls_set_lists_the_same_method_twice() {
+        for lang in ["rust", "python", "typescript"] {
+            let table = get_macro_table(lang).expect("table");
+            for exp in table.expansions() {
+                let mut seen = std::collections::HashSet::new();
+                for path in exp.emit_calls {
+                    let method = path.rsplit("::").next().unwrap_or(path);
+                    assert!(
+                        seen.insert(method),
+                        "{lang} {}: two targets end in `{method}`",
+                        exp.macro_name
+                    );
+                }
+            }
+        }
     }
 
     #[test]

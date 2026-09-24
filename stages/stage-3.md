@@ -221,6 +221,8 @@ enum EdgeKind {
 | `HasVariant` | Enum | Variant | 1:N | |
 | `Imports` | File, Module | File, Module, Symbol | N:M | Only exists after resolution; `is_resolved` on the Import node must be true |
 | `Calls` | Function, Method | Function, Method | N:M | Only exists after resolution; `is_resolved` on the CallSite node must be true |
+
+A `CallSite` of a macro invocation (`callee_name` ends in `!`) also carries `receiver_hint` (the declared type of the first argument of `write!` and `writeln!`) and `macro_arg_shape` (`empty`, `repeat` or `list` for `vec!`), which the macro-expansion pass reads (issue #339). Its `is_resolved` is true only when the pass determined the expansion's target.
 | `Implements` | Struct | Trait | N:M | Only after resolution |
 | `MemberOf` | any Symbol | Community | N:1 per resolution level | A symbol belongs to exactly one community at each Leiden resolution level |
 | `ParticipatesIn` | any Symbol | Process | N:M | |

@@ -97,6 +97,11 @@ pub struct LspResolutionResult {
     /// not "an answer was never possible"). The four counters partition
     /// every unresolved site (`lsp_resolver::pass::LspPass::into_result`).
     pub outside_targets_count: u64,
+    /// Issue #339: macro-invocation sites (`callee_name` ending in `!`) still
+    /// unresolved after the static phase. Never sent to the server: a macro
+    /// call has no `textDocument/definition` answer that names the expansion's
+    /// callee, so they are outside the four-way partition above.
+    pub macro_sites_count: u64,
     pub elapsed_ms: u64,
     /// The server's health as last observed by this pass's `initialize`
     /// call. `ServerHealth::not_probed` when no client was ever started

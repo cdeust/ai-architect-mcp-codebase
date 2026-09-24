@@ -23,8 +23,8 @@ mod unlinked;
 use edges::SiteContext;
 use pass::LspPass;
 use sites::{
-    build_node_position_index, collect_unresolved_callsites, group_by_file, language_id_for,
-    UnresolvedCallSite,
+    build_node_position_index, collect_unresolved_callsites, count_unresolved_macro_sites,
+    group_by_file, language_id_for, UnresolvedCallSite,
 };
 use unlinked::FileRef;
 
@@ -69,8 +69,12 @@ pub fn resolve_with_lsp(
     }
 
     let unresolved = collect_unresolved_callsites(store)?;
+    let macro_sites = count_unresolved_macro_sites(store)?;
     if unresolved.is_empty() {
-        return Ok(nothing_to_resolve(start));
+        return Ok(LspResolutionResult {
+            macro_sites_count: macro_sites,
+            ..nothing_to_resolve(start)
+        });
     }
 
     // fleet-watch#18: definition URIs come back absolute (and on macOS the
@@ -100,7 +104,11 @@ pub fn resolve_with_lsp(
     };
 
     let client = LspClient::start(cmd, default_args, codebase_path, timeout)?;
-    run_pass(store, client, &plan, &unresolved)
+    let result = run_pass(store, client, &plan, &unresolved)?;
+    Ok(LspResolutionResult {
+        macro_sites_count: macro_sites,
+        ..result
+    })
 }
 
 /// The result when no site is unresolved: no client was ever started, so
@@ -111,6 +119,7 @@ fn nothing_to_resolve(start: Instant) -> LspResolutionResult {
         failed_count: 0,
         skipped_count: 0,
         outside_targets_count: 0,
+        macro_sites_count: 0,
         elapsed_ms: start.elapsed().as_millis() as u64,
         server_health: ServerHealth::not_probed(),
         unlinked_check: UnlinkedFileCheck::default(),

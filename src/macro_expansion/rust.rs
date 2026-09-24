@@ -24,6 +24,13 @@ impl MacroTable for RustMacros {
 // each macro's official expansion documented by the std crate. Derive
 // markers come from https://doc.rust-lang.org/reference/attributes/derive.html
 // and the Rust book chapter 19.6.
+// source: https://doc.rust-lang.org/std/macro.write.html and
+// https://doc.rust-lang.org/std/macro.vec.html — these macros have no fixed
+// expansion: their target is decided by `dispatch` from the destination's type
+// or the argument shape, so they carry no `emit_calls` entry here.
+pub const DEST_MACROS: &[&str] = &["write", "writeln"];
+pub const VEC_MACROS: &[&str] = &["vec"];
+
 pub const RUST_MACROS: &[MacroExpansion] = &[
     MacroExpansion {
         macro_name: "println",
@@ -52,16 +59,6 @@ pub const RUST_MACROS: &[MacroExpansion] = &[
     MacroExpansion {
         macro_name: "format",
         emit_calls: &["std::fmt::format"],
-        emit_implements: &[],
-        language: "rust",
-    },
-    MacroExpansion {
-        macro_name: "vec",
-        emit_calls: &[
-            "std::vec::Vec::new",
-            "std::vec::Vec::push",
-            "std::vec::Vec::with_capacity",
-        ],
         emit_implements: &[],
         language: "rust",
     },
@@ -122,18 +119,6 @@ pub const RUST_MACROS: &[MacroExpansion] = &[
     MacroExpansion {
         macro_name: "unreachable",
         emit_calls: &["core::panicking::panic"],
-        emit_implements: &[],
-        language: "rust",
-    },
-    MacroExpansion {
-        macro_name: "write",
-        emit_calls: &["std::fmt::Write::write_fmt", "std::io::Write::write_fmt"],
-        emit_implements: &[],
-        language: "rust",
-    },
-    MacroExpansion {
-        macro_name: "writeln",
-        emit_calls: &["std::fmt::Write::write_fmt", "std::io::Write::write_fmt"],
         emit_implements: &[],
         language: "rust",
     },

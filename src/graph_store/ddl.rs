@@ -91,10 +91,12 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // type the Rust parser derived, empty when none, read by the resolver's
         // palier-3 gate after paliers 1 and 2 have declined the callee.
         // The two are independent: a site can carry either, both, or neither.
+        // macro_arg_shape: issue #339 — `empty`/`repeat`/`list` for a `vec!`
+        // site, '' for every other site; read by the macro-expansion pass.
         (NODE_CALL_SITE,
             "id STRING, callee_name STRING, line INT64, col INT64, \
              is_resolved BOOLEAN, language STRING, unresolved_reason STRING, \
-             receiver_hint STRING"),
+             receiver_hint STRING, macro_arg_shape STRING"),
         // 3c Community + Process — source: stages/stage-3c.md §4.1
         (NODE_COMMUNITY,
             "id STRING, name STRING, algorithm STRING, \

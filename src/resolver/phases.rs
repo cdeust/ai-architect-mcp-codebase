@@ -61,10 +61,11 @@ pub(super) fn run_phases(
     // `run_macro_expansion` now returns the same (resolved, total,
     // unresolved) shape as every other phase; its total is folded into
     // `total_refs` by `into_result`.
-    let macros = crate::resolver_layers::run_macro_expansion(store, buf, &|qn: &str| {
-        determine_caller_label(idx, qn)
-    })?
-    .into();
+    let macros =
+        crate::resolver_layers::run_macro_expansion(store, buf, file_imports, &|qn: &str| {
+            determine_caller_label(idx, qn)
+        })?
+        .into();
 
     Ok(PhaseTallies {
         imports,

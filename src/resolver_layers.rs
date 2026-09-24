@@ -3,14 +3,16 @@
 // that Q8 (symbols-in-file) ground truth for resolver.rs remains stable as
 // new passes are added. source: stages/stage-3b-v2.md §5.
 
+use crate::ambiguity_policy::{confidence_for, resolution_label, Evidence};
 use crate::graph_store::{call_site_rel_table, cypher_str, GraphStore, NODE_STDLIB_SYMBOL};
-use crate::resolver::{PhaseResult, UnresolvedRef};
-use std::collections::HashSet;
+use crate::language_provider::extract_file_prefix_or_self;
+use crate::macro_expansion::dispatch::{self, Basis, Decision, Dispatch};
+use crate::resolver::{EdgeBuffer, PhaseResult, UnresolvedRef};
+use std::collections::{HashMap, HashSet};
 
-// source: stages/stage-3b-v2.md §5 Layer 4 — rule-based macro expansion is
-// stored at confidence 0.85 with method "macro-expansion".
-const MACRO_CONFIDENCE: f64 = 0.85;
-const MACRO_METHOD: &str = "macro-expansion";
+// source: issue #339 — the reasons an expansion gets no edge.
+const REASON_AMBIGUOUS: &str = "ambiguous";
+const REASON_NO_STABLE_TARGET: &str = "no stable target for this expansion";
 
 /// Entry point for Layer 4 (macros + derives).
 /// postcondition: returns the same `(resolved, total, unresolved)` shape as
@@ -20,165 +22,208 @@ const MACRO_METHOD: &str = "macro-expansion";
 /// contribution), which let `resolution_rate` exceed 1.0.
 pub fn run_macro_expansion(
     store: &GraphStore,
-    buf: &mut crate::resolver::EdgeBuffer,
+    buf: &mut EdgeBuffer,
+    file_imports: &HashMap<String, Vec<String>>,
     caller_label_of: &dyn Fn(&str) -> String,
 ) -> PhaseResult {
-    let mut created: HashSet<String> = HashSet::new();
-    expand_macro_calls(store, buf, caller_label_of, &mut created)
+    let mut pass = MacroPass {
+        store,
+        buf,
+        file_imports,
+        caller_label_of,
+        created: HashSet::new(),
+    };
+    pass.run()
 }
 
-/// Resolves each legacy macro-marker CallSite (`callee_name` ending in
-/// `!`) to its expansion table entry, then to one Calls_*_StdlibSymbol
-/// edge per `emit_calls` entry.
-///
-/// Granularity: one macro invocation is one syntactic reference, but its
-/// resolution fans out into N edges (one per `emit_calls` entry) — mirrors
-/// resolver::resolve_field_type_uses, where the denominator matches the
-/// numerator's granularity rather than the row's. A macro invocation with
-/// zero attemptable emissions (unknown macro name, non-callable caller, or
-/// an expansion with an empty `emit_calls`) contributes exactly 1 unresolved
-/// unit; a macro invocation with N emissions contributes N total units,
-/// split resolved/unresolved per the same rules other phases use
-/// (unknown-rel-table drops are unresolved, not silently skipped).
-fn expand_macro_calls(
-    store: &GraphStore,
-    buf: &mut crate::resolver::EdgeBuffer,
-    caller_label_of: &dyn Fn(&str) -> String,
-    created: &mut HashSet<String>,
-) -> PhaseResult {
-    // The parser emits synthetic ExtractedRefs with kind="CallsMacro" that
-    // the indexer drops (no matching rel-table). Re-reading is impossible
-    // without another parse, so Layer 4 reads CallSite-less fallback: any
-    // Function / Method whose body contains a `name!(...)` invocation is
-    // represented in the graph as a CallSite only when the file has been
-    // parsed by this binary. For files parsed under the new extractor, the
-    // CallsMacro refs are dropped — so we rely on the post-parse resolver
-    // pass looking at the raw `CallSite` nodes via a fast path: any
-    // `callee_name` ending with `!` is a macro marker the parser emitted
-    // BEFORE the CallsMacro rewrite (legacy). The new extractor does not
-    // emit CallSite nodes for macros; therefore this pass currently covers
-    // the legacy path only. When the indexer learns CallsMacro, the full
-    // Layer 4 will light up.
-    let qr = store.execute_query("MATCH (cs:CallSite) RETURN cs.id, cs.callee_name")?;
-    let mut resolved = 0u64;
-    let mut total = 0u64;
-    let mut unresolved = Vec::new();
-    // stages/stage-3.md §10.4: a CallSite's `is_resolved` flips when its
-    // callee resolved to a graph target, whichever phase found it. The
-    // macro phase wrote its edges but never flipped the flag (#335).
-    let mut resolved_ids: Vec<&str> = Vec::new();
-    for row in &qr.rows {
-        if row.len() < 2 {
-            continue;
-        }
-        let cs_id = &row[0];
-        let callee = &row[1];
-        let macro_name = match callee.strip_suffix('!') {
-            Some(n) => n,
-            None => continue,
-        };
-        let (r, t, u) =
-            resolve_one_macro_call_site(store, buf, caller_label_of, created, cs_id, macro_name)?;
-        if r > 0 {
-            resolved_ids.push(cs_id);
-        }
-        resolved += r;
-        total += t;
-        unresolved.extend(u);
-    }
-    store.mark_nodes_resolved("CallSite", &resolved_ids)?;
-    Ok((resolved, total, unresolved))
+/// One macro-marker `CallSite` (`callee_name` ending in `!`) as the graph
+/// stores it.
+struct MacroRow {
+    cs_id: String,
+    macro_name: String,
+    receiver_hint: String,
+    arg_shape: String,
 }
 
-fn resolve_one_macro_call_site(
-    store: &GraphStore,
-    buf: &mut crate::resolver::EdgeBuffer,
-    caller_label_of: &dyn Fn(&str) -> String,
-    created: &mut HashSet<String>,
-    cs_id: &str,
-    macro_name: &str,
-) -> PhaseResult {
-    let one_unresolved = |reason: &str| {
-        (
-            0,
-            1,
-            vec![UnresolvedRef {
-                kind: "Calls".to_string(),
-                from_id: cs_id.to_string(),
-                target_text: format!("{macro_name}!"),
-                reason: reason.to_string(),
-            }],
-        )
-    };
-    let expansion = match crate::macro_expansion::lookup("rust", macro_name) {
-        Some(e) => e,
-        None => return Ok(one_unresolved("no macro-expansion table entry")),
-    };
-    let caller_qn = caller_from_callsite(cs_id);
-    let caller_label = caller_label_of(&caller_qn);
-    // source: stages/stage-3b.md §2 — Calls_*_StdlibSymbol is defined for
-    // Function|Method callers only.
-    if caller_label != "Function" && caller_label != "Method" {
-        return Ok(one_unresolved("caller is not a callable (Function|Method)"));
-    }
-    if expansion.emit_calls.is_empty() {
-        return Ok(one_unresolved("expansion has no emit_calls entries"));
-    }
-    let (mut resolved, mut unresolved) = (0u64, Vec::new());
-    let total = expansion.emit_calls.len() as u64;
-    let rel = format!("Calls_{caller_label}_StdlibSymbol");
-    let site = MacroSite {
-        cs_id,
-        caller_qn: &caller_qn,
-    };
-    for canonical in expansion.emit_calls {
-        ensure_stdlib_symbol(store, created, canonical, "rust")?;
-        match stage_macro_emission(buf, &rel, &site, canonical) {
-            Some(miss) => unresolved.push(miss),
-            None => resolved += 1,
-        }
-    }
-    Ok((resolved, total, unresolved))
+struct MacroPass<'a> {
+    store: &'a GraphStore,
+    buf: &'a mut EdgeBuffer,
+    file_imports: &'a HashMap<String, Vec<String>>,
+    caller_label_of: &'a dyn Fn(&str) -> String,
+    created: HashSet<String>,
 }
 
-/// The macro-marker `CallSite` one expansion belongs to, and its caller.
+/// The macro-marker `CallSite` one expansion belongs to, its caller, and the
+/// caller-level relationship table its edges go to.
 struct MacroSite<'a> {
     cs_id: &'a str,
     caller_qn: &'a str,
+    rel: &'a str,
 }
 
-/// Stages one expansion target: the caller-level `rel` edge plus its per-site
-/// twin (issue #335), which is not a second reference and so is not counted.
-/// Returns the unresolved record when `rel` is not a declared table.
+impl MacroPass<'_> {
+    /// Resolves each macro-marker CallSite to its expansion.
+    ///
+    /// Granularity: a fixed expansion (`println!`) is one syntactic reference
+    /// whose resolution fans out into N edges, one per `emit_calls` entry, so
+    /// it contributes N units (the denominator matches the numerator's
+    /// granularity, as in resolver::resolve_field_type_uses). A decided
+    /// expansion (`write!`, `vec!`) calls exactly one target: it contributes
+    /// one unit, resolved when the target is determined, unresolved otherwise.
+    /// A site with no attemptable emission contributes one unresolved unit.
+    ///
+    /// stages/stage-3.md §10.4: a CallSite's `is_resolved` flips when its
+    /// callee resolved to a graph target, whichever phase found it (#335).
+    fn run(&mut self) -> PhaseResult {
+        let rows = self.read_rows()?;
+        let (mut resolved, mut total, mut unresolved) = (0u64, 0u64, Vec::new());
+        let mut resolved_ids: Vec<&str> = Vec::new();
+        for row in &rows {
+            let (r, t, u) = self.resolve_one(row)?;
+            if r > 0 {
+                resolved_ids.push(&row.cs_id);
+            }
+            resolved += r;
+            total += t;
+            unresolved.extend(u);
+        }
+        self.store.mark_nodes_resolved("CallSite", &resolved_ids)?;
+        Ok((resolved, total, unresolved))
+    }
+
+    fn read_rows(&self) -> Result<Vec<MacroRow>, String> {
+        self.store
+            .ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
+        self.store
+            .ensure_node_column("CallSite", "macro_arg_shape", "STRING DEFAULT ''")?;
+        let qr = self.store.execute_query(
+            "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.receiver_hint, cs.macro_arg_shape",
+        )?;
+        let mut rows = Vec::new();
+        for r in qr.rows.iter().filter(|r| r.len() >= 4) {
+            let Some(path) = r[1].strip_suffix('!') else {
+                continue;
+            };
+            rows.push(MacroRow {
+                cs_id: r[0].clone(),
+                macro_name: path.rsplit("::").next().unwrap_or(path).to_string(),
+                receiver_hint: r[2].clone(),
+                arg_shape: r[3].clone(),
+            });
+        }
+        Ok(rows)
+    }
+
+    fn resolve_one(&mut self, row: &MacroRow) -> PhaseResult {
+        let none = |reason: &str| (0, 1, vec![unresolved_ref(row, &row.macro_name, reason)]);
+        let caller_qn = caller_from_callsite(&row.cs_id);
+        let caller_label = (self.caller_label_of)(&caller_qn);
+        // source: stages/stage-3b.md §2 — Calls_*_StdlibSymbol is defined for
+        // Function|Method callers only.
+        if caller_label != "Function" && caller_label != "Method" {
+            return Ok(none("caller is not a callable (Function|Method)"));
+        }
+        let rel = format!("Calls_{caller_label}_StdlibSymbol");
+        let site = MacroSite {
+            cs_id: &row.cs_id,
+            caller_qn: &caller_qn,
+            rel: &rel,
+        };
+        if let Some(rule) = dispatch::dispatch_for(&row.macro_name) {
+            return self.resolve_decided(row, &site, rule);
+        }
+        let Some(expansion) = crate::macro_expansion::lookup("rust", &row.macro_name) else {
+            return Ok(none("no macro-expansion table entry"));
+        };
+        if expansion.emit_calls.is_empty() {
+            return Ok(none("expansion has no emit_calls entries"));
+        }
+        let (mut resolved, mut unresolved) = (0u64, Vec::new());
+        for canonical in expansion.emit_calls {
+            self.ensure_symbol(canonical)?;
+            match stage_macro_emission(self.buf, &site, canonical, Evidence::MacroExpansion) {
+                Some(miss) => unresolved.push(miss),
+                None => resolved += 1,
+            }
+        }
+        Ok((resolved, expansion.emit_calls.len() as u64, unresolved))
+    }
+
+    /// A macro whose one target is decided (issue #339): one unit, an edge
+    /// only when the decision names a target.
+    fn resolve_decided(&mut self, row: &MacroRow, site: &MacroSite, rule: Dispatch) -> PhaseResult {
+        let decision = match rule {
+            Dispatch::ReceiverType(alternatives) => {
+                let file = extract_file_prefix_or_self(&row.cs_id);
+                let imports = self.file_imports.get(&file).map_or(&[][..], Vec::as_slice);
+                dispatch::decide_by_receiver(alternatives, &row.receiver_hint, imports)
+            }
+            Dispatch::ArgShape(rules) => dispatch::decide_by_shape(rules, &row.arg_shape),
+        };
+        let target = &row.macro_name;
+        match decision {
+            Decision::Target { canonical, basis } => {
+                self.ensure_symbol(canonical)?;
+                let miss = stage_macro_emission(self.buf, site, canonical, evidence_of(basis));
+                Ok(match miss {
+                    Some(m) => (0, 1, vec![m]),
+                    None => (1, 1, Vec::new()),
+                })
+            }
+            Decision::Undetermined { candidates } => {
+                let reason = if candidates > 1 {
+                    format!("{REASON_AMBIGUOUS} ({candidates} candidates)")
+                } else {
+                    REASON_NO_STABLE_TARGET.to_string()
+                };
+                Ok((0, 1, vec![unresolved_ref(row, target, &reason)]))
+            }
+        }
+    }
+
+    fn ensure_symbol(&mut self, canonical: &str) -> Result<(), String> {
+        ensure_stdlib_symbol(self.store, &mut self.created, canonical, "rust")
+    }
+}
+
+fn unresolved_ref(row: &MacroRow, macro_name: &str, reason: &str) -> UnresolvedRef {
+    UnresolvedRef {
+        kind: "Calls".to_string(),
+        from_id: row.cs_id.clone(),
+        target_text: format!("{macro_name}!"),
+        reason: reason.to_string(),
+    }
+}
+
+fn evidence_of(basis: Basis) -> Evidence {
+    match basis {
+        Basis::ReceiverType => Evidence::MacroReceiverType,
+        Basis::ImportScope => Evidence::MacroImportScope,
+        Basis::ArgShape => Evidence::MacroExpansion,
+    }
+}
+
+/// Stages one expansion target: the caller-level edge plus its per-site twin
+/// (issue #335), which is not a second reference and so is not counted.
+/// Returns the unresolved record when the caller-level table is not declared.
 fn stage_macro_emission(
-    buf: &mut crate::resolver::EdgeBuffer,
-    rel: &str,
+    buf: &mut EdgeBuffer,
     site: &MacroSite,
     canonical: &str,
+    evidence: Evidence,
 ) -> Option<UnresolvedRef> {
-    if !crate::graph_store::is_known_rel_table(rel) {
+    if !crate::graph_store::is_known_rel_table(site.rel) {
         return Some(UnresolvedRef {
             kind: "Calls".to_string(),
             from_id: site.cs_id.to_string(),
             target_text: canonical.to_string(),
-            reason: format!("unknown rel table {rel}"),
+            reason: format!("unknown rel table {}", site.rel),
         });
     }
-    buf.add(
-        rel,
-        site.caller_qn,
-        canonical,
-        MACRO_CONFIDENCE,
-        MACRO_METHOD,
-    );
+    let (confidence, method) = (confidence_for(evidence), resolution_label(evidence));
+    buf.add(site.rel, site.caller_qn, canonical, confidence, method);
     if let Some(site_rel) = call_site_rel_table(NODE_STDLIB_SYMBOL) {
-        buf.add(
-            site_rel,
-            site.cs_id,
-            canonical,
-            MACRO_CONFIDENCE,
-            MACRO_METHOD,
-        );
+        buf.add(site_rel, site.cs_id, canonical, confidence, method);
     }
     None
 }

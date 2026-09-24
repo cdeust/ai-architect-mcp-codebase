@@ -139,9 +139,10 @@ pub(crate) const COLS_CALL_SITE: ColTypes = &[
     ("col", LogicalType::Int64),
     ("is_resolved", LogicalType::Bool),
     ("language", LogicalType::String),
-    // Both must mirror the NODE_CALL_SITE DDL (ddl.rs), in its order.
+    // These three must mirror the NODE_CALL_SITE DDL (ddl.rs), in its order.
     ("unresolved_reason", LogicalType::String),
     ("receiver_hint", LogicalType::String),
+    ("macro_arg_shape", LogicalType::String),
 ];
 pub(crate) const COLS_COMMUNITY: ColTypes = &[
     ("id", LogicalType::String),

@@ -130,6 +130,7 @@ impl LspPass {
                 .total
                 .saturating_sub(self.resolved + self.failed + self.outside_targets),
             outside_targets_count: self.outside_targets,
+            macro_sites_count: 0,
             elapsed_ms,
             server_health,
             unlinked_check: self.unlinked,

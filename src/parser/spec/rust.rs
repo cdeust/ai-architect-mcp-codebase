@@ -201,6 +201,9 @@ impl LanguageConventions for RustConventions {
         callee: &str,
         _seq: u64,
     ) -> CallEntry {
+        if call_node.kind() == RUST_FAMILY.macro_invocation_kind {
+            return Self::macro_call_site(callee, call_node, caller_qn, source);
+        }
         Self::call_site(callee, call_node, caller_qn, source)
     }
 
@@ -356,7 +359,7 @@ static RUST_CONVENTIONS: RustConventions = RustConventions;
 
 /// The Rust structural sub-table (ADR-0055 phase 8). All node kinds and field
 /// names: tree-sitter-rust 0.23.3 node-types.json (validated by the spec guard).
-static RUST_FAMILY: RustFamilySpec = RustFamilySpec {
+pub(super) static RUST_FAMILY: RustFamilySpec = RustFamilySpec {
     attribute_kinds: &["attribute_item"],
     function_kinds: &["function_item"],
     function_signature_kinds: &["function_signature_item"],

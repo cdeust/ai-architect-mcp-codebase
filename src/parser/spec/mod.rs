@@ -30,6 +30,7 @@ mod ruby;
 mod rust;
 mod rust_call_site;
 mod rust_macro_calls;
+mod rust_macro_site;
 mod rust_receiver;
 mod rust_scope;
 mod shallow;

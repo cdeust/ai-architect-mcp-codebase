@@ -60,6 +60,19 @@ pub enum Evidence {
     /// Exactly one candidate's qualified name shares the caller's
     /// package/module prefix.
     PackageProximity,
+    /// A macro's expansion is fixed by the macro itself (`println!` always
+    /// calls `_print`), or by its argument shape (`vec![]` is `Vec::new`).
+    /// Issue #339; the value keeps the 0.85 the macro layer has always used.
+    MacroExpansion,
+    /// A macro whose expansion is a method call (`write!`) resolved by the
+    /// declared type of its destination: one syntactic hop from the call,
+    /// like `ReceiverLocalBinding`, but through a closed list of std types.
+    /// Issue #339.
+    MacroReceiverType,
+    /// The same macro resolved only because exactly one of the candidate
+    /// traits is imported in the file: the destination's type is unknown, so
+    /// this is weaker than `MacroReceiverType`. Issue #339.
+    MacroImportScope,
 }
 
 /// Heuristic ordinal trust tiers — NOT measured probabilities. These are
@@ -76,6 +89,12 @@ pub fn confidence_for(evidence: Evidence) -> f64 {
         Evidence::ReceiverLocalBinding => 0.87,
         Evidence::SameFileUnique => 0.85,
         Evidence::PackageProximity => 0.7,
+        // source: issue #339 — the macro tiers sit at or below the
+        // local-binding tier they are as indirect as: a fixed expansion keeps
+        // 0.85, a receiver-type decision 0.8, an import-scope decision 0.75.
+        Evidence::MacroExpansion => 0.85,
+        Evidence::MacroReceiverType => 0.8,
+        Evidence::MacroImportScope => 0.75,
     }
 }
 
@@ -166,6 +185,11 @@ pub fn resolution_label(evidence: Evidence) -> &'static str {
         Evidence::ReceiverLocalBinding => "receiver-local-binding",
         Evidence::SameFileUnique => "same-file-unique",
         Evidence::PackageProximity => "package-proximity",
+        // source: stages/stage-3b-v2.md §5 Layer 4 — the macro layer's own
+        // labels; every one starts with "macro-expansion" (issue #339).
+        Evidence::MacroExpansion => "macro-expansion",
+        Evidence::MacroReceiverType => "macro-expansion-receiver-type",
+        Evidence::MacroImportScope => "macro-expansion-import-scope",
     }
 }
 

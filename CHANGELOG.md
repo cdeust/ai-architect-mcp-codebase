@@ -8,6 +8,23 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A macro call site now gets the one target its expansion calls, or none (#339).
+  The macro layer wrote every target of an expansion as a call, whatever the
+  receiver: `write!` on a `fmt::Formatter` also got `io::Write::write_fmt`,
+  `writeln!` on a `BufWriter` also got `fmt::Write::write_fmt`, and `vec![0; n]`
+  got `Vec::new`, `Vec::push` and `Vec::with_capacity`, all at 0.85 on a site
+  marked resolved. `write!` and `writeln!` are now decided by the declared type
+  of their first argument (confidence 0.8, method `macro-expansion-receiver-type`),
+  then by the one write trait imported in the file (0.75,
+  `macro-expansion-import-scope`). `vec![]` is `Vec::new` and `vec![x; n]` is
+  `vec::from_elem`; a `vec![a, b]` list has no stable target. A site with no
+  determined target gets no edge and no per-site row, stays unresolved and is
+  reported as `ambiguous (N candidates)` or `no stable target for this
+  expansion`. Every resolve first deletes the macro-expansion rows of earlier
+  runs, so a graph written by an older build is corrected on its next resolve.
+  Macro sites are no longer sent to the language server, which answered with the
+  macro's own definition; `lsp_resolve` and `lsp_status` report them as
+  `macro_sites_count`. The CallSite table gains a `macro_arg_shape` column.
 - A bare function call inside macro arguments is now extracted (#328).
   `assert_eq!(helper(1), 2)` produced no `CallSite`, so `get_impact` on `helper`
   missed the test and reported no gap. The macro token-tree reconstruction now
