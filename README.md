@@ -1,7 +1,7 @@
 <!-- mcp-name: io.github.cdeust/ai-architect-mcp-codebase -->
 
 <p align="center">
-  <img src="assets/banner.svg" alt="ai-architect-mcp-codebase — codebase intelligence as an MCP server" width="100%"/>
+  <img src="assets/banner.svg" alt="ai-architect-mcp-codebase, a code-graph MCP server" width="100%"/>
 </p>
 
 <p align="center">
@@ -12,462 +12,77 @@
   <img src="https://img.shields.io/badge/Coverage-91%25-brightgreen" alt="91% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
-  <img src="https://img.shields.io/badge/Stages-0_through_9-8A2BE2" alt="Stages">
 </p>
 
 <p align="center">
-  <strong>Stop your coding agent from guessing at your codebase.</strong><br>
-  It answers <em>who calls this</em>, <em>what breaks if I change it</em>, and <em>how does execution get here</em> from a real graph of your code — not from grepping and hoping.<br>
-  <strong>Runs entirely on your machine. Read-only: it never writes code, opens PRs, or runs CI.</strong>
+  An MCP server that indexes a repository into a local code graph and answers
+  structural questions about it: who calls this, what depends on it, what a
+  diff touches, how execution reaches a function.
 </p>
 
 <p align="center">
-  <a href="#what-an-agent-can-ask-it">What An Agent Can Ask</a> · <a href="#getting-started">Getting Started</a> · <a href="#the-pipeline">Pipeline</a> · <a href="#26-mcp-tools">Tools</a> · <a href="#architecture">Architecture</a> · <a href="#the-zetetic-standard">Zetetic Standard</a>
-</p>
-
-<p align="center">
-  <sub>One of three MCP servers that each run standalone and keep evolving — <a href="https://github.com/cdeust/Cortex">memory</a>, code graph (this), <a href="https://github.com/cdeust/ai-architect-mcp-spec">spec verification</a> — plus visualization and reasoning-agent companions. <a href="#integration-with-the-rest-of-the-stack">How they fit together ↓</a></sub>
+  <a href="#what-it-is">What it is</a> ·
+  <a href="#install-and-register">Install</a> ·
+  <a href="#a-first-session">First session</a> ·
+  <a href="#26-mcp-tools">Tools</a> ·
+  <a href="#how-answers-state-their-limits">Limits</a> ·
+  <a href="#development">Development</a>
 </p>
 
 ---
 
-Every AI coding assistant hits the same wall: you ask it to change `handle_tool_call`, and it either hallucinates a function that was renamed last week, edits something in the wrong community of the codebase, or silently breaks a call chain three modules away. Agents operate on strings; codebases have structure. The gap is where bugs live.
-
-**This server gives it the structure.** It parses your repository into a real graph of symbols and their relationships, then answers structural questions directly — with source links, and with its own limitations stated alongside the answer.
-
-### What you get
-
-- **Real answers about your code.** Who calls this function, what breaks if I change it, how does execution reach here, what belongs together — resolved across files, not guessed from text matches.
-- **Your agent stops re-reading files.** One graph query replaces the open-five-files-and-scroll loop. On our offline evaluation that is **14.26× fewer payload tokens** and **5.20× fewer tool calls** than a Grep/Glob/Read baseline ([protocol, caveats and what it does *not* prove ↓](#falsifiable-evidence--graph-tools-vs-a-grepglobread-baseline)).
-- **11 languages.** Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, Go get full extraction; Ruby gets a shallow pass (node kinds, no deep extraction).
-- **Read-only by design.** It supplies evidence for the next stage — a fix, a PRD, a review. It never edits your code.
-- **It says what it cannot see.** Every answer carries its analysis limitations, so you can tell a real "no callers" from an unresolved import.
-
-### Sovereign intelligence, eco-responsible by intent
-
-**Sovereign is what it is today.** Native Rust and tree-sitter parse your code on your machine — no model is called to read it, and nothing is uploaded. The graph is a local database file you own.
-
-**Eco-responsible is what we're aiming at.** The dominant energy cost in an AI-assisted workflow is not this binary's CPU; it is inference spent re-reading files to answer a question one query could have settled. Reducing that demand is the lever we work on, and we measure it — while publishing **no energy or CO₂ figure**, because this repository measures no joules and a token proxy is not a watt-hour. [What we measure, and what we refuse to claim ↓](#green-software-engineering)
-
-**One pipeline stage = one MCP tool. 10 stages. 26 tools. 1800+ tests. Zero clippy warnings, enforced in CI.**
-
----
-
-## What an agent can ask it
-
-For inferred Rust receiver calls, pass `lsp: true` to `analyze_codebase` and
-install rust-analyzer. The response's `lsp_status.state` distinguishes
-`disabled`, `completed`, `completed_unresolved`, and `failed`; failures retain
-their error and analysis continues on the available graph, which may contain
-partial LSP results. `lsp_resolve` retains the pass's counts;
-`resolve.phase = "static"` identifies the separate static-resolution receipt.
-Completion does not mean every call was resolved — `completed_unresolved`
-(issue #282) is the explicit signal for "the pass ran and resolved nothing"
-(at least one site needed resolving, even when every one sat outside the
-compiled Cargo targets: issue #315), as opposed to `completed`, which also
-covers "there was nothing to resolve." A target that sits under a parent
-Cargo workspace which does not list it as a member — or any other condition
-the language server itself reports as `health: "error"` — fails the phase
-outright as `lsp_workspace_load_failed` before a single resolution request
-is sent, naming the cargo-level fix (add the package to the parent's
-`workspace.members`, or analyze the workspace root). `lsp_status.server_health`
-and `lsp_resolve`'s own `server_health` field carry the server's
-last-reported health, message, and readiness signal even on success.
-
-Analysis persists its coverage report for `query_graph(graph="missed")` and
-returns the same summary. Rust processes use explicit `#[test]` and
-`#[kani::proof]` attributes, with separate `test` and `proof` entry kinds.
-These are source declarations, not evidence of execution or successful proof.
-([Rust testing attributes](https://doc.rust-lang.org/reference/attributes/testing.html),
-[Kani proof attributes](https://model-checking.github.io/kani/reference/attributes.html).)
-For a Rust codebase, the coverage report also carries `outside_build_targets`
-(issue #284): `.rs` files the walker indexed — their declarations, including
-`#[kani::proof]` harnesses, are in the graph — that sit outside every
-compiled Cargo target per `cargo metadata --no-deps` (a proof harness under
-`kani/`, a `fuzz/` directory excluded from the workspace, …). Calls out of
-these files cannot be resolved by the language server, whose crate graph
-never contains them. The bucket is populated only when a root `Cargo.toml`
-is readable and `cargo metadata` succeeds; anything else (no manifest,
-`cargo` missing, or a workspace that fails to load) leaves it empty rather
-than guessing. When `lsp: true` runs against such a graph, `lsp_resolve`'s
-`outside_targets_count` reports how many unresolved call sites the pass
-skipped for exactly this reason — no `textDocument/definition` request is
-ever issued for them, so they never count as `failed` — and `get_impact`'s
-`unresolved_callsites_outside_targets` names the same attribution (plus the
-file it came from) for any target those sites call.
-With `lsp: true`, the pass also asks rust-analyzer for its own verdict
-(issue #292): for each file it opens, `textDocument/diagnostic` returns
-rust-analyzer's `unlinked-file` diagnostic when the file is in no crate of its
-crate graph (measured with rust-analyzer 1.95.0: the code arrived only on this
-pull request; `publishDiagnostics` for the same files carried an empty list). Such files enter the
-coverage report as `unlinked_file`, and `lsp_resolve.unlinked_file_check`
-sets the verdict beside the `cargo metadata` attribution, reporting
-disagreement in both directions rather than picking one. Only files holding
-an unresolved call site are opened, so absence of the flag is not a
-completeness claim. An incremental `index_codebase` drops `unlinked_file`
-entries (the verdict can change when another file adds a `mod`); the next
-LSP pass records them again.
-
-The report also carries `feature_gated` (issue #291): `.rs` files that sit
-inside a compiled target's directory but are reached only through `mod`
-declarations whose `#[cfg(...)]` is false under the package's default
-features (`[features] default` from the same `cargo metadata` call, followed
-transitively). The default build compiles them out, and so does
-rust-analyzer, so calls in them cannot be resolved by the language server;
-each entry's reason names the gating attribute. Only `feature = "..."`
-options are evaluated: a `cfg(test)`, `cfg(unix)`, or any other predicate the
-feature table cannot decide never flags a file, and a module another crate
-root compiles without the gate is not flagged.
-
-Both buckets come from the same `cargo metadata` call, so the report says once
-whether that call answered (issue #316): `cargo_attribution.status` is `known`
-when it did (empty buckets then mean nothing was found), `unknown` when a root
-`Cargo.toml` exists but the call failed or `cargo` is not on PATH (empty
-buckets then mean nothing was determined; `detail` carries cargo's own error),
-and `not_applicable` when there is no root `Cargo.toml` or no `.rs` file. A
-coverage record written before this field existed reads `not_recorded`. An
-`unknown` status keeps `get_impact` from reporting `exact`.
-
-Graphs created before entry metadata was stored require a full reindex:
-`analyze_codebase` rebuilds them, and `index_codebase` automatically falls back
-to a full index when its incremental compatibility check detects the old schema.
-
-```
-analyze_codebase(path: "/path/to/project", output_dir: "/tmp/run")
-  → index + resolve + cluster + build search index in one call
-  → 430 nodes, 400 edges, 216 communities, 35 processes on our own codebase
-
-search_codebase(graph_path, query: "process incoming tool requests")
-  → hybrid ranked results: BM25 lexical + sparse TF-IDF semantic + RRF fusion
-  → returns: handle_tool_call (score 0.021), dispatch_request (0.020), ...
-
-get_context(graph_path, qualified_name: "src/main.rs::handle_tool_call")
-  → 360° view: community membership, process participation,
-    incoming calls, outgoing calls, types used, types that use it
-  → did-you-mean suggestions when the symbol isn't found exactly
-
-get_impact(graph_path, qualified_name)
-  → candidate impact: callers, communities and processes in the available graph
-  → evidence for choosing what to inspect and recheck after a change
-
-detect_changes(graph_path, diff_text OR base_ref+head_ref)
-  → git diff → affected symbols → impacted communities → touched processes
-  → risk score for the change
-
-validate_prd_against_graph(prd_path, graph_path)
-  → does the PRD reference real symbols? (symbol hallucination check)
-  → does "scoped to X" match the actual community count?
-  → does "doesn't affect main" hold against the call graph?
-
-check_security_gates(graph_path, changed_symbols)
-  → auth-critical community touch · unsafe symbol · public API change ·
-    unresolved imports · test coverage gap
-
-verify_semantic_diff(before_graph_path, after_graph_path)
-  → what nodes/edges appeared, what disappeared, what dangles,
-    new cycles via Tarjan SCC, regression score with verdict
-```
-
-
-These tools establish different kinds of evidence. Stage 2's `verified` receipt
-means schema checks, clarification completeness and caller acknowledgement passed;
-its transcript digest binds the recorded bytes, not the truth of the finding.
-`gates_passed` means no critical flag was emitted by the available security checks.
-Inspect `report.assessment_complete` as well: it is false for an empty symbol list, skipped
-checks, or changed symbols that could not be resolved. Review those items and warnings even when
-`gates_passed` is true. The unresolved-import gate reports unresolved imports in
-a changed symbol's file; a single graph snapshot cannot establish when they were
-introduced.
-A semantic-diff `clean` verdict requires a structural regression score below
-the configured threshold and no positive unresolved-import delta. Any increase
-in unresolved imports produces at least `concerning`, even below that threshold.
-A clean result does not establish behavioral equivalence. Tests, compiler checks
-or formal proofs must establish that separate property.
-
-Impact and process results depend on the relationships the graph captured.
-Process traversal stops at depth 20; it is graph reachability, not an observed
-runtime trace or an exhaustive account of effects. Preserve coverage and
-resolution qualifiers, and confirm important absence claims against source even
-when the coverage report contains no flagged files.
-
----
-
-## Getting started
-
-### Prerequisites
-
-- Rust 1.95.0 — pinned by [`rust-toolchain.toml`](rust-toolchain.toml), so `rustup` installs and selects it for you; the same compiler builds CI and the releases
-- CMake (LadybugDB builds its C++ core from source — ~5 minutes first build, cached after)
-
-### Clone + build
-
-```bash
-git clone https://github.com/cdeust/ai-architect-mcp-codebase.git
-cd ai-architect-mcp-codebase
-cargo build --release
-# First build: ~5 minutes (compiles LadybugDB C++ core)
-# Subsequent builds: <1 second incremental
-```
-
-### Register the MCP server
-
-The repo ships a `.mcp.json` that Claude Code picks up automatically when you open the directory:
-
-```json
-{
-  "mcpServers": {
-    "ai-architect": {
-      "command": "cargo",
-      "args": ["run", "--quiet", "--release", "--manifest-path", "Cargo.toml", "--", "--profile", "core"]
-    }
-  }
-}
-```
-
-Or register globally (recommended agent setup — the `core` profile):
-
-```bash
-claude mcp add ai-architect -- /absolute/path/to/target/release/ai-architect-mcp-codebase --profile core
-```
-
-### Tool profiles
-
-The server registers one of two tool sets, chosen once at startup:
-
-| Profile | Tools | Who it's for |
-|---|---|---|
-| `core` | 8 — `health_check` · `analyze_codebase` · `search_codebase` · `get_context` · `get_symbol` · `get_impact` · `query_graph` · `detect_changes` | **Recommended for agents.** The read-only code-intelligence surface: analyze once, then search, inspect symbols, and measure blast radius. |
-| `full` | all 26 | The ai-architect pipeline orchestrator — adds the internal finding → PRD stages (1/2/4/6/8/9) and the manual graph passes (`index_codebase`, `resolve_graph`, `cluster_graph`, `lsp_resolve`, `get_processes`, `index_history`). |
-
-Select with the `--profile` flag or the `AP_PROFILE` environment variable (the flag wins):
-
-```bash
-ai-architect-mcp-codebase --profile core   # agent-facing 8
-AP_PROFILE=core ai-architect-mcp-codebase  # same, via env
-ai-architect-mcp-codebase                  # default: full (all 26)
-```
-
-The default stays `full` until the next major version — shrinking the default tool surface is a breaking change. New agent installations should opt into `core`: `analyze_codebase` already runs index + resolve + cluster in one call, so the 18 hidden tools are pipeline plumbing an agent never needs, and hiding them keeps the tool prompt small.
-
-### First run
-
-```bash
-# Run the binary directly to verify the handshake
-./target/release/ai-architect-mcp-codebase
-
-# Or exercise it via stdio JSON-RPC:
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"health_check","arguments":{}}}' \
-  | ./target/release/ai-architect-mcp-codebase
-```
-
-### Use with other MCP hosts
-
-The server is a self-contained stdio binary — any MCP host can launch it. Install once:
-
-```bash
-cargo install ai-architect-mcp-codebase   # installs the `ai-architect-mcp-codebase` binary into ~/.cargo/bin
-```
-
-### Install into your agent host (auto-config)
-
-One command detects your installed hosts and writes the right MCP config for each — **never clobbering** the rest of the file:
-
-```bash
-ai-architect-mcp-codebase install
-```
-
-It configures the top six hosts it detects: **Claude Code** (`~/.claude.json`), **Codex CLI** (`~/.codex/config.toml`), **Gemini CLI** (`~/.gemini/settings.json`), **Cursor** (`~/.cursor/mcp.json`), **VS Code** (`Code/User/mcp.json`), and **Zed** (`~/.config/zed/settings.json`).
-
-- **Never clobbers.** The existing config is parsed; only our `ai-architect` entry is added or updated; every other server survives. A file it cannot safely parse is **never overwritten** — it prints the exact entry to paste by hand.
-- **Zed JSONC.** Zed's `settings.json` allows comments, which strict JSON editing would destroy, so `install` **refuses to edit it in place** and prints the snippet + instructions instead (your comments stay byte-for-byte).
-- **Codex TOML** is edited comment- and format-preserving (via `toml_edit`).
-- **Flags:** `--dry-run` (print planned changes, write nothing), `--only <host>` / `--skip <host>` (filter; `--only` forces a host even if undetected), `--with-hooks` (also register the Grep/Glob PreToolUse hook, see below). Re-running is **idempotent** (a second run reports "no change").
-- **Uninstall:** `ai-architect-mcp-codebase uninstall` removes exactly our entries (and the hook), leaving everything else intact.
-
-```bash
-ai-architect-mcp-codebase install --dry-run                 # preview
-ai-architect-mcp-codebase install --only cursor --only zed  # just these
-ai-architect-mcp-codebase install --with-hooks              # + the grep→graph hook
-ai-architect-mcp-codebase uninstall                         # remove our entries
-```
-
-**Binary → first query.** Measured on this machine (2026-07): `install` completes in **~1.3 s** (dominated by process/DB startup; the config write itself is sub-second); `analyze_codebase` on this repo's own `src/` (114 files → 16.5k nodes, 16.3k edges — index + resolve + cluster) takes **~12 s wall**; the first `search_codebase` returns instantly. So once the binary exists, **install → analyze → first graph query is ~15 s — well under the 2-minute target.** The one-time `cargo build --release` (~5 min, compiling the LadybugDB C++ core) is a separate, before-the-clock step.
-
-#### Fail-open grep→graph hook
-
-`ai-architect-mcp-codebase install --with-hooks` registers a Claude Code `PreToolUse` hook (matcher `Grep|Glob`) that runs `ai-architect-mcp-codebase hook-augment`. Before a Grep/Glob in a project that has an ai-architect graph, it injects a one-line suggestion to consider `search_codebase`/`query_graph` first. **Cardinal rule: it never blocks the tool call** — no graph, an unparseable payload, or any error → it prints nothing and exits 0. Hook registration is **opt-in** (the `--with-hooks` flag), never default.
-
-### Or configure a host by hand
-
-The CLI commands below assume `~/.cargo/bin` is on your `PATH`. GUI hosts (Cursor, Windsurf, VS Code) may not inherit your shell `PATH` — in the JSON configs, replace `ai-architect-mcp-codebase` with the output of `which ai-architect-mcp-codebase`. Use the `core` profile (8 read-only tools) for agent hosts.
-
-**Gemini CLI**
-
-```bash
-gemini mcp add -e AP_PROFILE=core ai-architect ai-architect-mcp-codebase
-```
-
-Or install as an extension (this repo ships a `gemini-extension.json`):
-
-```bash
-gemini extensions install https://github.com/cdeust/ai-architect-mcp-codebase
-```
-
-The extension also exposes three host-native workflows from `skills/`:
-`understand-codebase`, `impact-analysis`, and `validate-change-plan`.
-They use only the eight tools in the `core` profile and explicitly surface
-index coverage gaps before accepting negative graph results.
-
-**Claude Code plugin** (primary interface)
+## What it is
+
+`ai-architect-mcp-codebase` parses a repository with tree-sitter, stores the
+symbols and their relationships (definitions, calls, imports, implementations,
+uses) in an embedded LadybugDB graph database on your machine, and exposes
+that graph to an agent through MCP tools. An agent can search the graph, look
+up a symbol with its callers and callees, list the reverse dependencies of a
+symbol, follow execution flows from entry points, map a git diff onto the
+symbols it changes, and compare two graphs of the same code. Every answer
+carries source locations and the limits of the analysis behind it.
+
+The server does not edit the files it indexes. It writes its graph and
+sidecar files under the `output_dir` you pass, plus a snapshot in the
+repository only when you ask for the team-shared artifact. Indexing and queries
+run locally without network calls, no language model reads the code, and
+nothing is uploaded. The graph is a directory you own.
+
+What it cannot see. The graph comes from static parsing of source text, so a
+call made through reflection, dynamic dispatch, generated code, or a macro the
+parser does not expand has no edge unless an optional language-server pass
+(`lsp: true`) or runtime traces (`ingest_traces`) supply one. Method calls
+through a receiver are resolved statically only for the receiver shapes listed
+[below](#static-receiver-call-resolution); the rest need the language-server
+pass. Ruby gets a shallow extraction with no imports or visibility. Process
+flows are reachability in the graph from declared entry points, capped at
+depth 20, with no observation of execution. An empty answer can mean "no such relationship"
+or "not indexed", and the coverage report exists to tell those apart.
+
+## Install and register
+
+### Claude Code plugin
 
 ```bash
 claude plugin marketplace add cdeust/ai-architect-mcp-codebase
 claude plugin install ai-architect-mcp-codebase@ai-architect-mcp-codebase-marketplace
 ```
 
-Fresh marketplace installs require GitHub CLI 2.68 or newer. The bootstrap
-verifies the release's attached Sigstore bundle against the fixed
-`cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml` signer before
-installing any executable; it never accepts a manifest-provided trust anchor.
-The bundle avoids a Rekor transparency-log lookup, but `gh` can still need the
-network to refresh Sigstore's TUF trust root on a cold cache.
-This protects the official package and makes a minimal-diff fork that changes
-only metadata fail closed; it cannot make arbitrary code from a hostile fork
-trustworthy, because such a fork can also replace the bootstrap itself. Verify
-that the marketplace slug is exactly `cdeust/ai-architect-mcp-codebase`.
+The plugin downloads the release binary and verifies its Sigstore provenance
+before running it; this needs GitHub CLI 2.68 or newer. The plugin starts the
+`full` profile unless `AP_PROFILE=core` is set.
 
-#### Developer escape hatch: running a local dev build in place of the release
-
-`bin/ensure-binary.sh` pins the installed binary to a verified release digest
-(see [Security](#security)) — that pin rejects any binary it did not download
-and verify itself, including one you legitimately rebuilt from source. Set
-`AI_ARCHITECT_SOURCE_CHECKOUT=1` to opt out of the pin for a local dev build.
-The bootstrap accepts two shapes under this flag, both requiring the explicit
-opt-in — it is never inferred from metadata:
-
-- **Plain source checkout** — `$CLAUDE_PLUGIN_ROOT` itself contains `.git`
-  (you registered a clone directly as the plugin root).
-- **Live-mount montage** — the installed binary at
-  `target/release/ai-architect-mcp-codebase` is a symlink whose fully
-  resolved target lies outside `$CLAUDE_PLUGIN_ROOT` and sits inside its own
-  `.git`-bearing checkout (e.g. a marketplace cache whose binary was replaced
-  with a symlink into a separate dev clone, so you can iterate without
-  reinstalling the plugin after every rebuild). Added in
-  [#208](https://github.com/cdeust/ai-architect-mcp-codebase/pull/208) —
-  a plain `.git`-at-root check cannot see this shape, because a marketplace
-  cache has no `.git` of its own.
-
-**What the flag skips, precisely:** only the release-binary digest
-verification (`sha256sum` against the cached/pinned digest) and, for a fresh
-install, the download + Sigstore provenance check — for that one launch. It
-does **not** skip the `Cargo.toml` / `plugin.json` presence checks (still
-`fatal` if either file is missing), and for a plain source checkout it still
-runs the freshness rebuild (`cargo build --release` when `src/` is newer than
-the binary). For the montage shape specifically, nothing rebuilds the
-binary — the bootstrap trusts the already-built binary the symlink resolves
-to, as-is.
-
-**Threat model.** This is an explicit, user-set opt-in, never something
-packaged metadata can trigger. An attacker who can already write to your
-plugin cache — replacing the installed binary with a symlink to force this
-path — can just as easily replace `bin/ensure-binary.sh` or
-`bin/launch-plugin.sh` themselves, so the digest pin was never a defense
-against that attacker; it defends the *default* path (flag unset) where the
-bootstrap is the thing standing between a marketplace download and your
-shell. The default path is unchanged by this hatch and remains a hard
-`fatal` on any digest mismatch. Every accepted bypass is announced on
-`stderr` even in quiet mode:
-
-```
-ai-architect-mcp-codebase: bootstrap verification skipped (source-checkout mode)
-ai-architect-mcp-codebase: live-mounted dev symlink: <plugin-cache>/target/release/ai-architect-mcp-codebase -> <resolved dev path> (source checkout at <resolved .git root>)
-```
-
-**Diagnosing the failure mode without the flag.** If a marketplace-cache
-binary is replaced by a montage symlink and `AI_ARCHITECT_SOURCE_CHECKOUT` is
-not set, the plugin dies silently from Claude Code's point of view — you only
-see `MCP error -32000: Connection closed`. The real cause is on stderr, which
-Claude Code does not surface for a failed MCP launch; run the launcher by
-hand with `CLAUDE_PLUGIN_ROOT` set to the plugin cache directory to see it:
-
-```bash
-CLAUDE_PLUGIN_ROOT=/path/to/plugin/cache bin/launch-plugin.sh
-# ai-architect-mcp-codebase: FATAL: cached binary digest mismatch; reinstall the plugin
-```
-
-**Operational gotcha:** `export AI_ARCHITECT_SOURCE_CHECKOUT=1` in
-`~/.zshrc` alone is not enough. `~/.zshrc` is read only by *interactive*
-shells; the Claude Code plugin launcher and its hooks run in non-interactive
-ones and never see it. Put the export in `~/.zshenv` (or your shell's
-equivalent non-interactive startup file) instead.
-
-If the former Automatised Pipeline plugin is installed, remove it before
-installing the canonical package:
-
-```bash
-claude plugin uninstall automatised-pipeline@automatised-pipeline-marketplace
-claude plugin marketplace remove automatised-pipeline-marketplace
-```
-
-Claude MCP allowlists and permissions must also replace every prefix listed in
-`revoked_claude_tool_prefixes` in the contract with
-`mcp__plugin_ai-architect-mcp-codebase_ai-architect__<tool>`. The final
-`ai-architect` segment is intentionally stable: it is the MCP server key, not
-the plugin's distribution name. The machine-readable source of truth is
-[`mcp-contract.json`](mcp-contract.json); consumer repositories validate their
-allowlists against its derived `claude_tool_prefix` instead of maintaining an
-independent spelling.
-
-Contract schema 1 requires `distribution`, `claude_plugin`,
-`claude_marketplace`, `mcp_server`, `claude_tool_prefix`, and
-`revoked_claude_tool_prefixes`. Consumers must pin the raw contract URL to the
-full commit SHA (tags can be moved), validate that the prefix equals
-`mcp__plugin_<claude_plugin>_<mcp_server>__`, and remove revoked prefixes from
-allowlists rather than retaining them as aliases. Consumer PRs record the full
-producer commit in their contract URL; the v0.12.0 release must not be assumed
-available until its verified-release workflow completes.
-The same contract is included in the crate, MCPB, and signed release assets.
-
-**OpenAI Codex CLI** (also picked up by the ChatGPT desktop app and Codex IDE extension — they share `~/.codex/config.toml`)
-
-```bash
-codex mcp add ai-architect -- ai-architect-mcp-codebase --profile core
-```
-
-Or in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.ai-architect]
-command = "ai-architect-mcp-codebase"
-args = ["--profile", "core"]
-```
-
-Or install the packaged Codex plugin and its three matching skills from this
-repository's marketplace:
+### Other MCP hosts
 
 ```bash
 cargo install ai-architect-mcp-codebase
-codex plugin marketplace add cdeust/ai-architect-mcp-codebase
-codex plugin add ai-architect-mcp-codebase@ai-architect-mcp-codebase
+ai-architect-mcp-codebase install          # writes the MCP entry for each detected host
 ```
 
-The Codex package lives under `plugins/ai-architect-mcp-codebase/`, with its own
-`.mcp.json` fixed to `--profile core`. This isolation is intentional: the
-root `.mcp.json` remains the existing Claude project configuration and keeps
-the server's backward-compatible `full` default.
-
-For Gemini CLI, uninstall the former extension identity before reinstalling
-from the renamed repository:
-
-```bash
-gemini extensions uninstall ai-architect
-gemini extensions install https://github.com/cdeust/ai-architect-mcp-codebase
-```
-
-**Cursor** — `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+`install` detects Claude Code, Codex CLI, Gemini CLI, Cursor, VS Code and Zed,
+adds only its own entry to each config file, and never overwrites a file it
+cannot parse. `--dry-run` previews the changes; `uninstall` removes them. To
+configure a host by hand, register the binary as a stdio server:
 
 ```json
 {
@@ -480,637 +95,383 @@ gemini extensions install https://github.com/cdeust/ai-architect-mcp-codebase
 }
 ```
 
-**Windsurf** — `~/.codeium/windsurf/mcp_config.json`: same `mcpServers` block as Cursor.
+[docs/install.md](docs/install.md) has the per-host snippets (Codex, Gemini,
+Cursor, Windsurf, VS Code, the OpenAI Agents SDK), the optional Grep/Glob
+hook, the plugin's release verification, and the developer escape hatch for
+running a local build inside the plugin.
 
-**VS Code** — `.vscode/mcp.json`:
+### Build from source
 
-```json
-{
-  "servers": {
-    "ai-architect": {
-      "type": "stdio",
-      "command": "ai-architect-mcp-codebase",
-      "args": ["--profile", "core"]
-    }
-  }
-}
+```bash
+git clone https://github.com/cdeust/ai-architect-mcp-codebase.git
+cd ai-architect-mcp-codebase
+cargo build --release     # about five minutes the first time (LadybugDB's C++ core)
 ```
 
-**OpenAI Agents SDK (Python)**
+Rust 1.95.0 is pinned by [`rust-toolchain.toml`](rust-toolchain.toml), and
+CMake is required.
 
-```python
-from agents.mcp import MCPServerStdio
+### Tool profiles
 
-async with MCPServerStdio(
-    name="ai-architect",
-    params={"command": "ai-architect-mcp-codebase", "args": ["--profile", "core"]},
-) as server:
-    agent = Agent(name="Assistant", mcp_servers=[server])
-```
+The server registers one of two tool sets, chosen at startup with `--profile`
+or the `AP_PROFILE` environment variable (the flag wins).
 
----
-
-## The pipeline
-
-Every stage is a tool. Stages build on each other but are independently callable. The pipeline is serial in logical order but MCP calls are stateless — you can re-run stages 3a-3d on a fresh codebase without re-running stages 1-2.
-
-| # | Tool(s) | What it does |
+| Profile | Tools | Use |
 |---|---|---|
-| **0** | `health_check` | Handshake + protocol + tool count |
-| **1** | `extract_finding`, `refine_finding` | Deterministic finding extraction + orchestrator-aware prompt refinement |
-| **2** | `start_verification`, `append_clarification`, `finalize_verification`, `abort_verification` | Human-gated clarification loop with SHA-256 transcript digest, atomic single-file session state |
-| **3a** | `index_codebase`, `query_graph`, `get_symbol` | tree-sitter AST → LadybugDB graph (16 node labels, 36+ relationship tables); user-configurable `exclude_dirs` and graceful skip of unreadable directories (issue #249) |
-| **3b** | `resolve_graph`, `lsp_resolve` | Import/call/impl resolution with confidence scoring + optional LSP deep resolution (rust-analyzer / pyright / typescript-language-server) |
-| **3c** | `cluster_graph`, `get_processes`, `get_impact` | Leiden-class community detection (Louvain + C2 repair) + BFS execution-flow tracing from entry points |
-| **3d** | `search_codebase`, `get_context`, `analyze_codebase`, `detect_changes` | Hybrid BM25 + sparse TF-IDF + RRF search · 360° symbol view · all-in-one analysis · git-diff impact |
-| **4** | `prepare_prd_input` | Bundle verified finding + graph intel → artifact for ai-architect-mcp-spec |
-| **6** | `validate_prd_against_graph` | Symbol hallucination · community consistency · process-impact contradiction |
-| **8** | `check_security_gates` | Auth-critical community · unsafe symbol · public-API change · unresolved-import presence · test-coverage gap |
-| **9** | `verify_semantic_diff` | Before/after graph diff with Tarjan SCC cycle detection and regression scoring |
+| `core` | 8: `health_check`, `analyze_codebase`, `search_codebase`, `get_context`, `get_symbol`, `get_impact`, `query_graph`, `detect_changes` | Recommended for agents. Analyze once, then search, inspect and measure impact. |
+| `full` | all 26 | Adds the manual graph passes, history, runtime traces, the verification tools, the artifact builder and the finding-record tools. |
 
-> Stages 5 (PRD generation), 7 (implementation), 10 (benchmark), 11 (deployment), 12 (PR) belong to other systems in the pipeline: [ai-architect-mcp-spec](https://github.com/cdeust/ai-architect-mcp-spec), the coding agent, CI, and `gh`. This project is the **read-only intelligence** half.
+```bash
+ai-architect-mcp-codebase --profile core   # the 8 core tools
+AP_PROFILE=core ai-architect-mcp-codebase  # same, through the environment
+ai-architect-mcp-codebase                  # default: full (all 26)
+```
 
----
+The default stays `full` until the next major version, because shrinking the
+default tool surface is a breaking change. New agent setups should use the
+`core` profile (8 read-only tools): `analyze_codebase` already runs index,
+resolve and cluster in one call, and leaving out the 18 hidden tools keeps the
+tool prompt small.
+
+## A first session
+
+```
+health_check()
+  → server name and version, protocol version, registered tool count
+
+analyze_codebase(path: "/path/to/repo", output_dir: "/tmp/repo-graph")
+  → index, resolve, cluster and build the search index in one call
+  → node and edge counts, communities, processes, and the coverage report
+
+search_codebase(graph_path: "/tmp/repo-graph/graph", query: "tool request dispatch")
+  → ranked symbols (BM25 and sparse TF-IDF fused with RRF), paged with next_offset
+
+get_context(graph_path, qualified_name: "src/main.rs::handle_tool_call")
+  → the symbol with its callers, callees, imports, implementations,
+    community and processes; suggestions when the name does not match exactly
+
+get_impact(graph_path, qualified_name: "src/main.rs::handle_tool_call")
+  → callers, importers, users and implementors, the communities and processes
+    affected, and an epistemic label (exact or lower-bound) with its reasons
+
+detect_changes(graph_path, codebase_path: "/path/to/repo", base_ref: "main", head_ref: "HEAD")
+  → symbols the diff adds, modifies or deletes, with a heuristic risk score each
+
+query_graph(graph_path, graph: "missed")
+  → the files the index could not fully cover, to check with grep
+```
+
+Re-run `analyze_codebase` after edits; indexing is incremental by default.
 
 ## 26 MCP Tools
 
-Every tool takes structured JSON arguments via the MCP protocol and returns a structured JSON response. No LLM is called from inside any tool — intelligence is the agent's job; the tool's job is safe, fast data movement with invariants.
+Each tool takes JSON arguments checked against its JSON Schema and returns
+structured JSON, with a named reason code on error. No tool calls a language
+model. Agent installs rarely need all 26; the `core` profile registers just
+the 8 code-intelligence tools.
 
 ```
-Stage 0:  health_check
-Stage 1:  extract_finding · refine_finding
-Stage 2:  start_verification · append_clarification · finalize_verification · abort_verification
-Stage 3:  ingest_traces
-Stage 3a: index_codebase · index_status · query_graph · get_symbol
-Stage 3b: resolve_graph · lsp_resolve
-Stage 3c: cluster_graph · get_processes · get_impact
-Stage 3d: search_codebase · get_context · analyze_codebase · detect_changes
-Stage 3e: index_history
-Stage 4:  prepare_prd_input
-Stage 6:  validate_prd_against_graph
-Stage 8:  check_security_gates
-Stage 9:  verify_semantic_diff
+Server:                  health_check
+Index and resolve:       analyze_codebase · index_codebase · resolve_graph · lsp_resolve · cluster_graph · ingest_traces
+Coverage:                index_status
+Search and context:      search_codebase · get_symbol · get_context · query_graph
+Impact and processes:    get_impact · get_processes · detect_changes
+History:                 index_history
+Verification:            check_security_gates · verify_semantic_diff · validate_prd_against_graph
+Artifact export:         prepare_prd_input
+Finding records:         extract_finding · refine_finding · start_verification · append_clarification · finalize_verification · abort_verification
 ```
 
-Each tool has a JSON Schema enforced at the wire, reason codes on error (no cryptic protocol errors), and a receipt-style response with timing and counts.
+| Tool | Core | What it does |
+|---|:---:|---|
+| `health_check` | yes | Returns server name and version, MCP protocol version and the registered tool count, which shows the active profile. |
+| `analyze_codebase` | yes | Runs index, resolve and cluster in one call and builds the search index; `lsp: true` adds the language-server pass. Returns statistics and the coverage report. |
+| `index_codebase` | | Walks and parses the repository into `<output_dir>/graph/`. Incremental by default; can export or import the [team-shared graph artifact](docs/configuration.md#team-shared-graph-artifact). |
+| `resolve_graph` | | Adds cross-file `Imports`, `Calls`, `Implements`, `Extends` and `Uses` edges with confidence scores. |
+| `lsp_resolve` | | Resolves remaining calls through rust-analyzer, pyright or typescript-language-server. |
+| `cluster_graph` | | Detects communities (Louvain with C2 repair) and traces processes from entry points. |
+| `ingest_traces` | | Folds runtime caller-to-callee observations (OTel spans, profiler or coverage traces) into the graph, and adds `OBSERVED_CALLS` edges where static resolution found none. |
+| `index_status` | | Node and edge counts plus the coverage report. |
+| `search_codebase` | yes | Hybrid ranked search over symbols, and BM25 search over documentation files. |
+| `get_symbol` | yes | Exact lookup by qualified name with every incoming and outgoing edge; `sibling_graphs` looks for a definition in other repositories' graphs. |
+| `get_context` | yes | One symbol with its relationships grouped by kind, its community and its processes. |
+| `query_graph` | yes | Read-only Cypher, paged; `graph: "missed"` lists what the index did not cover. |
+| `get_impact` | yes | Reverse dependencies of a symbol or file, with affected communities and processes and an epistemic label. |
+| `get_processes` | | Lists execution flows with entry point, entry kind (`main`, `test`, `proof`, `handler`, `lib_entry`), depth and size. |
+| `detect_changes` | yes | Maps a unified diff, or `base_ref`..`head_ref`, onto the symbols, communities and processes it touches. |
+| `index_history` | | Adds git history as `Commit` and `Version` nodes linked to the files and symbols each commit changed. |
+| `check_security_gates` | | Checks a list of changed symbols for auth-community touch, public-API change, unresolved imports and test-coverage gaps. |
+| `verify_semantic_diff` | | Compares a before graph and an after graph: added and removed nodes and edges, dangling references, new unresolved imports, new cycles (Tarjan SCC), and a heuristic regression score. |
+| `validate_prd_against_graph` | | Checks a product requirements document against the graph: symbols it names that do not exist, changes that span several communities, and "does not affect X" claims contradicted by process membership. |
+| `prepare_prd_input` | | Writes a JSON bundle of graph facts (matched symbols, affected communities and processes, graph statistics) for a finding or a free-text feature description. |
+| `extract_finding`, `refine_finding` | | Normalize an incoming finding to a canonical JSON record and store an agent's refinement of it. |
+| `start_verification`, `append_clarification`, `finalize_verification`, `abort_verification` | | Record a question-and-answer clarification of a finding, finalized with a SHA-256 digest of the transcript. |
 
-> Agent installs rarely need all 26 — the `core` profile (see [Tool profiles](#tool-profiles)) registers just the 8 code-intelligence tools.
+`validate_prd_against_graph`, `prepare_prd_input` and the finding-record tools
+produce or check JSON artifacts on disk under the `output_dir` a call names. A specification tool such as
+[ai-architect-mcp-spec](#related-projects), or any other consumer, can read
+them; the server itself has no dependency on the consumer.
 
-### Team-shared graph artifact (optional)
+What the verification verdicts mean. `check_security_gates` returns
+`gates_passed: true` when no check raised a critical flag, and
+`report.assessment_complete` separately; the latter is false for an empty
+symbol list, a skipped check, or changed symbols that could not be resolved.
+The unsafe-symbol check is skipped until the Rust parser records `unsafe`.
+Neither field certifies security. A `clean` verdict from
+`verify_semantic_diff` needs a regression score below the threshold and no new
+unresolved import, and says nothing about behavioural equivalence or
+compilation; tests, the compiler or proofs establish those. A finalized
+clarification digest binds the recorded transcript bytes and does not
+establish that the finding is true.
 
-`index_codebase` can commit a compressed snapshot of the graph so teammates who
-clone the repo never have to cold-index it.
+## How answers state their limits
 
-- `index_codebase` with `"export_artifact": true` writes, after a successful
-  index, a `tar → zstd` snapshot to `<path>/.ai-architect-mcp-codebase/graph.zst`
-  plus a `graph.meta.json` sidecar (schema version, git sha, tool version,
-  node/edge counts). It also appends a `.gitattributes` entry
-  (`.ai-architect-mcp-codebase/graph.zst binary merge=ours`) so the committed
-  binary never produces merge conflicts across branches. Commit both files.
-  A repo indexed before the project rename (issue #195) carries this snapshot
-  under the old `.automatised-pipeline/` directory name; the first touch of
-  the artifact (export, bootstrap, or even a `hook-augment` Grep/Glob check)
-  migrates it to the current name in place — a one-shot rename, not a
-  permanent dual-path read.
-- `index_codebase` with `"bootstrap": true` — when there is no local graph at
-  `<output_dir>/graph` but a committed artifact is present — decompresses the
-  snapshot instead of cold-indexing. **Staleness is checked first** by comparing
-  the artifact's git sha with the repo's current HEAD:
-  - shas equal → import as-is (nothing to fill), response `source='artifact_bootstrap'`,
-    `graph_state='fresh'`;
-  - shas differ → by **default the snapshot is imported, then incrementally
-    filled** up to the working tree (only the artifact→HEAD diff is
-    re-parsed), response `source='artifact_bootstrap_fill'`,
-    `graph_state='filled_to_working_tree'`, carrying `fill_method` and
-    `{changed, added, deleted, renamed, unchanged}` counts;
-  - `"accept_stale": true` → import the stale snapshot anyway and **skip the
-    fill**, and the response carries a `stale_artifact`
-    `{artifact_sha, head_sha, commits_behind}` report so a stale graph is
-    never mistaken for a fresh one.
+The read tools report what they could not see next to what they found. The
+[CHANGELOG](CHANGELOG.md) has the detail for each item below.
 
-  A fill that fails (no git diff and no bundled manifest) falls back to a
-  full index, as does an import failure — both explicit (logged to stderr,
-  never a silent partial graph) and reported via a `bootstrap_skipped` note.
+### Coverage report
 
-### Excluding directories from the walk (issue #249)
+`analyze_codebase`, `index_status` and `query_graph(graph: "missed")` report
+files that were `parse_incomplete`, `skipped` or `quarantined`, plus three
+Rust buckets added in 0.12.0. `outside_build_targets` lists indexed `.rs`
+files outside every compiled Cargo target according to
+`cargo metadata --no-deps` (a Kani proof file, an excluded `fuzz/` directory).
+`feature_gated` lists modules reached only through a `mod` declaration whose
+`#[cfg(feature = ...)]` is false under default features. `unlinked_file` lists
+files rust-analyzer itself reports as belonging to no crate, recorded when an
+LSP pass opens them. `cargo_attribution.status` says whether the two
+Cargo-derived buckets were determined: `known`, `unknown` (the `cargo
+metadata` call failed or `cargo` is missing, so an empty bucket means "not
+determined"), `not_applicable`, or `not_recorded` for an older record.
+`coverage.pruned_dirs` names every directory the walk skipped by policy, with
+its reason. An empty coverage report is still not proof of completeness.
 
-Both `index_codebase` and `analyze_codebase` accept `"exclude_dirs"`
-(default `[]`) — directory names or paths to prune from the walk in
-addition to the built-in build/dependency skip list (`node_modules`,
-`.venv`, `vendor`, `target`, …). This is for directories that must never be
-read (a secrets folder, a credentials mount), not a performance prune:
+### Epistemic boundary on impact
 
-- An entry **without** a path separator (e.g. `"secrets"`) is a bare name,
-  matched anywhere in the tree — like the built-in list.
-- An entry **with** a path separator (e.g. `"config/secrets"`) is a path
-  relative to `path`, matched as exactly one subtree. No glob support.
-- Exclusion **wins over every `dependency_scope` tier**, including `full` —
-  it is checked before, and independently of, dependency-directory descent.
-- Pruned directories are never silently dropped: each appears in the
-  coverage sidecar as `skipped` with reason `user_excluded`, and the
-  response's `coverage.skipped.user_excluded_count` carries the exact count.
-- Changing `exclude_dirs` on an existing graph requires `"full": true` — like
-  `dependency_scope`, the incremental-index manifest does not capture it.
+`get_impact` labels its answer `exact` only when the coverage record has zero
+gaps in every bucket, `cargo_attribution.status` is not `unknown`, and no
+unresolved call site names the target. Otherwise the answer is `lower-bound`, with reasons.
+`unresolved_callsites_naming_target` counts unresolved call sites whose callee
+names the target, and `unresolved_callsites_outside_targets` counts those in
+files outside the compiled Cargo targets, so an empty caller list can be told
+apart from a symbol with no callers.
 
-Independent of `exclude_dirs`, a directory the OS refuses to read
-(`EACCES`/`PermissionDenied`) no longer aborts the whole index: it is
-recorded in the coverage sidecar with reason `unreadable` and the walk
-continues past it, so one locked-down subdirectory can no longer discard an
-otherwise-successful index.
+### Language-server pass
 
-All three flags default to `false`, so existing behavior and the `core`/`core8`
-profiles are unchanged. The artifact is entirely optional: without it,
-`index_codebase` cold-indexes exactly as before.
+With `lsp: true`, `analyze_codebase` reports `lsp_status.state` as `disabled`,
+`completed`, `completed_unresolved` (sites needed resolving and none were
+resolved) or `failed`. A Rust crate nested under a Cargo workspace that does
+not list it as a member fails the pass with `lsp_workspace_load_failed`, naming
+the Cargo-level fix, before any resolution request is sent. Analysis continues
+on the available graph when the pass fails. `server_health` carries the language
+server's own last-reported health.
 
-> Post-import *incremental fill* (re-index only the `artifact_commit..HEAD` diff
-> instead of a full re-index) is tracked in
-> [#62](https://github.com/cdeust/ai-architect-mcp-codebase/issues/62) — it needs a
-> changed-files-only indexer, which AP does not yet have.
+### Static receiver-call resolution
 
----
+Since 0.12.0 the static resolver binds `self.m()` and `Self::m()` in Rust,
+`self.m()` in Python and `this.m()` in TypeScript to the enclosing type's
+method (`resolution_method: "receiver-type"`). In Rust it also binds `x.m()`
+when `x` is bound once in the enclosing function by a typed parameter, a typed
+`let`, or `let x = T::assoc(..)` (`"receiver-local-binding"`). A receiver it
+cannot type is left unresolved; it never falls back to a lookup by bare name.
 
-## Architecture
+### Query truncation and paging
 
-Rust MCP server, hand-rolled stdio JSON-RPC 2.0 (no SDK — we own the wire). Clean Architecture with module boundaries.
+`query_graph` bounds a query with no `LIMIT` of its own to 500 rows per page
+(`limit_injected: true`). `truncated` is true whenever more rows exist after
+the page, and `next_offset` reads the next one. When the row bound cut the
+result, `total_count` is a lower bound. Paging is stable only when the query
+declares `ORDER BY`, which `order_stable` reports. The tool's JSON Schema
+description has the full contract.
 
-```
-transport (stdio, JSON-RPC framing)
-      ↓
-server/main.rs  (request dispatch, tool registry)
-      ↓
-handlers (do_* functions, one per tool)
-      ↓
-core modules:
-    graph_store        — LadybugDB port (Cypher + UNWIND + prepared statements)
-    parser/{rust,python,typescript,mod}  — tree-sitter AST extractors
-    indexer            — walk + parse + persist pipeline
-    resolver           — cross-file import/call/impl resolution
-    lsp_{client,resolver}  — optional LSP deep resolution
-    clustering         — inline Louvain + C2 repair + process tracing
-    search/{bm25,vector,rrf,mod}  — hybrid search (Tantivy + sparse TF-IDF + RRF)
-    prd_input          — stage 4: bundle for ai-architect-mcp-spec
-    prd_validator      — stage 6: validate PRD claims against graph
-    security_gates     — stage 8: auth/unsafe/API/imports/coverage checks
-    semantic_diff      — stage 9: before/after graph regression scoring
-    git_diff           — diff parser + symbol mapping
-```
+### Freshness receipt
 
-### Dependencies
+`search_codebase`, `get_symbol` and `get_impact` return `graph_freshness`
+(`state: fresh | stale | unknown`, `dirty_files`, `checked_files`,
+`commits_behind`, `commits_ahead`) on every response, errors included, so an
+answer from a graph older than the working tree is marked as such. A graph
+indexed by 0.11.x reads `unknown` until it is re-indexed.
 
-Sixteen crates. Nothing speculative; everything justified.
+## Languages
 
-| Crate | Purpose | License | Why |
-|---|---|---|---|
-| `serde` + `serde_json` | Wire serialization | MIT | JSON-RPC, artifact persistence |
-| `sha2` | Stage-2 transcript digest | MIT | Tamper detection |
-| `lbug` (LadybugDB) | Embedded property graph + Cypher | MIT | Native Cypher, FTS-ready, the Kùzu successor |
-| `tree-sitter` | Incremental parser runtime | MIT | First-class Rust bindings |
-| `tree-sitter-rust` · `-python` · `-typescript` · `-java` · `-kotlin-ng` · `-swift` · `-objc` · `-c` · `-cpp` · `-go` | Language grammars (10) | MIT / Apache-2.0 | Semantic structure without a compiler |
-| `tantivy` | Lucene-grade BM25 | MIT | Real ranked text search, <10ms startup |
+Rust, Python, TypeScript (and JavaScript through the TSX grammar), Java,
+Kotlin, Swift, Objective-C, C, C++ and Go get deep extraction through a
+per-language spec: definitions, calls and imports, plus visibility and type
+relationships where the spec records them. Ruby is a shallow tier
+([ADR-0056](docs/adr/ADR-0056-shallow-spec-language-breadth.md)): functions,
+methods, classes and modules, and calls, with no visibility and no import
+edges (`require` appears as a call). Documentation and configuration files
+are indexed as `File` nodes, and their text is searchable through BM25. The
+language-server pass supports Rust, Python and TypeScript.
 
-Deliberately **not** included: async runtime (we're stdio-blocking), HTTP client, LLM SDK, embedding model runtime (sparse TF-IDF replaces it at zero dep cost).
+## Security model
 
-### Storage
+The server enforces read-only access to the graph in `query_graph` with two
+layers. The engine's compiled-plan check refuses database writes, and a
+lexical gate refuses the filesystem statements the engine classifies as
+read-only (`COPY … TO`, `EXPORT DATABASE`, `ATTACH`, and others), plus every
+`CALL` outside a two-procedure allowlist. Git refs are validated, the
+language-server command is limited to four known binaries, the walk has size
+and depth limits, and parsing has a per-file deadline. Release binaries carry
+Sigstore provenance that the Claude Code plugin verifies before running them.
 
-Graphs are per-finding by design (Lamport's isolation invariant): each finding gets its own LadybugDB instance at `<output_dir>/runs/<run_id>/findings/<finding_id>/graph/`. Zero-coordination concurrency, trivial cleanup, no cross-finding state leakage. Redundant indexing for shared codebases is acknowledged and mitigated in a later optional cache layer — not shoehorned into the core.
-
-### Configuration — `max_db_size`
-
-Every LadybugDB `Database` this crate opens reserves virtual address space up front, sized by `max_db_size`. lbug's own default (`SystemConfig::default()`) is `1 << 43` = 8 TiB per instance; with `graph_cache`'s `MAX_CACHED_GRAPHS = 8` entries live in the read-path cache at once, that is a 64 TiB worst case (issue #25). `src/graph_store.rs::system_config()` is the single choke point every `GraphStore::open_or_create` call resolves through, in this precedence order:
-
-1. **`AP_LBUG_TEST_MAX_DB_SIZE`** — test-only, set for every `cargo test` process via `.cargo/config.toml`'s `[env]` table (512 MiB / `2^29`, issue #21). Always wins when present, so `cargo test` behavior is independent of the production knob below.
-2. **`AP_LBUG_MAX_DB_SIZE`** — production override, unset by default. Bytes, must be a power of two and at least 8 MiB (lbug's own `BufferManager::verifySizeParams` floor). An invalid value is rejected with an actionable error at `GraphStore::open_or_create` time — never a silent fallback.
-3. **Default: 8 TiB (`1 << 43` bytes)** when neither var is set — lbug's own `DEFAULT_VM_REGION_MAX_SIZE`, the engine's per-database VM-region ceiling on every 64-bit desktop/server platform (`lbug-0.19.1/lbug-src/src/include/common/constants.h`). This is an address-space **reservation**, not an allocation: disk and memory grow only with the data actually written. An earlier release capped the default at 8 GiB (issue #25, sized from the measurement table below); that cap **aborted any ingestion whose graph outgrew it** and was repealed on 2026-08-14 — an index must complete regardless of corpus size, multi-TiB included.
-
-Set `AP_LBUG_MAX_DB_SIZE` to bound the reservation in address-space-constrained environments (e.g. containers with a low `RLIMIT_AS`); the historical measurement table below documents typical graph sizes.
-
-**Measured graph sizes (2026-07-15, `du -k` on every `graph` file found under `~/.cache/cortex/code-graphs/*/graph`, `~/.cortex/ap_graph/graph`, and `**/.prd-gen/graphs/*/graph`), top 10 of 75:**
-
-| Graph | Size |
-|---|---|
-| `repro-cortex-viz-deps` (cortex-viz + `node_modules`) | 473 MiB |
-| `bench-c2-viz-deps` (cortex-viz + deps) | 472 MiB |
-| `bench-c3-viz-pubapi` (cortex-viz, public API surface) | 460 MiB |
-| `wt-windows-launcher-96-97-*` (Cortex worktree) | 147 MiB |
-| `wt-homeostatic-*` (Cortex worktree) | 144 MiB |
-| `wt-tools-drift-*` (Cortex worktree) | 143 MiB |
-| `Cortex-wt-wiki-titles-*` | 142 MiB |
-| `wt-findings-provenance-*` | 126 MiB |
-| `anthropic-partnership-Cortex` | 126 MiB |
-| `wt-ingest-provenance-*` | 124 MiB |
-
-Total across all 75 measured graphs: ~4.87 GiB. Every graph other than the top 3 (which include `node_modules`) is under 150 MiB — the `node_modules`-inclusive runs are the actual worst case driving the sizing rule above.
-
----
-
-## The zetetic standard
-
-Inherited from [zetetic-team-subagents](https://github.com/cdeust/zetetic-team-subagents). Not a prompt suggestion — an enforcement rule that holds in code.
-
-| Pillar | Question |
-|---|---|
-| **Logical** | *Is it consistent?* |
-| **Critical** | *Is it true?* |
-| **Rational** | *Is it useful?* |
-| **Essential** | *Is it necessary?* |
-
-**In this codebase it concretely means:**
-
-1. Every algorithm traces to a source. Louvain → *Blondel et al. 2008*. Leiden C2 repair → *Traag et al. 2019*. RRF → *Cormack, Clarke, Büttcher 2009*. SCC → *Tarjan 1972*. BM25 via Tantivy → *Robertson et al. 1994*.
-2. Named constants should record their source or measured rationale. `RRF_K = 60` cites Cormack 2009. `BULK_BATCH_SIZE = 500` cites Kùzu/LadybugDB tuning. `PARSE_TIMEOUT_MICROS = 5_000_000` is justified in the block above it.
-3. No invented numbers. Where a value was chosen by judgment, the comment says so ("heuristic, not paper-backed") and cites its operational justification.
-4. Tool responses cite the spec that governs each error reason. `unsafe finding_id (spec §5.1.4, §9.3 Q4): must match [A-Za-z0-9._-]+` — callers see which rule they violated.
-5. When a capability can't be proved at spec time, the tool degrades gracefully and says so in plain language. Example: `lsp_resolve` on a stub binary returns `lsp_probe_failed: found on PATH but didn't respond as an LSP server (stdout closed immediately; likely a stub, proxy, or non-LSP binary)` — not a cryptic protocol error.
-
----
-
-## Security
-
-Four CRITICAL, four HIGH, three MEDIUM findings were surfaced by a `security-auditor` agent pass and fixed in commit [`512d683`](https://github.com/cdeust/ai-architect-mcp-codebase/commit/512d683):
-
-- Cypher injection via `insert_edge` → centralized `cypher_str()` escaping (`\` first, then `'`)
-- Git argument injection → `validate_git_ref` rejects `--`, newlines, NUL; `--` separator before refs
-- Arbitrary binary execution via `lsp_command` → strict allowlist (`rust-analyzer`, `pyright`, `pyright-langserver`, `typescript-language-server`)
-- Symlink traversal → `fs::symlink_metadata` + `MAX_DEPTH`
-- Resource exhaustion → `MAX_FILES=100_000`, `MAX_FILE_BYTES=10 MB`, `MAX_TOTAL_BYTES=2 GB`, `MAX_DEPTH=64`
-- Tree-sitter pathological input → `set_timeout_micros(5_000_000)` + `MAX_PARSE_BYTES=1 MB`
-- `query_graph` read-only → two layers over disjoint statement families (see below)
-- `graph_path` filesystem safety → `validate_graph_path_safe()` before any `remove_dir_all`
-- LSP `rootUri` → RFC 3986 percent-encoding
-- Diff line overflow → `DIFF_LINE_MAX = u64::MAX / 2` guard
-
-Each fix has a test that asserts the exploit is now rejected. Run `cargo test` to see 1800+ tests pass including the exploit-regression suite.
-
-### How `query_graph` is kept read-only
-
-Two layers, covering **disjoint** statement families. Neither subsumes the other.
-
-| Layer | Refuses | Mechanism |
-|---|---|---|
-| Engine (`GraphStore::execute_read_only_query`) | every database write and DDL — `CREATE`, `MERGE`, `SET`, `DELETE`/`DETACH DELETE`, `DROP`, `ALTER`, however spelled | `PreparedStatement::is_read_only()`: the verdict comes from the compiled plan, so a mutation written in syntax no keyword scan enumerates is still refused |
-| Lexical (`FORBIDDEN_CYPHER_KEYWORDS`) | filesystem and database movement — `COPY … TO`, `EXPORT`/`IMPORT DATABASE`, `ATTACH`, `DETACH`, `USE`, `LOAD FROM` | whole-word, case-insensitive scan of the query with string literals, backticked identifiers and comments masked out first |
-| Lexical (`READ_ONLY_PROCEDURES`) | every `CALL` naming anything but `TABLE_INFO` / `SHOW_TABLES` — including the `CALL <setting> = <value>` configuration form | per-PROCEDURE classification of the identifier after each `CALL` token |
-
-The lexical layer is **load-bearing, not defence in depth**. lbug's
-`StatementReadWriteAnalyzer` overrides `visitCopyFrom` but leaves **six**
-statements at the base visitor's no-op — `visitCopyTo`, `visitExportDatabase`,
-`visitImportDatabase`, `visitAttachDatabase`, `visitDetachDatabase` and
-`visitUseDatabase` (`parsed_statement_visitor.h`:51, 57-61 on lbug 0.19.1) — so all
-six are classified read-only. `DETACH`/`USE` were added to the denylist on
-2026-08-25 after a mechanical re-audit against those headers; before it, both
-passed the lexical filter AND the engine filter. Measured 2026-08-24 against
-lbug 0.19.1 on **both** available engine gates — `is_read_only()` and a database
-opened with `SystemConfig::read_only(true)`, which reaches the same predicate via
-`ClientContext::validateTransaction` — `COPY (…) TO 'f.csv'` and
-`EXPORT DATABASE 'd'` execute and write the filesystem, while both correctly refuse
-`CREATE NODE TABLE`. Pinned by `engine_gate_does_not_cover_filesystem_writes` and,
-for the whole family, `engine_classifies_every_filesystem_statement_as_read_only`.
-
-`CALL` is classified **per procedure** rather than refused wholesale, so schema
-introspection (`CALL table_info('Function') RETURN *`) is reachable. That
-distinction is load-bearing too: the same analyzer returns `readOnly = true` from
-`visitStandaloneCall`, so `CALL threads = 8` — a configuration write — is
-engine-read-only, and this lexical layer is the only barrier that exists against
-it. Relaxing the KEYWORD rather than allowlisting the PROCEDURE would remove that
-barrier entirely.
-
-A keyword introduced by `:` or `.` is an identifier, not a clause, so queries over
-this schema's own `Import` node table work unchanged:
-`MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE n.is_resolved = false RETURN n.path`.
-
-The gate does **not** extend that exemption to an alias (`AS <keyword>`), where the
-clause detectors do. The asymmetry is deliberate: on the gate an exemption can only
-ever let a keyword through, so it fails closed and a bare `use`/`create` pattern
-variable is refused (backtick it); on the clause detectors the expensive direction
-is reversed, because reading `AS limit` as a clause would suppress the `LIMIT`
-injection. A masked literal or backticked identifier is treated as a TOKEN, never
-as whitespace, so no look-back can walk across one.
-
-`query_graph` executes **one statement per call**. A trailing `;` is accepted; a
-`;`-chained request is refused with reason `multi_statement_not_supported`, because
-the read-only classification, `LIMIT` injection, `ORDER BY` detection and the offset
-cursor are all properties of a single statement.
-
-The full security argument — threat model, trust boundaries, what each claim
-rests on, and where it stops — is in
-[docs/ASSURANCE-CASE.md](docs/ASSURANCE-CASE.md). Reporting process and response
-SLA: [SECURITY.md](SECURITY.md). How the project is run and what happens if the
-maintainer stops: [GOVERNANCE.md](GOVERNANCE.md). Where it is going:
-[docs/ROADMAP.md](docs/ROADMAP.md). OpenSSF Best Practices answers, criterion by
-criterion: [.bestpractices.json](.bestpractices.json).
-
----
-
-## Scale
-
-Re-measured 2026-07-28 on the current dependency (`lbug 0.18`, rustc 1.95.0,
-macOS 26.5.1 arm64) by re-running the `dba` agent's nine compile-and-run probes
-— `cargo test --release --test lbug_bulk_investigation -- --nocapture`, 199
-edges per strategy. The ranking is the same one the original 0.15.3 run found;
-the absolute figures are not comparable across the two runs, because both the
-engine version and the machine changed.
-
-| Strategy | ms/edge |
-|---|---|
-| Raw string per edge (naive) | 9.658 |
-| Prepared statement, no transaction | 6.924 |
-| `BEGIN TRANSACTION` + prepared + `COMMIT` | 0.328 |
-| **UNWIND + typed `LogicalType::Struct`** | **0.127** |
-
-The chosen path is **76× faster than the naive one** on this measurement.
-
-The bulk-insert path uses UNWIND with a typed struct schema (the engineer who wrote the first version used `LogicalType::Any` which fails the binder — the typed struct form works). Prepared statements are cached in a `RefCell<HashMap<query, PreparedStatement>>` on the `GraphStore`. Sparse TF-IDF replaces the dense `N × V × 4B` matrix — **30.5× smaller** on our own codebase (108 KB vs 3.2 MB) and scales linearly with non-zero terms rather than vocab size. Clustering eliminated `probe_node_label_for_process` (per-node Cypher round-trip) in favor of a single in-memory `HashMap<id, label>` population pass.
-
-500-file synthetic Rust fixture indexes in **~38 seconds** end-to-end (parse + resolve + cluster + search index), down from the pre-audit implied "5 min – 1 hour" bracket.
-
----
-
-## Falsifiable evidence — graph tools vs a Grep/Glob/Read baseline
-
-This offline retrieval evaluation compares graph queries with a fixed
-substring-search/full-file-read protocol on an authored 4-language corpus
-(Python, TypeScript, Go, Rust): 20 questions across five capability dimensions.
-`benchmarks/eval_headtohead/PRE_REGISTRATION.md` records the hypotheses and
-protocol. The current results below are the post-#92 run in
-`benchmarks/eval_headtohead/results.json`; earlier runs remain separately saved.
-See that folder's `MANIFEST.md` for provenance and `reproduce.sh` for the command.
-The deterministic evaluation needs no API key or external corpus; building it
-requires the Rust toolchain and dependencies to be available.
-
-| metric (mean ± sample stdev, n=20) | AP graph tools | Grep/Glob/Read baseline | source field |
-|---|---:|---:|---|
-| retrieval precision | **1.00 ± 0.00** | 0.65 ± 0.33 | `aggregate.{graph,explorer}.precision` |
-| retrieval recall | **1.00 ± 0.00** | 1.00 ± 0.00 | `aggregate.*.recall` |
-| payload token proxy | **43.14 ± 17.26** | 550.36 ± 330.28 | `aggregate.*.tokens` |
-| modeled tool calls | **1.00 ± 0.00** | 5.20 ± 1.64 | `aggregate.*.tool_calls` |
-| mean per-question token ratio (baseline / graph) | **14.26×** | — | `aggregate.token_ratio_explorer_over_graph.mean` |
-| mean per-question tool-call ratio | **5.20×** | — | `aggregate.toolcall_ratio_explorer_over_graph.mean` |
-
-All four hypotheses H1–H4 are **SUPPORTED** in the current run under this
-protocol. The original run **FALSIFIED H4**: graph recall was 0.825 against 1.00.
-Its five losses (`go-D3`, `go-D4`, `rs-D2`, `rs-D4`, `ts-D4`) remain in
-`raw_results.2026-07-26-pre-fix-87.json`; fixes #87 and #92 closed these gaps.
-The corpus informed those fixes, so the current result is a regression benchmark,
-not an unseen generalization test.
-
-Costs are modeled, not observed AI-client bills or tool traces. The graph leg
-serializes a benchmark-specific compact envelope of symbol identities; the
-baseline counts its substring-hit transcript plus full matching files. Both use
-a payload-size / 4 token proxy. Graph calls are assigned one per question;
-baseline calls are assigned two plus the number of matching files. Indexing,
-client prompts, actual MCP response envelopes and model reasoning are excluded.
-The 14.26× figure is a mean of per-question ratios; dividing aggregate payload
-volumes gives 12.76×, a different statistic. The optional answer-quality judge
-(`AP_EVAL_JUDGE_CMD`) did not run. These measurements establish file-retrieval
-results and protocol costs, not AI-agent success, hallucination reduction or
-real-world token savings.
-
----
+[docs/security.md](docs/security.md) has the full list and the analysis of
+why both `query_graph` layers are needed, and
+[docs/ASSURANCE-CASE.md](docs/ASSURANCE-CASE.md) the security argument.
+Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
 ## Green software engineering
 
-This server's efficiency argument is **demand reduction**, and it is already
-measured — it just was not named as such until now.
+The dominant energy cost in an LLM-assisted coding workflow is the model
+inference spent re-reading files to answer a question a structural query could
+answer once; this binary's CPU is small next to it. Every token an agent does
+not process is compute that is never scheduled. The
+[Green Software Foundation](https://greensoftware.foundation/) calls this
+energy proportionality, and here it is applied where the constant is largest.
 
-The dominant energy term in an LLM-assisted coding workflow is not this
-binary's CPU. It is the model inference spent re-reading files to answer a
-question a structural query could have answered once. Every token an agent does
-not have to process is compute that is never scheduled. That is the same lever
-the [Green Software Foundation](https://greensoftware.foundation/) calls energy
-proportionality, applied at the layer where the constant is largest.
+The head-to-head evaluation measures that demand under a pre-registered
+protocol, n=20, reproducible offline with no API key:
 
-The head-to-head evaluation above quantifies exactly that, under a
-pre-registered protocol (`benchmarks/eval_headtohead/PRE_REGISTRATION.md`),
-n=20, reproducible offline with no API key:
-
-| Demand term | AP graph tools | Grep/Glob/Read baseline | Reduction |
+| Demand term | Graph tools | Grep/Glob/Read baseline | Reduction |
 |---|---:|---:|---:|
-| payload token proxy | 43.14 ± 17.26 | 550.36 ± 330.28 | **14.26×** (mean of per-question ratios) |
-| modeled tool calls | 1.00 ± 0.00 | 5.20 ± 1.64 | **5.20×** |
+| Payload token proxy | 43.14 ± 17.26 | 550.36 ± 330.28 | 14.26x (mean of per-question ratios) |
+| Modeled tool calls | 1.00 ± 0.00 | 5.20 ± 1.64 | 5.20x |
 
-**What those numbers are not.** Costs are *modeled*, not observed AI-client
-bills or tool traces; both legs use a payload-size / 4 token proxy; indexing,
-client prompts, real MCP response envelopes and model reasoning are all
-excluded. The corpus informed fixes #87 and #92, so this is a regression
-benchmark rather than an unseen generalization test. Dividing aggregate payload
-volumes instead of averaging per-question ratios gives 12.76×, a different
-statistic. **No energy or CO2 figure is derived from these numbers**, and none
-should be: this repository measures no joules, and a token proxy is not a
-watt-hour.
+Costs are modeled. Both legs use a payload-size / 4 token proxy, and indexing,
+client prompts, real MCP response envelopes and model reasoning are excluded.
+The corpus informed fixes #87 and #92, so this is a regression benchmark.
+Dividing aggregate payload volumes gives 12.76x, a different statistic. No
+energy or CO2 figure is derived from these numbers, because this repository
+measures no joules and a token count does not convert to watt-hours.
+[docs/evaluation.md](docs/evaluation.md#graph-tools-compared-with-a-grepglobread-baseline)
+has the full table, the protocol and the falsified first run.
 
-Server-side, the same discipline applies to work the machine does do — each
-figure sourced to a committed measurement, not an estimate:
+On the server side, bulk graph writes through UNWIND with a typed struct cost
+0.127 ms per edge against 9.658 ms for the naive raw-string path, 76 times
+less work for the same output (measured 2026-07-28 on `lbug 0.18` with
+`tests/lbug_bulk_investigation.rs`). Tree-sitter extracts structure without a
+model, and indexing is incremental by default. The server-side measurements
+and their dates are in [docs/evaluation.md](docs/evaluation.md).
 
-- **Bulk graph writes: 0.127 ms/edge** via UNWIND with a typed
-  `LogicalType::Struct`, against 9.658 ms/edge for the naive raw-string path —
-  **76×** less work for identical output (re-measured 2026-07-28, `lbug 0.18`,
-  rustc 1.95.0, macOS 26.5.1 arm64; `cargo test --release --test
-  lbug_bulk_investigation`).
-- **Search index: 30.5× smaller** — sparse TF-IDF at 108 KB replaces a dense
-  `N × V × 4B` matrix at 3.2 MB on this codebase, and scales with non-zero
-  terms rather than vocabulary size.
-- **Prepared statements are cached** in a `RefCell<HashMap<query,
-  PreparedStatement>>`; clustering populates one in-memory `HashMap<id, label>`
-  instead of a per-node Cypher round-trip.
-- **Native parsing, not inference.** Tree-sitter extracts structure
-  deterministically; no model is called to read code. A 500-file Rust fixture
-  indexes end-to-end in **~38 seconds**.
-- **Incremental by default**, with `max_db_size` bounding storage growth — see
-  [Configuration](#configuration--max_db_size).
+## The zetetic standard
 
-The rule is the same one the rest of this repository runs under (§ *The zetetic
-standard*): a constant with three or more significant digits carries a
-`// source:` annotation, and an efficiency claim with no measurement behind it
-does not ship.
+Inherited from
+[zetetic-team-subagents](https://github.com/cdeust/zetetic-team-subagents).
 
----
+| Pillar | Question |
+|---|---|
+| Logical | Is it consistent? |
+| Critical | Is it true? |
+| Rational | Is it useful? |
+| Essential | Is it necessary? |
 
-## Integration with the rest of the stack
+In this codebase it means five things.
 
-```
-                 ┌─────────────────────────────────────────┐
-                 │           Claude Code agent             │
-                 └────────────┬────────────────────────────┘
-                              │ MCP (stdio JSON-RPC)
-                              ↓
-      ┌──────────────────────────────────────────────────┐
-      │             ai-architect-mcp-codebase                 │  ← this repo
-      │  stage 0 · 1 · 2 · 3a-e · 4 · 6 · 8 · 9          │
-      │  Rust · LadybugDB · tree-sitter · Tantivy        │
-      └──────┬──────────────────┬────────────────────────┘
-             │                  │
-             │                  └────→  stage 5 (PRD gen)
-             │                         [ai-architect-mcp-spec]
-             ↓                          TypeScript / Node
-     ┌─────────────────┐                    │
-     │     Cortex      │                    │
-     │  memory engine  │ ←──────────────────┘
-     │  PostgreSQL +   │
-     │    pgvector     │
-     └─────────────────┘
-             ↑
-             │  cross-session memory for findings,
-             │  decisions, lessons learned
-             │
-     ┌─────────────────────────────┐
-     │  zetetic-team-subagents     │
-     │  97 genius + 18 specialists │
-     │  problem-shape routing      │
-     └─────────────────────────────┘
-```
+1. Every algorithm traces to a source. Louvain: Blondel et al. 2008. Leiden
+   C2 repair: Traag et al. 2019. RRF: Cormack, Clarke and Büttcher 2009.
+   Strongly connected components: Tarjan 1972. BM25 (through Tantivy):
+   Robertson et al. 1994.
+2. Named constants record their source or measured rationale. The RRF
+   constant `K = 60.0` in `src/search/rrf.rs` cites Cormack 2009;
+   `BULK_BATCH_SIZE = 500` cites LadybugDB practitioner guidance and the April
+   2026 scalability audit. [CONTRIBUTING.md](CONTRIBUTING.md) requires a
+   `// source:` annotation on every numeric constant with three or more
+   significant digits, and an efficiency claim with no measurement behind it
+   does not ship.
+3. No invented numbers. Where a value was chosen by judgment, the comment
+   says so and gives its operational justification.
+4. Error responses name the rule that was violated, for example
+   `unsafe finding_id (spec §5.1.4, §9.3 Q4): must not contain '..'`.
+5. When a capability is unavailable, the tool says so in plain language. For
+   example, `lsp_resolve` on a binary that is not a language server returns
+   `lsp_probe_failed: found on PATH but didn't respond as an LSP server
+   (stdout closed immediately; likely a stub, proxy, or non-LSP binary)`.
 
-- **Cortex** — every architectural decision made during a pipeline run gets remembered. When the next finding touches a similar area, Cortex surfaces the prior reasoning before you re-derive it.
-- **zetetic-team-subagents** — the genius agents (Shannon, Lamport, Simon, Popper, Feynman, Fermi, dba, architect, security-auditor, engineer) designed this project stage by stage. Every major decision in `stages/*.md` traces to an agent dispatch.
-- **ai-architect-mcp-spec** — consumes our `stage-4.prd_input.json` artifact via disk or MCP-to-MCP query of `search_codebase` / `get_context` / `get_impact`. Each in its ideal language: our performance-critical graph work in Rust, their document generation in TypeScript.
-
----
-
-## Testing
+## Development
 
 ```bash
-cargo test                                          # 1800+ tests, full suite
-cargo test --release --test scalability_bench       # 500-file synthetic fixture
-cargo test --release --test lbug_bulk_investigation # dba's 9 UNWIND probes
-cargo test --release --test stage3a_integration     # end-to-end per sub-stage
-cargo test --release --test stage9_integration      # before/after diff
-cargo check                                         # zero warnings required
-cargo build --release                               # release binary
+cargo build --release
+cargo test                                            # full suite (1800+ tests)
+cargo test --test graph_accuracy                      # structural accuracy gate
+cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
+python3 scripts/check_doc_claims.py                   # README numbers against their sources
 ```
 
-Every stage has an integration test with fixture data. The `lbug_bulk_investigation` test is intentionally preserved — it's the compile-and-run proof that dba's UNWIND pattern works, kept for regression protection and documentation.
-
----
+CI also measures line coverage with `cargo llvm-cov` (80% floor) and checks the
+coverage and test-count badges above against that run. Contributions need a
+DCO sign-off (`git commit -s`); [CONTRIBUTING.md](CONTRIBUTING.md) has the
+layer rules and coding standards, and
+[docs/architecture.md](docs/architecture.md) the module map, dependencies and
+design records. The evaluation programs are described in
+[docs/evaluation.md](docs/evaluation.md).
 
 ## Repository layout
 
 ```
 ai-architect-mcp-codebase/
 ├── src/
-│   ├── main.rs                    ← MCP server entry point
-│   ├── cli.rs                     ← argument parsing + startup wiring
-│   ├── tool_schemas.rs            ← JSON Schemas for every tool
-│   ├── tool_profile.rs            ← core/full profile selection
-│   ├── lib.rs                     ← re-exports for integration tests
-│   ├── analyze_handlers.rs        ← one file per tool-handler group
-│   ├── indexing_handlers.rs · query_handlers.rs · symbol_handlers.rs
-│   ├── search_context_handlers.rs · process_impact_handlers.rs
-│   ├── history_handlers.rs · prd_handlers.rs
-│   ├── verification_core.rs · verification_ops.rs
-│   ├── graph_store/               ← LadybugDB port (UNWIND + prepared + cached)
-│   │   ├── mod.rs · config.rs · ddl.rs · schema.rs · serialize.rs · membership.rs
-│   ├── parser/
-│   │   ├── mod.rs                 ← language dispatch
-│   │   ├── language.rs            ← the Language enum — 11 variants
-│   │   └── spec/                  ← per-language specs + shared walkers/
-│   ├── indexer/                   ← walk + parse + persist (+ iac/, persist/)
+│   ├── main.rs                    ← MCP server entry point and dispatch
+│   ├── tool_schemas.rs            ← JSON Schemas, one file per tool group
+│   ├── tool_profile.rs            ← core and full profiles
+│   ├── graph_store/               ← LadybugDB port
+│   ├── parser/                    ← tree-sitter extraction, one spec per language
+│   ├── indexer/                   ← walk, parse, persist, coverage
 │   ├── resolver/                  ← cross-file resolution
-│   │   ├── imports.rs · calls.rs · extends.rs · implements.rs · uses.rs · phases.rs
-│   ├── resolver_layers.rs · lsp_client.rs · lsp_resolver.rs
-│   ├── clustering/                ← Louvain + C2 repair + BFS process tracing
-│   │   ├── community.rs · process.rs · impact.rs
-│   ├── search/
-│   │   ├── mod.rs                 ← public types, index path, search_graph
-│   │   ├── hybrid.rs · substring.rs   ← the two ranking paths
-│   │   ├── context.rs · name_lookup.rs · enrichment.rs · grouping.rs
-│   │   ├── bm25.rs · vector.rs · vector_format.rs · rrf.rs
-│   │   ├── qualified_name.rs · impact_target.rs
-│   ├── prd_input/                 ← stage 4
-│   ├── prd_validator/             ← stage 6
-│   ├── security_gates/            ← stage 8
-│   ├── semantic_diff.rs           ← stage 9
-│   ├── history/ · cochange.rs     ← stage 3e
-│   ├── macro_expansion/ · stdlib_index/ · language_provider/
-│   └── git_diff.rs                ← diff parsing + symbol mapping
-├── stages/                        ← locked spec per stage (Shannon, then engineer implements)
-│   ├── stage-1.md · stage-2.md · stage-3.md · stage-3b.md · stage-3c.md
-│   ├── stage-6.md · stage-8.md
-│   ├── stage-1.review.md · stage-3-db-evaluation.md · stage-3-research.md
-│   └── decisions/                 ← Popper / Lamport / Simon verdicts per decision
-├── tests/
-│   ├── stage3a_integration.rs · stage3b_integration.rs
-│   ├── stage3c_integration.rs · stage3d_integration.rs
-│   ├── stage4_integration.rs · stage6_integration.rs
-│   ├── stage8_integration.rs · stage9_integration.rs
-│   ├── multilang_integration.rs · graph_accuracy.rs
-│   ├── stage3d_hybrid_search.rs
-│   ├── scalability_bench.rs
-│   ├── lbug_bulk_investigation.rs
-│   ├── tfidf_size_report.rs
-│   └── fixtures/multilang/        ← sample.rs · sample.py · sample.ts
-├── scripts/                       ← doc-claim and pin gates, both CI-enforced
-│   ├── check_doc_claims.py · check_marketplace_pins.py
-│   └── tests/
-├── .claude/
-│   ├── agents/                    ← 18 specialists + 97 genius agents
-│   ├── skills/ · commands/ · tools/ · hooks/
-│   └── scripts/
-├── .mcp.json
-├── NOTES.md                       ← stages table + growth rule
-├── Cargo.toml
-└── README.md
+│   ├── lsp_client/ · lsp_resolver/
+│   ├── clustering/                ← communities, processes, impact
+│   ├── search/                    ← BM25, sparse TF-IDF, RRF
+│   ├── history/                   ← git history layer
+│   ├── prd_input/ · prd_validator/ · security_gates/
+│   └── semantic_diff.rs · git_diff.rs
+├── tests/                         ← integration tests and graph_accuracy.rs
+├── benchmarks/                    ← eval_headtohead, token_surface, incremental_speed
+├── stages/                        ← design specs and decision records
+├── docs/                          ← install, configuration, security, architecture, evaluation
+├── scripts/                       ← doc-claim and pin gates
+├── bin/                           ← plugin launcher and release verification
+├── skills/                        ← host-native workflows
+├── plugins/                       ← Codex plugin package
+├── mcp-contract.json
+└── Cargo.toml
 ```
-
----
-
-## The zetetic decisions behind the build
-
-Every major architectural decision was made by a genius agent with a specific problem shape. Stored in `stages/decisions/*.md` and in Cortex.
-
-| Decision | Agent | Verdict |
-|---|---|---|
-| Rust vs C/C++ for the glue layer | **Popper** | Conjecture "Rust is the right language" is unfalsified. `lbug` + `tree-sitter` already run native C/C++; Rust is the glue where the borrow checker pays the most. |
-| Graph-per-finding vs graph-per-codebase | **Lamport** | Per-finding. Isolation holds by construction with zero coordination; the redundant-indexing cost is mitigable in an optional cache layer later. |
-| Stage 3a decomposition | **Simon** | Five steps, satisficed against the growth rule; first useful query at step 4. |
-| DB backend choice | **dba** | LadybugDB (evaluated at `lbug 0.15.3`, now on `0.18`) — only option simultaneously maintained, native Cypher, embedded, with FTS + vector + algo extensions. |
-| Stage 2 clarification loop shape | **Shannon** | Four-tool state machine with atomic single-file session (no crash window between separate files), unconditional one-round-minimum before finalize. |
-| lbug UNWIND pattern | **dba** | `LogicalType::Struct { fields }` works; `LogicalType::Any` fails the binder — 38× speedup verified by compile-and-run probes. |
-
-Agents are spawned via [zetetic-team-subagents](https://github.com/cdeust/zetetic-team-subagents); each genius is a reasoning pattern (not a persona) with canonical moves and primary-source citations.
-
----
 
 ## Status
 
-Public repo, MIT licensed. Security audit fixes are in, correctness fixes are in, scale fixes are in, stages 4/6/8/9 are live, but every capability marked "live" above has been verified end-to-end on this machine, not yet in a production context.
+Version 0.12.0. The capabilities above are covered by the test suite and the
+accuracy gate in CI and have been run end to end on the maintainer's machine;
+they have not yet been validated in a production deployment. The unsafe-symbol
+security check waits on `unsafe` extraction in the Rust parser. Rename and
+refactor tools are out of scope because the server does not edit code. Direction is in
+[docs/ROADMAP.md](docs/ROADMAP.md); what shipped is in
+[CHANGELOG.md](CHANGELOG.md).
 
-**What works today**: indexing Rust, Python, TypeScript, Java, Kotlin, Swift, Objective-C, C, C++, and Go codebases end-to-end, resolving cross-file relationships, clustering into communities, tracing processes from entry points, hybrid search, PRD input preparation, PRD claim validation, security gate checking, before/after regression detection.
+## Related projects
 
-**What's deferred**:
-- Cross-file indexer batching to unlock the full 38× UNWIND win (currently 1.17× aggregate; per-edge rate is already 0.143 ms)
-- `is_unsafe` extraction in the Rust parser (stage 8 S2 runs in `info`-skip mode pending this)
-- LSP-based deep method resolution on inferred types
-- Multi-repo / workgroup operations (GitNexus `group_*`)
-- Rename / refactor tools (we are read-only by design)
-
----
-
-## Registry
-
-Published on crates.io as [`ai-architect-mcp-codebase`](https://crates.io/crates/ai-architect-mcp-codebase) and listed in the [MCP Registry](https://registry.modelcontextprotocol.io) under the name below (this line doubles as the registry's package-ownership proof):
-
-mcp-name: io.github.cdeust/ai-architect-mcp-codebase
-
----
+Each of these runs on its own. [Cortex](https://github.com/cdeust/Cortex) is
+a persistent-memory MCP server, and
+[ai-architect-mcp-spec](https://github.com/cdeust/ai-architect-mcp-spec) is an
+MCP server for PRD generation and specification verification. An agent that
+has both this server and ai-architect-mcp-spec registered can ground a
+specification in the graph through `search_codebase`, `get_context` and
+`get_impact`, or through the JSON file `prepare_prd_input` writes, and check
+the result with `validate_prd_against_graph`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). Published on crates.io as
+[`ai-architect-mcp-codebase`](https://crates.io/crates/ai-architect-mcp-codebase)
+and listed in the [MCP Registry](https://registry.modelcontextprotocol.io)
+under the name below.
+
+mcp-name: io.github.cdeust/ai-architect-mcp-codebase
 
 This software is the independent work of Clément Deust. It was developed
 outside any employment relationship and is not affiliated with, endorsed by,
-or owned by any past or present employer. It is part of the ai-architect
-ecosystem ([Cortex](https://github.com/cdeust/Cortex),
-[zetetic-team-subagents](https://github.com/cdeust/zetetic-team-subagents),
-[AI Architect Spec](https://github.com/cdeust/ai-architect-mcp-spec)).
+or owned by any past or present employer.
 
-The graph-theoretic and information-retrieval algorithms used here (Louvain
-community detection with C2 repair, BM25, RRF rank fusion, tree-sitter AST
-parsing, Tarjan strongly-connected-components) are sourced from published
-research; citations are documented inline via `// source:` annotations and in
-`docs/`. The MIT license covers this implementation; it does not assert
-ownership over the underlying algorithms, which remain attributable to their
-original authors.
-
----
-
-<p align="center"><sub>Built by <a href="https://github.com/cdeust">cdeust</a>. Every stage designed by a genius agent. Every constant sourced.</sub></p>
+The graph and retrieval algorithms used here (Louvain community detection with
+C2 repair, BM25, RRF rank fusion, tree-sitter parsing, Tarjan strongly
+connected components) come from published research; citations are inline in
+`// source:` annotations and in `docs/`. The MIT license covers this
+implementation and asserts no ownership over the underlying algorithms, which
+remain attributable to their original authors.
