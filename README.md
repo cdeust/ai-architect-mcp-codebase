@@ -440,7 +440,7 @@ ai-architect-mcp-codebase/
 
 ## Status
 
-Version 0.12.0. The capabilities above are covered by the test suite and the
+Version 0.12.1. The capabilities above are covered by the test suite and the
 accuracy gate in CI and have been run end to end on the maintainer's machine;
 they have not yet been validated in a production deployment. The unsafe-symbol
 security check waits on `unsafe` extraction in the Rust parser. Rename and

@@ -6,7 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.1] — Per-site call rows, one edge count, one target per macro call
+
 ### Fixed
+
+- The per-site call tables are now written (#335). `Calls_CallSite_Function`,
+  `Calls_CallSite_Method` and `Calls_CallSite_StdlibSymbol` were declared in the
+  schema but no writer existed, so a resolved `CallSite` had `is_resolved = true`
+  and no row naming its target. The static resolver, the macro-expansion pass and
+  the language-server pass now each write the per-site row beside the
+  definition-level `Calls_*` edge, with the same confidence and method. These
+  rows restate a resolution and are not counted in `resolve.total_edges`.
+  `get_context` leaves them out of `calls` and `called_by`, and a macro call site
+  that resolved now has `is_resolved` set. A bare call in Python is now resolved
+  by Python's scoping and never to a method (a module function that shares a
+  name with a method was dropped as ambiguous, and a call whose only same-named
+  symbol was a method got a false edge). The accuracy scorer counts a resolution
+  once, against the symbol-level edge.
+- `query_graph` now reports `truncated: true` when the row bound cut a result
+  (#334). A query with no `LIMIT` ran with `LIMIT 500` and returned 500 rows with
+  `total_count: 500` and `truncated: false`; only `limit_injected` hinted at the
+  cut, and no offset could reach row 501. The injected bound now reads one probe
+  row past the window, so a continuing result is reported and `next_offset` is
+  the end of the window. The response carries `row_limit: 500` whenever the bound
+  was injected, and `total_count` is a lower bound in that case.
 
 - A macro call site now gets the one target its expansion calls, or none (#339).
   The macro layer wrote every target of an expansion as a call, whatever the
@@ -98,6 +121,12 @@ adheres to [Semantic Versioning](https://semver.org/).
   Closure parameters such as `i` are no longer emitted as call sites by the
   argument scan, which removes false caller edges to unrelated functions of the
   same name.
+
+### Changed
+
+- The README is rewritten around what this server does, with the operational
+  detail moved under `docs/` (#340). The changelog notes for 0.12.0 were
+  corrected (#333).
 
 ## [0.12.0] — Honest coverage for Rust builds; static receiver-call resolution; read-tool freshness receipt
 
