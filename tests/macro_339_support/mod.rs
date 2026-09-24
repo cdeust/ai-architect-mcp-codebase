@@ -77,3 +77,16 @@ pub fn reason_of(res: &resolver::ResolutionResult, file: &str) -> Option<String>
         .find(|u| u.from_id.starts_with(file) && u.target_text == "write!")
         .map(|u| u.reason.clone())
 }
+
+/// The reason the pass gave the unresolved `write!` on `line` of `file`.
+pub fn reason_on_line(res: &resolver::ResolutionResult, file: &str, line: u64) -> Option<String> {
+    let marker = format!("::call@{line}:");
+    res.unresolved
+        .iter()
+        .find(|u| {
+            u.from_id.starts_with(file)
+                && u.from_id.contains(&marker)
+                && u.target_text.ends_with('!')
+        })
+        .map(|u| u.reason.clone())
+}

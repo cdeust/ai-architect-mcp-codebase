@@ -268,15 +268,79 @@ fn binding_declared_type(source: &str, binding_node: Node, full_path: bool) -> O
         return None;
     }
     let value = binding_node.child_by_field_name(VALUE_FIELD)?;
-    if value.kind() != "call_expression" {
+    let (call, unwrapped) = constructor_call(source, value, full_path)?;
+    let func = call.child_by_field_name(FUNCTION_FIELD)?;
+    if func.kind() != "scoped_identifier" {
         return None;
     }
-    let func = value.child_by_field_name(FUNCTION_FIELD)?;
-    if func.kind() != "scoped_identifier" {
+    if unwrapped && !is_known_constructor(source, func) {
         return None;
     }
     let path = func.child_by_field_name(PATH_FIELD)?;
     expr_path_name(source, path, full_path)
+}
+
+// source: std constructors that return `Self`, or `Result<Self, _>` through
+// `io::Result`: `File::create`, `File::open`, `BufWriter::new`,
+// `Vec::with_capacity`, `TcpStream::connect` (https://doc.rust-lang.org/std/).
+const KNOWN_CONSTRUCTORS: [&str; 6] = [
+    "new",
+    "create",
+    "create_new",
+    "open",
+    "with_capacity",
+    "connect",
+];
+// source: `Result::unwrap` and `Result::expect` return the `Ok` value, the
+// same type `?` yields.
+const RESULT_UNWRAPPERS: [&str; 2] = ["unwrap", "expect"];
+
+/// The call a `let` initialiser is. With `through_results` (the macro
+/// destination lookup, issue #339) it looks through `?`, `.unwrap()` and
+/// `.expect(..)` and reports that it did; any other wrapper, `x.map(..)` for
+/// one, ends the search.
+fn constructor_call<'t>(
+    source: &str,
+    value: Node<'t>,
+    through_results: bool,
+) -> Option<(Node<'t>, bool)> {
+    let mut node = value;
+    let mut unwrapped = false;
+    loop {
+        let inner = match node.kind() {
+            "call_expression" if through_results => unwrapped_receiver(source, node),
+            "try_expression" if through_results => Some(node.named_child(0)?),
+            "call_expression" => return Some((node, unwrapped)),
+            _ => return None,
+        };
+        match inner {
+            Some(next) => {
+                node = next;
+                unwrapped = true;
+            }
+            None => return Some((node, unwrapped)),
+        }
+    }
+}
+
+/// `x` of `x.unwrap()` or `x.expect(..)`.
+fn unwrapped_receiver<'t>(source: &str, call: Node<'t>) -> Option<Node<'t>> {
+    let function = call.child_by_field_name(FUNCTION_FIELD)?;
+    if function.kind() != "field_expression" {
+        return None;
+    }
+    let field = node_text(source, function.child_by_field_name("field")?);
+    if !RESULT_UNWRAPPERS.contains(&field.as_str()) {
+        return None;
+    }
+    function.child_by_field_name(VALUE_FIELD)
+}
+
+/// True when the associated function of `T::assoc` is a known constructor.
+fn is_known_constructor(source: &str, scoped: Node) -> bool {
+    scoped
+        .child_by_field_name(NAME_FIELD)
+        .is_some_and(|n| KNOWN_CONSTRUCTORS.contains(&node_text(source, n).as_str()))
 }
 
 /// A TYPE expression's last segment with generics stripped: unwraps

@@ -12,9 +12,12 @@ use crate::macro_expansion::scope::Import;
 use crate::resolver::{EdgeBuffer, PhaseResult, UnresolvedRef};
 use std::collections::{HashMap, HashSet};
 
-// source: issue #339 — the reasons an expansion gets no edge.
-const REASON_AMBIGUOUS: &str = "ambiguous";
+// source: issue #339 — the reasons an expansion gets no edge, next to the
+// others this pass reports ("no macro-expansion table entry", "caller is not a
+// callable"). The first is a decided expansion whose shape has no target, the
+// second one whose destination type is not determined.
 const REASON_NO_STABLE_TARGET: &str = "no stable target for this expansion";
+const REASON_TYPE_NOT_DETERMINED: &str = "destination type not determined";
 
 /// Entry point for Layer 4 (macros + derives).
 /// postcondition: returns the same `(resolved, total, unresolved)` shape as
@@ -206,14 +209,16 @@ impl MacroPass<'_> {
                     None => (1, 1, Vec::new()),
                 })
             }
-            Decision::Undetermined { candidates } => {
-                let reason = if candidates > 1 {
-                    format!("{REASON_AMBIGUOUS} ({candidates} candidates)")
-                } else {
-                    REASON_NO_STABLE_TARGET.to_string()
-                };
-                Ok((0, 1, vec![unresolved_ref(row, target, &reason)]))
-            }
+            Decision::NoStableTarget => Ok((
+                0,
+                1,
+                vec![unresolved_ref(row, target, REASON_NO_STABLE_TARGET)],
+            )),
+            Decision::TypeNotDetermined => Ok((
+                0,
+                1,
+                vec![unresolved_ref(row, target, REASON_TYPE_NOT_DETERMINED)],
+            )),
         }
     }
 

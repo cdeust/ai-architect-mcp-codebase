@@ -51,9 +51,12 @@ pub enum Decision {
         canonical: &'static str,
         basis: Basis,
     },
-    /// No single target. `candidates` is how many alternatives stayed
-    /// possible: 0 means the shape has no stable target at all.
-    Undetermined { candidates: usize },
+    /// The expansion has no stable target whatever the site is (the list form
+    /// of `vec!`).
+    NoStableTarget,
+    /// The site's expansion has a target, but the destination's type is not
+    /// determined: not nameable, not std, unplaced or of two origins.
+    TypeNotDetermined,
 }
 
 /// The dispatch rule of a Rust macro, if its target is decided.
@@ -137,11 +140,8 @@ pub fn decide_by_receiver(
     dest: &Destination,
     imports: &[Import],
 ) -> Decision {
-    let undetermined = Decision::Undetermined {
-        candidates: alternatives.len(),
-    };
     if type_origin(dest.declared, imports, dest.defined_in_file) != TypeOrigin::Std {
-        return undetermined;
+        return Decision::TypeNotDetermined;
     }
     let name = original_name(dest.declared, imports);
     let mut by_type = alternatives
@@ -152,7 +152,7 @@ pub fn decide_by_receiver(
             canonical: only.canonical,
             basis: Basis::ReceiverType,
         },
-        _ => undetermined,
+        _ => Decision::TypeNotDetermined,
     }
 }
 
@@ -163,7 +163,7 @@ pub fn decide_by_shape(rules: &[(&str, &'static str)], shape: &str) -> Decision 
             canonical,
             basis: Basis::ArgShape,
         },
-        None => Decision::Undetermined { candidates: 0 },
+        None => Decision::NoStableTarget,
     }
 }
 
@@ -196,7 +196,7 @@ mod tests {
         }
     }
 
-    const NONE: Decision = Decision::Undetermined { candidates: 3 };
+    const NONE: Decision = Decision::TypeNotDetermined;
 
     #[test]
     fn a_formatter_destination_reaches_only_the_inherent_write_fmt() {
@@ -282,10 +282,7 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(
-            decide_by_shape(rules, "list"),
-            Decision::Undetermined { candidates: 0 }
-        );
+        assert_eq!(decide_by_shape(rules, "list"), Decision::NoStableTarget);
     }
 
     /// Every alternative is a different trait or type; two paths ending in the

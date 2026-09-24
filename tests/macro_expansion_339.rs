@@ -11,10 +11,13 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::resolver;
 mod common;
 mod macro_339_support;
-use macro_339_support::{index_files, is_resolved, macro_rows, reason_of, rows_on_line};
+use macro_339_support::{
+    index_files, is_resolved, macro_rows, reason_of, reason_on_line, rows_on_line,
+};
 
-/// `io::Write` is the only write trait imported here, so an untyped destination
-/// is decided by that import.
+/// The main fixture: a `Formatter` and a `BufWriter` typed by their parameter,
+/// an untyped destination beside `io::Write` (no target: an import decides
+/// nothing), and the three `vec!` shapes.
 const LIB: &str = "use std::fmt;
 use std::io::{BufWriter, Write};
 
@@ -47,8 +50,7 @@ pub fn list() -> Vec<u8> {
 }
 ";
 
-/// Both write traits are imported and the destination's type is unknown: the
-/// expansion is ambiguous.
+/// Both write traits are imported and the destination's type is unknown.
 const AMBIGUOUS: &str = "use std::fmt::Write as FmtWrite;
 use std::io::Write;
 
@@ -169,17 +171,12 @@ fn vec_targets_follow_the_argument_shape_and_a_list_has_none() {
 }
 
 #[test]
-fn an_ambiguous_write_gets_no_row_stays_unresolved_and_says_why() {
+fn an_untyped_write_gets_no_row_stays_unresolved_and_says_why() {
     let (store, res, _tmp) = index_and_resolve();
     assert!(macro_rows(&store, "src/amb.rs").is_empty());
     assert!(!is_resolved(&store, "src/amb.rs", 5));
-    let reason = res
-        .unresolved
-        .iter()
-        .find(|u| u.from_id.starts_with("src/amb.rs") && u.target_text == "write!")
-        .map(|u| u.reason.clone())
-        .expect("the ambiguous write! is reported unresolved");
-    assert_eq!(reason, "ambiguous (3 candidates)");
+    let reason = reason_on_line(&res, "src/amb.rs", 5).expect("reported unresolved");
+    assert_eq!(reason, "destination type not determined");
 }
 
 #[test]
@@ -213,7 +210,7 @@ fn a_user_type_named_formatter_never_gets_the_std_target() {
     assert!(macro_rows(&store, "src/user.rs").is_empty());
     assert!(!is_resolved(&store, "src/user.rs", 7));
     let reason = reason_of(&res, "src/user.rs").expect("reported unresolved");
-    assert!(reason.starts_with("ambiguous"), "{reason}");
+    assert_eq!(reason, "destination type not determined");
 }
 
 #[test]
@@ -254,7 +251,10 @@ fn a_ruby_bang_call_is_never_handled_as_a_rust_macro() {
         .unresolved
         .iter()
         .filter(|u| u.from_id.starts_with("src/bang.rb"))
-        .find(|u| macro_reasons.contains(&u.reason.as_str()) || u.reason.starts_with("ambiguous"));
+        .find(|u| {
+            macro_reasons.contains(&u.reason.as_str())
+                || u.reason == "destination type not determined"
+        });
     assert!(
         hit.is_none(),
         "a Ruby call got a macro reason: {:?}",

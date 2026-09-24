@@ -6,7 +6,7 @@ use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::resolver;
 mod common;
 mod macro_339_support;
-use macro_339_support::{index_files, is_resolved, macro_rows, rows_on_line};
+use macro_339_support::{index_files, is_resolved, macro_rows, reason_on_line, rows_on_line};
 
 /// `File` is an alias of the tokio type, `SF` of the std one, and `Custom`
 /// comes from a glob of another crate; `io::Write` is imported in all three.
@@ -176,21 +176,102 @@ fn a_destination_the_extractor_cannot_name_is_never_decided_by_an_imported_trait
         (13, "a generic parameter"),
         (18, "a local with no declaration"),
     ] {
-        assert!(
-            rows_on_line(&rows, line).is_empty(),
-            "{what}: {rows:?}",
-            rows = rows.len()
-        );
+        let got: Vec<&str> = rows_on_line(&rows, line)
+            .iter()
+            .map(|r| r.target.as_str())
+            .collect();
+        assert!(got.is_empty(), "{what} got {got:?}");
         assert!(!is_resolved(&store, "src/unnameable.rs", line), "{what}");
+        assert_eq!(
+            reason_on_line(&res, "src/unnameable.rs", line).as_deref(),
+            Some("destination type not determined"),
+            "{what}"
+        );
     }
-    assert!(res
-        .unresolved
-        .iter()
-        .any(|u| u.from_id.starts_with("src/unnameable.rs")));
 }
 
 #[test]
 fn an_untyped_local_with_a_function_local_use_is_not_decided_by_the_module_import() {
     let (store, _res, _tmp) = index_files(&[("untyped.rs", UNTYPED_LOCAL_USE)]);
     assert!(macro_rows(&store, "src/untyped.rs").is_empty());
+}
+
+/// Destinations built by a constructor of their own type, through `?`,
+/// `.unwrap()` or `.expect(..)`, and two that are not knowable.
+const CONSTRUCTED: &str = "use std::fs::File;
+use std::io::{BufWriter, Write};
+
+pub fn a(p: &str) -> std::io::Result<()> {
+    let mut f = File::create(p)?;
+    writeln!(f, \"x\")?;
+    Ok(())
+}
+
+pub fn b(p: &str) -> std::io::Result<()> {
+    let mut f = File::open(p).unwrap();
+    write!(f, \"x\")?;
+    Ok(())
+}
+
+pub fn c(p: &str) -> std::io::Result<()> {
+    let mut w = BufWriter::new(File::create(p)?);
+    write!(w, \"x\")?;
+    Ok(())
+}
+
+pub fn d() {
+    let mut s = String::new();
+    write!(s, \"x\").ok();
+}
+
+pub fn e(p: &str) -> std::io::Result<()> {
+    let mut f = File::create(p).expect(\"created\");
+    write!(f, \"x\")?;
+    Ok(())
+}
+
+pub fn n(o: Option<File>) {
+    let mut f = o.map(|x| x);
+    write!(f, \"x\").ok();
+}
+
+pub fn m(p: &str) -> std::io::Result<()> {
+    let mut f = File::parse(p)?;
+    write!(f, \"x\")?;
+    Ok(())
+}
+";
+
+#[test]
+fn a_destination_built_by_its_own_constructor_gets_its_target() {
+    let (store, _res, _tmp) = index_files(&[("built.rs", CONSTRUCTED)]);
+    let rows = macro_rows(&store, "src/built.rs");
+    for (line, what) in [
+        (6, "File::create(p)?"),
+        (12, "File::open(p).unwrap()"),
+        (18, "BufWriter::new(File::create(p)?)"),
+        (29, "File::create(p).expect(..)"),
+    ] {
+        let on = rows_on_line(&rows, line);
+        let all: Vec<(u64, &str)> = rows.iter().map(|r| (r.line, r.target.as_str())).collect();
+        assert_eq!(on.len(), 1, "{what}: {all:?}");
+        assert_eq!(on[0].target, "std::io::Write::write_fmt", "{what}");
+    }
+    let string = rows_on_line(&rows, 24);
+    assert_eq!(string.len(), 1, "String::new()");
+    assert_eq!(string[0].target, "std::fmt::Write::write_fmt");
+}
+
+#[test]
+fn a_destination_whose_type_no_constructor_tells_stays_undetermined() {
+    let (store, _res, _tmp) = index_files(&[("built.rs", CONSTRUCTED)]);
+    let rows = macro_rows(&store, "src/built.rs");
+    assert!(
+        rows_on_line(&rows, 35).is_empty(),
+        "o.map(..) is not knowable"
+    );
+    assert!(
+        rows_on_line(&rows, 40).is_empty(),
+        "File::parse(p)? is not a known constructor"
+    );
 }

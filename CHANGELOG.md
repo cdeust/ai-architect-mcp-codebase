@@ -22,16 +22,21 @@ adheres to [Semantic Versioning](https://semver.org/).
   alias resolves through its original path; a prelude name (`String`, `Vec`) is
   std unless the file redefines it. A `Formatter` defined in one file does not
   affect a std `Formatter` in another. Everything else is undetermined: a field,
-  `impl Trait`, `dyn Trait`, a generic parameter, a local with no declared type,
+  `impl Trait`, `dyn Trait`, a generic parameter, a local with no declared type
+  or whose initialiser is not a constructor call of its own type,
   a name that nothing in the file places, a name that two `use` items bind to
   different origins, and a destination whose function body holds a `use`
   mentioning its type. The write traits a file imports do not decide anything:
   what is in scope says what the file may call, not what the destination is, and
-  no class of sites makes that guess right by construction. `vec![]` is
+  no class of sites makes that guess right by construction. A local built by
+  `T::new(..)`, `T::create(..)`, `T::open(..)`, `T::with_capacity(..)` or
+  `T::connect(..)` takes the type `T`, also through `?`, `.unwrap()` and
+  `.expect(..)`, which return the value the constructor makes; any other
+  wrapper, `x.map(..)` for one, does not. `vec![]` is
   `Vec::new` and `vec![x; n]` is `vec::from_elem`; a `vec![a, b]` list has no
   stable target. A site with no determined target gets no edge and no per-site
-  row, stays unresolved and is reported as `ambiguous (N candidates)` or `no
-  stable target for this expansion`. Every resolve first deletes the
+  row, stays unresolved and is reported as `destination type not determined` or
+  `no stable target for this expansion`. Every resolve first deletes the
   macro-expansion rows of earlier runs, so a graph written by an older build is
   corrected on its next resolve. Macro sites are no longer sent to the language
   server, which answered with the macro's own definition; `lsp_resolve` and
