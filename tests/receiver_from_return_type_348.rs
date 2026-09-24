@@ -345,3 +345,48 @@ fn a_return_type_that_is_an_alias_elsewhere_in_the_repository_gets_no_edge() {
         "the parser sees an alias only in its own file, so the hint is read here"
     );
 }
+
+/// A return type renamed by `use ... as` names another type: the namesake
+/// `Local` of another file, which owns an `answer`, must not be picked.
+#[test]
+fn a_return_type_renamed_by_use_as_gets_no_edge_to_a_namesake() {
+    let tmp = tempfile::Builder::new()
+        .prefix("receiver_from_return_type_use_as_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let src = tmp.path().join("fixture/src");
+    fs::create_dir_all(&src).expect("mkdir src");
+    fs::write(
+        src.join("lib.rs"),
+        "pub mod real;\npub mod other;\npub mod user;\n",
+    )
+    .expect("lib");
+    fs::write(src.join("real.rs"), "pub struct Real;\n").expect("real");
+    fs::write(
+        src.join("other.rs"),
+        "pub struct Local;\nimpl Local {\n    pub fn answer(&self) -> u32 {\n        9\n    }\n}\n",
+    )
+    .expect("other");
+    fs::write(
+        src.join("user.rs"),
+        "use crate::real::Real as Local;\n\npub fn make() -> Local {\n    todo!()\n}\n\n\
+         pub fn run() -> u32 {\n    let x = make();\n    x.answer()\n}\n",
+    )
+    .expect("user");
+    let graph_dir = tmp.path().join("graph");
+    indexer::index_codebase(&tmp.path().join("fixture"), &graph_dir).expect("index");
+    let store = GraphStore::open_or_create(&graph_dir).expect("open graph");
+    resolver::resolve_graph(&store).expect("resolve");
+    let rows = store
+        .execute_query(
+            "MATCH (cs:CallSite)-[r:Calls_CallSite_Method]->(t) WHERE cs.callee_name = 'x.answer' \
+             RETURN t.id, r.resolution_method",
+        )
+        .expect("query rows");
+    assert!(
+        rows.rows.is_empty(),
+        "a renamed return type got an edge: {:?}",
+        rows.rows
+    );
+}

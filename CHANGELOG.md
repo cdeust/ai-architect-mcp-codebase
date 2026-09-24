@@ -20,10 +20,12 @@ adheres to [Semantic Versioning](https://semver.org/).
   `.unwrap()` or `?`. It declines on doubt: two functions of the name, a `use`,
   tuple struct, `const` or `static` of that name, a local of that name, a
   generic, `impl Trait` or `dyn Trait` return, a return type with a path or that
-  is a `type` alias, or a name bound more than once in the function all leave
-  the call unresolved. "Bound more than once" counts every form: `let`,
+  is a `type` alias or is renamed by `use x::Real as Local`, or a name bound more
+  than once in the function all leave the call unresolved. "Bound more than once" counts every form: `let`,
   parameters, closure parameters, `if let`, `while let`, `match` arms, `for`
-  patterns and names a macro may bind. The same count now applies to a typed
+  patterns, names a macro may bind, and a `const`, `static`, const generic or
+  `use` of the name; a `let` binds only in its own block and after it. The same
+  count now applies to a typed
   parameter or typed `let`, which a pattern rebinding the name used to leave
   typed (`let s: Set = ..; if let Some(s) = o { s.m() }` got an edge to
   `Set::m`). The callee must be in the same

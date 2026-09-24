@@ -227,18 +227,28 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
         for name in &names {
             *counts.entry(name.clone()).or_insert(0) += 1;
         }
-        if let Some(simple_name) = simple_identifier_name(source, pattern) {
+        let reaches = node.kind() != "let_declaration"
+            || super::rust_item_binds::declaration_reaches(node, call_node);
+        if let Some(simple_name) = simple_identifier_name(source, pattern).filter(|_| reaches) {
             if let Some(ty) = binding_declared_type(source, node, full_path) {
                 typed.insert(simple_name, ty);
             }
         }
     }
-    let rebound_by_macros = super::rust_macro_binds::names_macros_may_rebind(source, scope);
+    let rebound = other_binders(source, scope);
     counts
         .into_iter()
-        .filter(|(name, n)| *n == 1 && !rebound_by_macros.contains(name))
+        .filter(|(name, n)| *n == 1 && !rebound.contains(name))
         .filter_map(|(name, _)| typed.remove(&name).map(|ty| (name, ty)))
         .collect()
+}
+
+/// Names bound by something other than a pattern: an item of the function
+/// (`const`, `static`, const generic, `use`) or a macro that may bind it.
+fn other_binders(source: &str, scope: Node) -> HashSet<String> {
+    let mut names = super::rust_macro_binds::names_macros_may_rebind(source, scope);
+    names.extend(super::rust_item_binds::names_items_bind(source, scope));
+    names
 }
 
 /// One name bound exactly once in a scope, with the node that declares it and
@@ -268,10 +278,10 @@ pub(super) fn once_bound_bindings<'t>(source: &str, call_node: Node<'t>) -> Vec<
             sites.push((name, declaration, pattern));
         }
     }
-    let rebound_by_macros = super::rust_macro_binds::names_macros_may_rebind(source, scope);
+    let rebound = other_binders(source, scope);
     sites
         .into_iter()
-        .filter(|(name, _, _)| counts.get(name) == Some(&1) && !rebound_by_macros.contains(name))
+        .filter(|(name, _, _)| counts.get(name) == Some(&1) && !rebound.contains(name))
         .map(|(name, declaration, pattern)| OnceBound {
             name,
             declaration,

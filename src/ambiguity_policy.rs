@@ -96,9 +96,10 @@ pub fn confidence_for(evidence: Evidence) -> f64 {
         Evidence::ImportMatch => 0.9,
         Evidence::ReceiverLocalBinding => 0.87,
         // source: issues #348 and #349, measured and not derived. On dy-wcet
-        // v4.1.6 (statics only) the tier added 43 per-site rows, every one to
-        // the target the language-server pass names, none wrong, none of the
-        // existing rows changed. That supports a tier close to the
+        // v4.1.6 (statics only) the tier added 43 per-site rows, none of the
+        // existing rows changed, each to the target the language-server run of
+        // the official 0.13.0 binary names for that site (an earlier
+        // measurement, checked site by site). That supports a tier close to the
         // local-binding one (0.87), which reads a type written at the binding,
         // and the extra inference step (the callee's signature is read, not the
         // binding) puts it below. It ties `SameFileUnique` at 0.85; the two

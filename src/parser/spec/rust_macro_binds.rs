@@ -87,3 +87,56 @@ pub(super) fn names_macros_may_rebind(source: &str, scope: Node) -> HashSet<Stri
     }
     names
 }
+
+#[cfg(test)]
+mod tests {
+    use super::token_tree_words;
+    use tree_sitter::{Node, Parser};
+
+    fn first_token_tree<'t>(node: Node<'t>) -> Option<Node<'t>> {
+        if node.kind() == "token_tree" {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        let found = node.children(&mut cursor).find_map(first_token_tree);
+        found
+    }
+
+    /// `(words, binds)` of the first token tree of `src`.
+    fn read(src: &str) -> (Vec<String>, bool) {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .expect("language");
+        let tree = parser.parse(src, None).expect("parse");
+        let tt = first_token_tree(tree.root_node()).expect("a token tree");
+        token_tree_words(src, tt)
+    }
+
+    // source: measured on tree-sitter-rust 0.24.2 (Cargo.lock): the keywords
+    // `let`, `for`, `match`, `if` and the punctuation `|` and `=>` are children
+    // of a `token_tree`, so `token_tree_words` sees them. If a grammar bump
+    // stopped emitting one, the matching test fails and the rule must be
+    // revisited: the name would then be taken as never rebound.
+    #[test]
+    fn each_binder_token_is_a_child_of_the_token_tree() {
+        for (src, what) in [
+            ("fn f() { m!(let s = 1); }", "let"),
+            ("fn f() { m!(for s in v {}); }", "for"),
+            ("fn f() { m!(match s { _ => 1 }); }", "match"),
+            ("fn f() { m!(if s {}); }", "if"),
+            ("fn f() { m!(v.iter().all(|s| s.m())); }", "|"),
+            ("fn f() { m!(s => 1); }", "=>"),
+        ] {
+            assert!(read(src).1, "no binder token seen for `{what}` in {src}");
+        }
+    }
+
+    #[test]
+    fn a_plain_use_of_the_name_has_no_binder_token_and_a_string_is_skipped() {
+        let (words, binds) = read("fn f() { m!(s.m(), \"let s in a | b => c\"); }");
+        assert!(!binds);
+        assert!(words.contains(&"s".to_string()));
+        assert!(!words.contains(&"let".to_string()));
+    }
+}

@@ -371,3 +371,121 @@ fn a_return_type_that_is_an_alias_of_the_file_gives_no_hint() {
         with_set("type S = Set;\nfn make() -> S { Set }\nfn run() { let s = make(); s.m(); }");
     assert_eq!(hint_of(&src, "s.m"), NONE);
 }
+
+// ---- second review: renamed return types, item binders, block reach, gaps ----
+
+#[test]
+fn a_return_type_renamed_by_use_as_gives_no_hint() {
+    let src = with_set(
+        "use other::Real as Local;\nfn make() -> Local { todo!() }\n\
+         fn run() { let s = make(); s.m(); }",
+    );
+    assert_eq!(hint_of(&src, "s.m"), NONE);
+}
+
+#[test]
+fn a_return_type_imported_under_its_own_name_keeps_the_hint() {
+    // The lookup is by that name, which is the type's own: this is the
+    // `use dy_wcet::TaskSet` shape of the measured crate.
+    let src = with_set(
+        "use other::Set as _unused;\nuse dy::Set;\nfn make() -> Set { todo!() }\n\
+         fn run() { let s = make(); s.m(); }",
+    );
+    assert_eq!(hint_of(&src, "s.m"), derived("Set"));
+}
+
+#[test]
+fn a_let_in_an_inner_block_does_not_type_a_call_after_the_block() {
+    let body = "fn f() { { let s = make(); } s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_call_before_its_let_is_not_typed_by_it() {
+    let body = "fn f() { loop { s.m(); let s = make(); } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_static_const_or_use_item_of_the_name_gives_no_hint() {
+    for item in [
+        "static s: Other = Other;",
+        "const s: Other = Other;",
+        "use other::s;",
+    ] {
+        let body = format!("fn f() {{ {item} {{ let s = make(); }} s.m(); }}");
+        assert_eq!(rebound_in(&body), NONE, "{item}");
+    }
+}
+
+#[test]
+fn a_const_generic_of_the_name_gives_no_hint() {
+    let body = "fn f<const s: usize>() { let s = make(); s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+// Gaps the second review found in the pattern tests.
+#[test]
+fn a_name_rebound_by_a_let_else_gives_no_hint() {
+    let body = "fn f(o: Option<Other>) { let s = make(); let Some(s) = o else { return }; s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_let_chain_gives_no_hint() {
+    let body = "fn f(a: Option<Other>, b: Option<u8>) { let s = make(); \
+                if let Some(s) = a && let Some(_n) = b { s.m(); } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_match_guard_using_the_arms_binding_gives_no_hint() {
+    let body = "fn f(o: Option<Other>) { let s = make(); \
+                match o { Some(s) if { s.m(); true } => {} _ => {} } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_an_or_pattern_gives_no_hint() {
+    let body = "enum E { A(Other), B(Other) }\nfn f(e: E) { let s = make(); \
+                match e { E::A(s) | E::B(s) => s.m() } }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_closure_pattern_parameter_gives_no_hint() {
+    let body = "fn f(v: Vec<&Other>) { let s = make(); v.into_iter().for_each(|&s| s.m()); }";
+    assert_eq!(rebound_in(body), NONE);
+    let body =
+        "fn f(v: Vec<(Other, u8)>) { let s = make(); v.into_iter().for_each(|(s, _n)| s.m()); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_name_rebound_by_a_shorthand_field_pattern_gives_no_hint() {
+    let body =
+        "struct P { s: Other, n: u8 }\nfn f(p: P) { let s = make(); let P { s, .. } = p; s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn matches_is_an_unknown_macro_and_its_names_are_declined() {
+    let body = "fn f(o: Option<Other>) { let s = make(); let _ = matches!(o, Some(s) if s.m() == ()); s.m(); }";
+    assert_eq!(rebound_in(body), NONE);
+}
+
+#[test]
+fn a_binder_token_inside_a_known_macro_declines_the_names_of_that_macro() {
+    for inner in [
+        "for s in v {}",
+        "match s { _ => 1 }",
+        "if let Some(s) = o { s.m(); }",
+        "v.iter().all(|s| s.m() == ())",
+        "match o { Some(s) => s.m(), None => () }",
+    ] {
+        let body = format!(
+            "fn f(v: Vec<Other>, o: Option<Other>) {{ let s = make(); assert!({{ {inner}; true }}); s.m(); }}"
+        );
+        assert_eq!(rebound_in(&body), NONE, "{inner}");
+    }
+}

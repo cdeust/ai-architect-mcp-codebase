@@ -85,6 +85,9 @@ pub(super) fn return_type_hint(source: &str, call_node: Node, receiver: Node) ->
     {
         return None;
     }
+    if !super::rust_item_binds::declaration_reaches(declaration, call_node) {
+        return None;
+    }
     let shape = binding_shape(source, &binding)?;
     let value = declaration.child_by_field_name(VALUE_FIELD)?;
     let (call, unwrapped) = constructor_call(source, value, true)?;
@@ -108,6 +111,14 @@ fn file_declares_alias(source: &str, node: Node, ty: &str) -> bool {
     let mut stack = vec![root_of(node)];
     while let Some(current) = stack.pop() {
         if current.kind() == "type_item" && declares(source, current, ty) {
+            return true;
+        }
+        // `use x::Real as Local`: the name says nothing of the type it renames.
+        if current.kind() == "use_as_clause"
+            && current
+                .child_by_field_name("alias")
+                .is_some_and(|a| node_text(source, a) == ty)
+        {
             return true;
         }
         let mut cursor = current.walk();
@@ -261,7 +272,7 @@ fn unique_visible_function<'t>(source: &str, call: Node<'t>, name: &str) -> Opti
         return None;
     };
     let scope = function.parent()?;
-    is_ancestor(scope, call).then_some(*function)
+    super::rust_item_binds::is_ancestor(scope, call).then_some(*function)
 }
 
 /// True when the file declares a struct, enum, union or alias named `Option`
@@ -303,17 +314,6 @@ fn root_of(node: Node) -> Node {
         current = parent;
     }
     current
-}
-
-fn is_ancestor(ancestor: Node, node: Node) -> bool {
-    let mut current = Some(node);
-    while let Some(n) = current {
-        if n.id() == ancestor.id() {
-            return true;
-        }
-        current = n.parent();
-    }
-    false
 }
 
 /// True when `text` holds `word` as a whole identifier.
