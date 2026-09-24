@@ -466,5 +466,24 @@ pub(crate) fn graph_counts(graph_dir: &Path) -> graph_store::GraphCounts {
 /// `graph_counts` without the zero fallback: the reason when the graph cannot
 /// be opened or queried.
 pub(crate) fn try_graph_counts(graph_dir: &Path) -> Result<graph_store::GraphCounts, String> {
+    if !graph_dir.is_dir() {
+        return Err(format!(
+            "graph directory not found: {}",
+            graph_dir.display()
+        ));
+    }
     graph_store::GraphStore::open_or_create(graph_dir)?.graph_counts()
+}
+
+#[cfg(test)]
+mod graph_counts_tests {
+    use super::try_graph_counts;
+
+    #[test]
+    fn a_missing_graph_directory_is_an_error_and_is_not_created() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let missing = tmp.path().join("no-such-graph");
+        assert!(try_graph_counts(&missing).is_err());
+        assert!(!missing.exists(), "a read must not create a graph");
+    }
 }

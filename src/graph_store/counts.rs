@@ -72,7 +72,9 @@ impl GraphStore {
     }
 
     /// `(graph edges, per-site target rows)`. A table that cannot be queried
-    /// counts as empty, as `edge_count` always has.
+    /// counts as empty, as `edge_count` always has: a graph written by an older
+    /// schema legitimately lacks some tables, so a failed count cannot be told
+    /// from an absent table and the totals are a floor on a damaged graph.
     fn rel_row_counts(&self) -> Result<(u64, u64), String> {
         let (mut edges, mut targets) = (0_u64, 0_u64);
         for &(rel, from, _) in REL_TABLES {

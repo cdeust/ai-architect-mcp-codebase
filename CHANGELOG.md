@@ -21,7 +21,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   snapshot taken at the end of indexing. On a graph written after #335,
   `edge_count` is lower than the value 0.12.0 reported by the number of
   per-site rows. `resolve.total_edges` keeps its name and counts resolved
-  references.
+  references. An artifact sidecar exported before this change still records the
+  old `edge_count`, per-site rows included. A relationship table that cannot be
+  queried counts as empty, so on a damaged graph the totals are a floor.
 - A bare function call inside macro arguments is now extracted (#328).
   `assert_eq!(helper(1), 2)` produced no `CallSite`, so `get_impact` on `helper`
   missed the test and reported no gap. The macro token-tree reconstruction now
