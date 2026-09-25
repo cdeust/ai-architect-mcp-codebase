@@ -43,10 +43,17 @@ adheres to [Semantic Versioning](https://semver.org/).
   the default profile only: `BuildProfile` is where a Kani profile would plug
   in, and none is written. Not covered: twin files chosen by `#[cfg_attr(..,
   path = "..")]`, twins in different files (an ordinary ambiguity), and the
-  language-server tier, which may still point a site at a twin the default
-  build does not compile. A graph written by the first change has no
-  `cfg_active` column: its twins read as `unknown` and the next index pass adds
-  the column.
+  language-server tier. The language server may still point a site at a twin
+  the default build does not compile, and a site that a resolve chose a twin
+  for and that the language server also pointed at another twin ends with both
+  edges after the next resolve (the reset reopens the site, the language-server
+  edge is not removed). Dependency feature unification is not modelled either:
+  a caller in crate B into a twin of crate A is judged by A's default features
+  while the build of B may enable other features of A, so the chosen twin can be
+  the one B's build drops; 0.85 is a policy value, not a measurement. A graph
+  written by the first change has no `cfg_active` column: an incremental
+  refresh or a bootstrap fill adds it before the nodes are written, its twins
+  read as `unknown` until then, and the ids do not change.
 
 - Two Rust items of one name under mutually exclusive `#[cfg]` predicates are
   two nodes, and a call to that name is no longer resolved to either (#353,

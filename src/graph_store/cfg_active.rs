@@ -133,6 +133,21 @@ impl GraphStore {
         out
     }
 
+    /// Adds `cfg_active` to every twin label that lacks it. A graph written by
+    /// the first part of #353 has `cfg_gate` and the marker, so it passes
+    /// `require_cfg_gate_metadata`, but its tables have no `cfg_active`, and the
+    /// nodes an index pass re-inserts carry that property: the column must exist
+    /// BEFORE the nodes are persisted. Ids do not change (only a column is added),
+    /// so `CANONICAL_FORM_VERSION` stays. Called right after the guard by the
+    /// incremental refresh and the bootstrap fill, the two paths that write nodes
+    /// into an existing graph (a full index removes the old directory first).
+    pub fn ensure_cfg_active_columns(&self) -> Result<(), String> {
+        for label in CFG_GATE_LABELS {
+            self.ensure_node_column(label, "cfg_active", ACTIVE_COLUMN_TYPE)?;
+        }
+        Ok(())
+    }
+
     /// Writes `cfg_active` for every `(label, id, value)`. The column is added
     /// first on a graph written before it existed. Values are this module's
     /// three constants, never caller input.

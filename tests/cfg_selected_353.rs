@@ -346,3 +346,90 @@ fn a_graph_without_the_activity_column_fails_closed_and_is_repaired_by_an_index_
         "{edges:?}"
     );
 }
+
+/// The graph of the first part has `cfg_gate` and the marker but no
+/// `cfg_active`, and passes the guard. An incremental refresh that REPARSES a
+/// Rust file re-inserts its nodes with a `cfg_active` value, so the column has to
+/// exist before the nodes are written, not only when the activity pass runs.
+#[test]
+fn an_incremental_refresh_that_reparses_a_file_repairs_a_graph_without_the_column() {
+    let p = Project::new("fast = []", &[("src/lib.rs", PICK)]);
+    let store = p.store();
+    for label in ai_architect_mcp::graph_store::CFG_GATE_LABELS {
+        store
+            .execute_query(&format!("ALTER TABLE {label} DROP cfg_active"))
+            .expect("drop the column to imitate the graph of the first part");
+    }
+    drop(store);
+    let manifest_path = p.graph.parent().unwrap().join("manifest.json");
+    indexer::write_full_manifest(&p.root, &manifest_path, &indexer::IndexOptions::default())
+        .expect("manifest");
+    fs::write(
+        p.root.join("src/lib.rs"),
+        format!("{PICK}\npub fn added() {{}}\n"),
+    )
+    .unwrap();
+    let prior = indexer::manifest::load(&manifest_path).expect("manifest loads");
+    indexer::index_incremental(
+        &p.root,
+        &p.graph,
+        &manifest_path,
+        &indexer::IndexOptions::default(),
+        &prior,
+    )
+    .expect("the refresh of a graph from the first part must not fail");
+    assert_eq!(
+        p.activity("Function", "pick"),
+        [
+            pair("feature=fast", "inactive"),
+            pair("not(feature=fast)", "active")
+        ]
+    );
+    p.resolve();
+    let edges = p.calls_into("pick");
+    assert_eq!(edges.len(), 1, "{edges:?}");
+}
+
+/// A twin file that is deleted takes its twins and the edges into them with it;
+/// the caller in another file is left open, not pointed at a node that is gone.
+#[test]
+fn deleting_the_file_that_holds_the_twins_leaves_the_caller_open() {
+    let p = Project::new(
+        "fast = []",
+        &[
+            (
+                "src/lib.rs",
+                "mod twins;\npub fn caller() -> u32 {\n    twins::pick()\n}\n",
+            ),
+            (
+                "src/twins.rs",
+                "#[cfg(feature = \"fast\")]\npub fn pick() -> u32 {\n    1\n}\n\
+                 #[cfg(not(feature = \"fast\"))]\npub fn pick() -> u32 {\n    2\n}\n",
+            ),
+        ],
+    );
+    assert_eq!(p.calls_into("pick").len(), 1, "{:?}", p.calls_into("pick"));
+    let manifest_path = p.graph.parent().unwrap().join("manifest.json");
+    indexer::write_full_manifest(&p.root, &manifest_path, &indexer::IndexOptions::default())
+        .expect("manifest");
+    fs::remove_file(p.root.join("src/twins.rs")).unwrap();
+    fs::write(
+        p.root.join("src/lib.rs"),
+        "pub fn caller() -> u32 {\n    0\n}\n",
+    )
+    .unwrap();
+    let prior = indexer::manifest::load(&manifest_path).expect("manifest loads");
+    indexer::index_incremental(
+        &p.root,
+        &p.graph,
+        &manifest_path,
+        &indexer::IndexOptions::default(),
+        &prior,
+    )
+    .expect("incremental refresh");
+    p.resolve();
+    assert!(p
+        .rows("MATCH (f:Function) WHERE f.name = 'pick' RETURN f.id")
+        .is_empty());
+    assert!(p.calls_into("pick").is_empty());
+}

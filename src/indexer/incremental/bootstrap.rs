@@ -67,6 +67,7 @@ pub fn fill_after_bootstrap(
     let store = GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
     store.require_cfg_gate_metadata()?;
+    store.ensure_cfg_active_columns()?;
     let walk_opts = WalkOptions {
         language_filter: options.language_filter,
         dependency_scope,
