@@ -8,6 +8,33 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A receiver name bound more than once in a function is typed through the
+  binding that is live at the call (#350). `let s = Set::new(); ..; let s =
+  Set::new(); s.answer(3)` was left unresolved by the static pass even when
+  every binding had the same type, because a name bound twice was declined
+  wherever it was used. The live binding is the one whose scope holds the call
+  and whose binding point ends before the call starts, the latest such point
+  winning: a `let` reaches the rest of its block, a function or closure
+  parameter its body, a `for` pattern its loop body (not the iterated value),
+  an `if let` or `while let` pattern the rest of its condition and its
+  consequence or body (never the `else`), a match arm pattern its arm. On the
+  local clone of `dy-wcet` v4.1.2 (the crate of the issue, whose file is
+  `tests/adversarial.rs`) the three `response_of` sites of the function that
+  binds `s` three times go from unresolved to resolved, each to
+  `TaskSet::response_of`, and no `response_of` site of the crate has another
+  target. The tiers and their confidences are unchanged (0.87 for a receiver
+  typed by a constructor or a written type, 0.85 through a return type),
+  chosen by how the live binding gets its type. Nothing is guessed: no hint
+  when no binding reaches the call, when the live binding has no type (a
+  closure parameter without a type, a destructuring pattern, a `for`, `match`
+  or `if let` pattern, a `let` that is not a constructor call), when a
+  binding has a form outside that list, or when a macro or an item (`const`,
+  `static`, `use`) may bind the name; a name used in a match guard is still
+  declined. The path of a name bound once is unchanged. The change is in the
+  parser, so an incremental refresh, which is keyed on the content hash of a
+  file, keeps the old empty hints of files that did not change until a full
+  reindex: edges are missing there, none is wrong.
+
 - A call to twins of one item under mutually exclusive `#[cfg]` gates is
   resolved to the twin the build compiles when the build decides it (#353,
   second of two changes). On the reproduction of the issue (`fast` off by

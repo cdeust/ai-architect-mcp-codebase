@@ -227,10 +227,10 @@ fn a_file_that_defines_its_own_option_gives_no_hint_through_it() {
 }
 
 #[test]
-fn a_name_bound_twice_gives_no_hint() {
+fn a_name_bound_twice_takes_the_binding_live_at_the_call() {
     let src =
         with_set("fn make() -> Set { Set }\nfn run() { let s = make(); let s = make(); s.m(); }");
-    assert_eq!(hint_of(&src, "s.m"), NONE);
+    assert_eq!(hint_of(&src, "s.m"), derived("Set"));
 }
 
 #[test]
@@ -295,9 +295,9 @@ fn a_name_rebound_by_a_closure_parameter_gives_no_hint() {
 }
 
 #[test]
-fn a_name_rebound_by_a_nested_fn_parameter_gives_no_hint() {
+fn a_nested_fn_parameter_of_the_same_name_does_not_shadow_the_outer_let() {
     let body = "fn f() { let s = make(); fn g(_s: Other) {} fn h(s: Other) { let _ = s; } g(Other); s.m(); }";
-    assert_eq!(rebound_in(body), NONE);
+    assert_eq!(rebound_in(body), derived("Set"));
 }
 
 #[test]

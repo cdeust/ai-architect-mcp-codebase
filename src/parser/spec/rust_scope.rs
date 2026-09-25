@@ -141,7 +141,7 @@ fn binding_patterns(scope: Node, every_form: bool) -> Vec<(Node, Node)> {
 
 /// Harvests every `identifier` leaf inside one pattern, so destructuring
 /// binds all of its names rather than only the simple case.
-fn collect_identifiers(source: &str, pattern: Node, out: &mut HashSet<String>) {
+pub(super) fn collect_identifiers(source: &str, pattern: Node, out: &mut HashSet<String>) {
     let mut stack = vec![pattern];
     while let Some(node) = stack.pop() {
         if BINDING_LEAF_KINDS.contains(&node.kind()) {
@@ -221,7 +221,8 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
     let Some(scope) = enclosing_scope(call_node) else {
         return HashMap::new();
     };
-    for (node, pattern) in binding_patterns(scope, true) {
+    let all = binding_patterns(scope, true);
+    for &(node, pattern) in &all {
         let mut names = HashSet::new();
         collect_identifiers(source, pattern, &mut names);
         for name in &names {
@@ -236,11 +237,21 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
         }
     }
     let rebound = other_binders(source, scope);
-    counts
+    let mut result: HashMap<String, String> = counts
         .into_iter()
         .filter(|(name, n)| *n == 1 && !rebound.contains(name))
         .filter_map(|(name, _)| typed.remove(&name).map(|ty| (name, ty)))
-        .collect()
+        .collect();
+    for live in super::rust_live_binding::live_bindings(source, call_node, &all, &rebound) {
+        let simple = simple_identifier_name(source, live.pattern);
+        if simple.as_deref() != Some(live.name.as_str()) {
+            continue;
+        }
+        if let Some(ty) = binding_declared_type(source, live.declaration, full_path) {
+            result.insert(live.name, ty);
+        }
+    }
+    result
 }
 
 /// Names bound by something other than a pattern: an item of the function
@@ -270,7 +281,8 @@ pub(super) fn once_bound_bindings<'t>(source: &str, call_node: Node<'t>) -> Vec<
     };
     let mut counts: HashMap<String, u32> = HashMap::new();
     let mut sites: Vec<(String, Node<'t>, Node<'t>)> = Vec::new();
-    for (declaration, pattern) in binding_patterns(scope, true) {
+    let all = binding_patterns(scope, true);
+    for &(declaration, pattern) in &all {
         let mut names = HashSet::new();
         collect_identifiers(source, pattern, &mut names);
         for name in names {
@@ -279,7 +291,7 @@ pub(super) fn once_bound_bindings<'t>(source: &str, call_node: Node<'t>) -> Vec<
         }
     }
     let rebound = other_binders(source, scope);
-    sites
+    let mut once: Vec<OnceBound<'t>> = sites
         .into_iter()
         .filter(|(name, _, _)| counts.get(name) == Some(&1) && !rebound.contains(name))
         .map(|(name, declaration, pattern)| OnceBound {
@@ -287,7 +299,11 @@ pub(super) fn once_bound_bindings<'t>(source: &str, call_node: Node<'t>) -> Vec<
             declaration,
             pattern,
         })
-        .collect()
+        .collect();
+    once.extend(super::rust_live_binding::live_bindings(
+        source, call_node, &all, &rebound,
+    ));
+    once
 }
 
 /// The name bound by a pattern that is a plain identifier, optionally
