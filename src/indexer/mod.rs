@@ -155,9 +155,14 @@ pub fn index_codebase_with_language(
 ) -> Result<IndexResult, String> {
     let start = Instant::now();
     let store = GraphStore::open_or_create(graph_path)?;
+    // An old graph directory keeps its tables (IF NOT EXISTS): refuse it with the
+    // remedy up front (#353). A new directory has no `Function` table yet.
+    let existing = store.has_node_table("Function")?;
     store.create_schema()?;
-    // An old graph directory keeps its tables (IF NOT EXISTS): say so up front (#353).
-    store.require_cfg_gate_metadata()?;
+    if existing {
+        store.require_cfg_gate_metadata()?;
+    }
+    store.write_canonical_marker()?;
 
     // Coverage-honesty accounting (issue #57): note every File node, and record
     // the parse-incomplete / skipped / quarantined gaps as they occur. Created

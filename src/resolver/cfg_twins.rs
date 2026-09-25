@@ -53,17 +53,14 @@ pub(super) fn is_twin_member(target: &SymbolEntry, candidates: &[SymbolEntry]) -
 /// Writes `unresolved_reason = cfg_twins` on the sites the resolver left open
 /// because their callee has twins. The column is added first on a graph indexed
 /// before it existed (same precedent as `receiver_hint`); `mark_nodes_resolved`
-/// is not called for them and their flag is set to `false` (an earlier pass or an
-/// incremental refresh may have left a stale `true`), so the language server pass
-/// still sees them as open sites.
+/// is not called for them, and `stale_flags::open_sites` has already reset a stale
+/// `true` flag, so the language server pass still sees them as open sites.
 pub(super) fn persist_twin_reason(store: &GraphStore, ids: &[String]) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
     }
     store.ensure_node_column("CallSite", "unresolved_reason", "STRING DEFAULT ''")?;
-    store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
     let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-    store.mark_callsites_unresolved(&refs)?;
     store.set_callsite_unresolved_reason(
         &refs,
         crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,

@@ -26,9 +26,10 @@ pub(super) fn resolve_calls(
     store.ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
     // Issues #348 and #349: same precedent; '' reads as "written at the binding".
     store.ensure_node_column("CallSite", "receiver_hint_via", "STRING DEFAULT ''")?;
+    store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
     let qr = store.execute_query(
         "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.language, cs.receiver_hint, \
-         cs.receiver_hint_via",
+         cs.receiver_hint_via, cs.is_resolved",
     )?;
     let mut resolved = 0u64;
     let mut total = 0u64;
@@ -39,9 +40,14 @@ pub(super) fn resolve_calls(
     // of one item under mutually exclusive `#[cfg]` predicates.
     let mut twin_site_ids: Vec<String> = Vec::new();
 
+    // Sites flagged resolved before this run: a purge leaves the flag behind.
+    let mut flagged: HashSet<&str> = HashSet::new();
     for row in &qr.rows {
-        if row.len() < 5 {
+        if row.len() < 6 {
             continue;
+        }
+        if row[5] == "true" {
+            flagged.insert(row[0].as_str());
         }
         let callee = &row[1];
         // Macro invocations (`name!(...)`) are a distinct reference kind,
@@ -74,7 +80,7 @@ pub(super) fn resolve_calls(
     }
     let id_refs: Vec<&str> = resolved_ids.iter().map(|s| s.as_str()).collect();
     store.mark_nodes_resolved("CallSite", &id_refs)?;
-    super::cfg_twins::persist_twin_reason(store, &twin_site_ids)?;
+    super::stale_flags::settle_open_sites(store, &unresolved, &flagged, twin_site_ids)?;
     Ok((resolved, total, unresolved))
 }
 

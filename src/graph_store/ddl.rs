@@ -173,6 +173,10 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // read, no re-parse. `id` = the file's relative path (matches File.id).
         (NODE_FILE_CONTENT,
             "id STRING, content_zstd BLOB, original_size INT64, compressed_size INT64"),
+        // Marker rows written by the indexer (issue #353): the canonical form
+        // version of the `#[cfg]` gates in twin ids. Not a code node: it is in no
+        // node-label list, so no count or query over symbols sees it.
+        (super::cfg_twins::MARKER_TABLE, "id STRING, value STRING"),
 ];
 
 pub(crate) fn node_table_ddl() -> Vec<String> {

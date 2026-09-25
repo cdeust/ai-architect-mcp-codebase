@@ -370,3 +370,48 @@ fn nested_fns_under_exclusive_gates_keep_the_line_suffix_behaviour() {
     assert!(gs.iter().all(|n| !n.qualified_name.contains("#cfg(")));
     assert_ne!(gs[0].qualified_name, gs[1].qualified_name);
 }
+
+/// No structural ref of a parse names an owner that is not a node of it: the
+/// twin fixtures below hold every shape (twin structs, enums, traits, impls
+/// inside and outside the twins, derives), and none leaves a `HasMethod`,
+/// `HasField`, `HasVariant` or `DeriveImplements` pointing at an id that no
+/// longer exists (the plain name of a type that became a twin).
+#[test]
+fn no_structural_ref_names_an_owner_that_is_not_a_node() {
+    let fixtures = [
+        "#[cfg(unix)]\nstruct S { a: u8 }\n#[cfg(not(unix))]\nstruct S { a: u16 }\nimpl S {\n fn m(&self) {}\n}\n",
+        "#[cfg(unix)]\n#[derive(Clone)]\nstruct S;\n#[cfg(not(unix))]\n#[derive(Debug)]\nstruct S;\n#[cfg(unix)]\nimpl S {\n fn m(&self) {}\n}\n#[cfg(windows)]\nimpl S {\n fn n(&self) {}\n}\n",
+        "#[cfg(unix)]\nenum E { A }\n#[cfg(not(unix))]\nenum E { A, B }\nimpl E {\n fn m(&self) {}\n}\n",
+        "#[cfg(unix)]\ntrait T { fn f(&self); }\n#[cfg(not(unix))]\ntrait T { fn f(&self); fn g(&self); }\nstruct X;\nimpl T for X {\n fn f(&self) {}\n}\n",
+        "#[cfg(unix)]\nmod m {\n pub struct S;\n impl S {\n  pub fn f(&self) {}\n }\n}\n#[cfg(not(unix))]\nmod m {\n pub struct S;\n}\n",
+    ];
+    for source in fixtures {
+        let result = parse(source);
+        let owners: std::collections::HashSet<&str> = result
+            .nodes
+            .iter()
+            .map(|n| n.qualified_name.as_str())
+            .collect();
+        for r in &result.refs {
+            let structural = matches!(
+                r.kind.as_str(),
+                "HasMethod" | "HasField" | "HasVariant" | "DeriveImplements"
+            );
+            if structural && r.kind != "DeriveImplements" {
+                assert!(
+                    owners.contains(r.from_qualified_name.as_str()),
+                    "{} from {:?} names no node in\n{source}",
+                    r.kind,
+                    r.from_qualified_name
+                );
+            }
+            if r.kind == "DeriveImplements" {
+                assert!(
+                    owners.contains(r.from_qualified_name.as_str()),
+                    "derive from {:?} names no node in\n{source}",
+                    r.from_qualified_name
+                );
+            }
+        }
+    }
+}

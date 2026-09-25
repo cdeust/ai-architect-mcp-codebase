@@ -100,6 +100,8 @@ mod python_parity_tests;
 #[cfg(test)]
 mod rust_call_shape_tests;
 #[cfg(test)]
+mod rust_cfg_canonical_tests;
+#[cfg(test)]
 mod rust_cfg_twin_tests;
 #[cfg(test)]
 mod rust_identity_tests;

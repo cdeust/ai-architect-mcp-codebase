@@ -25,6 +25,8 @@ mod recovery;
 mod schema;
 mod serialize;
 mod writes;
+#[cfg(test)]
+pub(crate) use cfg_twins::CANONICAL_FORM_VERSION;
 pub(crate) use cfg_twins::{has_cfg_gate, strip_cfg_gates};
 pub use cfg_twins::{CALLSITE_UNRESOLVED_REASON_CFG_TWINS, CFG_GATE_LABELS};
 pub use columns::label_declares_column;

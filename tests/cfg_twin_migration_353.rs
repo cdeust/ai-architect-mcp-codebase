@@ -160,3 +160,49 @@ fn nothing_adds_the_gate_column_with_an_alter() {
     );
     assert!(hits.is_empty(), "{hits:?}");
 }
+
+/// A graph with every `cfg_gate` column, as an earlier commit of this work wrote
+/// it, carries no marker or an older one: its twin ids were spelled by an older
+/// canonical form. The columns alone must not pass the guard.
+fn refused_then_rebuilt(spoil: &str) {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    let output = tmp.path().join("output");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("lib.rs"), TWO).unwrap();
+    index_over_stdio(&source, &output);
+    let graph = output.join("graph");
+    {
+        let store = GraphStore::open_or_create(&graph).unwrap();
+        let marker = |s: &GraphStore| {
+            s.execute_query("MATCH (m:GraphMarker) RETURN m.value")
+                .unwrap()
+                .rows
+        };
+        // Written by the indexer of this build, the current canonical form.
+        assert_eq!(marker(&store), [["2"]], "bump with CANONICAL_FORM_VERSION");
+        assert!(store.node_column_exists("Function", "cfg_gate").unwrap());
+        store.execute_query(spoil).unwrap();
+    }
+    let refused = incremental(&source, &output).expect_err("columns alone must not pass");
+    assert!(refused.contains("full reindex required"), "{refused}");
+    index_over_stdio(&source, &output);
+    let store = GraphStore::open_or_create(&graph).unwrap();
+    let rows = store
+        .execute_query("MATCH (m:GraphMarker) RETURN m.value")
+        .unwrap()
+        .rows;
+    assert_eq!(rows, [["2"]]);
+    drop(store);
+    incremental(&source, &output).expect("a rebuilt graph takes refreshes");
+}
+
+#[test]
+fn a_graph_with_the_columns_but_no_marker_is_refused_and_a_full_reindex_fixes_it() {
+    refused_then_rebuilt("MATCH (m:GraphMarker) DELETE m");
+}
+
+#[test]
+fn a_graph_with_an_older_marker_is_refused_and_a_full_reindex_fixes_it() {
+    refused_then_rebuilt("MATCH (m:GraphMarker) SET m.value = '1'");
+}

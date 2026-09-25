@@ -21,6 +21,7 @@ mod imports;
 mod nested_scope;
 mod phases;
 mod receiver;
+mod stale_flags;
 mod uses;
 #[cfg(test)]
 use extends::{resolve_one_extends_base, ExtendsCandidate, ExtendsContext};
