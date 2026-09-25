@@ -9,7 +9,7 @@
 // source: The Rust Reference, "Modules" (module source filenames, the `path`
 // attribute) and "Conditional compilation" (the `cfg` attribute).
 
-use super::cfg_expr::{self, CfgPredicate};
+use crate::parser::cfg_expr::{self, CfgPredicate};
 use tree_sitter::{Node, Parser};
 
 /// One `mod name;` item.

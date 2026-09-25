@@ -35,6 +35,9 @@ pub(super) fn resolve_calls(
     let mut unresolved = Vec::new();
     // §10.4 — CallSite nodes whose callee was resolved to a graph target.
     let mut resolved_ids: Vec<String> = Vec::new();
+    // Issue #353 — CallSites left unresolved because every candidate is a twin
+    // of one item under mutually exclusive `#[cfg]` predicates.
+    let mut twin_site_ids: Vec<String> = Vec::new();
 
     for row in &qr.rows {
         if row.len() < 5 {
@@ -55,6 +58,7 @@ pub(super) fn resolve_calls(
         let mut tally = CallTally {
             resolved: &mut resolved,
             unresolved: &mut unresolved,
+            twin_sites: &mut twin_site_ids,
         };
         let graph = GraphContext { idx, file_imports };
         let row_input = RowInput {
@@ -70,6 +74,7 @@ pub(super) fn resolve_calls(
     }
     let id_refs: Vec<&str> = resolved_ids.iter().map(|s| s.as_str()).collect();
     store.mark_nodes_resolved("CallSite", &id_refs)?;
+    super::cfg_twins::persist_twin_reason(store, &twin_site_ids)?;
     Ok((resolved, total, unresolved))
 }
 
@@ -129,11 +134,22 @@ fn resolve_one_call_site(
         // candidates): labeled and dropped rather than guessed — see
         // resolve_single_call's doc comment for why this beats a
         // deterministic tiebreak here (issue #30).
-        PolicyResolution::Ambiguous { candidates } => record_call_unresolved(
-            &site,
-            tally,
-            format!("ambiguous ({} candidates)", candidates.len()),
-        ),
+        PolicyResolution::Ambiguous { candidates } => {
+            let twins = super::cfg_twins::are_twins_of_one_item(&candidates);
+            if twins {
+                tally.twin_sites.push(site.cs_id.to_string());
+            }
+            let label = if twins {
+                crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS
+            } else {
+                "ambiguous"
+            };
+            record_call_unresolved(
+                &site,
+                tally,
+                format!("{label} ({} candidates)", candidates.len()),
+            );
+        }
         PolicyResolution::NotFound => {
             record_call_unresolved(&site, tally, "no target found".to_string())
         }
@@ -211,6 +227,8 @@ struct MatchedCall<'a> {
 struct CallTally<'a> {
     resolved: &'a mut u64,
     unresolved: &'a mut Vec<UnresolvedRef>,
+    /// Ids of the sites whose every candidate is a cfg twin (issue #353).
+    twin_sites: &'a mut Vec<String>,
 }
 
 /// Stages the Calls/Uses edge for one resolved callee, or records why it

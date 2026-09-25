@@ -66,6 +66,7 @@ pub fn fill_after_bootstrap(
     // No create_schema(): the imported artifact graph already carries the schema.
     let store = GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
+    store.require_cfg_gate_metadata()?;
     let walk_opts = WalkOptions {
         language_filter: options.language_filter,
         dependency_scope,

@@ -182,6 +182,20 @@ impl GraphStore {
         }
     }
 
+    /// Issue #353: an old graph keeps ONE node for two items of a name under
+    /// mutually exclusive `#[cfg]` predicates, because the persistence layer
+    /// dropped the second. Adding an empty `cfg_gate` column cannot split a node
+    /// that is already collapsed: reparse every file through the full-index
+    /// handler. Read-only, like `require_entry_metadata`, so a caller can check
+    /// compatibility before it mutates a graph.
+    pub fn require_cfg_gate_metadata(&self) -> Result<(), String> {
+        if self.node_column_exists("Function", "cfg_gate")? {
+            Ok(())
+        } else {
+            Err("graph lacks #[cfg] twin metadata (cfg_gate); full reindex required (index_codebase with full: true)".into())
+        }
+    }
+
     /// Adds `column` to node table `label` when the table does not already
     /// carry it, and reports whether it had to be added.
     ///

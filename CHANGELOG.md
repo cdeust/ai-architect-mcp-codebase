@@ -8,6 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Two Rust items of one name under mutually exclusive `#[cfg]` predicates are
+  two nodes, and a call to that name is no longer resolved to either (#353,
+  first of two changes). A file with `#[cfg(feature = "fast")] fn pick` and
+  `#[cfg(not(feature = "fast"))] fn pick` used to give one `pick` node (the
+  first) and an edge at 0.95 from every caller to it, whichever twin the build
+  compiles. Now each twin is a node whose id ends in `#cfg(<gate>)` (for
+  example `src/lib.rs::pick#cfg(not(feature=fast))`) and carries a new
+  `cfg_gate` column; the gate joins the item's own `#[cfg]`, those of its
+  enclosing `mod`, `impl`, `trait` and `fn`, and inner `#![cfg]`. Only items
+  that collide in one file are renamed, so every other id is unchanged. A
+  call whose candidates are all twins of one item gets no edge and the reason
+  `cfg_twins` on its call site. A graph indexed before this change has already
+  lost its twins, so an incremental refresh of it asks for a full reindex
+  (`index_codebase` with `full: true`). Choosing the twin the build compiles
+  is left to the second change.
+
 - A graph queried before `lsp_resolve` no longer loses the rows the pass writes
   (#352). The read cache keeps a graph handle open between requests, and a
   write tool opened its own handle to the same graph in the same process.

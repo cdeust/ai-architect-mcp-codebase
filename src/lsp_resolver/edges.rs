@@ -144,8 +144,11 @@ fn find_node_at_position<'a>(
 /// must equal the identifier the call site actually asked about, or this is
 /// that same collision wearing an exact-match line instead of a fuzzy one.
 fn resolved_target_matches(target: &NodePosition, site: &UnresolvedCallSite) -> bool {
-    let target_name = target.id.rsplit("::").next().unwrap_or(&target.id);
-    target_name == site.identifier_name()
+    // A twin item (issue #353) carries `#cfg(..)` on its last segment
+    // (`pick#cfg(not(feature=fast))`); the call spells only `pick`.
+    let last =
+        crate::graph_store::strip_cfg_gates(target.id.rsplit("::").next().unwrap_or(&target.id));
+    last == site.identifier_name()
 }
 
 #[cfg(test)]

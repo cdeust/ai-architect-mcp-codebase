@@ -29,6 +29,7 @@ mod registry;
 mod ruby;
 mod rust;
 mod rust_call_site;
+pub(crate) mod rust_cfg_gate;
 mod rust_item_binds;
 mod rust_macro_binds;
 mod rust_macro_calls;
@@ -98,6 +99,8 @@ mod parity_tests;
 mod python_parity_tests;
 #[cfg(test)]
 mod rust_call_shape_tests;
+#[cfg(test)]
+mod rust_cfg_twin_tests;
 #[cfg(test)]
 mod rust_nested_fn_tests;
 #[cfg(test)]

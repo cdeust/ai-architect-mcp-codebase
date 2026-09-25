@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
+mod cfg_twins;
 mod columns;
 mod config;
 mod counts;
@@ -24,6 +25,8 @@ mod recovery;
 mod schema;
 mod serialize;
 mod writes;
+pub use cfg_twins::CALLSITE_UNRESOLVED_REASON_CFG_TWINS;
+pub(crate) use cfg_twins::{has_cfg_gate, strip_cfg_gates};
 pub use columns::label_declares_column;
 use columns::*;
 pub use config::*;

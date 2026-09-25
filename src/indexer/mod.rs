@@ -14,7 +14,6 @@ mod batch;
 pub mod cargo_attribution;
 mod cargo_features;
 pub mod cargo_targets;
-mod cfg_expr;
 pub mod coverage;
 mod feature_gated;
 mod iac;

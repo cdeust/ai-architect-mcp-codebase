@@ -11,6 +11,11 @@
 // flags a module only on `False` — a compiled module is never flagged.
 // source: The Rust Reference, "Conditional compilation" (configuration
 // predicates `all`, `any`, `not`, key-value options).
+//
+// Issue #353: the predicate also has a CANONICAL form and a COMPACT text, so
+// two items of one name under mutually exclusive `#[cfg]` predicates can be told
+// apart. Every option is kept (`kani`, `test`, `unix`, `target_os = "..."`):
+// evaluation still leaves them `Unknown`, but identity must not erase them.
 
 use std::collections::BTreeSet;
 
@@ -18,8 +23,13 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CfgPredicate {
     Feature(String),
-    /// Any option other than `feature = "..."` — not decidable here.
-    Other,
+    /// Any option other than `feature = "..."` — not decidable here, but kept
+    /// by name so twins under `cfg(kani)` and `cfg(not(kani))` stay distinct.
+    /// `value` is `None` for a bare name (`unix`, `kani`).
+    Option {
+        key: String,
+        value: Option<String>,
+    },
     All(Vec<CfgPredicate>),
     Any(Vec<CfgPredicate>),
     Not(Box<CfgPredicate>),
@@ -39,7 +49,7 @@ impl CfgPredicate {
         match self {
             CfgPredicate::Feature(f) if enabled.contains(f) => Truth::True,
             CfgPredicate::Feature(_) => Truth::False,
-            CfgPredicate::Other => Truth::Unknown,
+            CfgPredicate::Option { .. } => Truth::Unknown,
             CfgPredicate::All(items) => fold(items, enabled, Truth::False, Truth::True),
             CfgPredicate::Any(items) => fold(items, enabled, Truth::True, Truth::False),
             CfgPredicate::Not(inner) => match inner.eval(enabled) {
@@ -69,6 +79,80 @@ fn fold(
         }
     }
     result
+}
+
+impl CfgPredicate {
+    /// The canonical form: nested `all`/`any` of the same kind flattened,
+    /// duplicates removed, terms sorted, a one-term `all`/`any` unwrapped and
+    /// `not(not(x))` folded to `x`. Two spellings of one condition therefore
+    /// compare equal, and the order of `all(a, b)` never makes two twins look
+    /// different. It is syntactic only: no boolean simplification beyond this.
+    pub(crate) fn canonical(&self) -> CfgPredicate {
+        match self {
+            CfgPredicate::All(items) => Self::join(items, true),
+            CfgPredicate::Any(items) => Self::join(items, false),
+            CfgPredicate::Not(inner) => match inner.canonical() {
+                CfgPredicate::Not(twice) => *twice,
+                other => CfgPredicate::Not(Box::new(other)),
+            },
+            leaf => leaf.clone(),
+        }
+    }
+
+    fn join(items: &[CfgPredicate], is_all: bool) -> CfgPredicate {
+        let mut flat: Vec<CfgPredicate> = Vec::new();
+        for item in items {
+            match item.canonical() {
+                CfgPredicate::All(inner) if is_all => flat.extend(inner),
+                CfgPredicate::Any(inner) if !is_all => flat.extend(inner),
+                other => flat.push(other),
+            }
+        }
+        flat.sort_by_key(CfgPredicate::compact);
+        flat.dedup();
+        match (flat.len(), is_all) {
+            (1, _) => flat.remove(0),
+            (_, true) => CfgPredicate::All(flat),
+            (_, false) => CfgPredicate::Any(flat),
+        }
+    }
+
+    /// The compact text of the predicate, used inside an item id
+    /// (`src/lib.rs::pick#cfg(not(feature=fast))`). Spaces and quotes are
+    /// dropped; a value or a name outside `[A-Za-z0-9_-]` is percent-encoded,
+    /// so the text never holds `::`, `.`, `:` or a `#`, and the id parsers
+    /// (`strip_seq_suffix`, the `::` splitters) cannot misread it.
+    pub(crate) fn compact(&self) -> String {
+        match self {
+            CfgPredicate::Feature(name) => format!("feature={}", encode(name)),
+            CfgPredicate::Option { key, value: None } => encode(key),
+            CfgPredicate::Option {
+                key,
+                value: Some(v),
+            } => format!("{}={}", encode(key), encode(v)),
+            CfgPredicate::All(items) => Self::compact_list("all", items),
+            CfgPredicate::Any(items) => Self::compact_list("any", items),
+            CfgPredicate::Not(inner) => format!("not({})", inner.compact()),
+        }
+    }
+
+    fn compact_list(name: &str, items: &[CfgPredicate]) -> String {
+        let parts: Vec<String> = items.iter().map(CfgPredicate::compact).collect();
+        format!("{name}({})", parts.join(","))
+    }
+}
+
+/// Percent-encodes every byte outside `[A-Za-z0-9_-]`.
+fn encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// Parses the argument text of a `cfg` attribute, parentheses included —
@@ -160,11 +244,17 @@ impl Parser {
             self.pos += 1;
             return Some(match name.as_str() {
                 "feature" => CfgPredicate::Feature(value),
-                _ => CfgPredicate::Other,
+                _ => CfgPredicate::Option {
+                    key: name,
+                    value: Some(value),
+                },
             });
         }
         if !self.eat(&Token::Open) {
-            return Some(CfgPredicate::Other);
+            return Some(CfgPredicate::Option {
+                key: name,
+                value: None,
+            });
         }
         let items = self.list()?;
         match name.as_str() {
@@ -256,6 +346,44 @@ mod tests {
             "(a::b)",
         ] {
             assert_eq!(parse_cfg_arguments(text), None, "{text}");
+        }
+    }
+
+    fn compact(text: &str) -> String {
+        parse_cfg_arguments(text)
+            .expect("parses")
+            .canonical()
+            .compact()
+    }
+
+    #[test]
+    fn an_option_keeps_its_name_so_kani_and_miri_twins_stay_distinct() {
+        assert_eq!(compact("(kani)"), "kani");
+        assert_ne!(compact("(kani)"), compact("(miri)"));
+        assert_eq!(compact("(not(kani))"), "not(kani)");
+        assert_eq!(compact("(target_os = \"linux\")"), "target_os=linux");
+    }
+
+    #[test]
+    fn canonical_flattens_sorts_dedups_and_unwraps() {
+        assert_eq!(compact("(all(b, all(a, b)))"), "all(a,b)");
+        assert_eq!(compact("(any(any(x), y))"), "any(x,y)");
+        assert_eq!(compact("(all(unix))"), "unix");
+        assert_eq!(compact("(not(not(kani)))"), "kani");
+        assert_eq!(compact("(all(a, b))"), compact("(all(b, a))"));
+    }
+
+    #[test]
+    fn a_feature_is_written_with_its_key_and_a_value_is_percent_encoded() {
+        assert_eq!(compact("(not(feature = \"fast\"))"), "not(feature=fast)");
+        assert_eq!(compact("(feature = \"a.b:c\")"), "feature=a%2Eb%3Ac");
+    }
+
+    #[test]
+    fn the_compact_text_never_holds_an_id_separator() {
+        let text = compact("(all(feature = \"x::y\", target_os = \"a#b.c\"))");
+        for bad in ["::", ".", "#", " ", "\""] {
+            assert!(!text.contains(bad), "{text} holds {bad}");
         }
     }
 }

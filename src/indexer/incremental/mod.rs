@@ -156,6 +156,7 @@ pub fn index_incremental(
     let start = Instant::now();
     let store = GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
+    store.require_cfg_gate_metadata()?;
     // No create_schema() here: the graph already exists (this path is reached
     // only when a prior full index built it with the current schema), and the
     // DDL pass is ~0.4s of pure fixed cost that would defeat the whole point of

@@ -3,6 +3,7 @@
 // Split out of `walkers/mod.rs` (issue #101, §4.1) as a pure move; the
 // `ExtractedNode`/`ExtractedRef` contract is unchanged.
 
+use std::collections::HashSet;
 use tree_sitter::{Node, Parser};
 
 use super::super::lang_spec::LangSpec;
@@ -74,6 +75,8 @@ fn reparse_embedded(inner_spec: &LangSpec, ctx: &mut WalkCtx, content: Node, sco
         refs: Vec::new(),
         next_seq: ctx.next_seq,
         emitted_qns: std::mem::take(&mut ctx.emitted_qns),
+        cfg_gates: None,
+        twins: HashSet::new(),
     };
     walk_defs(inner_spec, &mut inner, tree.root_node(), scope, None);
     ctx.next_seq = inner.next_seq;

@@ -19,8 +19,8 @@
 // ever classified, so a mis-resolved path produces nothing.
 
 use super::cargo_targets::{CrateRoot, TargetMap};
-use super::cfg_expr::{CfgPredicate, Truth};
 use super::rust_mod_decls::{self, ModDecl};
+use crate::parser::cfg_expr::{CfgPredicate, Truth};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 

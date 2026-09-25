@@ -12,6 +12,7 @@
 use tree_sitter::Node;
 
 use super::super::lang_spec::LangSpec;
+use super::super::rust_cfg_gate::twin_qn;
 use super::rust::{
     decl_list_body, emit_derive_implements, has_async, implements_props, push_def, Def,
     DeriveScope, RustSpecs,
@@ -38,7 +39,7 @@ pub(super) fn emit_struct(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, ds: D
     if name.is_empty() {
         return;
     }
-    let qn = qual(ds.scope, &name);
+    let qn = twin_qn(ctx, node, LABEL_STRUCT, qual(ds.scope, &name));
     push_def(
         ctx,
         node,
@@ -53,7 +54,7 @@ pub(super) fn emit_struct(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, ds: D
         },
     );
     emit_fields(spec, ctx, node, &qn);
-    emit_derive_implements(spec, ctx, node, ds);
+    emit_derive_implements(ctx, ds, &qn);
 }
 
 /// Emits one `Field` + `HasField` per named member of the node's field-list body.
@@ -85,7 +86,7 @@ fn emit_fields(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, owner_qn: &str) {
             continue;
         }
         let type_ann = node_field_text(ctx.source, child, spec.type_field);
-        let fqn = qual(owner_qn, &name);
+        let fqn = twin_qn(ctx, child, LABEL_FIELD, qual(owner_qn, &name));
         push_def(
             ctx,
             child,
@@ -109,7 +110,7 @@ pub(super) fn emit_enum(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, ds: Der
     if name.is_empty() {
         return;
     }
-    let qn = qual(ds.scope, &name);
+    let qn = twin_qn(ctx, node, LABEL_ENUM, qual(ds.scope, &name));
     push_def(
         ctx,
         node,
@@ -124,7 +125,7 @@ pub(super) fn emit_enum(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, ds: Der
         },
     );
     emit_variants(specs, ctx, node, &qn);
-    emit_derive_implements(spec, ctx, node, ds);
+    emit_derive_implements(ctx, ds, &qn);
 }
 
 /// Emits one `Variant` + `HasVariant` per member of the enum's variant-list body.
@@ -156,7 +157,7 @@ fn emit_variants(specs: RustSpecs, ctx: &mut WalkCtx, enum_node: Node, enum_qn: 
         if name.is_empty() {
             continue;
         }
-        let vqn = qual(enum_qn, &name);
+        let vqn = twin_qn(ctx, child, LABEL_VARIANT, qual(enum_qn, &name));
         push_def(
             ctx,
             child,
@@ -181,7 +182,7 @@ pub(super) fn emit_trait(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope:
     if name.is_empty() {
         return;
     }
-    let qn = qual(scope, &name);
+    let qn = twin_qn(ctx, node, LABEL_TRAIT, qual(scope, &name));
     // Supertraits are the `extends_field` (`bounds`) children of `base_node_kinds`
     // — exactly the shared `collect_bases` contract, so Rust rides it.
     let supers = types::collect_bases(spec, ctx.source, node);
@@ -238,7 +239,12 @@ fn emit_trait_methods(specs: RustSpecs, ctx: &mut WalkCtx, trait_node: Node, tra
             continue;
         }
         let seq = ctx.next_seq();
-        let mqn = spec.conventions.def_qn(trait_qn, &name, seq);
+        let mqn = twin_qn(
+            ctx,
+            child,
+            LABEL_METHOD,
+            spec.conventions.def_qn(trait_qn, &name, seq),
+        );
         // A bodiless requirement is reported non-async unconditionally; only a
         // defaulted `fn` has its modifiers read. The hand-written walker's split,
         // preserved.
@@ -321,7 +327,12 @@ fn emit_impl_method(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, target: &Im
         return;
     }
     let seq = ctx.next_seq();
-    let mqn = spec.conventions.def_qn(target.receiver_qn, &name, seq);
+    let mqn = twin_qn(
+        ctx,
+        node,
+        LABEL_METHOD,
+        spec.conventions.def_qn(target.receiver_qn, &name, seq),
+    );
     let mut props = vec![
         ("is_async".to_string(), has_async(rf, node).to_string()),
         ("receiver_type".to_string(), target.receiver_qn.to_string()),

@@ -35,6 +35,7 @@
 use tree_sitter::Node;
 
 use super::super::lang_spec::{LangSpec, RustFamilySpec};
+use super::super::rust_cfg_gate::{effective_gate, gate_of_qualified_name, twin_qn};
 use super::{
     call_scan_of, end_line_of, imports, kind_in, line_of, rust_body, rust_types, type_uses, WalkCtx,
 };
@@ -80,7 +81,16 @@ pub(super) struct Def<'a> {
 /// Appends `d`'s node and then its owning edge.
 /// precondition: `d.name` is non-empty and `d.qn` is its qualified name.
 /// postcondition: exactly one node and one ref are appended, node first.
-pub(super) fn push_def(ctx: &mut WalkCtx, node: Node, d: Def) {
+pub(super) fn push_def(ctx: &mut WalkCtx, node: Node, mut d: Def) {
+    // Issue #353: the gate of every node while looking for twins, and the gate of
+    // a twin on its own node once it is told apart by its qualified name.
+    if let Some(gates) = ctx.cfg_gates.as_mut() {
+        gates.push((ctx.nodes.len(), effective_gate(ctx.source, node)));
+    }
+    if let Some(gate) = gate_of_qualified_name(d.qn) {
+        d.properties
+            .push(("cfg_gate".to_string(), gate.to_string()));
+    }
     ctx.nodes.push(ExtractedNode {
         label: d.label.to_string(),
         name: d.name.to_string(),
@@ -196,24 +206,14 @@ pub(super) fn implements_props(derives: &[String]) -> Vec<(String, String)> {
 /// QN to the bare trait name, AFTER the item's own node/edges — the order the
 /// hand-written dispatcher produced. The resolver's Layer 4 maps each through the
 /// macro table.
-pub(super) fn emit_derive_implements(
-    spec: &LangSpec,
-    ctx: &mut WalkCtx,
-    item: Node,
-    ds: DeriveScope,
-) {
+pub(super) fn emit_derive_implements(ctx: &mut WalkCtx, ds: DeriveScope, from_qn: &str) {
     if ds.derives.is_empty() {
         return;
     }
-    let name = node_field_text(ctx.source, item, spec.name_field);
-    if name.is_empty() {
-        return;
-    }
-    let from_qn = qual(ds.scope, &name);
     for trait_name in ds.derives {
         ctx.refs.push(ExtractedRef {
             kind: "DeriveImplements".to_string(),
-            from_qualified_name: from_qn.clone(),
+            from_qualified_name: from_qn.to_string(),
             to_qualified_name: trait_name.clone(),
         });
     }
@@ -306,7 +306,12 @@ fn emit_function(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope: &str) {
         return;
     }
     let seq = ctx.next_seq();
-    let qn = spec.conventions.def_qn(scope, &name, seq);
+    let qn = twin_qn(
+        ctx,
+        node,
+        LABEL_FUNCTION,
+        spec.conventions.def_qn(scope, &name, seq),
+    );
     let mut properties = vec![(
         "is_async".to_string(),
         has_async(specs.rf, node).to_string(),
@@ -341,7 +346,7 @@ fn emit_constant(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     if name.is_empty() {
         return;
     }
-    let qn = qual(scope, &name);
+    let qn = twin_qn(ctx, node, LABEL_CONSTANT, qual(scope, &name));
     let type_ann = node_field_text(ctx.source, node, spec.type_field);
     push_def(
         ctx,
@@ -367,7 +372,7 @@ fn emit_macro_def(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
     if name.is_empty() {
         return;
     }
-    let qn = qual(scope, &name);
+    let qn = twin_qn(ctx, node, LABEL_CONSTANT, qual(scope, &name));
     push_def(
         ctx,
         node,
@@ -390,7 +395,7 @@ fn emit_type_alias(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str) 
     if name.is_empty() {
         return;
     }
-    let qn = qual(scope, &name);
+    let qn = twin_qn(ctx, node, LABEL_TYPE_ALIAS, qual(scope, &name));
     let target = node_field_text(ctx.source, node, spec.type_field);
     push_def(
         ctx,
@@ -415,7 +420,7 @@ fn emit_mod(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope: &str) {
     if name.is_empty() {
         return;
     }
-    let qn = qual(scope, &name);
+    let qn = twin_qn(ctx, node, LABEL_MODULE, qual(scope, &name));
     push_def(
         ctx,
         node,
