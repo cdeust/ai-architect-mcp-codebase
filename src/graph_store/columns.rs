@@ -33,6 +33,8 @@ pub(crate) const COLS_FILE: ColTypes = &[
     ("size_bytes", LogicalType::Int64),
     // source: stages/stage-3.md §10.5 — must mirror the NODE_FILE DDL.
     ("parse_errors", LogicalType::Int64),
+    // source: issue #354: must mirror the DDL's `target_context` column.
+    ("target_context", LogicalType::String),
 ];
 // source: Spike B' BUG #5 + #9 — every symbol-bearing label gets a
 // `language` String column; Struct/Enum/Trait additionally gain `bases`.
@@ -74,6 +76,8 @@ pub(crate) const COLS_FUNCTION: ColTypes = &[
     // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
     ("cfg_active", LogicalType::String),
+    // source: issue #354: must mirror the DDL's `code_context` column.
+    ("code_context", LogicalType::String),
 ];
 pub(crate) const COLS_METHOD: ColTypes = &[
     ("id", LogicalType::String),
@@ -92,6 +96,8 @@ pub(crate) const COLS_METHOD: ColTypes = &[
     // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
     ("cfg_active", LogicalType::String),
+    // source: issue #354: must mirror the DDL's `code_context` column.
+    ("code_context", LogicalType::String),
 ];
 pub(crate) const COLS_TYPEDECL: ColTypes = &[
     ("id", LogicalType::String),

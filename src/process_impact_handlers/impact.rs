@@ -37,7 +37,12 @@ pub(crate) fn run_get_impact(arguments: &Value) -> Value {
 /// (issue #56). Shared by all five impact sections (they are homogeneous):
 /// callers/importers/users/implementors/references (references added by
 /// issue #205).
-pub(crate) const IMPACT_COLUMNS: &[&str] = &["qualified_name", "label", "confidence", "id"];
+///
+/// `context` (issue #354) is set on callers only: `production`, `test`, `bench`,
+/// `example`, `proof` or `unknown`. It is null in the other sections in tabular
+/// form and absent in json form.
+pub(crate) const IMPACT_COLUMNS: &[&str] =
+    &["qualified_name", "label", "confidence", "id", "context"];
 
 pub(crate) fn do_get_impact(arguments: &Value) -> Result<Value, String> {
     let args = arguments.as_object().ok_or("arguments must be an object")?;
@@ -167,12 +172,16 @@ fn impact_handles(nodes: &[clustering::ImpactNode]) -> Vec<Value> {
     nodes
         .iter()
         .map(|n| {
-            json!({
+            let mut handle = json!({
                 "id": n.id,
                 "qualified_name": n.qualified_name,
                 "label": n.label,
                 "confidence": format!("{:.2}", n.confidence),
-            })
+            });
+            if !n.context.is_empty() {
+                handle["context"] = json!(n.context);
+            }
+            handle
         })
         .collect()
 }
@@ -282,6 +291,7 @@ fn impact_envelope(
         "unresolved_callsites_outside_targets": impact.unresolved_callsites_outside_targets,
     });
     attach_cfg_twins(&mut out, impact, qn);
+    attach_caller_contexts(&mut out, impact, sections.dependents_total);
     if views.callers.columns.is_some() {
         // One header covers all homogeneous sections.
         out["columns"] = json!(IMPACT_COLUMNS);
@@ -311,6 +321,24 @@ fn attach_cfg_twins(out: &mut Value, impact: &clustering::ImpactResult, qn: &str
         .map(graph_store::TwinRow::to_json)
         .collect::<Vec<_>>());
     out["unresolved_callsites_cfg_twins"] = json!(impact.unresolved_callsites_cfg_twins);
+}
+
+/// Issue #354: how many of the callers are production code, so "who calls this
+/// in production" is one field. Additive: `callers`, `callers_total` and
+/// `dependents_total` are unchanged and still count every caller.
+/// `callers_production_total` is the callers not PROVEN non-production
+/// (`production` plus `unknown`); `dependents_production_total` is
+/// `dependents_total` less the callers proven non-production. `code_context_basis`
+/// says where the contexts come from: `cargo+source`, `source_only` (no Cargo
+/// map: only the attributes and `#[cfg(test)]` of the source), or `absent` (a
+/// graph without the columns: every caller `unknown`, reindex to get them).
+fn attach_caller_contexts(out: &mut Value, impact: &clustering::ImpactResult, dependents: usize) {
+    let summary = clustering::summarize_caller_contexts(&impact.callers);
+    let proven_away = impact.callers.len() - summary.production_total;
+    out["callers_by_context"] = json!(summary.by_context);
+    out["callers_production_total"] = json!(summary.production_total);
+    out["dependents_production_total"] = json!(dependents - proven_away);
+    out["code_context_basis"] = json!(impact.code_context_basis);
 }
 
 /// The five reverse-dependency sections rendered under one detail/format

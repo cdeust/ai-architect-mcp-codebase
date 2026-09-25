@@ -11,6 +11,7 @@
 
 mod community;
 mod impact;
+mod impact_context;
 mod impact_reasons;
 mod process;
 
@@ -42,5 +43,6 @@ pub use community::{
 };
 #[allow(unused_imports)]
 pub use impact::{get_impact, ImpactNode, ImpactResult};
+pub use impact_context::summarize as summarize_caller_contexts;
 #[allow(unused_imports)]
 pub use process::{get_processes, trace_processes, ProcessInfo};

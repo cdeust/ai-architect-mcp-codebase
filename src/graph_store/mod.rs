@@ -12,6 +12,7 @@ use std::path::Path;
 
 mod cfg_active;
 mod cfg_twins;
+pub(crate) mod code_context;
 mod columns;
 mod config;
 mod counts;

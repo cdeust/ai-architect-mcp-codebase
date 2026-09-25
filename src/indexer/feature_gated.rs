@@ -58,11 +58,7 @@ pub(crate) fn analyse(
             features: BTreeMap::new(),
         };
     };
-    let tree = ModuleTree {
-        root,
-        indexed,
-        crate_entries: crate_roots.iter().map(|c| c.entry.clone()).collect(),
-    };
+    let tree = ModuleTree::new(root, indexed, crate_roots);
     let mut live: BTreeMap<PathBuf, BTreeSet<BTreeSet<String>>> = BTreeMap::new();
     let mut seeds = Vec::new();
     for crate_root in crate_roots {
@@ -86,11 +82,26 @@ pub(crate) fn analyse(
     FeatureAnalysis { gated, features }
 }
 
-/// What the walk needs that is fixed for the whole codebase.
-struct ModuleTree<'a> {
+/// What the walk needs that is fixed for the whole codebase. Shared with
+/// `target_context`, which walks the same tree for another question.
+pub(super) struct ModuleTree<'a> {
     root: &'a Path,
     indexed: &'a BTreeSet<PathBuf>,
     crate_entries: BTreeSet<PathBuf>,
+}
+
+impl<'a> ModuleTree<'a> {
+    pub(super) fn new(
+        root: &'a Path,
+        indexed: &'a BTreeSet<PathBuf>,
+        crate_roots: &[CrateRoot],
+    ) -> Self {
+        ModuleTree {
+            root,
+            indexed,
+            crate_entries: crate_roots.iter().map(|c| c.entry.clone()).collect(),
+        }
+    }
 }
 
 impl ModuleTree<'_> {
@@ -143,7 +154,7 @@ impl ModuleTree<'_> {
     }
 
     /// The `mod name;` declarations of `file` that resolve to an indexed file.
-    fn children(&self, file: &Path) -> Vec<(ModDecl, PathBuf)> {
+    pub(super) fn children(&self, file: &Path) -> Vec<(ModDecl, PathBuf)> {
         let Ok(source) = std::fs::read_to_string(self.root.join(file)) else {
             return Vec::new();
         };

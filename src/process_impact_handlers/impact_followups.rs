@@ -188,6 +188,7 @@ mod impact_next_steps_tests {
             qualified_name: qualified_name.to_string(),
             label: "Function".to_string(),
             confidence: 1.0,
+            context: String::new(),
         }
     }
 
@@ -206,6 +207,7 @@ mod impact_next_steps_tests {
             unresolved_callsites_outside_targets: 0,
             unresolved_callsites_cfg_twins: 0,
             cfg_twins: Vec::new(),
+            code_context_basis: "absent",
         }
     }
 

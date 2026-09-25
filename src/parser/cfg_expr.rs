@@ -123,6 +123,22 @@ fn fold(
 }
 
 impl CfgPredicate {
+    /// True when the predicate holds only if the bare option `key` is set: the
+    /// option itself, or an `all` with a term that requires it. `any`, `not` and
+    /// every other shape never do, so `cfg(any(test, feature = "x"))` and
+    /// `cfg(not(test))` are not test-only. Syntactic, like `canonical`.
+    /// source: issue #354.
+    pub(crate) fn requires_option(&self, key: &str) -> bool {
+        match self {
+            CfgPredicate::Option {
+                key: k,
+                value: None,
+            } => k == key,
+            CfgPredicate::All(items) => items.iter().any(|item| item.requires_option(key)),
+            _ => false,
+        }
+    }
+
     /// The canonical form: nested `all`/`any` of the same kind flattened,
     /// duplicates removed, terms sorted, a one-term `all`/`any` unwrapped and
     /// `not(not(x))` folded to `x`. Two spellings of one condition therefore

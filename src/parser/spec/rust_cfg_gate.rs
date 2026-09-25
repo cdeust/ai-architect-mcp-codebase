@@ -39,6 +39,23 @@ const GATING_ANCESTORS: &[&str] = &["mod_item", "impl_item", "trait_item", "func
 
 /// The compact, canonical gate of `item`, or `""` when nothing gates it.
 pub(crate) fn effective_gate(source: &str, item: Node) -> String {
+    let predicates = gate_predicates(source, item);
+    if predicates.is_empty() {
+        return String::new();
+    }
+    CfgPredicate::All(predicates).canonical().compact()
+}
+
+/// True when `item` exists only in a build that sets `cfg(test)`: some `#[cfg]`
+/// that reaches it (see `effective_gate`) requires the bare option `test`.
+/// `cfg(any(test, ..))`, `cfg(not(test))` and `cfg_attr(test, ..)` do not.
+/// source: issue #354.
+pub(crate) fn gate_requires_test(source: &str, item: Node) -> bool {
+    CfgPredicate::All(gate_predicates(source, item)).requires_option("test")
+}
+
+/// Every `#[cfg]` predicate that reaches `item`, own attributes first.
+fn gate_predicates(source: &str, item: Node) -> Vec<CfgPredicate> {
     let mut predicates = outer_cfgs(source, item);
     let mut ancestor = item.parent();
     while let Some(node) = ancestor {
@@ -50,10 +67,7 @@ pub(crate) fn effective_gate(source: &str, item: Node) -> String {
         }
         ancestor = node.parent();
     }
-    if predicates.is_empty() {
-        return String::new();
-    }
-    CfgPredicate::All(predicates).canonical().compact()
+    predicates
 }
 
 /// The `#[cfg(..)]` outer attributes that precede `item`, comments skipped.

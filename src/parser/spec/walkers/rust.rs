@@ -36,12 +36,13 @@ use tree_sitter::Node;
 
 use super::super::lang_spec::{LangSpec, RustFamilySpec};
 use super::super::rust_cfg_gate::{effective_gate, gate_of_qualified_name, twin_qn};
+use super::super::rust_code_context::{attribute_marker, code_context, CONTEXT_BENCH};
 use super::{
     call_scan_of, end_line_of, imports, kind_in, line_of, rust_body, rust_types, type_uses, WalkCtx,
 };
 use crate::parser::{
     node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_FUNCTION,
-    LABEL_MODULE, LABEL_TYPE_ALIAS,
+    LABEL_METHOD, LABEL_MODULE, LABEL_TYPE_ALIAS,
 };
 
 /// The two spec halves a Rust emitter always needs together: the shared
@@ -91,6 +92,14 @@ pub(super) fn push_def(ctx: &mut WalkCtx, node: Node, mut d: Def) {
     if let Some(gate) = gate_of_qualified_name(d.qn) {
         d.properties
             .push(("cfg_gate".to_string(), gate.to_string()));
+    }
+    // Issue #354: test, bench and proof code says so, from the source alone.
+    // Production code gets no property, so its parse output is unchanged.
+    if d.label == LABEL_FUNCTION || d.label == LABEL_METHOD {
+        if let Some(context) = code_context(ctx.source, node) {
+            d.properties
+                .push(("code_context".to_string(), context.to_string()));
+        }
     }
     ctx.nodes.push(ExtractedNode {
         label: d.label.to_string(),
@@ -257,31 +266,13 @@ pub(super) fn decl_list_body<'t>(specs: RustSpecs, node: Node<'t>) -> Option<Nod
     }
 }
 
-/// Classifies only exact, argument-free outer attribute paths. These markers
-/// declare harness entry points, never successful test/proof execution.
+/// The `entry_kind` an outer attribute declares: a test attribute (with or
+/// without arguments, any crate: `#[tokio::test(flavor = ..)]`) or `kani::proof`.
+/// These markers declare harness entry points, never successful test/proof
+/// execution. `#[bench]` marks bench code (`code_context`), not an entry point.
 /// Sources: Rust Reference attributes/testing.html; Kani reference/attributes.html.
 fn entry_attribute(source: &str, item: Node) -> Option<&'static str> {
-    let attribute = item.named_child(0)?;
-    if attribute.kind() != "attribute"
-        || attribute.child_by_field_name("arguments").is_some()
-        || attribute.child_by_field_name("value").is_some()
-    {
-        return None;
-    }
-    let path = attribute.named_child(0)?;
-    if path.kind() == "identifier" && node_text(source, path) == "test" {
-        return Some("test");
-    }
-    if path.kind() != "scoped_identifier" {
-        return None;
-    }
-    let prefix = path.child_by_field_name("path")?;
-    let name = path.child_by_field_name("name")?;
-    (prefix.kind() == "identifier"
-        && node_text(source, prefix) == "kani"
-        && name.kind() == "identifier"
-        && node_text(source, name) == "proof")
-        .then_some("proof")
+    attribute_marker(source, item).filter(|marker| *marker != CONTEXT_BENCH)
 }
 
 /// Outer attributes belong to the immediately following item; comments may

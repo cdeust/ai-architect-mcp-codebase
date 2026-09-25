@@ -175,7 +175,7 @@ fn refused_then_rebuilt(spoil: &str) {
     {
         let store = GraphStore::open_or_create(&graph).unwrap();
         let marker = |s: &GraphStore| {
-            s.execute_query("MATCH (m:GraphMarker) RETURN m.value")
+            s.execute_query("MATCH (m:GraphMarker {id: 'cfg_canonical_form'}) RETURN m.value")
                 .unwrap()
                 .rows
         };
@@ -189,10 +189,14 @@ fn refused_then_rebuilt(spoil: &str) {
     index_over_stdio(&source, &output);
     let store = GraphStore::open_or_create(&graph).unwrap();
     let rows = store
-        .execute_query("MATCH (m:GraphMarker) RETURN m.value")
+        .execute_query("MATCH (m:GraphMarker {id: 'cfg_canonical_form'}) RETURN m.value")
         .unwrap()
         .rows;
     assert_eq!(rows, [["2"]]);
+    assert!(
+        store.has_code_context(),
+        "the rebuild writes the code-context marker too"
+    );
     drop(store);
     incremental(&source, &output).expect("a rebuilt graph takes refreshes");
 }
@@ -221,7 +225,7 @@ fn a_failed_full_index_leaves_no_marker() {
     let marker_rows = |graph: &Path| {
         let store = GraphStore::open_or_create(graph).unwrap();
         store
-            .execute_query("MATCH (m:GraphMarker) RETURN m.value")
+            .execute_query("MATCH (m:GraphMarker {id: 'cfg_canonical_form'}) RETURN m.value")
             .unwrap()
             .rows
     };

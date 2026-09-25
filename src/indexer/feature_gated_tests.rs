@@ -22,6 +22,7 @@ fn known(roots: &[(&str, &[&str])]) -> TargetMap {
             .map(|(entry, features)| CrateRoot {
                 entry: PathBuf::from(entry),
                 default_features: features.iter().map(|f| f.to_string()).collect(),
+                kind: crate::indexer::cargo_targets::TargetKind::Production,
             })
             .collect(),
         crate_names: BTreeSet::new(),

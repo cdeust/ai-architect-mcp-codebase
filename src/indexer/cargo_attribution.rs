@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::cargo_targets::{self, TargetMap};
 use super::feature_gated::{self, FileFeatures};
+use super::target_context;
 
 /// Whether the Cargo-derived coverage buckets carry information.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +63,10 @@ pub struct CargoAttributions {
     /// (root-relative, forward-slash keys), empty unless the status is `Known`.
     /// Issue #353, part B.
     pub(crate) file_features: BTreeMap<String, FileFeatures>,
+    /// What the Cargo package says each reached Rust file is (`production`,
+    /// `test`, `bench`, `example`; root-relative, forward-slash keys), empty
+    /// unless the status is `Known`. Issue #354.
+    pub(crate) target_contexts: BTreeMap<String, &'static str>,
 }
 
 /// What the Cargo map tells the rest of an index pass, apart from the coverage
@@ -71,6 +76,7 @@ pub struct CargoAttributions {
 pub(crate) struct CargoFacts {
     pub crate_names: BTreeSet<String>,
     pub file_features: BTreeMap<String, FileFeatures>,
+    pub target_contexts: BTreeMap<String, &'static str>,
 }
 
 /// Attributes `rust_files` (root-relative `.rs` paths indexed this pass)
@@ -79,14 +85,10 @@ pub(crate) struct CargoFacts {
 ///
 /// Postcondition: the buckets are non-empty only under `Known`.
 pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttributions {
-    let not_applicable = |detail: &str| CargoAttributions {
-        status: CargoAttributionStatus::NotApplicable {
+    let not_applicable = |detail: &str| {
+        empty(CargoAttributionStatus::NotApplicable {
             detail: detail.to_string(),
-        },
-        outside_targets: Vec::new(),
-        feature_gated: Vec::new(),
-        crate_names: BTreeSet::new(),
-        file_features: BTreeMap::new(),
+        })
     };
     if !codebase.join("Cargo.toml").is_file() {
         return not_applicable("no Cargo.toml at the analyzed root");
@@ -94,17 +96,31 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
     if rust_files.is_empty() {
         return not_applicable("no .rs file indexed");
     }
-    let map = cargo_targets::discover(codebase);
-    if let TargetMap::Unknown { detail } = map {
-        return CargoAttributions {
-            status: CargoAttributionStatus::Unknown { detail },
-            outside_targets: Vec::new(),
-            feature_gated: Vec::new(),
-            crate_names: BTreeSet::new(),
-            file_features: BTreeMap::new(),
-        };
+    match cargo_targets::discover(codebase) {
+        TargetMap::Unknown { detail } => empty(CargoAttributionStatus::Unknown { detail }),
+        known => attributed(codebase, rust_files, &known),
     }
-    let crate_names = match &map {
+}
+
+/// An attribution with `status` and nothing in any bucket.
+fn empty(status: CargoAttributionStatus) -> CargoAttributions {
+    CargoAttributions {
+        status,
+        outside_targets: Vec::new(),
+        feature_gated: Vec::new(),
+        crate_names: BTreeSet::new(),
+        file_features: BTreeMap::new(),
+        target_contexts: BTreeMap::new(),
+    }
+}
+
+/// The attribution of `rust_files` under a known Cargo `map`.
+fn attributed(
+    codebase: &Path,
+    rust_files: &BTreeSet<PathBuf>,
+    map: &TargetMap,
+) -> CargoAttributions {
+    let crate_names = match map {
         TargetMap::Known { crate_names, .. } => crate_names.clone(),
         TargetMap::Unknown { .. } => BTreeSet::new(),
     };
@@ -114,7 +130,7 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
         .filter(|rel| map.is_outside_targets(rel))
         .map(forward_slash)
         .collect();
-    let analysis = feature_gated::analyse(codebase, &map, rust_files);
+    let analysis = feature_gated::analyse(codebase, map, rust_files);
     let feature_gated = analysis
         .gated
         .into_iter()
@@ -125,12 +141,17 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
         .into_iter()
         .map(|(rel, known)| (forward_slash(&rel), known))
         .collect();
+    let target_contexts = target_context::analyse(codebase, map, rust_files)
+        .into_iter()
+        .map(|(rel, context)| (forward_slash(&rel), context))
+        .collect();
     CargoAttributions {
         status: CargoAttributionStatus::Known,
         outside_targets,
         feature_gated,
         crate_names,
         file_features,
+        target_contexts,
     }
 }
 

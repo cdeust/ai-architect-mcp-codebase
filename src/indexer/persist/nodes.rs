@@ -186,6 +186,13 @@ fn build_node_properties(node: &parser::ExtractedNode, language: &str) -> Vec<(S
         ));
         props.push(("cfg_active".to_string(), cypher_str("")));
     }
+    // Issue #354: 'test' / 'bench' / 'proof', '' for production code.
+    if matches!(node.label.as_str(), "Function" | "Method") {
+        props.push((
+            "code_context".to_string(),
+            cypher_str(&find_property(node, "code_context")),
+        ));
+    }
     if has_language_col(&node.label) {
         props.push(("language".to_string(), cypher_str(language)));
     }

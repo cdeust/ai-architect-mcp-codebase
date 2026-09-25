@@ -124,6 +124,7 @@ fn overlay_cargo_attributions(
     cargo_attribution::CargoFacts {
         crate_names: found.crate_names,
         file_features: found.file_features,
+        target_contexts: found.target_contexts,
     }
 }
 
@@ -136,6 +137,8 @@ fn overlay_cargo_attributions(
 ///   unverified is declined by the resolver.
 /// - Writes `cfg_active` on every `#[cfg]` twin (issue #353): a twin the
 ///   default build cannot be shown to compile stays `unknown`, never `active`.
+/// - Writes `File.target_context` on every file (issue #354): what the Cargo
+///   package says the file is; a file no target reaches gets `''`.
 pub(in crate::indexer) fn apply_cargo_facts(
     store: &crate::graph_store::GraphStore,
     facts: &cargo_attribution::CargoFacts,
@@ -145,6 +148,9 @@ pub(in crate::indexer) fn apply_cargo_facts(
     }
     if let Err(e) = super::super::cfg_active::write(store, &facts.file_features) {
         eprintln!("[ap] cfg_active pass skipped: {e}");
+    }
+    if let Err(e) = store.write_target_contexts(&facts.target_contexts) {
+        eprintln!("[ap] target_context pass skipped: {e}");
     }
 }
 

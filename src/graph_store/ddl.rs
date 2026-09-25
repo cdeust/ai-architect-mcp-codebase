@@ -14,7 +14,12 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // parses to few/zero symbols with parse_errors > 0 is a degraded parse
         // (e.g. wrong grammar dialect), not a genuinely empty file; downstream
         // tools must be able to tell the two apart.
-        (NODE_FILE, "id STRING, path STRING, name STRING, extension STRING, size_bytes INT64, parse_errors INT64"),
+        // target_context: issue #354: what the Cargo package says the file is:
+        // 'test' / 'bench' / 'example' when every path to it comes from such
+        // targets (or through a `#[cfg(test)] mod`), 'production' when a lib, bin
+        // or build target reaches it, '' when nothing is decided (see
+        // `indexer::target_context`). '' on a graph from before the column.
+        (NODE_FILE, "id STRING, path STRING, name STRING, extension STRING, size_bytes INT64, parse_errors INT64, target_context STRING DEFAULT ''"),
         // cfg_gate: issue #353: on every label a Rust item can twin under, the
         // compact `#[cfg]` gate of an item whose qualified name carries a
         // `#cfg(..)` suffix; '' for every other item and for a graph written
@@ -31,10 +36,15 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // function's return-type annotation and the space-joined set of types it
         // constructs; resolve_uses reads both to emit Uses_Function_<Type> edges.
         // Empty ("") for languages that have not adopted the extraction.
+        // code_context: issue #354: 'test' / 'bench' / 'proof' for a function or
+        // method the source proves is not production code (a test attribute, an
+        // enclosing `#[cfg(test)]`); '' for every other one and for a graph
+        // written before the column existed (see `require_code_context_metadata`).
         (NODE_FUNCTION,
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, is_async BOOLEAN, \
-             return_type STRING, constructed_types STRING, language STRING, entry_kind STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
+             return_type STRING, constructed_types STRING, language STRING, entry_kind STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT '', \
+             code_context STRING DEFAULT ''"),
         // source: implements fix — `trait_name` carries the trait a method
         // belongs to in an `impl Trait for Type` block (already extracted by
         // the parser at parser/rust.rs but previously dropped for lack of a
@@ -44,7 +54,8 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, is_async BOOLEAN, \
              receiver_type STRING, trait_name STRING, return_type STRING, \
-             constructed_types STRING, language STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
+             constructed_types STRING, language STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT '', \
+             code_context STRING DEFAULT ''"),
         // source: Spike B' BUG #9 fix — `bases STRING` column carries a CSV
         // of unresolved base-class names emitted by the parser. The resolver
         // reads this in resolve_extends, looks each name up in the symbol

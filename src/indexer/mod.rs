@@ -23,6 +23,7 @@ mod light_link;
 pub mod manifest;
 mod persist;
 mod rust_mod_decls;
+mod target_context;
 mod walk;
 
 // Re-exported so sibling submodules (persist, incremental) keep referring to
@@ -162,6 +163,7 @@ pub fn index_codebase_with_language(
     store.create_schema()?;
     if existing {
         store.require_cfg_gate_metadata()?;
+        store.require_code_context_metadata()?;
     }
     // No current marker while this index runs: a failure leaves a graph that the
     // next incremental refresh refuses (#353).
@@ -293,6 +295,7 @@ pub fn index_codebase_with_language(
     incremental::apply_cargo_facts(&store, &facts);
 
     store.write_canonical_marker()?;
+    store.write_code_context_marker()?;
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -365,6 +368,7 @@ fn record_cargo_attributions(
     cargo_attribution::CargoFacts {
         crate_names: found.crate_names,
         file_features: found.file_features,
+        target_contexts: found.target_contexts,
     }
 }
 

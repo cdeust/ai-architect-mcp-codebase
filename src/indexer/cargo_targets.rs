@@ -99,6 +99,34 @@ pub enum TargetMap {
     },
 }
 
+/// What a Cargo target builds, as far as production code is concerned. Only
+/// `test`, `bench` and `example` targets are non-production; every other kind
+/// (`lib`, `bin`, `proc-macro`, `custom-build`, a kind this build does not know)
+/// is production, so an unknown kind can never hide a caller. Issue #354.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetKind {
+    Production,
+    Test,
+    Bench,
+    Example,
+}
+
+impl TargetKind {
+    /// source: cargo-metadata(1), `packages[].targets[].kind`.
+    fn from_cargo(kinds: &[String]) -> Self {
+        let has = |k: &str| kinds.iter().any(|kind| kind == k);
+        if has("test") {
+            Self::Test
+        } else if has("bench") {
+            Self::Bench
+        } else if has("example") {
+            Self::Example
+        } else {
+            Self::Production
+        }
+    }
+}
+
 /// One compiled target's entry file and its package's default feature set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrateRoot {
@@ -106,6 +134,8 @@ pub struct CrateRoot {
     pub entry: PathBuf,
     /// Features enabled when the package is built with default features.
     pub default_features: BTreeSet<String>,
+    /// What the target builds (issue #354).
+    pub kind: TargetKind,
 }
 
 impl TargetMap {
@@ -275,6 +305,7 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
             {
                 crate_names.insert(t.name.replace('-', "_"));
             }
+            let kind = TargetKind::from_cargo(&t.kind);
             let abs = PathBuf::from(&t.src_path);
             let Ok(rel) = abs.strip_prefix(root) else {
                 continue;
@@ -288,6 +319,7 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
             crate_roots.push(CrateRoot {
                 entry: rel.clone(),
                 default_features: default_features.clone(),
+                kind,
             });
             target_files.insert(rel);
         }

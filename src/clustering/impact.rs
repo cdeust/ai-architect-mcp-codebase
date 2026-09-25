@@ -1,7 +1,7 @@
 use crate::epistemic::{self, Boundary};
 use crate::graph_store::{community_ids, cypher_str, process_names, GraphStore, SymbolMatch};
 
-use super::impact_reasons;
+use super::{impact_context, impact_reasons};
 
 /// A reverse-dependency edge endpoint, carried as a re-queryable handle
 /// (id + qualified_name + label) rather than a flattened name string, so a
@@ -19,6 +19,10 @@ pub struct ImpactNode {
     /// per-relation-type floor (`epistemic::relation_confidence_floor`). A value
     /// < 1.0 means this dependency was resolved heuristically and may be wrong.
     pub confidence: f64,
+    /// For a caller: `production`, `test`, `bench`, `example`, `proof` or
+    /// `unknown` (issue #354, see `impact_context`); empty for every other
+    /// section, which is not classified.
+    pub context: String,
 }
 
 pub struct ImpactResult {
@@ -72,6 +76,10 @@ pub struct ImpactResult {
     /// default build compiles them; empty when the target is not a twin.
     /// Issue #353.
     pub cfg_twins: Vec<crate::graph_store::TwinRow>,
+    /// Where the callers' `context` comes from: `cargo+source`, `source_only`,
+    /// or `absent` (a graph without code-context columns: every caller is
+    /// `unknown`). Issue #354.
+    pub code_context_basis: &'static str,
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +99,8 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
     // (callers, importers, users, implementors) is what a "what breaks if I
     // change this?" query needs. Each is a re-queryable handle so the caller
     // can keep walking the graph through MCP rather than stopping at a digest.
-    let callers = reverse_dependents(store, &esc, "Calls_");
+    let mut callers = reverse_dependents(store, &esc, "Calls_");
+    let code_context_basis = impact_context::attach(store, &mut callers);
     let importers = reverse_dependents(store, &esc, "Imports_");
     let users = reverse_dependents(store, &esc, "Uses_");
     let implementors = reverse_dependents(store, &esc, "Implements_");
@@ -128,6 +137,7 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         unresolved_callsites_outside_targets: attribution.outside_targets,
         unresolved_callsites_cfg_twins: attribution.cfg_twins,
         cfg_twins,
+        code_context_basis,
     })
 }
 
@@ -317,6 +327,7 @@ fn dependent_node(row: &[String], from_label: &str, floor: f64) -> ImpactNode {
         qualified_name: row[1].clone(),
         label: from_label.to_string(),
         confidence,
+        context: String::new(),
     }
 }
 
