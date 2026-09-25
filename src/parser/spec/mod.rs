@@ -32,6 +32,7 @@ mod rust_call_site;
 pub(crate) mod rust_cfg_gate;
 pub(crate) mod rust_code_context;
 mod rust_item_binds;
+mod rust_live_binding;
 mod rust_macro_binds;
 mod rust_macro_calls;
 mod rust_macro_site;
@@ -108,6 +109,8 @@ mod rust_cfg_twin_tests;
 mod rust_code_context_tests;
 #[cfg(test)]
 mod rust_identity_tests;
+#[cfg(test)]
+mod rust_live_binding_tests;
 #[cfg(test)]
 mod rust_nested_fn_tests;
 #[cfg(test)]

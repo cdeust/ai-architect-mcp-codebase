@@ -244,7 +244,6 @@ fn a_receiver_whose_type_the_signature_does_not_give_stays_unresolved() {
             "an Option used without unwrapping is not the wrapped type",
         ),
         ("answer(6)", "a generic return type names no concrete type"),
-        ("answer(7)", "a name bound twice has no single binding"),
         ("answer(8)", "unwrapping a plain type is an unknown method"),
         (
             "answer(9)",
@@ -259,6 +258,26 @@ fn a_receiver_whose_type_the_signature_does_not_give_stays_unresolved() {
         );
         assert!(rows(&store, &line).is_empty(), "{why}");
     }
+}
+
+/// Issue #350: a name bound twice is typed by the binding live at the call,
+/// here `build(true).expect(..)`, the second one, not by the first.
+#[test]
+fn a_name_bound_twice_is_typed_by_its_live_binding() {
+    let (store, _tmp) = index_and_resolve();
+    let line = line_of("answer(7)");
+    assert_eq!(
+        site(&store, &line),
+        ("true".into(), "Set".into(), "return-type".into())
+    );
+    assert_eq!(
+        rows(&store, &line),
+        vec![(
+            TARGET.to_string(),
+            "receiver-return-type".to_string(),
+            "0.85".to_string()
+        )]
+    );
 }
 
 /// `get_impact` lists the callers found through the return type, and only
@@ -277,6 +296,7 @@ fn get_impact_lists_the_callers_found_through_the_return_type() {
         callers,
         vec![
             ("src/lib.rs::control_constructor".into(), "0.87".into()),
+            ("src/lib.rs::shadowed_receiver".into(), "0.85".into()),
             ("src/lib.rs::via_expect".into(), "0.85".into()),
             ("src/lib.rs::via_free_function".into(), "0.85".into()),
             ("src/lib.rs::via_let_else".into(), "0.85".into()),

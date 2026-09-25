@@ -94,7 +94,7 @@ fn run() {
 }
 
 #[test]
-fn two_bindings_of_different_types_yield_no_hint() {
+fn two_bindings_of_different_types_yield_the_live_one() {
     let src = r#"
 struct A;
 struct B;
@@ -106,7 +106,7 @@ fn run() {
     s.m();
 }
 "#;
-    assert_eq!(hint_of(src, "s.m"), None);
+    assert_eq!(hint_of(src, "s.m"), Some("B".to_string()));
 }
 
 #[test]
@@ -187,19 +187,19 @@ fn closure_parameter_shadowing_the_outer_binding_yields_no_hint() {
     assert_eq!(hint_of(src, "x.m"), None);
 }
 
-/// Decision (#329): a name bound once outside a closure and once again inside
-/// its body is bound twice in the function, so it carries no hint, the same
-/// as two `let`s in one function body.
+/// Issue #350 (after #329): a name bound once outside a closure and once again
+/// inside its body has two bindings, and the call inside the body names the
+/// inner one, which is live there.
 #[test]
-fn rebinding_inside_the_closure_body_counts_as_a_second_binding() {
+fn a_let_inside_the_closure_body_is_the_live_binding_of_its_own_call() {
     let src = "fn f() { let s = W::new(); let v: Vec<u64> = (0..3).map(|i| { let s = W::new(); s.z(i) }).collect(); }";
-    assert_eq!(hint_of(src, "s.z"), None);
+    assert_eq!(hint_of(src, "s.z"), Some("W".to_string()));
 }
 
 #[test]
-fn double_binding_used_inside_a_closure_yields_no_hint() {
+fn double_binding_used_inside_a_closure_yields_the_later_binding() {
     let src = "fn f() { let x = A::new(); let x = T::new(); let v: Vec<u64> = (0..3).map(|i| x.m(i)).collect(); }";
-    assert_eq!(hint_of(src, "x.m"), None);
+    assert_eq!(hint_of(src, "x.m"), Some("T".to_string()));
 }
 
 #[test]
