@@ -16,6 +16,12 @@
 // macro tier writes `Calls_CallSite_StdlibSymbol`). A call to a tuple-struct
 // constructor writes none, so it is never collected here.
 //
+// Known gap, accepted: a site resolved WITHOUT a per-site row (a tuple-struct
+// constructor, a macro, a language-server site that points at a Struct) whose
+// target file is DELETED keeps `is_resolved = true`, because the purge sees no
+// edge to reopen. It cannot be told apart from a legitimate resolution without a
+// per-site row; issue #356 (a table that targets a Struct) is what closes it.
+//
 // Order and crash safety. `reopen_sites_resolved_into` runs BEFORE the purge and
 // `restore_sites_with_edge` AFTER the relink, each idempotent:
 //   1. collect the sites with an edge into a purged file and set them to `false`

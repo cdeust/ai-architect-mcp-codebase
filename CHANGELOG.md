@@ -18,13 +18,15 @@ adheres to [Semantic Versioning](https://semver.org/).
   `cfg_gate` column. The gate is the item's own `#[cfg]` together with those of
   its enclosing `mod`, `impl`, `trait` and `fn` and the inner `#![cfg]` of its
   file or module, in a canonical order, without comments; `cfg_attr` is not
-  expanded. Only items that collide in one file are renamed. The parse output of a file
-  without twins is unchanged: `scripts/check_parse_identity.py` fingerprints the
-  406 Rust files of `src/`, `tests/` and `crates/` (an earlier ad hoc run also
-  walked `benches/`, `benchmarks/`, `fuzz/` and `scripts/` and counted 424; the
-  script fixes the corpus so the number is reproducible) with the parser of main
-  and with this one and finds no difference, and altering one file makes it fail, and a test shows the twin logic does
-  nothing on those files. What does change for every graph is that each node of
+  expanded. Only items that collide in one file are renamed. The parse output of
+  a file without twins is unchanged. A check that is run by hand shows it:
+  `python3 scripts/check_parse_identity.py` fingerprints the 406 Rust files of
+  `src/`, `tests/` and `crates/` with the parser of main and with this one and
+  finds no difference; `--mutate` alters one file and makes it fail. An earlier
+  ad hoc run also walked `benches/`, `benchmarks/`, `fuzz/` and `scripts/` and
+  counted 424; the script fixes the corpus so the number is reproducible. It is
+  not part of CI, because it needs a worktree of the base ref and two builds. A
+  unit test shows that the twin logic does nothing on those files. What does change for every graph is that each node of
   ten tables gains the `cfg_gate` column, empty unless the node is a twin, and a
   `GraphMarker` table records the version of the canonical form of the gates.
   A call whose candidates are all twins of one
