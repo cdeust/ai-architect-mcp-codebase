@@ -7,6 +7,9 @@
 use super::*;
 use crate::graph_store::{call_rel_table, call_site_rel_table};
 
+mod gates;
+use gates::{rust_local_receiver_gate, same_class_receiver_gate};
+
 // ---------------------------------------------------------------------------
 // Phase 2: Call resolution
 // source: stages/stage-3b.md §5.2
@@ -26,10 +29,9 @@ pub(super) fn resolve_calls(
     store.ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
     // Issues #348 and #349: same precedent; '' reads as "written at the binding".
     store.ensure_node_column("CallSite", "receiver_hint_via", "STRING DEFAULT ''")?;
-    store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
     let qr = store.execute_query(
         "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.language, cs.receiver_hint, \
-         cs.receiver_hint_via, cs.is_resolved",
+         cs.receiver_hint_via",
     )?;
     let mut resolved = 0u64;
     let mut total = 0u64;
@@ -40,14 +42,9 @@ pub(super) fn resolve_calls(
     // of one item under mutually exclusive `#[cfg]` predicates.
     let mut twin_site_ids: Vec<String> = Vec::new();
 
-    // Sites flagged resolved before this run: a purge leaves the flag behind.
-    let mut flagged: HashSet<&str> = HashSet::new();
     for row in &qr.rows {
-        if row.len() < 6 {
+        if row.len() < 5 {
             continue;
-        }
-        if row[5] == "true" {
-            flagged.insert(row[0].as_str());
         }
         let callee = &row[1];
         // Macro invocations (`name!(...)`) are a distinct reference kind,
@@ -80,7 +77,7 @@ pub(super) fn resolve_calls(
     }
     let id_refs: Vec<&str> = resolved_ids.iter().map(|s| s.as_str()).collect();
     store.mark_nodes_resolved("CallSite", &id_refs)?;
-    super::stale_flags::settle_open_sites(store, &unresolved, &flagged, twin_site_ids)?;
+    super::cfg_twins::persist_twin_reason(store, &twin_site_ids)?;
     Ok((resolved, total, unresolved))
 }
 
@@ -282,97 +279,6 @@ fn stage_call_edge(
         buf.add(site_rel, site.cs_id, &target.id, matched.confidence, method);
     }
     *tally.resolved += 1;
-}
-
-/// Same-class receiver call on a Method caller — Rust `self.<m>` /
-/// `Self::<m>` (issue #283), Python `self.<m>` and TypeScript `this.<m>`
-/// (issue #290): resolved against the caller's enclosing type BEFORE
-/// `resolve_single_call`'s by-name lookup, which would otherwise try (and
-/// always fail) to find a symbol literally named "self.<m>" / "this.<m>" —
-/// see receiver/mod.rs's module doc. Which languages take part is decided by
-/// `LanguageProvider::self_value_prefix`/`self_type_prefix`, not here.
-///
-/// precondition: `site.callee`/`site.caller_qn`/`site.caller_label` come
-/// from the same `CallSite` row `resolve_single_call` was called with.
-/// postcondition: `None` when the gate does not apply (the language has no
-/// same-class receiver spelling, the caller is not a Method, or the callee
-/// isn't receiver-shaped) — the caller must fall through to the
-/// pre-existing by-name path. `Some(_)` is a final answer for a
-/// receiver-shaped callee and is NEVER a bare-name-lookup fallback:
-/// `resolve_receiver_bound` returns `Some(NotFound)` / `Some(Ambiguous)`
-/// rather than `None` for those outcomes (receiver/mod.rs postcondition) —
-/// this is what preserves the zero-false-callers property this module's
-/// tests defend.
-fn same_class_receiver_gate(
-    ctx: &ResolveContext,
-    site: &CallSite,
-) -> Option<PolicyResolution<SymbolEntry>> {
-    let spelling = receiver::ReceiverSpelling::of(ctx.provider);
-    if !spelling.binds_same_class_receiver() || site.caller_label != "Method" {
-        return None;
-    }
-    let form = receiver::classify(site.callee, &spelling);
-    if !matches!(
-        form,
-        receiver::ReceiverForm::SelfValue(_) | receiver::ReceiverForm::SelfType(_)
-    ) {
-        return None;
-    }
-    receiver::resolve_receiver_bound(ctx.idx, &form, receiver::impl_qn_of(site.caller_qn))
-}
-
-/// Rust `<local>.<m>` on ANY caller (not gated to `Method`, unlike the
-/// `self`/`Self` gate above — a free function's local variable qualifies
-/// exactly as well as a method's): resolved against the parser-attached
-/// `CallSite.receiver_hint` BEFORE `resolve_single_call`'s by-name lookup,
-/// which would otherwise try (and always fail) to find a symbol literally
-/// named "<local>.<m>" — see receiver.rs's module doc and issue #283 palier
-/// 3 (lot 6).
-///
-/// precondition: `site.callee`/`site.receiver_hint` come from the same
-/// `CallSite` row `resolve_single_call` was called with; `file_id` is the
-/// caller's own file id.
-/// postcondition: `None` when the gate does not apply (non-Rust caller,
-/// callee isn't `<ident>.<m>`-shaped, or `receiver_hint` is empty — no hint
-/// attached, meaning the parser found no once-bound-and-typed local) — the
-/// caller must fall through to the pre-existing by-name path. `Some(_)` is a
-/// final answer for a hinted local receiver and is NEVER a bare-name-lookup
-/// fallback, mirroring `same_class_receiver_gate`'s zero-false-callers discipline.
-fn rust_local_receiver_gate(
-    ctx: &ResolveContext,
-    site: &CallSite,
-    file_id: &str,
-) -> Option<PolicyResolution<SymbolEntry>> {
-    if ctx.provider.language() != "rust" || site.receiver_hint.is_empty() {
-        return None;
-    }
-    let form = receiver::classify(site.callee, &receiver::ReceiverSpelling::of(ctx.provider));
-    let receiver::ReceiverForm::Local { m, .. } = form else {
-        return None;
-    };
-    if site
-        .receiver_hint_via
-        .starts_with(crate::graph_store::RECEIVER_HINT_VIA_IMPORT_PREFIX)
-    {
-        // A return type named only by a `use` of a path the indexer could not
-        // show to be a crate of this repository (issues #348 and #349): a
-        // foreign crate's type of that name would match a repository namesake.
-        return Some(PolicyResolution::NotFound);
-    }
-    let via_return_type =
-        site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE;
-    if via_return_type && receiver::names_a_type_alias(ctx.idx, site.receiver_hint) {
-        // A return type that is an alias names another type; the lookup by
-        // last segment would match a namesake (issues #348 and #349).
-        return Some(PolicyResolution::NotFound);
-    }
-    let resolution =
-        receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id);
-    Some(if via_return_type {
-        receiver::relabel_as_return_type(resolution)
-    } else {
-        resolution
-    })
 }
 
 /// Resolves one callee reference via the shared ambiguity policy (issue

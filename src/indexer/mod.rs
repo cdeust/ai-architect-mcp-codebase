@@ -162,7 +162,9 @@ pub fn index_codebase_with_language(
     if existing {
         store.require_cfg_gate_metadata()?;
     }
-    store.write_canonical_marker()?;
+    // No current marker while this index runs: a failure leaves a graph that the
+    // next incremental refresh refuses (#353).
+    store.clear_canonical_marker()?;
 
     // Coverage-honesty accounting (issue #57): note every File node, and record
     // the parse-incomplete / skipped / quarantined gaps as they occur. Created
@@ -288,6 +290,7 @@ pub fn index_codebase_with_language(
     // are kept only for a crate of this workspace (issues #348 and #349).
     incremental::verify_import_roots(&store, &crate_names);
 
+    store.write_canonical_marker()?;
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;
     let elapsed_ms = start.elapsed().as_millis() as u64;

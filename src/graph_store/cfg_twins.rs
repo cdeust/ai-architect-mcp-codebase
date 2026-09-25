@@ -34,7 +34,14 @@ pub const CALLSITE_UNRESOLVED_REASON_CFG_TWINS: &str = "cfg_twins";
 /// reindex removes the old graph directory first
 /// (`indexing_handlers::do_index_codebase`), so the tables and the marker are
 /// rebuilt together. Bump `CANONICAL_FORM_VERSION` whenever the canonical form or
-/// the compact text of a gate changes.
+/// the compact text of a gate changes. The marker is cleared when a full index
+/// starts and written when it ends, so a failed index leaves none.
+///
+/// Known limit: the marker is one row for the whole graph. A graph later touched
+/// by an OLDER build (which does not know the marker and writes ids by the old
+/// form) keeps a current marker, and only a per-row stamp could tell. The build
+/// that wrote this marker never does that; the artifact and directory paths
+/// refuse graphs without it.
 pub const CFG_GATE_LABELS: [&str; 10] = [
     "Module",
     "Function",
@@ -111,7 +118,14 @@ impl GraphStore {
             .any(|row| row.get(1).is_some_and(|name| name == label)))
     }
 
-    /// Records that this graph is being written with the current canonical form.
+    /// Removes the marker: the graph is being (re)written and holds no proof yet.
+    pub fn clear_canonical_marker(&self) -> Result<(), String> {
+        self.execute_query(&format!("MATCH (m:{MARKER_TABLE}) DELETE m"))?;
+        Ok(())
+    }
+
+    /// Records that this graph was completely written with the current canonical
+    /// form. Called at the END of a successful index, never at its start.
     pub fn write_canonical_marker(&self) -> Result<(), String> {
         self.execute_query(&format!(
             "MERGE (m:{MARKER_TABLE} {{id: {}}}) SET m.value = {}",

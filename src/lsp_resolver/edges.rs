@@ -67,7 +67,7 @@ pub(super) fn try_add_lsp_edge(
 /// the next run — and two sites in one caller reaching the same callee
 /// duplicate within a single run. An edge that is already there counts as
 /// resolved, which is what it is.
-fn insert_lsp_edge(
+pub(super) fn insert_lsp_edge(
     store: &GraphStore,
     rel_type: &str,
     site: &UnresolvedCallSite,

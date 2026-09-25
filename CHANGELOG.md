@@ -20,8 +20,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   file or module, in a canonical order, without comments; `cfg_attr` is not
   expanded. Only items that collide in one file are renamed. The parse output of a file
   without twins is unchanged: `scripts/check_parse_identity.py` fingerprints the
-  403 Rust files of `src/`, `tests/` and `crates/` with the parser of main and
-  with this one and finds no difference, and a test shows the twin logic does
+  406 Rust files of `src/`, `tests/` and `crates/` (an earlier ad hoc run also
+  walked `benches/`, `benchmarks/`, `fuzz/` and `scripts/` and counted 424; the
+  script fixes the corpus so the number is reproducible) with the parser of main
+  and with this one and finds no difference, and altering one file makes it fail, and a test shows the twin logic does
   nothing on those files. What does change for every graph is that each node of
   ten tables gains the `cfg_gate` column, empty unless the node is a twin, and a
   `GraphMarker` table records the version of the canonical form of the gates.
@@ -33,9 +35,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   change has already lost its twins, and one with the columns but no current
   marker names them by an older form, so an incremental refresh of it, an
   artifact import and a re-index over its directory ask for a full reindex
-  (`index_codebase` with `full: true`). A call site that a purge left flagged
-  `is_resolved` while its target is gone is now flagged open by the next resolve,
-  unless another tier holds an edge for it. Choosing the twin the build compiles
+  (`index_codebase` with `full: true`). A call site whose resolution edge the incremental purge takes away (its
+  target file deleted, renamed or rewritten without the target) is now reopened
+  by the purge itself, in the same refresh; a site with no edge but a legitimate
+  resolution (a tuple-struct constructor call, a macro or language-server site)
+  keeps its flag. Choosing the twin the build compiles
   is left to the second change.
 
 - A graph queried before `lsp_resolve` no longer loses the rows the pass writes

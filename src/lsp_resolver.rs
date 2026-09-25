@@ -33,6 +33,10 @@ use unlinked::FileRef;
 mod cfg_twin_tests;
 
 #[cfg(test)]
+#[path = "lsp_resolver/purge_reset_tests.rs"]
+mod purge_reset_tests;
+
+#[cfg(test)]
 #[path = "lsp_resolver/health_gate_tests.rs"]
 mod health_gate_tests;
 

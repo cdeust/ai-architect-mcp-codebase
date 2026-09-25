@@ -66,6 +66,7 @@ mod classify;
 mod coverage;
 mod edges;
 mod mutate;
+mod stale_sites;
 
 pub use bootstrap::{fill_after_bootstrap, FillMethod, FillResult};
 use classify::{classify, discover};
@@ -261,6 +262,18 @@ pub(super) fn apply_changes(
     // die, exactly as a full re-index would drop an edge to a vanished target.)
     let changed_rels: Vec<&str> = changes.changed.iter().map(|d| d.rel.as_str()).collect();
     let saved_edges = snapshot_inbound_edges(store, &changed_rels, &reparsed_set)?;
+    // Issue #353: the sites of other files whose resolution edge the purge below
+    // takes away are reopened now, while the edges still exist (see `stale_sites`).
+    let purged_rels: Vec<&str> = changes
+        .changed
+        .iter()
+        .map(|d| d.rel.as_str())
+        .chain(changes.deleted.iter().map(String::as_str))
+        .chain(changes.renamed.iter().map(|r| r.old_rel.as_str()))
+        .collect();
+    let mut leaving = reparsed_set.clone();
+    leaving.extend(purged_rels.iter().map(|rel| rel.to_string()));
+    let reopened = stale_sites::reopen_sites_resolved_into(store, &purged_rels, &leaving)?;
 
     // ---- 2. Purge -----------------------------------------------------------
     for d in &changes.changed {
@@ -350,6 +363,7 @@ pub(super) fn apply_changes(
 
     // ---- 5. Re-link the snapshotted inbound cross-file edges -----------------
     relink_inbound_edges(store, &saved_edges)?;
+    stale_sites::restore_sites_with_edge(store, &reopened)?;
 
     Ok((reparsed_set.len() as u64, collector.into_files()))
 }

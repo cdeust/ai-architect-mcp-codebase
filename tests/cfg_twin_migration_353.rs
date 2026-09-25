@@ -206,3 +206,37 @@ fn a_graph_with_the_columns_but_no_marker_is_refused_and_a_full_reindex_fixes_it
 fn a_graph_with_an_older_marker_is_refused_and_a_full_reindex_fixes_it() {
     refused_then_rebuilt("MATCH (m:GraphMarker) SET m.value = '1'");
 }
+
+/// The marker is written at the END of a successful index: a full index that
+/// fails leaves none, so the partial graph is refused by the next incremental
+/// refresh instead of passing as current.
+#[test]
+fn a_failed_full_index_leaves_no_marker() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("lib.rs"), TWO).unwrap();
+    let graph = tmp.path().join("graph");
+    indexer::index_codebase(&source, &graph).expect("index");
+    let marker_rows = |graph: &Path| {
+        let store = GraphStore::open_or_create(graph).unwrap();
+        store
+            .execute_query("MATCH (m:GraphMarker) RETURN m.value")
+            .unwrap()
+            .rows
+    };
+    assert_eq!(
+        marker_rows(&graph),
+        [["2"]],
+        "control: a good index writes it"
+    );
+    // Re-index the same directory from a codebase path that cannot be walked.
+    let missing = tmp.path().join("no-such-dir");
+    assert!(indexer::index_codebase(&missing, &graph).is_err());
+    assert!(
+        marker_rows(&graph).is_empty(),
+        "a failed index kept the marker"
+    );
+    let store = GraphStore::open_or_create(&graph).unwrap();
+    assert!(store.require_cfg_gate_metadata().is_err());
+}
