@@ -281,6 +281,7 @@ fn impact_envelope(
         "unresolved_callsites_naming_target": impact.unresolved_callsites_naming_target,
         "unresolved_callsites_outside_targets": impact.unresolved_callsites_outside_targets,
     });
+    attach_cfg_twins(&mut out, impact, qn);
     if views.callers.columns.is_some() {
         // One header covers all homogeneous sections.
         out["columns"] = json!(IMPACT_COLUMNS);
@@ -289,6 +290,27 @@ fn impact_envelope(
         out["next_offset"] = json!(next);
     }
     out
+}
+
+/// Issue #353: when the target is one of several twins of one item under
+/// exclusive `#[cfg]` gates, its own gate and whether the default build compiles
+/// it, the twins of the item, and how many call sites naming the item were left
+/// open. Absent for a target that is not a twin, so the shape of every other
+/// answer is unchanged.
+fn attach_cfg_twins(out: &mut Value, impact: &clustering::ImpactResult, qn: &str) {
+    if impact.cfg_twins.is_empty() {
+        return;
+    }
+    if let Some(own) = impact.cfg_twins.iter().find(|t| t.id == qn) {
+        out["cfg_gate"] = json!(own.cfg_gate);
+        out["cfg_active"] = json!(own.cfg_active);
+    }
+    out["cfg_twins"] = json!(impact
+        .cfg_twins
+        .iter()
+        .map(graph_store::TwinRow::to_json)
+        .collect::<Vec<_>>());
+    out["unresolved_callsites_cfg_twins"] = json!(impact.unresolved_callsites_cfg_twins);
 }
 
 /// The five reverse-dependency sections rendered under one detail/format

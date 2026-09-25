@@ -81,6 +81,13 @@ pub enum Evidence {
     /// like `ReceiverLocalBinding`, but through a closed list of std types.
     /// Issue #339.
     MacroReceiverType,
+    /// The callee names two or more twins of one item under mutually exclusive
+    /// `#[cfg]` gates, and the build profile of the graph compiles exactly one
+    /// (the caller sits under the gate of one twin, or the default features
+    /// decide it). Produced only by `resolver::cfg_select`. It rests on one more
+    /// assumption than the tiers above: the build the reader cares about is the
+    /// profile the graph was indexed under. Issue #353.
+    CfgSelected,
 }
 
 /// Heuristic ordinal trust tiers — NOT measured probabilities. These are
@@ -113,6 +120,13 @@ pub fn confidence_for(evidence: Evidence) -> f64 {
         // 0.85 and a receiver-type decision is 0.8.
         Evidence::MacroExpansion => 0.85,
         Evidence::MacroReceiverType => 0.8,
+        // source: issue #353 (part B), a policy value and not a measurement.
+        // Below `ImportMatch` (0.9), which needs no assumption about the build;
+        // at the level of `SameFileUnique`, the tier a lone candidate in the
+        // caller's file gets, which is what the compiled twin is once the
+        // build is fixed. Never above 0.9: the choice depends on the default
+        // features being the features of the build under analysis.
+        Evidence::CfgSelected => 0.85,
     }
 }
 
@@ -208,6 +222,7 @@ pub fn resolution_label(evidence: Evidence) -> &'static str {
         // labels; every one starts with "macro-expansion" (issue #339).
         Evidence::MacroExpansion => "macro-expansion",
         Evidence::MacroReceiverType => "macro-expansion-receiver-type",
+        Evidence::CfgSelected => crate::graph_store::RESOLUTION_CFG_SELECTED,
     }
 }
 
@@ -376,6 +391,13 @@ mod tests {
                 confidence_for(weaker)
             );
         }
+    }
+
+    #[test]
+    fn a_cfg_selected_edge_is_never_more_confident_than_an_import_match() {
+        assert!(confidence_for(Evidence::CfgSelected) <= 0.9);
+        assert!(confidence_for(Evidence::CfgSelected) < confidence_for(Evidence::ImportMatch));
+        assert_eq!(resolution_label(Evidence::CfgSelected), "cfg-selected");
     }
 
     // --- Test 4: ambiguous vs. not-found are distinguishable ------------

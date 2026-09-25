@@ -62,6 +62,16 @@ pub struct ImpactResult {
     /// `impact_reasons::unresolved_callsite_attribution`. source: issue #284
     /// (lot 5, the `get_impact` half — the LSP-pass half is `lsp_resolve`).
     pub unresolved_callsites_outside_targets: u64,
+    /// Of `unresolved_callsites_naming_target`, how many were left open on
+    /// purpose: every candidate for the callee is a twin of one item under
+    /// exclusive `#[cfg]` gates and the default build does not choose one
+    /// (`CallSite.unresolved_reason = cfg_twins`). 0 on a graph without the
+    /// column. Issue #353.
+    pub unresolved_callsites_cfg_twins: u64,
+    /// The twins of the target, itself included, with their gate and whether the
+    /// default build compiles them; empty when the target is not a twin.
+    /// Issue #353.
+    pub cfg_twins: Vec<crate::graph_store::TwinRow>,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +100,6 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
     // a code dependency.
     let references = reverse_dependents(store, &esc, "References_");
 
-    let target_bare_name = crate::bridge::last_segment(qualified_name);
     let deps = ReverseDependents {
         callers: &callers,
         importers: &importers,
@@ -98,8 +107,12 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         implementors: &implementors,
         references: &references,
     };
-    let (attribution, epistemic_reasons, epistemic) =
-        resolve_epistemic(store, &esc, target_bare_name, &deps);
+    let Epistemics {
+        attribution,
+        reasons: epistemic_reasons,
+        boundary: epistemic,
+        twins: cfg_twins,
+    } = resolve_epistemics(store, qualified_name, &esc, &deps);
 
     Ok(ImpactResult {
         communities,
@@ -113,6 +126,8 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         epistemic_reasons,
         unresolved_callsites_naming_target: attribution.total,
         unresolved_callsites_outside_targets: attribution.outside_targets,
+        unresolved_callsites_cfg_twins: attribution.cfg_twins,
+        cfg_twins,
     })
 }
 
@@ -167,6 +182,48 @@ fn resolve_epistemic(
         Boundary::LowerBound
     };
     (attribution, epistemic_reasons, epistemic)
+}
+
+/// What `get_impact` knows about how far its answer can be trusted, and the
+/// twins of the target (issue #353).
+struct Epistemics {
+    attribution: impact_reasons::UnresolvedCallsiteAttribution,
+    reasons: Vec<String>,
+    boundary: Boundary,
+    twins: Vec<crate::graph_store::TwinRow>,
+}
+
+/// `resolve_epistemic` for the target `qualified_name`, plus its `#[cfg]` twins.
+///
+/// A twin's id ends in `#cfg(<gate>)`, which is not part of the name a call site
+/// spells, so the suffixes are stripped before the bare name is taken. A target
+/// that has a twin under another gate is never `Exact`: the dependents are those
+/// of THIS twin, and a caller that names the item without a gate is recorded on
+/// a twin only when the default build decides which one it reaches.
+fn resolve_epistemics(
+    store: &GraphStore,
+    qualified_name: &str,
+    esc: &str,
+    deps: &ReverseDependents,
+) -> Epistemics {
+    let plain = crate::graph_store::strip_cfg_gates(qualified_name);
+    let bare = crate::bridge::last_segment(&plain);
+    let (attribution, mut reasons, mut boundary) = resolve_epistemic(store, esc, bare, deps);
+    let twins = if crate::graph_store::has_cfg_gate(qualified_name) {
+        store.cfg_twin_rows(&plain)
+    } else {
+        Vec::new()
+    };
+    if let Some(reason) = impact_reasons::cfg_twin_reason(&twins, &attribution) {
+        reasons.push(reason);
+        boundary = Boundary::LowerBound;
+    }
+    Epistemics {
+        attribution,
+        reasons,
+        boundary,
+        twins,
+    }
 }
 
 /// The five reverse-dependency slices `get_impact` collects, grouped into one

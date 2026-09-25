@@ -184,6 +184,7 @@ fn build_node_properties(node: &parser::ExtractedNode, language: &str) -> Vec<(S
             "cfg_gate".to_string(),
             cypher_str(&find_property(node, "cfg_gate")),
         ));
+        props.push(("cfg_active".to_string(), cypher_str("")));
     }
     if has_language_col(&node.label) {
         props.push(("language".to_string(), cypher_str(language)));

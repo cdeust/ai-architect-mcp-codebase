@@ -6,9 +6,9 @@
 // "one candidate in the caller's file", and neither is "one candidate in the
 // package". The call is dropped, which is the safe answer, and this module only
 // names WHY, so the site carries the reason `cfg_twins` instead of a bare
-// "ambiguous (2 candidates)". A twin is never chosen here: which twin a build
-// compiles is decided by the build, and only the build knows it (PR B reads the
-// default features for the cases the source alone settles).
+// "ambiguous (2 candidates)". A twin is never chosen here: `cfg_select` chooses
+// one, before this reason is written, only when the caller's own gate or the
+// default features settle which twin the build compiles.
 
 use super::SymbolEntry;
 use crate::graph_store::GraphStore;
@@ -51,20 +51,33 @@ pub(super) fn is_twin_member(target: &SymbolEntry, candidates: &[SymbolEntry]) -
 }
 
 /// Writes `unresolved_reason = cfg_twins` on the sites the resolver left open
-/// because their callee has twins. The column is added first on a graph indexed
-/// before it existed (same precedent as `receiver_hint`); `mark_nodes_resolved`
-/// is not called for them, and `stale_flags::open_sites` has already reset a stale
-/// `true` flag, so the language server pass still sees them as open sites.
-pub(super) fn persist_twin_reason(store: &GraphStore, ids: &[String]) -> Result<(), String> {
-    if ids.is_empty() {
-        return Ok(());
+/// because their callee has twins, and clears it on the sites the build profile
+/// then decided (`selected`): a resolved site carries no reason. The column is
+/// added first on a graph indexed before it existed (same precedent as
+/// `receiver_hint`); `mark_nodes_resolved` is not called for the open ones, and
+/// `stale_flags::open_sites` has already reset a stale `true` flag, so the
+/// language server pass still sees them as open sites.
+pub(super) fn persist_twin_reason(
+    store: &GraphStore,
+    open: &[String],
+    selected: &[String],
+) -> Result<(), String> {
+    if !open.is_empty() {
+        store.ensure_node_column("CallSite", "unresolved_reason", "STRING DEFAULT ''")?;
+        let refs: Vec<&str> = open.iter().map(String::as_str).collect();
+        store.set_callsite_unresolved_reason(
+            &refs,
+            crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
+        )?;
     }
-    store.ensure_node_column("CallSite", "unresolved_reason", "STRING DEFAULT ''")?;
-    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
-    store.set_callsite_unresolved_reason(
-        &refs,
-        crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
-    )
+    if !selected.is_empty() && store.node_column_exists("CallSite", "unresolved_reason")? {
+        let refs: Vec<&str> = selected.iter().map(String::as_str).collect();
+        store.clear_callsite_reason(
+            &refs,
+            crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

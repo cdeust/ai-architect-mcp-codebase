@@ -43,7 +43,7 @@ fn a_disabled_feature_gates_its_module_and_every_module_under_it() {
         ("src/extra/inner.rs", "pub fn f() {}\n"),
         ("src/tests.rs", "\n"),
     ]);
-    let result = find_feature_gated(dir.path(), &known(&[("src/lib.rs", &[])]), &indexed);
+    let result = analyse(dir.path(), &known(&[("src/lib.rs", &[])]), &indexed).gated;
     // `Path` orders by component: `extra` < `extra.rs`.
     assert_eq!(gated_paths(&result), ["src/extra/inner.rs", "src/extra.rs"]);
     assert!(result[Path::new("src/extra.rs")]
@@ -60,7 +60,7 @@ fn a_module_another_crate_root_compiles_is_not_gated() {
         ("src/util.rs", "\n"),
     ]);
     let map = known(&[("src/lib.rs", &[]), ("src/main.rs", &[])]);
-    assert!(find_feature_gated(dir.path(), &map, &indexed).is_empty());
+    assert!(analyse(dir.path(), &map, &indexed).gated.is_empty());
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn not_of_a_default_feature_gates_and_the_default_feature_itself_does_not() {
         ("src/with_std.rs", "\n"),
     ]);
     let map = known(&[("src/lib.rs", &["default", "std"])]);
-    let result = find_feature_gated(dir.path(), &map, &indexed);
+    let result = analyse(dir.path(), &map, &indexed).gated;
     assert_eq!(gated_paths(&result), ["src/no_std.rs"]);
 }
 
@@ -86,7 +86,7 @@ fn nested_non_root_files_resolve_under_their_stem_directory_and_path_attributes(
         ("src/a/b/mod.rs", "\n"),
         ("src/elsewhere/c.rs", "\n"),
     ]);
-    let result = find_feature_gated(dir.path(), &known(&[("src/lib.rs", &[])]), &indexed);
+    let result = analyse(dir.path(), &known(&[("src/lib.rs", &[])]), &indexed).gated;
     assert_eq!(
         gated_paths(&result),
         ["src/a/b/mod.rs", "src/elsewhere/c.rs"]
@@ -99,12 +99,64 @@ fn an_unknown_target_map_classifies_nothing() {
         ("src/lib.rs", "#[cfg(feature = \"extra\")]\nmod extra;\n"),
         ("src/extra.rs", "\n"),
     ]);
-    assert!(find_feature_gated(
-        dir.path(),
-        &TargetMap::Unknown {
-            detail: "test fixture".into()
-        },
-        &indexed
-    )
-    .is_empty());
+    let unknown = TargetMap::Unknown {
+        detail: "test fixture".into(),
+    };
+    let analysis = analyse(dir.path(), &unknown, &indexed);
+    assert!(analysis.gated.is_empty() && analysis.features.is_empty());
+}
+
+fn feature_set(features: &[&str]) -> BTreeSet<String> {
+    features.iter().map(|f| f.to_string()).collect()
+}
+
+#[test]
+fn each_compiled_file_reports_the_default_features_of_its_crate_root() {
+    let (dir, indexed) = tree(&[
+        (
+            "src/lib.rs",
+            "mod child;\n#[cfg(feature = \"extra\")]\nmod extra;\n",
+        ),
+        ("src/child.rs", "\n"),
+        ("src/extra.rs", "\n"),
+    ]);
+    let map = known(&[("src/lib.rs", &["fast"])]);
+    let features = analyse(dir.path(), &map, &indexed).features;
+    let enabled = FileFeatures::Enabled(feature_set(&["fast"]));
+    assert_eq!(features.get(Path::new("src/lib.rs")), Some(&enabled));
+    assert_eq!(features.get(Path::new("src/child.rs")), Some(&enabled));
+    assert_eq!(
+        features.get(Path::new("src/extra.rs")),
+        Some(&FileFeatures::CompiledOut)
+    );
+}
+
+#[test]
+fn a_file_two_crate_roots_compile_with_different_features_disagrees() {
+    let (dir, indexed) = tree(&[
+        ("src/lib.rs", "mod shared;\n"),
+        ("src/main.rs", "mod shared;\n"),
+        ("src/shared.rs", "\n"),
+    ]);
+    let map = known(&[("src/lib.rs", &["x"]), ("src/main.rs", &[])]);
+    let features = analyse(dir.path(), &map, &indexed).features;
+    assert_eq!(
+        features.get(Path::new("src/shared.rs")),
+        Some(&FileFeatures::Disagree)
+    );
+}
+
+#[test]
+fn a_file_two_crate_roots_compile_with_the_same_features_is_decided() {
+    let (dir, indexed) = tree(&[
+        ("src/lib.rs", "mod shared;\n"),
+        ("src/main.rs", "mod shared;\n"),
+        ("src/shared.rs", "\n"),
+    ]);
+    let map = known(&[("src/lib.rs", &["x"]), ("src/main.rs", &["x"])]);
+    let features = analyse(dir.path(), &map, &indexed).features;
+    assert_eq!(
+        features.get(Path::new("src/shared.rs")),
+        Some(&FileFeatures::Enabled(feature_set(&["x"])))
+    );
 }

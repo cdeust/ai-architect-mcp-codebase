@@ -19,7 +19,10 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // compact `#[cfg]` gate of an item whose qualified name carries a
         // `#cfg(..)` suffix; '' for every other item and for a graph written
         // before the column existed (see `require_cfg_gate_metadata`).
-        (NODE_MODULE, "id STRING, name STRING, qualified_name STRING, cfg_gate STRING DEFAULT ''"),
+        // cfg_active: issue #353 (B): 'active' / 'inactive' / 'unknown' for the
+        // items that carry a gate: whether the default build compiles them. ''
+        // for every other item and for a graph written before the column.
+        (NODE_MODULE, "id STRING, name STRING, qualified_name STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         // source: Spike B' BUG #5 fix — every symbol-bearing node gets a
         // `language` STRING column populated by the indexer from the file's
         // extension (python/rust/typescript). Previously every symbol came
@@ -31,7 +34,7 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         (NODE_FUNCTION,
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, is_async BOOLEAN, \
-             return_type STRING, constructed_types STRING, language STRING, entry_kind STRING, cfg_gate STRING DEFAULT ''"),
+             return_type STRING, constructed_types STRING, language STRING, entry_kind STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         // source: implements fix — `trait_name` carries the trait a method
         // belongs to in an `impl Trait for Type` block (already extracted by
         // the parser at parser/rust.rs but previously dropped for lack of a
@@ -41,7 +44,7 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, is_async BOOLEAN, \
              receiver_type STRING, trait_name STRING, return_type STRING, \
-             constructed_types STRING, language STRING, cfg_gate STRING DEFAULT ''"),
+             constructed_types STRING, language STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         // source: Spike B' BUG #9 fix — `bases STRING` column carries a CSV
         // of unresolved base-class names emitted by the parser. The resolver
         // reads this in resolve_extends, looks each name up in the symbol
@@ -58,30 +61,30 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         (NODE_STRUCT,
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, language STRING, \
-             bases STRING, implements STRING, cfg_gate STRING DEFAULT ''"),
+             bases STRING, implements STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         (NODE_ENUM,
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, language STRING, \
-             bases STRING, implements STRING, cfg_gate STRING DEFAULT ''"),
+             bases STRING, implements STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         // source: stages/stage-3.md §10.1 — every symbol carries its source
         // span. The parser already emits start_line/end_line for these nodes;
         // the columns were previously missing so the spans were dropped at persist.
         (NODE_VARIANT,
             "id STRING, name STRING, qualified_name STRING, \
-             start_line INT64, end_line INT64, language STRING, cfg_gate STRING DEFAULT ''"),
+             start_line INT64, end_line INT64, language STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         (NODE_TRAIT,
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, language STRING, \
-             bases STRING, implements STRING, cfg_gate STRING DEFAULT ''"),
+             bases STRING, implements STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         (NODE_FIELD,
             "id STRING, name STRING, type_annotation STRING, visibility STRING, \
-             start_line INT64, end_line INT64, language STRING, cfg_gate STRING DEFAULT ''"),
+             start_line INT64, end_line INT64, language STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         (NODE_CONSTANT,
             "id STRING, name STRING, qualified_name STRING, type_annotation STRING, \
-             start_line INT64, end_line INT64, language STRING, cfg_gate STRING DEFAULT ''"),
+             start_line INT64, end_line INT64, language STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         (NODE_TYPE_ALIAS,
             "id STRING, name STRING, qualified_name STRING, target_type STRING, \
-             start_line INT64, end_line INT64, language STRING, cfg_gate STRING DEFAULT ''"),
+             start_line INT64, end_line INT64, language STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         // source: stages/stage-3.md §10.1 (span) + §10.4 (`is_resolved` on Import
         // and CallSite — Stage 4 must distinguish "resolved" from "attempted,
         // failed" from "never attempted"; the indexer writes false, the resolver

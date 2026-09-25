@@ -8,13 +8,13 @@
 // produced the buckets, once per report rather than once per bucket, so a
 // reader can tell "nothing outside the build" from "nothing was determined".
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::cargo_targets::{self, TargetMap};
-use super::feature_gated;
+use super::feature_gated::{self, FileFeatures};
 
 /// Whether the Cargo-derived coverage buckets carry information.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +58,19 @@ pub struct CargoAttributions {
     /// The library crate names of the workspace (`use <name>::X`), empty
     /// unless the status is `Known`. Issues #348 and #349.
     pub crate_names: BTreeSet<String>,
+    /// The features each compiled Rust file sees under the default build
+    /// (root-relative, forward-slash keys), empty unless the status is `Known`.
+    /// Issue #353, part B.
+    pub(crate) file_features: BTreeMap<String, FileFeatures>,
+}
+
+/// What the Cargo map tells the rest of an index pass, apart from the coverage
+/// buckets: the workspace's crate names (issues #348 and #349) and the features
+/// each file is compiled with (issue #353). Empty when the map is unknown.
+#[derive(Debug, Default)]
+pub(crate) struct CargoFacts {
+    pub crate_names: BTreeSet<String>,
+    pub file_features: BTreeMap<String, FileFeatures>,
 }
 
 /// Attributes `rust_files` (root-relative `.rs` paths indexed this pass)
@@ -73,6 +86,7 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
         outside_targets: Vec::new(),
         feature_gated: Vec::new(),
         crate_names: BTreeSet::new(),
+        file_features: BTreeMap::new(),
     };
     if !codebase.join("Cargo.toml").is_file() {
         return not_applicable("no Cargo.toml at the analyzed root");
@@ -87,6 +101,7 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
             outside_targets: Vec::new(),
             feature_gated: Vec::new(),
             crate_names: BTreeSet::new(),
+            file_features: BTreeMap::new(),
         };
     }
     let crate_names = match &map {
@@ -99,15 +114,23 @@ pub fn attribute(codebase: &Path, rust_files: &BTreeSet<PathBuf>) -> CargoAttrib
         .filter(|rel| map.is_outside_targets(rel))
         .map(forward_slash)
         .collect();
-    let feature_gated = feature_gated::find_feature_gated(codebase, &map, rust_files)
+    let analysis = feature_gated::analyse(codebase, &map, rust_files);
+    let feature_gated = analysis
+        .gated
         .into_iter()
         .map(|(rel, detail)| (forward_slash(&rel), detail))
+        .collect();
+    let file_features = analysis
+        .features
+        .into_iter()
+        .map(|(rel, known)| (forward_slash(&rel), known))
         .collect();
     CargoAttributions {
         status: CargoAttributionStatus::Known,
         outside_targets,
         feature_gated,
         crate_names,
+        file_features,
     }
 }
 

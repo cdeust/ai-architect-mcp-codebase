@@ -107,30 +107,50 @@ fn the_call_site_is_left_open_with_the_reason_cfg_twins() {
     assert_eq!(site[0][1], "cfg_twins", "{site:?}");
 }
 
-/// A caller under the SAME gate as one twin still gets no edge in this PR: the
-/// choice needs the build's predicate values, which the next PR reads.
+/// Callers that are twins under the same gates as the twins they call each reach
+/// the twin of their own gate, whatever the build: the gate in a caller's id is
+/// the evidence, and this project has no `Cargo.toml`, so the build decides
+/// nothing. The plain `caller` decides nothing and stays open.
 #[test]
-fn a_caller_under_the_same_gate_as_one_twin_still_gets_no_edge() {
+fn callers_that_are_twins_reach_the_twin_of_their_own_gate() {
     let source = format!(
-        "{TWINS}\n#[cfg(feature = \"fast\")]\npub fn fast_caller() -> u32 {{\n    pick()\n}}\n"
+        "{TWINS}\n#[cfg(feature = \"fast\")]\npub fn run() -> u32 {{\n    pick()\n}}\n\
+         #[cfg(not(feature = \"fast\"))]\npub fn run() -> u32 {{\n    pick()\n}}\n"
     );
     let tmp = tempfile::tempdir().unwrap();
     let store = index_and_resolve(tmp.path(), &[("lib.rs", &source)]);
-    let per_site = rows(
+    let mut edges = rows(
         &store,
-        "MATCH (c:CallSite)-[r:Calls_CallSite_Function]->(f:Function) WHERE f.name = 'pick' RETURN c.line",
+        "MATCH (a:Function)-[r:Calls_Function_Function]->(b:Function) WHERE b.name = 'pick' \
+         RETURN a.qualified_name, b.qualified_name, r.resolution_method, r.confidence",
     );
-    assert!(per_site.is_empty(), "{per_site:?}");
-    let any = edges_into_pick(&store);
+    edges.sort();
+    assert_eq!(edges.len(), 2, "{edges:?}");
+    for edge in &edges {
+        assert_eq!(edge[2], "cfg-selected", "{edges:?}");
+        assert_eq!(edge[3], "0.85", "{edges:?}");
+        let gate = |qn: &str| qn.split_once("#cfg(").unwrap().1.to_string();
+        assert_eq!(
+            gate(&edge[0]),
+            gate(&edge[1]),
+            "a caller reached the other twin: {edges:?}"
+        );
+    }
+    let open = rows(
+        &store,
+        "MATCH (c:CallSite) WHERE c.callee_name = 'pick' AND c.is_resolved = false \
+         RETURN c.unresolved_reason",
+    );
+    assert_eq!(open, [["cfg_twins"]], "{open:?}");
+    let above_09 = rows(
+        &store,
+        "MATCH ()-[r]->(f:Function) WHERE f.name = 'pick' AND r.confidence > 0.9 \
+         AND r.resolution_method <> 'direct-ast' RETURN f.id",
+    );
     assert!(
-        any.is_empty(),
-        "an edge of some kind reaches a twin: {any:?}"
+        above_09.is_empty(),
+        "a twin got more than 0.9: {above_09:?}"
     );
-    let at_095 = rows(
-        &store,
-        "MATCH ()-[r]->(f:Function) WHERE f.name = 'pick' AND r.confidence >= 0.95 AND r.resolution_method <> 'direct-ast' RETURN f.id",
-    );
-    assert!(at_095.is_empty(), "a twin got a 0.95 edge: {at_095:?}");
 }
 
 /// Control for the two checks above: with ONE `pick` the same queries do see the

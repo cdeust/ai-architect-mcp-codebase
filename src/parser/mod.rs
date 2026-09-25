@@ -10,6 +10,7 @@
 
 // Table-driven extraction (ADR-0055). Migrated languages route through the
 // generic spec walkers; the rest stay on the hand-written modules above.
+pub(crate) mod cfg_compact;
 pub(crate) mod cfg_expr;
 mod cfg_lex;
 mod spec;

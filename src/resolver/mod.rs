@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 mod calls;
+mod cfg_select;
 mod cfg_twins;
 mod extends;
 mod implements;
@@ -237,6 +238,10 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     // Before the existing edges are read: a macro row from an earlier run
     // must not count as already resolved (issue #339).
     store.reset_macro_expansion()?;
+    // Likewise a twin chosen by an earlier run: the choice follows the build
+    // profile and the caller's gate, either of which may have changed since
+    // (issue #353).
+    store.reset_cfg_selected()?;
     let existing = load_existing_edges(store)?;
     let mut buf = EdgeBuffer::new(existing);
 

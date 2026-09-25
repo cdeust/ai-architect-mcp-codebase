@@ -8,6 +8,46 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A call to twins of one item under mutually exclusive `#[cfg]` gates is
+  resolved to the twin the build compiles when the build decides it (#353,
+  second of two changes). On the reproduction of the issue (`fast` off by
+  default) the call from `caller` now has one edge, to
+  `src/lib.rs::pick#cfg(not(feature=fast))`, with
+  `resolution_method: "cfg-selected"` at confidence 0.85; the twin under
+  `feature = "fast"` has none. Two facts decide, both without guessing. First,
+  the caller's own gate: a caller whose id carries a gate (a twin, or an item in
+  a twin `mod`, `impl` or `trait`) reaches the twin whose gate it contains, and
+  never one it contradicts; a caller under `#[cfg(kani)]` that has no twin has
+  no gate in its id and decides nothing. Second, the default features:
+  each index pass (full, incremental, bootstrap fill) writes `cfg_active`
+  (`active`, `inactive` or `unknown`) on every twin from the features `cargo
+  metadata` reports as enabled by default for the package that compiles its
+  file. Only `feature = "..."` leaves are decided, so a twin behind `kani`,
+  `test`, `unix` or a `target_*` option stays `unknown`; a file reached only
+  through a `mod` the default features compile out holds only `inactive` twins;
+  no readable `Cargo.toml`, a file two packages compile with different
+  features, or an unreadable gate give `unknown`. A twin is chosen only when
+  exactly one twin is not ruled out and that one is shown compiled; otherwise
+  the site stays open with the reason `cfg_twins`, as in the first change. The
+  0.85 is a policy value, not a measurement: it sits below
+  `import-scope-lookup` and never above 0.9, because the choice also assumes
+  that the build under analysis is the default one. Every resolve first
+  deletes the `cfg-selected` rows of the earlier run and reopens their sites,
+  so an edit of `Cargo.toml` moves the edge without any file being reparsed.
+  `get_impact` and `get_symbol` accept the bare name of a twinned item and
+  resolve it to the twin that is `active`, or list the twins; an answer for a
+  twin carries `cfg_gate`, `cfg_active` and `cfg_twins`, `get_impact` adds
+  `unresolved_callsites_cfg_twins` and is never `exact` for a twin, and
+  `index_status` reports `cfg_twins` and lists the twins the default build
+  compiles out under `coverage.feature_gated.items`. `cfg_active` belongs to
+  the default profile only: `BuildProfile` is where a Kani profile would plug
+  in, and none is written. Not covered: twin files chosen by `#[cfg_attr(..,
+  path = "..")]`, twins in different files (an ordinary ambiguity), and the
+  language-server tier, which may still point a site at a twin the default
+  build does not compile. A graph written by the first change has no
+  `cfg_active` column: its twins read as `unknown` and the next index pass adds
+  the column.
+
 - Two Rust items of one name under mutually exclusive `#[cfg]` predicates are
   two nodes, and a call to that name is no longer resolved to either (#353,
   first of two changes). A file with `#[cfg(feature = "fast")] fn pick` and

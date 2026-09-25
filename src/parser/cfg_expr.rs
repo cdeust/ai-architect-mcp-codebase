@@ -17,7 +17,7 @@
 // apart. Every option is kept (`kani`, `test`, `unix`, `target_os = "..."`):
 // evaluation still leaves them `Unknown`, but identity must not erase them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) use super::cfg_lex::without_comments;
 use super::cfg_lex::{tokenize, Token};
@@ -46,16 +46,54 @@ pub(crate) enum Truth {
     Unknown,
 }
 
+/// One build the graph can be read under: the Cargo features it enables and the
+/// bare options (`kani`, `test`, `miri`) it decides. The default profile decides
+/// no option, so every option stays `Unknown` under it. A second profile, such as
+/// a Kani build, is a value of this type: nothing else in the evaluation changes.
+/// source: issue #353 (the Kani extension point).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct BuildProfile {
+    pub features: BTreeSet<String>,
+    /// `true` for an option the build sets, `false` for one it certainly does
+    /// not; an option absent from the map is `Unknown`.
+    pub options: BTreeMap<String, bool>,
+}
+
+impl BuildProfile {
+    /// The profile `cargo metadata` describes: default features, no option decided.
+    pub(crate) fn with_features(features: BTreeSet<String>) -> Self {
+        BuildProfile {
+            features,
+            options: BTreeMap::new(),
+        }
+    }
+}
+
 impl CfgPredicate {
-    /// Evaluates against the features the build enables.
+    /// Evaluates against the features the build enables; every option is
+    /// `Unknown`.
     pub(crate) fn eval(&self, enabled: &BTreeSet<String>) -> Truth {
+        self.eval_with(enabled, &BTreeMap::new())
+    }
+
+    /// Evaluates under `profile`.
+    pub(crate) fn eval_in(&self, profile: &BuildProfile) -> Truth {
+        self.eval_with(&profile.features, &profile.options)
+    }
+
+    fn eval_with(&self, enabled: &BTreeSet<String>, options: &BTreeMap<String, bool>) -> Truth {
         match self {
             CfgPredicate::Feature(f) if enabled.contains(f) => Truth::True,
             CfgPredicate::Feature(_) => Truth::False,
+            CfgPredicate::Option { key, value: None } => match options.get(key) {
+                Some(true) => Truth::True,
+                Some(false) => Truth::False,
+                None => Truth::Unknown,
+            },
             CfgPredicate::Option { .. } => Truth::Unknown,
-            CfgPredicate::All(items) => fold(items, enabled, Truth::False, Truth::True),
-            CfgPredicate::Any(items) => fold(items, enabled, Truth::True, Truth::False),
-            CfgPredicate::Not(inner) => match inner.eval(enabled) {
+            CfgPredicate::All(items) => fold(items, (enabled, options), Truth::False, Truth::True),
+            CfgPredicate::Any(items) => fold(items, (enabled, options), Truth::True, Truth::False),
+            CfgPredicate::Not(inner) => match inner.eval_with(enabled, options) {
                 Truth::True => Truth::False,
                 Truth::False => Truth::True,
                 Truth::Unknown => Truth::Unknown,
@@ -69,13 +107,13 @@ impl CfgPredicate {
 /// `Unknown`.
 fn fold(
     items: &[CfgPredicate],
-    enabled: &BTreeSet<String>,
+    build: (&BTreeSet<String>, &BTreeMap<String, bool>),
     absorbing: Truth,
     empty: Truth,
 ) -> Truth {
     let mut result = empty;
     for item in items {
-        match item.eval(enabled) {
+        match item.eval_with(build.0, build.1) {
             t if t == absorbing => return absorbing,
             Truth::Unknown => result = Truth::Unknown,
             _ => {}

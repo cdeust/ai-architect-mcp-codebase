@@ -24,27 +24,66 @@ use crate::parser::cfg_expr::{CfgPredicate, Truth};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Every feature-gated file in `indexed` (root-relative), with the coverage
-/// detail naming the gate. Reads each reachable `.rs` file under `root` once.
-pub(crate) fn find_feature_gated(
+/// What the default build knows about the features one source file is compiled
+/// with (issue #353, part B): the input of `cfg_active`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FileFeatures {
+    /// Reached only through `mod` declarations the default features compile out.
+    CompiledOut,
+    /// Every crate root that reaches the file enables exactly these features.
+    Enabled(BTreeSet<String>),
+    /// Crate roots that reach the file enable different sets (two packages of a
+    /// workspace share it): nothing is decided for its items.
+    Disagree,
+}
+
+/// The two answers one walk of the module trees gives.
+pub(crate) struct FeatureAnalysis {
+    /// Every feature-gated file, with the coverage detail naming the gate.
+    pub gated: BTreeMap<PathBuf, String>,
+    /// The features of every file some crate root reaches, and the gated ones.
+    pub features: BTreeMap<PathBuf, FileFeatures>,
+}
+
+/// Walks every crate's module tree once and reports both which files the
+/// default features compile out and which features each compiled file sees.
+pub(crate) fn analyse(
     root: &Path,
     map: &TargetMap,
     indexed: &BTreeSet<PathBuf>,
-) -> BTreeMap<PathBuf, String> {
+) -> FeatureAnalysis {
     let TargetMap::Known { crate_roots, .. } = map else {
-        return BTreeMap::new();
+        return FeatureAnalysis {
+            gated: BTreeMap::new(),
+            features: BTreeMap::new(),
+        };
     };
     let tree = ModuleTree {
         root,
         indexed,
         crate_entries: crate_roots.iter().map(|c| c.entry.clone()).collect(),
     };
-    let mut live = BTreeSet::new();
+    let mut live: BTreeMap<PathBuf, BTreeSet<BTreeSet<String>>> = BTreeMap::new();
     let mut seeds = Vec::new();
     for crate_root in crate_roots {
         tree.walk_live(crate_root, &mut live, &mut seeds);
     }
-    tree.propagate_gated(seeds, &live)
+    let gated = tree.propagate_gated(seeds, &live);
+    let mut features: BTreeMap<PathBuf, FileFeatures> = live
+        .into_iter()
+        .map(|(file, sets)| {
+            let mut sets = sets.into_iter();
+            let known = match (sets.next(), sets.next()) {
+                (Some(only), None) => FileFeatures::Enabled(only),
+                _ => FileFeatures::Disagree,
+            };
+            (file, known)
+        })
+        .collect();
+    for file in gated.keys() {
+        features.insert(file.clone(), FileFeatures::CompiledOut);
+    }
+    FeatureAnalysis { gated, features }
 }
 
 /// What the walk needs that is fixed for the whole codebase.
@@ -55,23 +94,26 @@ struct ModuleTree<'a> {
 }
 
 impl ModuleTree<'_> {
-    /// Marks every file `crate_root` compiles as live, and collects each
-    /// declaration its default features compile out as a `(file, detail)` seed.
+    /// Marks every file `crate_root` compiles as live, with the feature set that
+    /// reaches it, and collects each declaration its default features compile
+    /// out as a `(file, detail)` seed. A file already reached with the same
+    /// features is not walked again; one reached with other features is.
     fn walk_live(
         &self,
         crate_root: &CrateRoot,
-        live: &mut BTreeSet<PathBuf>,
+        live: &mut BTreeMap<PathBuf, BTreeSet<BTreeSet<String>>>,
         seeds: &mut Vec<(PathBuf, String)>,
     ) {
-        if !self.indexed.contains(&crate_root.entry) || !live.insert(crate_root.entry.clone()) {
+        let features = &crate_root.default_features;
+        if !self.indexed.contains(&crate_root.entry) || !reach(live, &crate_root.entry, features) {
             return;
         }
         let mut pending = vec![crate_root.entry.clone()];
         while let Some(file) = pending.pop() {
             for (decl, target) in self.children(&file) {
-                if gate(&decl, &crate_root.default_features) == Truth::False {
+                if gate(&decl, features) == Truth::False {
                     seeds.push((target, gate_detail(&decl, &file)));
-                } else if live.insert(target.clone()) {
+                } else if reach(live, &target, features) {
                     pending.push(target);
                 }
             }
@@ -83,12 +125,12 @@ impl ModuleTree<'_> {
     fn propagate_gated(
         &self,
         seeds: Vec<(PathBuf, String)>,
-        live: &BTreeSet<PathBuf>,
+        live: &BTreeMap<PathBuf, BTreeSet<BTreeSet<String>>>,
     ) -> BTreeMap<PathBuf, String> {
         let mut gated = BTreeMap::new();
         let mut pending = seeds;
         while let Some((file, detail)) = pending.pop() {
-            if live.contains(&file) || gated.contains_key(&file) {
+            if live.contains_key(&file) || gated.contains_key(&file) {
                 continue;
             }
             for (_, target) in self.children(&file) {
@@ -117,6 +159,17 @@ impl ModuleTree<'_> {
             })
             .collect()
     }
+}
+
+/// Records that `file` is reached with `features`; true when that pair is new.
+fn reach(
+    live: &mut BTreeMap<PathBuf, BTreeSet<BTreeSet<String>>>,
+    file: &Path,
+    features: &BTreeSet<String>,
+) -> bool {
+    live.entry(file.to_path_buf())
+        .or_default()
+        .insert(features.clone())
 }
 
 /// The cfg gate of a declaration: `all` of its `cfg` attributes, `Unknown`

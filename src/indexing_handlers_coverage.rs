@@ -155,6 +155,36 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
     })
 }
 
+/// Issue #353: what `index_status` says about the `#[cfg]` twins of a graph.
+///
+/// `cfg_twins` counts the twins and their state under the DEFAULT build profile
+/// (default features; `cfg(kani)`, `test` and target options stay `unknown`) and
+/// the call sites left open because a twin set is not decided. `feature_gated`
+/// covers modules through its `files` and, through `items`, the twin ITEMS the
+/// default build compiles out: the same word, one level down, so an item under
+/// `#[cfg(feature = "x")]` is not invisible just because its file is compiled.
+/// `null` when the graph cannot be opened.
+pub(crate) fn cfg_twin_status(graph_dir: &Path) -> Option<(Value, Value)> {
+    let store = crate::graph_store::GraphStore::open_or_create(graph_dir).ok()?;
+    let s = store.cfg_twin_summary();
+    let examples: Vec<Value> = s
+        .inactive_examples
+        .iter()
+        .map(|t| json!({ "id": t.id, "cfg_gate": t.cfg_gate }))
+        .collect();
+    let twins = json!({
+        "sets": s.sets,
+        "members": s.members,
+        "active": s.active,
+        "inactive": s.inactive,
+        "unknown": s.unknown,
+        "unresolved_sites": s.unresolved_sites,
+        "profile": "default features; options such as kani, test and unix are unknown",
+    });
+    let items = json!({ "count": s.inactive, "examples": examples });
+    Some((twins, items))
+}
+
 /// Loads the coverage sidecar for a graph at `graph_dir` (its `output_dir` is the
 /// parent) and renders the summary, or `null` when no coverage is available.
 pub(crate) fn coverage_summary_for_graph(graph_dir: &Path) -> Value {

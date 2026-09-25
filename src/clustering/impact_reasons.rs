@@ -26,6 +26,8 @@ pub(super) struct UnresolvedCallsiteAttribution {
     pub(super) total: u64,
     pub(super) outside_targets: u64,
     pub(super) outside_target_files: Vec<String>,
+    /// Sites left open because the callee is a set of `#[cfg]` twins (issue #353).
+    pub(super) cfg_twins: u64,
 }
 
 /// Counts unresolved `CallSite` nodes (`is_resolved = false`) whose
@@ -71,6 +73,7 @@ pub(super) fn unresolved_callsite_attribution(
             total: count_unresolved(store, &name_filter),
             outside_targets: 0,
             outside_target_files: Vec::new(),
+            cfg_twins: 0,
         };
     }
 
@@ -84,6 +87,13 @@ pub(super) fn unresolved_callsite_attribution(
     let total = rows.len() as u64;
     let mut outside_targets = 0u64;
     let mut outside_target_files = std::collections::BTreeSet::new();
+    let cfg_twins = rows
+        .iter()
+        .filter(|row| {
+            row.get(1).map(String::as_str)
+                == Some(crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS)
+        })
+        .count() as u64;
     for row in &rows {
         let is_outside = row
             .get(1)
@@ -101,6 +111,7 @@ pub(super) fn unresolved_callsite_attribution(
         total,
         outside_targets,
         outside_target_files: outside_target_files.into_iter().collect(),
+        cfg_twins,
     }
 }
 
@@ -249,6 +260,39 @@ fn unresolved_callsite_reason(attribution: &UnresolvedCallsiteAttribution) -> Op
              them",
             out = attribution.outside_targets,
             files = attribution.outside_target_files.join(", ")
+        ));
+    }
+    Some(reason)
+}
+
+/// `Some(reason)` when the target is one of several twins of one item under
+/// exclusive `#[cfg]` gates (issue #353): what each twin is under the default
+/// build, and how many call sites naming the item were left open because the
+/// build does not choose one. Takes the twins and the attribution `get_impact`
+/// already computed; does not query.
+pub(super) fn cfg_twin_reason(
+    twins: &[crate::graph_store::TwinRow],
+    attribution: &UnresolvedCallsiteAttribution,
+) -> Option<String> {
+    if twins.len() < 2 {
+        return None;
+    }
+    let listing: Vec<String> = twins
+        .iter()
+        .map(|t| format!("cfg({}) is {}", t.cfg_gate, t.cfg_active))
+        .collect();
+    let mut reason = format!(
+        "target is one of {n} twins of one item under exclusive #[cfg] gates ({listing}) under \
+         the default build; a caller that names the item without a gate reaches whichever twin the \
+         build compiles, and is recorded on that twin only when the default build decides it",
+        n = twins.len(),
+        listing = listing.join("; ")
+    );
+    if attribution.cfg_twins > 0 {
+        reason.push_str(&format!(
+            "; {open} call site(s) naming the item were left unresolved because the default \
+             build does not decide which twin they reach",
+            open = attribution.cfg_twins
         ));
     }
     Some(reason)

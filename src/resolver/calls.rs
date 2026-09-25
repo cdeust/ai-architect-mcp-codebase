@@ -41,6 +41,10 @@ pub(super) fn resolve_calls(
     // Issue #353: CallSites left unresolved because every candidate is a twin
     // of one item under mutually exclusive `#[cfg]` predicates.
     let mut twin_site_ids: Vec<String> = Vec::new();
+    // Sites of a twin set the build profile decided: resolved, so a `cfg_twins`
+    // reason an earlier pass wrote on them is stale.
+    let mut selected_site_ids: Vec<String> = Vec::new();
+    let twins = super::cfg_select::TwinView::load(store);
 
     for row in &qr.rows {
         if row.len() < 5 {
@@ -62,8 +66,13 @@ pub(super) fn resolve_calls(
             resolved: &mut resolved,
             unresolved: &mut unresolved,
             twin_sites: &mut twin_site_ids,
+            selected_sites: &mut selected_site_ids,
         };
-        let graph = GraphContext { idx, file_imports };
+        let graph = GraphContext {
+            idx,
+            file_imports,
+            twins: &twins,
+        };
         let row_input = RowInput {
             cs_id: &row[0],
             callee,
@@ -77,7 +86,7 @@ pub(super) fn resolve_calls(
     }
     let id_refs: Vec<&str> = resolved_ids.iter().map(|s| s.as_str()).collect();
     store.mark_nodes_resolved("CallSite", &id_refs)?;
-    super::cfg_twins::persist_twin_reason(store, &twin_site_ids)?;
+    super::cfg_twins::persist_twin_reason(store, &twin_site_ids, &selected_site_ids)?;
     Ok((resolved, total, unresolved))
 }
 
@@ -137,7 +146,24 @@ fn resolve_one_call_site(
         // candidates): labeled and dropped rather than guessed — see
         // resolve_single_call's doc comment for why this beats a
         // deterministic tiebreak here (issue #30).
-        PolicyResolution::Ambiguous { candidates } => record_ambiguous(&site, tally, &candidates),
+        PolicyResolution::Ambiguous { candidates } => {
+            // Issue #353: twins of one item under exclusive `#[cfg]` gates are
+            // resolved only when the build decides which one it compiles.
+            match super::cfg_select::choose(graph.twins, site.caller_qn, &candidates) {
+                Some(twin) => {
+                    let matched = MatchedCall {
+                        target: twin,
+                        evidence: ambiguity_policy::Evidence::CfgSelected,
+                        confidence: ambiguity_policy::confidence_for(
+                            ambiguity_policy::Evidence::CfgSelected,
+                        ),
+                    };
+                    stage_call_edge(buf, &site, &matched, tally);
+                    tally.selected_sites.push(site.cs_id.to_string());
+                }
+                None => record_ambiguous(&site, tally, &candidates),
+            }
+        }
         PolicyResolution::NotFound => {
             record_call_unresolved(&site, tally, "no target found".to_string())
         }
@@ -188,6 +214,8 @@ struct ResolveContext<'a> {
 struct GraphContext<'a> {
     idx: &'a SymbolIndex,
     file_imports: &'a HashMap<String, Vec<String>>,
+    /// `cfg_active` of every `#[cfg]` twin (issue #353).
+    twins: &'a super::cfg_select::TwinView,
 }
 
 /// One `CallSite` scan row, grouped for the same reason as `GraphContext`.
@@ -237,6 +265,8 @@ struct CallTally<'a> {
     unresolved: &'a mut Vec<UnresolvedRef>,
     /// Ids of the sites whose every candidate is a cfg twin (issue #353).
     twin_sites: &'a mut Vec<String>,
+    /// Ids of the sites a twin set was resolved for by the build profile.
+    selected_sites: &'a mut Vec<String>,
 }
 
 /// Stages the Calls/Uses edge for one resolved callee, or records why it

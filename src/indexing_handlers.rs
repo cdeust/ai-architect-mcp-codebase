@@ -358,6 +358,11 @@ pub(crate) fn do_index_status(arguments: &Value) -> Result<Value, String> {
         return Err(format!("graph_path does not exist: {graph_str}"));
     }
     let counts = graph_counts(graph_path);
+    let mut coverage = coverage_summary_for_graph(graph_path);
+    let twins = crate::indexing_handlers_coverage::cfg_twin_status(graph_path);
+    if let (Some((_, items)), Some(gated)) = (&twins, coverage.get_mut("feature_gated")) {
+        gated["items"] = items.clone();
+    }
     Ok(json!({
         "stage": 3,
         "status": "ok",
@@ -366,6 +371,7 @@ pub(crate) fn do_index_status(arguments: &Value) -> Result<Value, String> {
         "node_count": counts.nodes,
         "edge_count": counts.edges,
         "call_site_target_count": counts.call_site_targets,
-        "coverage": coverage_summary_for_graph(graph_path),
+        "coverage": coverage,
+        "cfg_twins": twins.map(|(t, _)| t),
     }))
 }

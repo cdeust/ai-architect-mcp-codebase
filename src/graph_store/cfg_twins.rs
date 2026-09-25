@@ -16,8 +16,8 @@ pub(crate) const TWIN_MARK: &str = "#cfg(";
 
 /// Attribution of a `CallSite` left unresolved on purpose: every candidate for
 /// its callee is one of several twins of one item, so no single edge is honest.
-/// Written by the static resolver (`resolver::calls`); the impact tools and
-/// `index_status` read it in the next change. `''` still means "not attributed".
+/// Written by the static resolver (`resolver::calls`); `get_impact` and
+/// `index_status` count it. `''` still means "not attributed".
 /// source: issue #353.
 pub const CALLSITE_UNRESOLVED_REASON_CFG_TWINS: &str = "cfg_twins";
 
@@ -78,7 +78,7 @@ pub(crate) fn strip_cfg_gates(qn: &str) -> String {
 }
 
 /// The index of the `)` that closes a group already opened, in `text`.
-fn closing_paren(text: &str) -> Option<usize> {
+pub(super) fn closing_paren(text: &str) -> Option<usize> {
     let mut depth = 1usize;
     for (index, byte) in text.bytes().enumerate() {
         match byte {

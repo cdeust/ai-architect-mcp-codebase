@@ -99,7 +99,7 @@ fn overlay_cargo_attributions(
     report: &mut coverage::CoverageReport,
     codebase: &Path,
     current: &[Discovered],
-) -> BTreeSet<String> {
+) -> cargo_attribution::CargoFacts {
     let rust_files: BTreeSet<PathBuf> = current
         .iter()
         .filter(|d| d.rel.ends_with(".rs"))
@@ -121,18 +121,30 @@ fn overlay_cargo_attributions(
         });
     }
     report.cargo_attribution = Some(found.status);
-    found.crate_names
+    cargo_attribution::CargoFacts {
+        crate_names: found.crate_names,
+        file_features: found.file_features,
+    }
 }
 
-/// Promotes the receiver hints that need crate evidence, now that the
-/// workspace's crate names are known (issues #348 and #349). Best-effort: a
-/// failure leaves those hints unverified, which the resolver declines.
-pub(in crate::indexer) fn verify_import_roots(
+/// Applies what the Cargo map says to the graph, now that every node is
+/// written. Best-effort: a failure degrades the graph to what it was before
+/// the fact was known, which both readers treat as "not decided".
+///
+/// - Promotes the receiver hints that need crate evidence, now that the
+///   workspace's crate names are known (issues #348 and #349); a hint that stays
+///   unverified is declined by the resolver.
+/// - Writes `cfg_active` on every `#[cfg]` twin (issue #353): a twin the
+///   default build cannot be shown to compile stays `unknown`, never `active`.
+pub(in crate::indexer) fn apply_cargo_facts(
     store: &crate::graph_store::GraphStore,
-    crate_names: &BTreeSet<String>,
+    facts: &cargo_attribution::CargoFacts,
 ) {
-    if let Err(e) = store.verify_repo_crate_roots(crate_names) {
+    if let Err(e) = store.verify_repo_crate_roots(&facts.crate_names) {
         eprintln!("[ap] import-root verification skipped: {e}");
+    }
+    if let Err(e) = super::super::cfg_active::write(store, &facts.file_features) {
+        eprintln!("[ap] cfg_active pass skipped: {e}");
     }
 }
 
@@ -150,10 +162,10 @@ pub(super) fn save_incremental_coverage(
     reparsed_gaps: BTreeMap<String, FileCoverage>,
     pruned_dirs: BTreeMap<String, String>,
     index_mode: &str,
-) -> BTreeSet<String> {
+) -> cargo_attribution::CargoFacts {
     let output_dir = match graph_dir.parent() {
         Some(p) => p,
-        None => return BTreeSet::new(),
+        None => return cargo_attribution::CargoFacts::default(),
     };
     let cov_path = coverage::coverage_path(output_dir);
     let prior = coverage::load(&cov_path);
@@ -179,11 +191,11 @@ pub(super) fn save_incremental_coverage(
     // than carried forward: the pruned set changes the moment a directory is
     // added or removed. source: ADR-9841.
     report.pruned_dirs = pruned_dirs;
-    let crate_names = overlay_cargo_attributions(&mut report, codebase, current);
+    let facts = overlay_cargo_attributions(&mut report, codebase, current);
     if let Err(e) = coverage::save(&cov_path, &report) {
         eprintln!("[ap] coverage sidecar write failed: {e}");
     }
-    crate_names
+    facts
 }
 
 #[cfg(test)]

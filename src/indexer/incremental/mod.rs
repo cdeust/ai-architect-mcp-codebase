@@ -70,8 +70,8 @@ mod stale_sites;
 
 pub use bootstrap::{fill_after_bootstrap, FillMethod, FillResult};
 use classify::{classify, discover};
+pub(super) use coverage::apply_cargo_facts;
 use coverage::save_incremental_coverage;
-pub(super) use coverage::verify_import_roots;
 use edges::{relink_inbound_edges, snapshot_inbound_edges};
 use mutate::{
     existing_directory_ids, prune_orphan_directories, purge_file_content, purge_file_node,
@@ -192,7 +192,7 @@ pub fn index_incremental(
     // save.
     let mut merged_gaps = reparsed_gaps;
     merged_gaps.extend(walk_gaps);
-    let crate_names = save_incremental_coverage(
+    let facts = save_incremental_coverage(
         codebase,
         graph_dir,
         &current,
@@ -201,7 +201,7 @@ pub fn index_incremental(
         walk_pruned,
         "incremental",
     );
-    verify_import_roots(&store, &crate_names);
+    apply_cargo_facts(&store, &facts);
 
     // Intentionally NO node_count()/edge_count() here — see `IncrementalResult`.
     Ok(IncrementalResult {

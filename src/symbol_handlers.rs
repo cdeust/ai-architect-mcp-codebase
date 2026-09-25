@@ -61,7 +61,7 @@ pub(crate) fn do_get_symbol(arguments: &Value) -> Result<Value, String> {
     // Returns the string already wrapped in single quotes.
     let escaped = graph_store::cypher_str(&resolved_qn);
 
-    Ok(json!({
+    let mut out = json!({
         "stage": 3,
         "status": "ok",
         "tool": "get_symbol",
@@ -72,7 +72,20 @@ pub(crate) fn do_get_symbol(arguments: &Value) -> Result<Value, String> {
             format!("see relationship context: get_context on '{resolved_qn}'"),
             format!("trace blast radius before changing it: get_impact on '{resolved_qn}'"),
         ],
-    }))
+    });
+    // Issue #353: a symbol that is one of several twins under exclusive
+    // `#[cfg]` gates says so, and names the others with their gates and whether
+    // the default build compiles them.
+    if graph_store::has_cfg_gate(&resolved_qn) {
+        let twins = store.cfg_twin_rows(&graph_store::strip_cfg_gates(&resolved_qn));
+        if twins.len() > 1 {
+            out["cfg_twins"] = json!(twins
+                .iter()
+                .map(graph_store::TwinRow::to_json)
+                .collect::<Vec<_>>());
+        }
+    }
+    Ok(out)
 }
 
 /// The answer when the local graph does not define `qn`.

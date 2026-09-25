@@ -326,6 +326,28 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Empties `unresolved_reason` on every `CallSite` in `ids` whose reason is
+    /// `reason`: the site was resolved since, and a reason names only an open
+    /// site. A site with another reason is left alone.
+    pub(crate) fn clear_callsite_reason(&self, ids: &[&str], reason: &str) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let cypher = format!(
+            "UNWIND $rows AS rid MATCH (n:CallSite {{id: rid}}) \
+             WHERE n.unresolved_reason = {} SET n.unresolved_reason = ''",
+            cypher_str(reason)
+        );
+        for chunk in ids.chunks(BULK_BATCH_SIZE) {
+            let values: Vec<Value> = chunk
+                .iter()
+                .map(|id| Value::String((*id).to_string()))
+                .collect();
+            self.run_prepared(&cypher, Value::List(LogicalType::String, values))?;
+        }
+        Ok(())
+    }
+
     /// Sets `is_resolved = false` on every `CallSite` in `ids`. A site that a
     /// resolve pass leaves open keeps whatever flag an earlier pass or an
     /// incremental refresh left (a target purged with its file leaves a stale

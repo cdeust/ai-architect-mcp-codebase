@@ -42,12 +42,51 @@ pub fn resolve_qualified_name(store: &GraphStore, input: &str) -> Result<String,
         }
     }
 
+    // Layer 2b (issue #353): a bare name that stands for twins of one item
+    // under exclusive `#[cfg]` gates. The twin the default build compiles is the
+    // answer when exactly one is; otherwise the twins are the suggestions, so a
+    // caller is never handed one of them by guesswork.
+    let stripped = strip_leading_path_component(input);
+    for name in std::iter::once(input).chain(stripped.as_deref()) {
+        match resolve_twins(store, name) {
+            Some(Ok(qn)) => return Ok(qn),
+            Some(Err(twins)) => {
+                return Err(SymbolNotFound {
+                    input: input.to_string(),
+                    did_you_mean: twins,
+                })
+            }
+            None => {}
+        }
+    }
+
     // Layer 3 — name-only fuzzy. Return top candidates as suggestions.
     let leaf = input.rsplit("::").next().unwrap_or(input);
     let suggestions = find_name_candidates(store, leaf, 5);
     Err(SymbolNotFound {
         input: input.to_string(),
         did_you_mean: suggestions,
+    })
+}
+
+/// The twins of the item `name` stands for: `Ok(id)` of the one the default
+/// build compiles, `Err(ids)` of every twin when it does not decide exactly one,
+/// `None` when `name` is not a twinned item. Only labels a symbol tool can show.
+fn resolve_twins(store: &GraphStore, name: &str) -> Option<Result<String, Vec<String>>> {
+    let twins: Vec<_> = store
+        .cfg_twin_rows(name)
+        .into_iter()
+        .filter(|row| SEARCHABLE_LABELS.contains(&row.label.as_str()))
+        .collect();
+    if twins.is_empty() {
+        return None;
+    }
+    let mut active = twins
+        .iter()
+        .filter(|row| row.cfg_active == crate::graph_store::CFG_ACTIVE);
+    Some(match (active.next(), active.next()) {
+        (Some(only), None) => Ok(only.id.clone()),
+        _ => Err(twins.iter().map(|row| row.id.clone()).collect()),
     })
 }
 
