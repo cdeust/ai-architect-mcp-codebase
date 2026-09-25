@@ -179,7 +179,7 @@ fn build_node_properties(node: &parser::ExtractedNode, language: &str) -> Vec<(S
     }
     append_label_properties(&mut props, node);
     // Issue #353: the gate of a twin item, '' for every other item.
-    if has_cfg_gate_col(&node.label) {
+    if crate::graph_store::CFG_GATE_LABELS.contains(&node.label.as_str()) {
         props.push((
             "cfg_gate".to_string(),
             cypher_str(&find_property(node, "cfg_gate")),
@@ -189,24 +189,6 @@ fn build_node_properties(node: &parser::ExtractedNode, language: &str) -> Vec<(S
         props.push(("language".to_string(), cypher_str(language)));
     }
     props
-}
-
-/// True for every label whose table declares `cfg_gate` (issue #353): the labels
-/// a Rust item can twin under.
-fn has_cfg_gate_col(label: &str) -> bool {
-    matches!(
-        label,
-        "Module"
-            | "Function"
-            | "Method"
-            | "Struct"
-            | "Enum"
-            | "Variant"
-            | "Trait"
-            | "Field"
-            | "Constant"
-            | "TypeAlias"
-    )
 }
 
 /// True for every symbol-bearing node label (everything carrying source-code

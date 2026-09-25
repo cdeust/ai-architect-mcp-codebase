@@ -29,6 +29,19 @@ fn index_and_resolve(tmp: &Path, files: &[(&str, &str)]) -> GraphStore {
     store
 }
 
+/// Every relationship whose target is a `pick` function, any table, any kind:
+/// (table, confidence, method). Structural edges (`Defines`) are direct-AST facts
+/// and are not calls; nothing else may reach a twin.
+fn edges_into_pick(store: &GraphStore) -> Vec<Vec<String>> {
+    rows(
+        store,
+        "MATCH ()-[r]->(f:Function) WHERE f.name = 'pick' RETURN label(r), r.confidence, r.resolution_method",
+    )
+    .into_iter()
+    .filter(|r| !r[0].starts_with("Defines_"))
+    .collect()
+}
+
 fn rows(store: &GraphStore, cypher: &str) -> Vec<Vec<String>> {
     store.execute_query(cypher).expect(cypher).rows
 }
@@ -73,6 +86,11 @@ fn a_call_to_twins_gets_no_edge_to_either() {
         "MATCH (a:Function)-[r:Calls_Function_Function]->(b:Function) WHERE b.name = 'pick' RETURN a.name, b.qualified_name",
     );
     assert!(edges.is_empty(), "a twin was chosen: {edges:?}");
+    let any = edges_into_pick(&store);
+    assert!(
+        any.is_empty(),
+        "an edge of some kind reaches a twin: {any:?}"
+    );
 }
 
 /// The site stays open, says why, and is not counted resolved.
@@ -103,6 +121,65 @@ fn a_caller_under_the_same_gate_as_one_twin_still_gets_no_edge() {
         "MATCH (c:CallSite)-[r:Calls_CallSite_Function]->(f:Function) WHERE f.name = 'pick' RETURN c.line",
     );
     assert!(per_site.is_empty(), "{per_site:?}");
+    let any = edges_into_pick(&store);
+    assert!(
+        any.is_empty(),
+        "an edge of some kind reaches a twin: {any:?}"
+    );
+    let at_095 = rows(
+        &store,
+        "MATCH ()-[r]->(f:Function) WHERE f.name = 'pick' AND r.confidence >= 0.95 AND r.resolution_method <> 'direct-ast' RETURN f.id",
+    );
+    assert!(at_095.is_empty(), "a twin got a 0.95 edge: {at_095:?}");
+}
+
+/// Control for the two checks above: with ONE `pick` the same queries do see the
+/// 0.95 edge, so an empty result on twins is not an empty query.
+#[test]
+fn the_edge_queries_see_the_edge_when_there_is_one_pick() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = index_and_resolve(
+        tmp.path(),
+        &[(
+            "lib.rs",
+            "pub fn pick() -> u32 {\n    1\n}\npub fn caller() -> u32 {\n    pick()\n}\n",
+        )],
+    );
+    let any = edges_into_pick(&store);
+    assert!(!any.is_empty(), "the query sees no edge at all");
+    let at_095 = rows(
+        &store,
+        "MATCH ()-[r]->(f:Function) WHERE f.name = 'pick' AND r.confidence >= 0.95 AND r.resolution_method <> 'direct-ast' RETURN f.id",
+    );
+    assert!(!at_095.is_empty(), "no 0.95 edge seen: {any:?}");
+}
+
+/// The accounting of a `cfg_twins` site: it is one unresolved reference with the
+/// reason, counted once in `total_refs`, and never in `calls_resolved`.
+#[test]
+fn a_cfg_twins_site_is_counted_once_as_unresolved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("lib.rs"), TWINS).unwrap();
+    let graph = tmp.path().join("graph");
+    indexer::index_codebase(&source, &graph).expect("index");
+    let store = GraphStore::open_or_create(&graph).expect("open");
+    let result = resolver::resolve_graph(&store).expect("resolve");
+    assert_eq!(result.calls_resolved, 0);
+    let twin_refs: Vec<_> = result
+        .unresolved
+        .iter()
+        .filter(|u| u.reason.starts_with("cfg_twins"))
+        .collect();
+    assert_eq!(twin_refs.len(), 1, "{} unresolved", result.unresolved.len());
+    assert_eq!(twin_refs[0].target_text, "pick");
+    assert!(twin_refs[0].reason.contains("2 candidates"));
+    let again = resolver::resolve_graph(&store).expect("second resolve");
+    assert_eq!(
+        again.total_refs, result.total_refs,
+        "a second pass recounts"
+    );
 }
 
 /// Regression pin: an item without a twin keeps its plain id and its 0.95 edge,

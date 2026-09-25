@@ -15,14 +15,22 @@ adheres to [Semantic Versioning](https://semver.org/).
   first) and an edge at 0.95 from every caller to it, whichever twin the build
   compiles. Now each twin is a node whose id ends in `#cfg(<gate>)` (for
   example `src/lib.rs::pick#cfg(not(feature=fast))`) and carries a new
-  `cfg_gate` column; the gate joins the item's own `#[cfg]`, those of its
-  enclosing `mod`, `impl`, `trait` and `fn`, and inner `#![cfg]`. Only items
-  that collide in one file are renamed, so every other id is unchanged. A
-  call whose candidates are all twins of one item gets no edge and the reason
-  `cfg_twins` on its call site. A graph indexed before this change has already
-  lost its twins, so an incremental refresh of it asks for a full reindex
-  (`index_codebase` with `full: true`). Choosing the twin the build compiles
-  is left to the second change.
+  `cfg_gate` column. The gate is the item's own `#[cfg]` together with those of
+  its enclosing `mod`, `impl`, `trait` and `fn` and the inner `#![cfg]` of its
+  file or module, in a canonical order, without comments; `cfg_attr` is not
+  expanded. Only items that collide in one file are renamed, so a file without
+  twins parses to exactly the nodes and refs it did before (checked over the 424
+  Rust files of this repository against the parser of main). What does change
+  for every graph is that each node of ten tables gains the `cfg_gate` column,
+  empty unless the node is a twin. A call whose candidates are all twins of one
+  item gets no edge and the reason `cfg_twins` on its call site, and so does
+  every other edge that a name lookup would have pointed at the first twin
+  (`Implements`, `Uses`); an `impl` for a twin type owns its methods only when
+  its own gate is exactly the gate of one twin. A graph indexed before this
+  change has already lost its twins, so an incremental refresh of it, an
+  artifact import and a re-index over its directory ask for a full reindex
+  (`index_codebase` with `full: true`). Choosing the twin the build compiles is
+  left to the second change.
 
 - A graph queried before `lsp_resolve` no longer loses the rows the pass writes
   (#352). The read cache keeps a graph handle open between requests, and a

@@ -102,6 +102,8 @@ mod rust_call_shape_tests;
 #[cfg(test)]
 mod rust_cfg_twin_tests;
 #[cfg(test)]
+mod rust_identity_tests;
+#[cfg(test)]
 mod rust_nested_fn_tests;
 #[cfg(test)]
 mod rust_parity_corpus;
@@ -138,3 +140,5 @@ pub(crate) use shallow::parse_shallow;
 pub(crate) use swift::SWIFT_SPEC;
 pub(crate) use typescript::TS_SPEC;
 pub(crate) use walkers::parse_with_spec;
+#[cfg(test)]
+pub(crate) use walkers::parse_with_spec_no_twins;

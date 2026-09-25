@@ -80,7 +80,8 @@ pub(super) struct Def<'a> {
 
 /// Appends `d`'s node and then its owning edge.
 /// precondition: `d.name` is non-empty and `d.qn` is its qualified name.
-/// postcondition: exactly one node and one ref are appended, node first.
+/// postcondition: exactly one node and, unless `d.edge_from` is empty, one ref are
+/// appended, node first.
 pub(super) fn push_def(ctx: &mut WalkCtx, node: Node, mut d: Def) {
     // Issue #353: the gate of every node while looking for twins, and the gate of
     // a twin on its own node once it is told apart by its qualified name.
@@ -100,6 +101,11 @@ pub(super) fn push_def(ctx: &mut WalkCtx, node: Node, mut d: Def) {
         visibility: d.visibility,
         properties: d.properties,
     });
+    // An empty owner is an impl for a twin type it cannot be tied to (issue
+    // #353): the node stays, the owning edge is not guessed.
+    if d.edge_from.is_empty() {
+        return;
+    }
     ctx.refs.push(ExtractedRef {
         kind: d.edge_kind.to_string(),
         from_qualified_name: d.edge_from.to_string(),

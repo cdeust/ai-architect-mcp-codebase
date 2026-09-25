@@ -271,7 +271,7 @@ pub(crate) fn attempt_bootstrap(
 /// A snapshot's archive format can be compatible while its graph columns are
 /// obsolete. Refuse before publishing freshness or attempting an incremental
 /// fill: only a full reparse can recover discarded Rust harness attributes.
-fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> Result<(), String> {
+pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> Result<(), String> {
     artifact::import_artifact(codebase, graph_dir)?;
     let store = graph_store::GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;

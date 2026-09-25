@@ -12,7 +12,7 @@
 use tree_sitter::Node;
 
 use super::super::lang_spec::LangSpec;
-use super::super::rust_cfg_gate::twin_qn;
+use super::super::rust_cfg_gate::{impl_owner, twin_qn};
 use super::rust::{
     decl_list_body, emit_derive_implements, has_async, implements_props, push_def, Def,
     DeriveScope, RustSpecs,
@@ -28,6 +28,9 @@ use crate::parser::{
 struct ImplTarget<'a> {
     receiver_qn: &'a str,
     trait_name: &'a str,
+    /// False when the impl is for a twin type it cannot be tied to (issue #353):
+    /// its methods are emitted without the owning `HasMethod` edge.
+    owned: bool,
 }
 
 /// Emits a struct or union (`Struct` + `Defines`), its named fields, then its
@@ -297,7 +300,9 @@ pub(super) fn emit_impl(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope: 
         return;
     }
     let trait_name = node_field_text(ctx.source, node, rf.trait_field);
-    let receiver_qn = qual(scope, &impl_type);
+    let plain_qn = qual(scope, &impl_type);
+    let owner = impl_owner(ctx, node, &plain_qn);
+    let receiver_qn = owner.clone().unwrap_or(plain_qn);
     let body = match decl_list_body(specs, node) {
         Some(b) => b,
         None => return,
@@ -305,6 +310,7 @@ pub(super) fn emit_impl(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, scope: 
     let target = ImplTarget {
         receiver_qn: &receiver_qn,
         trait_name: &trait_name,
+        owned: owner.is_some(),
     };
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
@@ -352,7 +358,7 @@ fn emit_impl_method(specs: RustSpecs, ctx: &mut WalkCtx, node: Node, target: &Im
             visibility: spec.conventions.node_visibility(ctx.source, node, &name),
             properties: props,
             edge_kind: "HasMethod",
-            edge_from: target.receiver_qn,
+            edge_from: if target.owned { target.receiver_qn } else { "" },
         },
     );
     if let Some(body) = call_scan_of(spec, node) {

@@ -128,12 +128,13 @@ fn resolve_one_implements(
         name,
     } = *candidate;
     let lookup = provider.import_last_segment(name);
-    if let Some(t) = ctx
-        .idx
-        .by_name
-        .get(lookup)
-        .and_then(|c| c.iter().find(|e| e.label == "Trait"))
-    {
+    let candidates = ctx.idx.by_name.get(lookup);
+    if let Some(t) = candidates.and_then(|c| c.iter().find(|e| e.label == "Trait")) {
+        // Issue #353: the first of several twin traits is not the one the build
+        // compiles. No edge.
+        if super::cfg_twins::is_twin_member(t, candidates.map_or(&[], Vec::as_slice)) {
+            return Ok(false);
+        }
         let table = format!("Implements_{label}_Trait");
         buf.add(&table, from_id, &t.id, 0.95, "declared-implements");
         return Ok(true);
@@ -193,11 +194,13 @@ fn resolve_impl_trait_blocks(
         };
         total += 1;
         let lookup = trait_name.rsplit("::").next().unwrap_or(trait_name);
-        match idx
-            .by_name
-            .get(lookup)
+        let candidates = idx.by_name.get(lookup);
+        let trait_target = candidates
             .and_then(|c| c.iter().find(|e| e.label == "Trait"))
-        {
+            .filter(|t| {
+                !super::cfg_twins::is_twin_member(t, candidates.map_or(&[], Vec::as_slice))
+            });
+        match trait_target {
             Some(t) => {
                 let table = format!("Implements_{}_Trait", recv.label);
                 buf.add(&table, &recv.id, &t.id, 0.95, "impl-block");

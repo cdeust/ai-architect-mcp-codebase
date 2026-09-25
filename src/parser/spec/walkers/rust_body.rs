@@ -68,6 +68,9 @@ fn is_item_scope(specs: RustSpecs, kind: &str) -> bool {
 ///   body, so a QN under the file or module would collide with, and be
 ///   indistinguishable from, a same-named item the whole module can name.
 ///   `ctx.dedup` separates two same-named fns in sibling blocks of one body.
+///   It is not twin-aware (issue #353): two nested fns under mutually exclusive
+///   `#[cfg]` are told apart by `qn@line` exactly as before, carry no `cfg_gate`
+///   and no `#cfg(..)` suffix, and both stay nodes.
 /// - `Function`, never `Method`: an item inside a body has no `self`.
 /// - `Defines` from the file: the file does define it, and the schema has no
 ///   `Defines_Function_Function`/`Defines_Method_Function` table (adding one

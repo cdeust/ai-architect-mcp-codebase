@@ -35,7 +35,7 @@ pub(super) fn resolve_calls(
     let mut unresolved = Vec::new();
     // §10.4 — CallSite nodes whose callee was resolved to a graph target.
     let mut resolved_ids: Vec<String> = Vec::new();
-    // Issue #353 — CallSites left unresolved because every candidate is a twin
+    // Issue #353: CallSites left unresolved because every candidate is a twin
     // of one item under mutually exclusive `#[cfg]` predicates.
     let mut twin_site_ids: Vec<String> = Vec::new();
 
@@ -134,22 +134,7 @@ fn resolve_one_call_site(
         // candidates): labeled and dropped rather than guessed — see
         // resolve_single_call's doc comment for why this beats a
         // deterministic tiebreak here (issue #30).
-        PolicyResolution::Ambiguous { candidates } => {
-            let twins = super::cfg_twins::are_twins_of_one_item(&candidates);
-            if twins {
-                tally.twin_sites.push(site.cs_id.to_string());
-            }
-            let label = if twins {
-                crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS
-            } else {
-                "ambiguous"
-            };
-            record_call_unresolved(
-                &site,
-                tally,
-                format!("{label} ({} candidates)", candidates.len()),
-            );
-        }
+        PolicyResolution::Ambiguous { candidates } => record_ambiguous(&site, tally, &candidates),
         PolicyResolution::NotFound => {
             record_call_unresolved(&site, tally, "no target found".to_string())
         }
@@ -220,6 +205,26 @@ struct MatchedCall<'a> {
     target: &'a SymbolEntry,
     evidence: ambiguity_policy::Evidence,
     confidence: f64,
+}
+
+/// An ambiguous callee: dropped and labeled. When every candidate is a twin of
+/// one item under exclusive `#[cfg]` gates (issue #353) the label is `cfg_twins`
+/// and the site is queued for the reason to be persisted.
+fn record_ambiguous(site: &CallSite, tally: &mut CallTally, candidates: &[SymbolEntry]) {
+    let twins = super::cfg_twins::are_twins_of_one_item(candidates);
+    if twins {
+        tally.twin_sites.push(site.cs_id.to_string());
+    }
+    let label = if twins {
+        crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS
+    } else {
+        "ambiguous"
+    };
+    record_call_unresolved(
+        site,
+        tally,
+        format!("{label} ({} candidates)", candidates.len()),
+    );
 }
 
 /// Running counters for `resolve_calls`, grouped so helpers take one

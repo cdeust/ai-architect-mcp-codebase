@@ -480,4 +480,21 @@ mod tests {
         assert_eq!(language_id_for("python"), "python");
         assert_eq!(language_id_for("unknown"), "plaintext");
     }
+
+    /// Issue #353: a call site left open with the reason `cfg_twins` is an
+    /// unresolved site like any other for the language server pass: it is
+    /// collected, so the compiler-level tool can still say which twin it means.
+    #[test]
+    fn a_cfg_twins_site_is_collected_for_the_server() {
+        let (_dir, store) = store_with_schema("lsp_cfg_twins_site");
+        insert_site(&store, "src/a.rs::caller::call@5:4", Some("false"));
+        store
+            .set_callsite_unresolved_reason(
+                &["src/a.rs::caller::call@5:4"],
+                crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
+            )
+            .expect("reason");
+        let sites = collect_unresolved_callsites(&store).expect("collect");
+        assert_eq!(sites.len(), 1);
+    }
 }

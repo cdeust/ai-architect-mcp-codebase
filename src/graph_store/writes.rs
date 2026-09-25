@@ -189,7 +189,11 @@ impl GraphStore {
     /// handler. Read-only, like `require_entry_metadata`, so a caller can check
     /// compatibility before it mutates a graph.
     pub fn require_cfg_gate_metadata(&self) -> Result<(), String> {
-        if self.node_column_exists("Function", "cfg_gate")? {
+        let mut complete = true;
+        for label in super::CFG_GATE_LABELS {
+            complete &= self.node_column_exists(label, "cfg_gate")?;
+        }
+        if complete {
             Ok(())
         } else {
             Err("graph lacks #[cfg] twin metadata (cfg_gate); full reindex required (index_codebase with full: true)".into())
@@ -336,6 +340,26 @@ impl GraphStore {
                 .collect();
             let list = Value::List(LogicalType::String, values);
             self.run_prepared(&cypher, list)?;
+        }
+        Ok(())
+    }
+
+    /// Sets `is_resolved = false` on every `CallSite` in `ids`. A site that a
+    /// resolve pass leaves open keeps whatever flag an earlier pass or an
+    /// incremental refresh left (a target purged with its file leaves a stale
+    /// `true`); the caller that knows the site is open says so here (issue #353,
+    /// a call whose candidates are all `#[cfg]` twins).
+    pub(crate) fn mark_callsites_unresolved(&self, ids: &[&str]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let cypher = "UNWIND $rows AS rid MATCH (n:CallSite {id: rid}) SET n.is_resolved = false";
+        for chunk in ids.chunks(BULK_BATCH_SIZE) {
+            let values: Vec<Value> = chunk
+                .iter()
+                .map(|id| Value::String((*id).to_string()))
+                .collect();
+            self.run_prepared(cypher, Value::List(LogicalType::String, values))?;
         }
         Ok(())
     }

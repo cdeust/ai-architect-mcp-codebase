@@ -33,17 +33,37 @@ pub(super) fn are_twins_of_one_item(candidates: &[SymbolEntry]) -> bool {
     })
 }
 
+/// True when `target` is one of several twins of one item among `candidates`
+/// (its id ends a `#cfg(..)` segment and another candidate of its label has the
+/// same id once the gates are stripped). A resolver that takes the first
+/// candidate of a name must drop such a target instead: which twin the build
+/// compiles is not the first one in the file.
+pub(super) fn is_twin_member(target: &SymbolEntry, candidates: &[SymbolEntry]) -> bool {
+    if !has_cfg_gate(&target.qualified_name) {
+        return false;
+    }
+    let plain = strip_cfg_gates(&target.qualified_name);
+    candidates.iter().any(|other| {
+        other.id != target.id
+            && other.label == target.label
+            && strip_cfg_gates(&other.qualified_name) == plain
+    })
+}
+
 /// Writes `unresolved_reason = cfg_twins` on the sites the resolver left open
 /// because their callee has twins. The column is added first on a graph indexed
 /// before it existed (same precedent as `receiver_hint`); `mark_nodes_resolved`
-/// is not called for them, so they stay `is_resolved = false` and the language
-/// server pass still sees them as open sites.
+/// is not called for them and their flag is set to `false` (an earlier pass or an
+/// incremental refresh may have left a stale `true`), so the language server pass
+/// still sees them as open sites.
 pub(super) fn persist_twin_reason(store: &GraphStore, ids: &[String]) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
     }
     store.ensure_node_column("CallSite", "unresolved_reason", "STRING DEFAULT ''")?;
+    store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
     let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    store.mark_callsites_unresolved(&refs)?;
     store.set_callsite_unresolved_reason(
         &refs,
         crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
@@ -110,5 +130,45 @@ mod tests {
             "Function",
             "src/lib.rs::pick#cfg(a)"
         )]));
+    }
+
+    /// Every parser of an id or a name that runs on a graph with twins, on a twin
+    /// id: none may cut inside the `#cfg(..)` suffix, read it as a sequence
+    /// number, or lose the file the twin belongs to.
+    #[test]
+    fn the_id_parsers_read_a_twin_id_whole() {
+        let twin = "src/lib.rs::pick#cfg(not(feature=fast))";
+        assert_eq!(crate::call_evidence::strip_seq_suffix(twin), twin);
+        let numeric = "src/lib.rs::pick#cfg(feature=a1)";
+        assert_eq!(crate::call_evidence::strip_seq_suffix(numeric), numeric);
+        assert_eq!(
+            crate::language_provider::extract_file_prefix(twin).as_deref(),
+            Some("src/lib.rs")
+        );
+        let site = format!("{twin}::call@3:4");
+        assert_eq!(super::super::extract_caller_from_callsite_id(&site), twin);
+        let in_twin_module = "src/lib.rs::m#cfg(unix)::pick";
+        assert_eq!(
+            in_twin_module.rsplit_once("::").map(|(parent, _)| parent),
+            Some("src/lib.rs::m#cfg(unix)")
+        );
+    }
+
+    #[test]
+    fn a_first_candidate_that_is_a_twin_is_dropped_and_a_lone_gated_id_is_not() {
+        let twins = [
+            entry("Trait", "src/lib.rs::Base#cfg(unix)"),
+            entry("Trait", "src/lib.rs::Base#cfg(not(unix))"),
+        ];
+        assert!(is_twin_member(&twins[0], &twins));
+        // The only `S` inside one of two twin modules has no twin of its own.
+        let lone = [entry("Struct", "src/lib.rs::m#cfg(unix)::S")];
+        assert!(!is_twin_member(&lone[0], &lone));
+        // A plain id is never a twin, whatever else shares its name.
+        let mixed = [
+            entry("Trait", "src/lib.rs::Base"),
+            entry("Trait", "src/other.rs::Base"),
+        ];
+        assert!(!is_twin_member(&mixed[0], &mixed));
     }
 }

@@ -14,11 +14,34 @@ pub(crate) const TWIN_MARK: &str = "#cfg(";
 
 /// Attribution of a `CallSite` left unresolved on purpose: every candidate for
 /// its callee is one of several twins of one item, so no single edge is honest.
-/// Written by the static resolver (`resolver::calls`), read by
-/// `clustering::impact_reasons` and `index_status`. `''` still means "not
-/// attributed".
+/// Written by the static resolver (`resolver::calls`); the impact tools and
+/// `index_status` read it in the next change. `''` still means "not attributed".
 /// source: issue #353.
 pub const CALLSITE_UNRESOLVED_REASON_CFG_TWINS: &str = "cfg_twins";
+
+/// The node tables that carry the `cfg_gate` column, exactly those of the DDL.
+///
+/// The column is created ONLY by `create_schema` on a graph built by this code:
+/// nothing anywhere adds it with an `ALTER` (a test scans the sources for one).
+/// That is what makes its presence a proof that the graph was indexed with twin
+/// identity: an old graph has no column and is refused for incremental work
+/// (`require_cfg_gate_metadata`), and a full reindex removes the graph directory
+/// first (`indexing_handlers::do_index_codebase`), so the new tables replace the
+/// old ones. A future change that adds the column with an `ALTER` must ALSO write
+/// a marker only the new indexer sets, or old collapsed graphs would pass the
+/// guard.
+pub const CFG_GATE_LABELS: [&str; 10] = [
+    "Module",
+    "Function",
+    "Method",
+    "Struct",
+    "Enum",
+    "Variant",
+    "Trait",
+    "Field",
+    "Constant",
+    "TypeAlias",
+];
 
 /// True when `qn` carries a twin suffix anywhere in its path.
 pub(crate) fn has_cfg_gate(qn: &str) -> bool {

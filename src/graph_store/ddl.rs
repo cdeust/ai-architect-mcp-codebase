@@ -15,7 +15,7 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // (e.g. wrong grammar dialect), not a genuinely empty file; downstream
         // tools must be able to tell the two apart.
         (NODE_FILE, "id STRING, path STRING, name STRING, extension STRING, size_bytes INT64, parse_errors INT64"),
-        // cfg_gate: issue #353 — on every label a Rust item can twin under, the
+        // cfg_gate: issue #353: on every label a Rust item can twin under, the
         // compact `#[cfg]` gate of an item whose qualified name carries a
         // `#cfg(..)` suffix; '' for every other item and for a graph written
         // before the column existed (see `require_cfg_gate_metadata`).

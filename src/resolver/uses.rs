@@ -251,6 +251,8 @@ fn find_type_target<'a>(idx: &'a SymbolIndex, type_name: &str) -> Option<&'a Sym
     if types.is_empty() {
         return None;
     }
-    // Ambiguous: return first match with lower confidence (handled by caller)
-    Some(types[0])
+    // Ambiguous: return first match with lower confidence (handled by caller),
+    // unless it is one of several twins of one item (issue #353): the first
+    // twin is not the one the build compiles.
+    Some(types[0]).filter(|t| !super::cfg_twins::is_twin_member(t, candidates))
 }

@@ -16,15 +16,19 @@
 // The gate of an item is the `all` of every `#[cfg]` that reaches it: its own
 // outer attributes, those of every enclosing `mod`, `impl`, `trait` and `fn`, and
 // the inner `#![cfg]` attributes of the file or of an enclosing inline module.
-// `cfg_attr` is not expanded, and a predicate that does not parse is kept as its
-// raw text, so two different unparsed gates still give two different suffixes.
+// `cfg_attr` is NOT expanded: `#[cfg_attr(feature = "x", cfg(unix))]` gates
+// nothing here, so an item under it has no gate from it (a `cfg_attr` that adds a
+// `cfg` is a rare spelling; two twins told apart only by it stay one node, as
+// before this change). Comments inside `cfg(..)` do not count: they are removed
+// before the predicate is read, so adding one never renames an id. A predicate
+// that does not parse is kept as its comment-free text, so two different unparsed gates still give two different suffixes.
 // source: The Rust Reference, "Conditional compilation" (the `cfg` attribute
 // applies to the item it precedes; a `cfg` on a container gates its contents).
 
 use tree_sitter::Node;
 
 use super::walkers::WalkCtx;
-use crate::parser::cfg_expr::{parse_cfg_arguments, CfgPredicate};
+use crate::parser::cfg_expr::{parse_cfg_arguments, without_comments, CfgPredicate};
 use crate::parser::node_text;
 
 /// Opens the suffix of a twin id. The suffix closes with `)`.
@@ -90,9 +94,9 @@ fn cfg_of(source: &str, attribute_item: Node) -> Option<CfgPredicate> {
         return None;
     }
     let raw = node_text(source, attribute.child_by_field_name("arguments")?);
-    let raw = raw.as_str();
+    let raw = without_comments(raw.as_str());
     Some(
-        parse_cfg_arguments(raw).unwrap_or_else(|| CfgPredicate::Option {
+        parse_cfg_arguments(&raw).unwrap_or_else(|| CfgPredicate::Option {
             key: "unparsed".to_string(),
             value: Some(raw.split_whitespace().collect()),
         }),
@@ -119,11 +123,34 @@ pub(crate) fn gate_of_qualified_name(qn: &str) -> Option<&str> {
 /// item's own gate. `ctx.twins` is empty on the first walk of a file, so the
 /// first walk never changes a name.
 pub(crate) fn twin_qn(ctx: &WalkCtx, node: Node, label: &str, plain: String) -> String {
-    if ctx.twins.is_empty() || !ctx.twins.contains(&(label.to_string(), plain.clone())) {
+    if ctx.twins.is_empty() || !ctx.twins.contains_key(&(label.to_string(), plain.clone())) {
         return plain;
     }
     let gate = effective_gate(ctx.source, node);
     format!("{plain}{}", twin_suffix(&gate))
+}
+
+/// The types an `impl` block can be written for and that can have twins.
+const IMPL_OWNER_LABELS: [&str; 3] = ["Struct", "Enum", "Trait"];
+
+/// The id an `impl` block's methods attach to when its type is `plain`.
+///
+/// Not a twin: `plain`. A twin type has no node named `plain` any more, so an
+/// edge from it would dangle; the impl belongs to a twin only when its own gate
+/// is exactly the gate of one member, and then to that member's id. Otherwise
+/// (an ungated impl, a gate that names none of them, or one that names several)
+/// the block is not tied to a twin and the owner is `None`: no edge, the safe
+/// answer, since which twin the impl serves is the build's to say.
+pub(crate) fn impl_owner(ctx: &WalkCtx, impl_node: Node, plain: &str) -> Option<String> {
+    let member_gates = IMPL_OWNER_LABELS
+        .iter()
+        .find_map(|label| ctx.twins.get(&(label.to_string(), plain.to_string())));
+    let Some(member_gates) = member_gates else {
+        return Some(plain.to_string());
+    };
+    let gate = effective_gate(ctx.source, impl_node);
+    (!gate.is_empty() && member_gates.contains(&gate))
+        .then(|| format!("{plain}{}", twin_suffix(&gate)))
 }
 
 #[cfg(test)]

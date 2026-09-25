@@ -42,7 +42,7 @@ pub(crate) const COLS_MODULE: ColTypes = &[
     ("id", LogicalType::String),
     ("name", LogicalType::String),
     ("qualified_name", LogicalType::String),
-    // source: issue #353 — must mirror the DDL's `cfg_gate` column.
+    // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
 ];
 pub(crate) const COLS_VARIANT: ColTypes = &[
@@ -53,7 +53,7 @@ pub(crate) const COLS_VARIANT: ColTypes = &[
     ("start_line", LogicalType::Int64),
     ("end_line", LogicalType::Int64),
     ("language", LogicalType::String),
-    // source: issue #353 — must mirror the DDL's `cfg_gate` column.
+    // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
 ];
 pub(crate) const COLS_FUNCTION: ColTypes = &[
@@ -69,7 +69,7 @@ pub(crate) const COLS_FUNCTION: ColTypes = &[
     ("constructed_types", LogicalType::String),
     ("language", LogicalType::String),
     ("entry_kind", LogicalType::String),
-    // source: issue #353 — must mirror the DDL's `cfg_gate` column.
+    // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
 ];
 pub(crate) const COLS_METHOD: ColTypes = &[
@@ -86,7 +86,7 @@ pub(crate) const COLS_METHOD: ColTypes = &[
     ("return_type", LogicalType::String),
     ("constructed_types", LogicalType::String),
     ("language", LogicalType::String),
-    // source: issue #353 — must mirror the DDL's `cfg_gate` column.
+    // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
 ];
 pub(crate) const COLS_TYPEDECL: ColTypes = &[
@@ -99,7 +99,7 @@ pub(crate) const COLS_TYPEDECL: ColTypes = &[
     ("language", LogicalType::String),
     ("bases", LogicalType::String),
     ("implements", LogicalType::String),
-    // source: issue #353 — must mirror the DDL's `cfg_gate` column.
+    // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
 ];
 // source: stages/stage-3.md §10.1 — Field/Constant/TypeAlias/Import gain span
@@ -113,7 +113,7 @@ pub(crate) const COLS_FIELD: ColTypes = &[
     ("start_line", LogicalType::Int64),
     ("end_line", LogicalType::Int64),
     ("language", LogicalType::String),
-    // source: issue #353 — must mirror the DDL's `cfg_gate` column.
+    // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
 ];
 pub(crate) const COLS_CONSTANT: ColTypes = &[
@@ -124,7 +124,7 @@ pub(crate) const COLS_CONSTANT: ColTypes = &[
     ("start_line", LogicalType::Int64),
     ("end_line", LogicalType::Int64),
     ("language", LogicalType::String),
-    // source: issue #353 — must mirror the DDL's `cfg_gate` column.
+    // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
 ];
 pub(crate) const COLS_TYPE_ALIAS: ColTypes = &[
@@ -135,7 +135,7 @@ pub(crate) const COLS_TYPE_ALIAS: ColTypes = &[
     ("start_line", LogicalType::Int64),
     ("end_line", LogicalType::Int64),
     ("language", LogicalType::String),
-    // source: issue #353 — must mirror the DDL's `cfg_gate` column.
+    // source: issue #353: must mirror the DDL's `cfg_gate` column.
     ("cfg_gate", LogicalType::String),
 ];
 pub(crate) const COLS_IMPORT: ColTypes = &[

@@ -264,3 +264,109 @@ fn a_twin_id_holds_no_id_separator_inside_its_suffix() {
         assert!(n.qualified_name.ends_with(')'), "{}", n.qualified_name);
     }
 }
+
+/// Adding a comment to a `cfg` must not rename the id: identity is computed on
+/// the comment-free predicate (review of #364).
+#[test]
+fn a_comment_inside_a_cfg_does_not_rename_the_twin() {
+    let plain = parse(
+        "#[cfg(feature = \"fast\")]\nfn f() {}\n#[cfg(not(feature = \"fast\"))]\nfn f() {}\n",
+    );
+    let commented = parse(
+        "#[cfg(feature = \"fast\" /* fast path */)]\nfn f() {}\n#[cfg(not(feature = \"fast\" // off\n))]\nfn f() {}\n",
+    );
+    let ids = |r: &ParseResult| {
+        let mut v: Vec<String> = nodes(r, "Function", "f")
+            .iter()
+            .map(|n| n.qualified_name.clone())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(
+        ids(&plain),
+        [
+            "src/lib.rs::f#cfg(feature=fast)",
+            "src/lib.rs::f#cfg(not(feature=fast))"
+        ]
+    );
+    assert_eq!(ids(&commented), ids(&plain));
+}
+
+/// An escaped quote inside a `cfg` string is one string, and the id holds no raw
+/// quote: it is percent-encoded.
+#[test]
+fn an_escaped_quote_in_a_cfg_string_is_percent_encoded_in_the_id() {
+    let result = parse(
+        "#[cfg(feature = \"a\\\"b\")]\nfn f() {}\n#[cfg(not(feature = \"a\\\"b\"))]\nfn f() {}\n",
+    );
+    let mut ids: Vec<String> = nodes(&result, "Function", "f")
+        .iter()
+        .map(|n| n.qualified_name.clone())
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        [
+            "src/lib.rs::f#cfg(feature=a%22b)",
+            "src/lib.rs::f#cfg(not(feature=a%22b))"
+        ]
+    );
+}
+
+/// `cfg_attr` is not expanded: two items told apart only by a `cfg` added through
+/// `cfg_attr` are not twins here, so they keep the one plain name.
+#[test]
+fn a_cfg_added_through_cfg_attr_is_not_a_gate() {
+    let result = parse(
+        "#[cfg_attr(feature = \"x\", cfg(unix))]\nfn f() {}\n#[cfg_attr(feature = \"x\", cfg(not(unix)))]\nfn f() {}\n",
+    );
+    let fs = nodes(&result, "Function", "f");
+    assert_eq!(fs.len(), 2);
+    assert!(fs.iter().all(|n| n.qualified_name == "src/lib.rs::f"));
+}
+
+/// The `HasMethod` owner of an impl for twin types: none when the block names no
+/// twin (no edge from the id that no longer exists), the twin when its own gate
+/// is exactly the twin's.
+#[test]
+fn an_impl_for_twin_types_names_its_owner_only_when_its_gate_selects_one_twin() {
+    let owner = |source: &str| -> Vec<String> {
+        parse(source)
+            .refs
+            .iter()
+            .filter(|r| r.kind == "HasMethod")
+            .map(|r| r.from_qualified_name.clone())
+            .collect()
+    };
+    let twins = "#[cfg(unix)]\nstruct S;\n#[cfg(not(unix))]\nstruct S;\n";
+    assert!(owner(&format!("{twins}impl S {{\n fn m(&self) {{}}\n}}\n")).is_empty());
+    assert_eq!(
+        owner(&format!(
+            "{twins}#[cfg(unix)]\nimpl S {{\n fn m(&self) {{}}\n}}\n"
+        )),
+        ["src/lib.rs::S#cfg(unix)"]
+    );
+    assert!(owner(&format!(
+        "{twins}#[cfg(windows)]\nimpl S {{\n fn m(&self) {{}}\n}}\n"
+    ))
+    .is_empty());
+    assert_eq!(
+        owner("struct S;\nimpl S {\n fn m(&self) {}\n}\n"),
+        ["src/lib.rs::S"]
+    );
+}
+
+/// Two nested fns under exclusive gates keep the old behaviour: `ctx.dedup` tells
+/// them apart by line, they carry no `cfg_gate`, and both stay nodes.
+#[test]
+fn nested_fns_under_exclusive_gates_keep_the_line_suffix_behaviour() {
+    let result = parse(
+        "fn outer() {\n    #[cfg(unix)]\n    fn g() {}\n    #[cfg(not(unix))]\n    fn g() {}\n}\n",
+    );
+    let gs = nodes(&result, "Function", "g");
+    assert_eq!(gs.len(), 2);
+    assert!(gs.iter().all(|n| prop(n, "cfg_gate").is_none()));
+    assert!(gs.iter().all(|n| !n.qualified_name.contains("#cfg(")));
+    assert_ne!(gs[0].qualified_name, gs[1].qualified_name);
+}

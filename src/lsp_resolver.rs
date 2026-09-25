@@ -29,6 +29,10 @@ use sites::{
 use unlinked::FileRef;
 
 #[cfg(test)]
+#[path = "lsp_resolver/cfg_twin_tests.rs"]
+mod cfg_twin_tests;
+
+#[cfg(test)]
 #[path = "lsp_resolver/health_gate_tests.rs"]
 mod health_gate_tests;
 

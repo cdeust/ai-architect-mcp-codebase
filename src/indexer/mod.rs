@@ -156,6 +156,8 @@ pub fn index_codebase_with_language(
     let start = Instant::now();
     let store = GraphStore::open_or_create(graph_path)?;
     store.create_schema()?;
+    // An old graph directory keeps its tables (IF NOT EXISTS): say so up front (#353).
+    store.require_cfg_gate_metadata()?;
 
     // Coverage-honesty accounting (issue #57): note every File node, and record
     // the parse-incomplete / skipped / quarantined gaps as they occur. Created

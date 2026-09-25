@@ -1,4 +1,4 @@
-// cfg_expr — parses a `#[cfg(...)]` predicate and evaluates it against a set of
+// cfg_expr: parses a `#[cfg(...)]` predicate and evaluates it against a set of
 // enabled Cargo features (issue #291).
 //
 // Layer: pure, no I/O. Only `feature = "..."` leaves are decidable from
@@ -8,7 +8,7 @@
 // `False` only when the feature leaves alone force it false whatever the
 // unknown leaves turn out to be: `all(feature = "x", unix)` with `x` off is
 // `False`; `any(feature = "x", unix)` with `x` off is `Unknown`. The caller
-// flags a module only on `False` — a compiled module is never flagged.
+// flags a module only on `False`, a compiled module is never flagged.
 // source: The Rust Reference, "Conditional compilation" (configuration
 // predicates `all`, `any`, `not`, key-value options).
 //
@@ -19,11 +19,14 @@
 
 use std::collections::BTreeSet;
 
+pub(crate) use super::cfg_lex::without_comments;
+use super::cfg_lex::{tokenize, Token};
+
 /// A parsed configuration predicate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CfgPredicate {
     Feature(String),
-    /// Any option other than `feature = "..."` — not decidable here, but kept
+    /// Any option other than `feature = "..."`, not decidable here, but kept
     /// by name so twins under `cfg(kani)` and `cfg(not(kani))` stay distinct.
     /// `value` is `None` for a bare name (`unix`, `kani`).
     Option {
@@ -155,63 +158,17 @@ fn encode(text: &str) -> String {
     out
 }
 
-/// Parses the argument text of a `cfg` attribute, parentheses included —
+/// Parses the argument text of a `cfg` attribute, parentheses included ,
 /// `(feature = "x")`, `(all(feature = "x", unix))`. `None` when the text is
 /// not one well-formed predicate.
 pub(crate) fn parse_cfg_arguments(text: &str) -> Option<CfgPredicate> {
-    let tokens = tokenize(text)?;
+    let tokens = tokenize(&without_comments(text))?;
     let mut parser = Parser { tokens, pos: 0 };
     parser.expect(&Token::Open)?;
     let predicate = parser.predicate()?;
     parser.eat(&Token::Comma);
     parser.expect(&Token::Close)?;
     (parser.pos == parser.tokens.len()).then_some(predicate)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Token {
-    Ident(String),
-    Str(String),
-    Eq,
-    Open,
-    Close,
-    Comma,
-}
-
-fn tokenize(text: &str) -> Option<Vec<Token>> {
-    let mut tokens = Vec::new();
-    let mut chars = text.chars().peekable();
-    while let Some(&c) = chars.peek() {
-        match c {
-            c if c.is_whitespace() => {
-                chars.next();
-            }
-            '(' | ')' | ',' | '=' => {
-                chars.next();
-                tokens.push(match c {
-                    '(' => Token::Open,
-                    ')' => Token::Close,
-                    ',' => Token::Comma,
-                    _ => Token::Eq,
-                });
-            }
-            '"' => {
-                chars.next();
-                let literal: String = chars.by_ref().take_while(|&c| c != '"').collect();
-                tokens.push(Token::Str(literal));
-            }
-            c if c.is_alphanumeric() || c == '_' => {
-                let mut ident = String::new();
-                while let Some(&c) = chars.peek().filter(|c| c.is_alphanumeric() || **c == '_') {
-                    ident.push(c);
-                    chars.next();
-                }
-                tokens.push(Token::Ident(ident));
-            }
-            _ => return None,
-        }
-    }
-    Some(tokens)
 }
 
 struct Parser {
@@ -385,5 +342,46 @@ mod tests {
         for bad in ["::", ".", "#", " ", "\""] {
             assert!(!text.contains(bad), "{text} holds {bad}");
         }
+    }
+
+    fn compact_of(text: &str) -> String {
+        parse_cfg_arguments(text)
+            .expect("parses")
+            .canonical()
+            .compact()
+    }
+
+    #[test]
+    fn a_comment_inside_a_cfg_does_not_change_the_gate() {
+        let plain = compact_of("(all(feature = \"a\", unix))");
+        let line = compact_of("(all(feature = \"a\", // why\n unix))");
+        let block = compact_of("(all(feature = \"a\", /* why /* nested */ */ unix))");
+        assert_eq!(plain, "all(feature=a,unix)");
+        assert_eq!(line, plain);
+        assert_eq!(block, plain);
+    }
+
+    #[test]
+    fn a_comment_marker_inside_a_string_is_text() {
+        assert_eq!(
+            without_comments("(feature = \"a//b\") // gone"),
+            "(feature = \"a//b\")  "
+        );
+        assert_eq!(compact_of("(feature = \"a//b\")"), "feature=a%2F%2Fb");
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_end_a_string() {
+        let parsed = parse_cfg_arguments("(feature = \"a\\\"b\")").expect("parses");
+        assert_eq!(parsed, CfgPredicate::Feature("a\"b".to_string()));
+        assert_eq!(parsed.compact(), "feature=a%22b");
+        let escaped_backslash = parse_cfg_arguments("(feature = \"a\\\\\")").expect("parses");
+        assert_eq!(escaped_backslash, CfgPredicate::Feature("a\\".to_string()));
+    }
+
+    #[test]
+    fn an_unterminated_string_or_an_unknown_escape_does_not_parse() {
+        assert!(parse_cfg_arguments("(feature = \"a)").is_none());
+        assert!(parse_cfg_arguments("(feature = \"a\\qb\")").is_none());
     }
 }

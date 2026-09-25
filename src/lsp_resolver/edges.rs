@@ -143,7 +143,7 @@ fn find_node_at_position<'a>(
 /// segment of its `id`, which the indexer sets equal to `qualified_name`)
 /// must equal the identifier the call site actually asked about, or this is
 /// that same collision wearing an exact-match line instead of a fuzzy one.
-fn resolved_target_matches(target: &NodePosition, site: &UnresolvedCallSite) -> bool {
+pub(super) fn resolved_target_matches(target: &NodePosition, site: &UnresolvedCallSite) -> bool {
     // A twin item (issue #353) carries `#cfg(..)` on its last segment
     // (`pick#cfg(not(feature=fast))`); the call spells only `pick`.
     let last =

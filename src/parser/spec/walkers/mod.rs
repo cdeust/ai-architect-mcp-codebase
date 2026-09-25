@@ -39,7 +39,7 @@ mod typescript;
 pub(crate) use defs::walk_defs;
 pub(super) use types::collect_bases;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::{Node, Parser};
 
@@ -72,10 +72,33 @@ pub(crate) struct WalkCtx<'a> {
     /// and qualified name under distinct gates). `None` otherwise, so a file
     /// without `cfg` pays nothing.
     pub(super) cfg_gates: Option<Vec<(usize, String)>>,
-    /// Issue #353. The (label, qualified name) pairs that have twins, set only on
-    /// the second walk of a file that has some: the emitters then append each
-    /// twin's gate to its qualified name. Empty on every other walk.
-    pub(super) twins: HashSet<(String, String)>,
+    /// Issue #353. The (label, qualified name) pairs that have twins, each with
+    /// the gates of its members, set only on the second walk of a file that has
+    /// some: the emitters then append each twin's gate to its qualified name.
+    /// Empty on every other walk.
+    pub(super) twins: HashMap<(String, String), Vec<String>>,
+}
+
+impl<'a> WalkCtx<'a> {
+    /// A fresh walk of `source`. `cfg_gates` is `Some` on the first walk of a Rust
+    /// file that mentions `cfg`; `twins` is non-empty only on the second walk.
+    fn new(
+        source: &'a str,
+        file_path: &'a str,
+        cfg_gates: Option<Vec<(usize, String)>>,
+        twins: HashMap<(String, String), Vec<String>>,
+    ) -> Self {
+        WalkCtx {
+            source,
+            file_path,
+            nodes: Vec::new(),
+            refs: Vec::new(),
+            next_seq: 0,
+            emitted_qns: HashSet::new(),
+            cfg_gates,
+            twins,
+        }
+    }
 }
 
 impl WalkCtx<'_> {
@@ -113,6 +136,27 @@ pub(crate) fn parse_with_spec(
     source: &str,
     file_path: &str,
 ) -> Result<ParseResult, String> {
+    parse_with_spec_twins(spec, source, file_path, true)
+}
+
+/// `parse_with_spec` with the #353 twin identity switched off: the walk that
+/// existed before it. Only the identity test uses it, to compare the two over
+/// every Rust file of the repository.
+#[cfg(test)]
+pub(crate) fn parse_with_spec_no_twins(
+    spec: &LangSpec,
+    source: &str,
+    file_path: &str,
+) -> Result<ParseResult, String> {
+    parse_with_spec_twins(spec, source, file_path, false)
+}
+
+fn parse_with_spec_twins(
+    spec: &LangSpec,
+    source: &str,
+    file_path: &str,
+    twin_identity: bool,
+) -> Result<ParseResult, String> {
     // Most languages have one fixed grammar (`ts_language`); TypeScript selects
     // between its `typescript` and `tsx` grammars by file extension
     // (`ts_language_by_ext`), because JSX syntax is only in the tsx grammar.
@@ -135,31 +179,18 @@ pub(crate) fn parse_with_spec(
         ));
     }
 
-    let track_gates = spec.rust_family.is_some() && source.contains("cfg");
-    let mut ctx = WalkCtx {
+    let track_gates = twin_identity && spec.rust_family.is_some() && source.contains("cfg");
+    let mut ctx = WalkCtx::new(
         source,
         file_path,
-        nodes: Vec::new(),
-        refs: Vec::new(),
-        next_seq: 0,
-        emitted_qns: HashSet::new(),
-        cfg_gates: track_gates.then(Vec::new),
-        twins: HashSet::new(),
-    };
+        track_gates.then(Vec::new),
+        HashMap::new(),
+    );
     walk_defs(spec, &mut ctx, tree.root_node(), file_path, None);
     // Issue #353: a second walk only when the first found twins, so a file
     // without twins produces exactly the output it always did.
     if let Some(twins) = twin_keys(&ctx) {
-        ctx = WalkCtx {
-            source,
-            file_path,
-            nodes: Vec::new(),
-            refs: Vec::new(),
-            next_seq: 0,
-            emitted_qns: HashSet::new(),
-            cfg_gates: None,
-            twins,
-        };
+        ctx = WalkCtx::new(source, file_path, None, twins);
         walk_defs(spec, &mut ctx, tree.root_node(), file_path, None);
     }
     Ok(ParseResult {
@@ -174,20 +205,23 @@ pub(crate) fn parse_with_spec(
 /// emitted under DISTINCT gates, or `None` when there are none. Duplicates under
 /// the SAME gate are not twins: they keep today's behaviour (the persistence
 /// layer keeps the first).
-fn twin_keys(ctx: &WalkCtx) -> Option<HashSet<(String, String)>> {
+fn twin_keys(ctx: &WalkCtx) -> Option<HashMap<(String, String), Vec<String>>> {
     let gates = ctx.cfg_gates.as_ref()?;
-    let mut seen: std::collections::HashMap<(&str, &str), HashSet<&str>> =
-        std::collections::HashMap::new();
+    let mut seen: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
     for (index, gate) in gates {
         let node = ctx.nodes.get(*index)?;
         seen.entry((node.label.as_str(), node.qualified_name.as_str()))
             .or_default()
             .insert(gate.as_str());
     }
-    let twins: HashSet<(String, String)> = seen
+    let twins: HashMap<(String, String), Vec<String>> = seen
         .into_iter()
         .filter(|(_, gates)| gates.len() > 1)
-        .map(|((label, qn), _)| (label.to_string(), qn.to_string()))
+        .map(|((label, qn), gates)| {
+            let mut gates: Vec<String> = gates.into_iter().map(str::to_string).collect();
+            gates.sort_unstable();
+            ((label.to_string(), qn.to_string()), gates)
+        })
         .collect();
     (!twins.is_empty()).then_some(twins)
 }
