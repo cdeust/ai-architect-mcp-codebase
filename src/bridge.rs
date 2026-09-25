@@ -173,6 +173,22 @@ impl ForeignHit {
 // Forward resolution — an unresolved local ref defined in a sibling
 // ---------------------------------------------------------------------------
 
+/// Opens one sibling graph. A refusal (`graph_handle_in_use`, `graph_cache_busy`,
+/// issue #352) or any other failure skips that sibling, and says so on stderr
+/// with the path and the error, the way the server logs elsewhere.
+fn open_sibling(path: &Path) -> Option<GraphStore> {
+    match GraphStore::open_or_create(path) {
+        Ok(store) => Some(store),
+        Err(error) => {
+            eprintln!(
+                "[ap] bridge: skipped sibling graph {}: {error}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 /// Finds definitions of `input` (a qualified name or bare symbol name) across
 /// the sibling graphs. Prefers an exact/stripped qualified-name match (the same
 /// forgiving lookup `get_symbol` uses); falls back to a bare-name match so a
@@ -183,7 +199,7 @@ pub fn resolve_definition(siblings: &SiblingGraphs, input: &str) -> Vec<ForeignS
     let mut out = Vec::new();
     let short = last_segment(input);
     for path in siblings.paths() {
-        let Ok(store) = GraphStore::open_or_create(path) else {
+        let Some(store) = open_sibling(path) else {
             continue;
         };
         let repo = path.display().to_string();
@@ -250,7 +266,7 @@ pub fn foreign_callers(siblings: &SiblingGraphs, target_name: &str) -> Vec<Forei
         return out;
     }
     for path in siblings.paths() {
-        let Ok(store) = GraphStore::open_or_create(path) else {
+        let Some(store) = open_sibling(path) else {
             continue;
         };
         if defines_name(&store, short) {
@@ -365,7 +381,7 @@ pub fn federated_search(siblings: &SiblingGraphs, query: &str, limit: usize) -> 
         min_score: 0.01,
     };
     for path in siblings.paths() {
-        let Ok(store) = GraphStore::open_or_create(path) else {
+        let Some(store) = open_sibling(path) else {
             continue;
         };
         let index_dir = path
@@ -472,3 +488,7 @@ mod tests {
         assert!(s.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "bridge_sibling_tests.rs"]
+mod sibling_tests;

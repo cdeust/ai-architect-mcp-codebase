@@ -232,7 +232,8 @@ jobs:
         run: |
           python3 -m unittest \
             scripts/tests/test_check_doc_claims.py \
-            scripts/tests/test_doc_claim_sources.py -v 2>&1 | tail -5
+            scripts/tests/test_doc_claim_sources.py \
+            scripts/tests/test_check_moved_fn_bodies.py -v 2>&1 | tail -5
 
       - name: Install Linux build deps
         run: |

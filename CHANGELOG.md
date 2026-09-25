@@ -28,7 +28,12 @@ adheres to [Semantic Versioning](https://semver.org/).
   a schema drift instead of reading zero. That check covers a loss that happens
   before the call returns; the release is what stops the later one. The server
   must stay single-threaded for the release to reach the cache, and a test now
-  fails if production code starts a thread outside the LSP frame reader.
+  fails if production code starts a thread or joins a pool outside the LSP
+  frame reader, wherever it sits relative to a `#[cfg(test)]` block. The two
+  refusal codes are documented in the description of the eight tools that open,
+  rewrite, remove or import a graph, and the bridge logs a sibling graph it
+  skips instead of skipping it silently. `scripts/check_moved_fn_bodies.py`
+  checks that a code move changed no function body.
 
 ## [0.13.0] — Per-site call rows, one edge count, one target per macro call
 

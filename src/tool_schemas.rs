@@ -45,38 +45,68 @@ use prd_security::{
     verify_semantic_diff_schema,
 };
 
+/// Tools whose call opens, rewrites, removes or imports a graph through
+/// `GraphStore::open_or_create` or the removal and import helpers, and so can
+/// be refused by the handle release of issue #352. The read tools reuse the
+/// cache's handle and never release, so they cannot return these codes.
+const HELD_GRAPH_TOOLS: &[&str] = &[
+    "index_codebase",
+    "analyze_codebase",
+    "resolve_graph",
+    "cluster_graph",
+    "lsp_resolve",
+    "index_history",
+    "prepare_prd_input",
+    "verify_semantic_diff",
+];
+
+/// Appended to the description of every tool in `HELD_GRAPH_TOOLS`.
+const HELD_GRAPH_NOTE: &str = " GRAPH HANDLE ERRORS (issue #352): the call fails with \
+    graph_handle_in_use when a running request still holds the graph's read handle, and with \
+    graph_cache_busy when the handle cache is being modified; the code opens the error message \
+    and nothing was written. Retry once the other request has returned; restarting the server \
+    clears both.";
+
 /// Returns the full `tools/list` response payload.
 pub fn tools_list() -> Value {
-    json!({
-        "tools": [
-            health_check_schema(),
-            extract_finding_schema(),
-            refine_finding_schema(),
-            start_verification_schema(),
-            append_clarification_schema(),
-            finalize_verification_schema(),
-            abort_verification_schema(),
-            index_codebase_schema(),
-            index_status_schema(),
-            ingest_traces_schema(),
-            query_graph_schema(),
-            get_symbol_schema(),
-            resolve_graph_schema(),
-            cluster_graph_schema(),
-            get_processes_schema(),
-            get_impact_schema(),
-            index_history_schema(),
-            search_codebase_schema(),
-            get_context_schema(),
-            analyze_codebase_schema(),
-            detect_changes_schema(),
-            lsp_resolve_schema(),
-            prepare_prd_input_schema(),
-            validate_prd_against_graph_schema(),
-            check_security_gates_schema(),
-            verify_semantic_diff_schema(),
-        ]
-    })
+    let mut tools = vec![
+        health_check_schema(),
+        extract_finding_schema(),
+        refine_finding_schema(),
+        start_verification_schema(),
+        append_clarification_schema(),
+        finalize_verification_schema(),
+        abort_verification_schema(),
+        index_codebase_schema(),
+        index_status_schema(),
+        ingest_traces_schema(),
+        query_graph_schema(),
+        get_symbol_schema(),
+        resolve_graph_schema(),
+        cluster_graph_schema(),
+        get_processes_schema(),
+        get_impact_schema(),
+        index_history_schema(),
+        search_codebase_schema(),
+        get_context_schema(),
+        analyze_codebase_schema(),
+        detect_changes_schema(),
+        lsp_resolve_schema(),
+        prepare_prd_input_schema(),
+        validate_prd_against_graph_schema(),
+        check_security_gates_schema(),
+        verify_semantic_diff_schema(),
+    ];
+    for tool in &mut tools {
+        let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+        if !HELD_GRAPH_TOOLS.contains(&name) {
+            continue;
+        }
+        if let Some(Value::String(description)) = tool.get_mut("description") {
+            description.push_str(HELD_GRAPH_NOTE);
+        }
+    }
+    json!({ "tools": tools })
 }
 
 /// The canonical one-line summary of a tool: the first sentence of its
@@ -118,4 +148,52 @@ fn health_check_schema() -> Value {
             "additionalProperties": false
         }
     })
+}
+
+#[cfg(test)]
+mod held_graph_tests {
+    use super::*;
+
+    fn description_of(name: &str) -> String {
+        let payload = tools_list();
+        payload["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is not a registered tool"))["description"]
+            .as_str()
+            .expect("description")
+            .to_string()
+    }
+
+    // The two codes reach a client as the prefix of a tool's failure message
+    // (issue #352); a client can only act on them if the schema names them.
+    #[test]
+    fn every_tool_that_can_be_refused_documents_both_codes() {
+        for name in HELD_GRAPH_TOOLS {
+            let description = description_of(name);
+            for code in ["graph_handle_in_use", "graph_cache_busy"] {
+                assert!(
+                    description.contains(code),
+                    "{name} does not document {code}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_read_tool_does_not_claim_the_write_refusal() {
+        for name in ["query_graph", "get_symbol", "get_impact", "detect_changes"] {
+            assert!(
+                !description_of(name).contains("graph_handle_in_use"),
+                "{name} reuses the cache handle and cannot be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn lsp_resolve_documents_its_durability_code_too() {
+        assert!(description_of("lsp_resolve").contains("lsp_rows_not_durable"));
+    }
 }
