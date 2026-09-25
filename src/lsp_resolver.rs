@@ -85,6 +85,10 @@ pub fn resolve_with_lsp(
         });
     }
 
+    // An older graph lacks the per-site table for a call that names a type;
+    // the writes below would drop it (issue #356).
+    store.ensure_rel_tables()?;
+
     // fleet-watch#18: definition URIs come back absolute (and on macOS the
     // server may answer under /private/var while the caller passed /var, or
     // vice versa). Canonicalize the root ONCE so uri_to_relative_path can

@@ -149,22 +149,23 @@ fn a_site_whose_target_survives_a_rewrite_stays_resolved() {
 const SHAPES_A: &str = "pub fn helper() {}\npub struct P(pub u32);\n";
 const SHAPES_B: &str = "fn f() {\n    helper();\n    let _p = P(1);\n    println!(\"x\");\n}\n";
 
-/// (b) A call to a tuple-struct constructor is flagged resolved with no per-site
-/// row (issue #356: no table targets a Struct). Its file did not change: it
-/// keeps the flag through an incremental refresh and a resolve.
+/// (b) A call to a tuple-struct constructor is flagged resolved and holds a
+/// per-site row (`Calls_CallSite_Struct`, issue #356). Its file did not change:
+/// it keeps the flag and the row through an incremental refresh and a resolve.
 #[test]
-fn a_constructor_call_flagged_resolved_without_a_row_stays_resolved() {
+fn a_constructor_call_keeps_its_row_and_its_flag_through_an_unrelated_refresh() {
     let f = Fixture::new(&[
         ("a.rs", SHAPES_A),
         ("b.rs", SHAPES_B),
         ("c.rs", "fn unrelated() {}\n"),
     ]);
     assert_eq!(f.flag("P"), "true", "control: the constructor is resolved");
-    assert_eq!(f.site_rows("P"), 0, "control: and has no per-site row");
+    assert_eq!(f.site_rows("P"), 1, "control: and has its per-site row");
     f.edit("c.rs", "fn unrelated() {}\nfn touched() {}\n");
     f.refresh();
     f.resolve();
     assert_eq!(f.flag("P"), "true", "a valid resolution was flipped");
+    assert_eq!(f.site_rows("P"), 1, "the per-site row was lost");
 }
 
 /// (d) A macro site resolved by the macro tier keeps its state.
@@ -202,7 +203,7 @@ fn touching_an_unrelated_file_leaves_the_resolved_count_identical() {
 
 /// (b2) A site another tier flagged resolved with no per-site row, that the
 /// static resolver still cannot resolve (the language server pointed it at a
-/// tuple-struct constructor: no table targets a Struct, issue #356). Its file
+/// target of a kind no per-site table exists for, such as a Trait). Its file
 /// did not change: a resolve that infers "no edge, so no longer resolved" would
 /// flip it; the purge is the source of truth, and nothing was purged.
 #[test]

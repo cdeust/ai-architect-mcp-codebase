@@ -160,6 +160,7 @@ pub fn index_incremental(
     store.require_cfg_gate_metadata()?;
     store.require_code_context_metadata()?;
     store.ensure_cfg_active_columns()?;
+    store.ensure_rel_tables()?;
     // No create_schema() here: the graph already exists (this path is reached
     // only when a prior full index built it with the current schema), and the
     // DDL pass is ~0.4s of pure fixed cost that would defeat the whole point of

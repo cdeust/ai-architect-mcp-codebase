@@ -7,20 +7,20 @@
 // flag while the edge dies with the node, so the graph would claim a resolution
 // it no longer has. The purge is the source of truth here, not the absence of an
 // edge: a site with no per-site edge can be resolved for a legitimate reason (a
-// tuple-struct constructor has no per-site table, issue #356; a macro site; a
-// language-server site) and must keep its flag. So only the sites that HAD an
-// edge into a purged node are touched.
+// macro site, or a language-server site that points at a Trait or an Enum) and
+// must keep its flag. So only the sites that HAD an edge into a purged node are
+// touched.
 //
 // Which tiers write a per-site row: the static resolver and the language server
-// pass write `Calls_CallSite_Function|Method` beside the function-level edge (the
-// macro tier writes `Calls_CallSite_StdlibSymbol`). A call to a tuple-struct
-// constructor writes none, so it is never collected here.
+// pass write `Calls_CallSite_Function|Method` beside the symbol-level edge (the
+// macro tier writes `Calls_CallSite_StdlibSymbol`, and a call that names a type
+// writes `Calls_CallSite_Struct`, issue #356). The table list comes from
+// `REL_TABLES`, so a per-site table added there is collected without a change here.
 //
-// Known gap, accepted: a site resolved WITHOUT a per-site row (a tuple-struct
-// constructor, a macro, a language-server site that points at a Struct) whose
-// target file is DELETED keeps `is_resolved = true`, because the purge sees no
-// edge to reopen. It cannot be told apart from a legitimate resolution without a
-// per-site row; issue #356 (a table that targets a Struct) is what closes it.
+// Known gap, accepted: a site resolved WITHOUT a per-site row (a macro site, a
+// language-server site that points at a Trait or an Enum) whose target file is
+// DELETED keeps `is_resolved = true`, because the purge sees no edge to reopen.
+// The constructor case of this gap is closed by `Calls_CallSite_Struct`.
 //
 // Order and crash safety. `reopen_sites_resolved_into` runs BEFORE the purge and
 // `restore_sites_with_edge` AFTER the relink, each idempotent:

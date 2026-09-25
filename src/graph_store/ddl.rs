@@ -216,6 +216,31 @@ pub(crate) fn rel_table_ddl() -> Vec<String> {
         .collect()
 }
 
+impl GraphStore {
+    /// Creates the relationship tables a graph written by an earlier build does
+    /// not have yet, and only those (issue #356). `CREATE .. IF NOT EXISTS` is a
+    /// no-op per table, but running the whole pass costs about 0.4 s, so the
+    /// tables present are read first. An empty new table is the right starting
+    /// point: the next resolve pass fills it, nothing else is persisted for it.
+    /// Returns how many tables were created.
+    pub fn ensure_rel_tables(&self) -> Result<usize, String> {
+        let listed = self.execute_query("CALL show_tables() RETURN *")?;
+        let present: std::collections::HashSet<&str> = listed
+            .rows
+            .iter()
+            .filter_map(|row| row.get(1).map(String::as_str))
+            .collect();
+        let mut created = 0;
+        for ((name, _, _), ddl) in REL_TABLES.iter().zip(rel_table_ddl()) {
+            if !present.contains(name) {
+                self.exec_ddl(&ddl)?;
+                created += 1;
+            }
+        }
+        Ok(created)
+    }
+}
+
 // Property lists preserve the schema contracts: temporal coupling and observed
 // calls (issue #58), resolution provenance (stage-3b §2 and Spike B' bug #4),
 // process entry/participation (stage-3c §4.2), and the full-AST child contract.

@@ -8,6 +8,31 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A call that names a type gets a per-site row (#356). A call to a tuple-struct
+  constructor such as `Tier(1)`, or a class instantiation, was marked
+  `is_resolved` and had its symbol-level `Uses_Function_Struct` or
+  `Uses_Method_Struct` edge, but no row in any `Calls_CallSite_*` table, because
+  none targeted a Struct: a consumer that counts per-site rows to measure
+  resolution undercounted those sites, and a purge could not reopen them. The
+  new table `Calls_CallSite_Struct` holds the row, written by the static resolver
+  and by the language-server pass beside the symbol-level edge, which stays as it
+  is. `edge_count` does not move (a per-site table counts in
+  `call_site_target_count`, by the shape rule of #338), and the table list of
+  the purge is derived from `REL_TABLES`, so a constructor site whose struct file
+  is deleted is reopened; the accepted gap noted in #353 stays open only for macro
+  sites and for language-server sites that point at a Trait or an Enum.
+  `get_impact` on a Struct lists the functions and methods that construct it
+  under `users`. A graph written by an earlier build gets the table when it is
+  opened for an incremental refresh, a bootstrap fill, `resolve_graph` or
+  `lsp_resolve`, empty, and the next resolve pass backfills every row: no
+  reparse, no marker, no full reindex. A qualified call whose qualifier names
+  only enums, such as `Kind::A(1)`, no longer resolves to a struct `A` found by
+  name elsewhere: it builds a variant, which the index does not hold, and the
+  by-name lookup used to take it for a lone struct (an edge that already existed
+  in the graph, now refused). Not covered: a call that resolves to an Enum,
+  a Trait or a TypeAlias still has no per-site row, and a variant brought in
+  with `use Kind::*` and called bare is not told from a struct.
+
 - A receiver that spells its own type is typed statically (#355). The static
   resolver typed a receiver bound by `let t = Type::new(..)` but not a tuple
   constructor `Tier(1)`, a struct literal `Named { n: 3 }`, or a receiver written
