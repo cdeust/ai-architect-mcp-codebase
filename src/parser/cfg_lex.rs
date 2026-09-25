@@ -108,7 +108,7 @@ fn string_literal(chars: &mut Peekable<Chars>) -> Option<String> {
                     char::from(u8::from_str_radix(&hex, 16).ok().filter(|b| *b < 0x80)?)
                 }
                 'u' => {
-                    if chars.next()? != '{' {
+                    if chars.next() != Some('{') {
                         return None;
                     }
                     let hex: String = chars.by_ref().take_while(|&c| c != '}').collect();
