@@ -1,4 +1,4 @@
-// parser::spec::rust_constructed_receiver_tests — issue #355: the receiver hint
+// parser::spec::rust_constructed_receiver_tests, issue #355: the receiver hint
 // read off a tuple-struct constructor, a struct literal or `Type::assoc(..)`,
 // and every shape that must NOT give one (a wrong single edge is worse than
 // none).

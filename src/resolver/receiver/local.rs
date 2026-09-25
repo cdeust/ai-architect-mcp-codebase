@@ -58,31 +58,55 @@ fn local_candidates(idx: &SymbolIndex, hint: &str, m: &str) -> Vec<SymbolEntry> 
 }
 
 /// `resolve_local_receiver_bound` for a hint the parser read off a receiver that
-/// spells its own type (issue #355): only candidates defined in `caller_file`
-/// count. The hint is the last path segment of a type the parser saw defined in
-/// this file, so a namesake type in another file must not be a candidate; the
-/// cost is the recall of a type whose impl lives in another file.
+/// spells its own type (issue #355). The hint is the last path segment of a
+/// struct or enum the parser saw defined in the caller's file, so a candidate
+/// counts only when it is a `Method` of exactly that type: its parent qualified
+/// name (everything before the last `::`) is the qualified name of a `Struct`
+/// or `Enum` defined in `caller_file`. A namesake in another file, a
+/// `trait Tier { fn join }`, a `mod Tier { fn join }` and an `impl other::Tier`
+/// of the same file all share only the last segment of the parent and are
+/// dropped. The cost is recall: an impl in a module other than the one that
+/// defines the type, and a `union`, are not resolved by this source.
 ///
-/// postcondition: `NotFound` when no candidate is in `caller_file`, `Resolved`
-/// (evidence `ReceiverLocalBinding`) when exactly one is, `Ambiguous` when two
-/// or more are.
+/// postcondition: `NotFound` when no candidate qualifies, `Resolved` (evidence
+/// `ReceiverLocalBinding`) when exactly one does, `Ambiguous` when two or more
+/// do.
 pub(in crate::resolver) fn resolve_local_receiver_in_file(
     idx: &SymbolIndex,
     hint: &str,
     m: &str,
     caller_file: &str,
 ) -> PolicyResolution<SymbolEntry> {
-    let mut in_file: Vec<SymbolEntry> = local_candidates(idx, hint, m)
+    let mut of_type: Vec<SymbolEntry> = local_candidates(idx, hint, m)
         .into_iter()
-        .filter(|e| extract_file_prefix_or_self(&e.qualified_name) == caller_file)
+        .filter(|e| is_method_of_type_in_file(idx, e, caller_file))
         .collect();
-    match in_file.len() {
+    match of_type.len() {
         0 => PolicyResolution::NotFound,
-        1 => local_receiver_bound(in_file.remove(0)),
+        1 => local_receiver_bound(of_type.remove(0)),
         _ => PolicyResolution::Ambiguous {
-            candidates: in_file,
+            candidates: of_type,
         },
     }
+}
+
+/// True when `candidate` is a `Method` whose owner is a `Struct` or `Enum`
+/// defined in `caller_file`.
+fn is_method_of_type_in_file(
+    idx: &SymbolIndex,
+    candidate: &SymbolEntry,
+    caller_file: &str,
+) -> bool {
+    if candidate.label != "Method" {
+        return false;
+    }
+    let Some((owner_qn, _)) = candidate.qualified_name.rsplit_once("::") else {
+        return false;
+    };
+    idx.by_qn.get(owner_qn).is_some_and(|owner| {
+        matches!(owner.label.as_str(), "Struct" | "Enum")
+            && extract_file_prefix_or_self(&owner.qualified_name) == caller_file
+    })
 }
 
 /// The method name of an in-place receiver call: the identifier after the last
@@ -263,14 +287,19 @@ mod tests {
 
     #[test]
     fn a_constructed_hint_keeps_only_candidates_of_the_callers_file() {
+        let owner = entry("os", "Struct", "src/lib.rs::Solo");
+        let elsewhere = entry("es", "Struct", "src/other.rs::Solo");
         let own = entry("own", "Method", "src/lib.rs::Solo::join");
         let other = entry("other", "Method", "src/other.rs::Solo::join");
-        let idx = index_with(vec![], vec![own.clone(), other.clone()]);
+        let idx = index_with(
+            vec![owner, elsewhere.clone()],
+            vec![own.clone(), other.clone()],
+        );
         match resolve_local_receiver_in_file(&idx, "Solo", "join", "src/lib.rs") {
             PolicyResolution::Resolved { target, .. } => assert_eq!(target.id, "own"),
             other => panic!("expected the caller's own candidate, got {other:?}"),
         }
-        let only_elsewhere = index_with(vec![], vec![other]);
+        let only_elsewhere = index_with(vec![elsewhere], vec![other]);
         assert!(matches!(
             resolve_local_receiver_in_file(&only_elsewhere, "Solo", "join", "src/lib.rs"),
             PolicyResolution::NotFound
@@ -279,12 +308,69 @@ mod tests {
 
     #[test]
     fn a_constructed_hint_with_two_candidates_in_the_callers_file_is_ambiguous() {
+        let owner_a = entry("sa", "Struct", "src/lib.rs::a::Solo");
+        let owner_b = entry("sb", "Struct", "src/lib.rs::b::Solo");
         let a = entry("a", "Method", "src/lib.rs::a::Solo::join");
         let b = entry("b", "Method", "src/lib.rs::b::Solo::join");
-        let idx = index_with(vec![], vec![a, b]);
+        let idx = index_with(vec![owner_a, owner_b], vec![a, b]);
         assert!(matches!(
             resolve_local_receiver_in_file(&idx, "Solo", "join", "src/lib.rs"),
             PolicyResolution::Ambiguous { .. }
         ));
+    }
+
+    fn resolved_id(res: &PolicyResolution<SymbolEntry>) -> Option<&str> {
+        match res {
+            PolicyResolution::Resolved { target, .. } => Some(target.id.as_str()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_constructed_hint_takes_a_method_of_the_hinted_struct() {
+        let strukt = entry("s", "Struct", "src/lib.rs::Tier");
+        let method = entry("m", "Method", "src/lib.rs::Tier::join");
+        let idx = index_with(vec![strukt], vec![method]);
+        let res = resolve_local_receiver_in_file(&idx, "Tier", "join", "src/lib.rs");
+        assert_eq!(resolved_id(&res), Some("m"));
+        let enumeration = entry("e", "Enum", "src/lib.rs::Kind");
+        let method = entry("k", "Method", "src/lib.rs::Kind::m");
+        let idx = index_with(vec![enumeration], vec![method]);
+        let res = resolve_local_receiver_in_file(&idx, "Kind", "m", "src/lib.rs");
+        assert_eq!(resolved_id(&res), Some("k"));
+    }
+
+    #[test]
+    fn a_constructed_hint_never_takes_a_look_alike_that_is_not_a_method_of_that_struct() {
+        // The one struct Tier of the file has no `join`; each look-alike below
+        // shares only the last segment of the parent with it.
+        let strukt = entry("s", "Struct", "src/lib.rs::Tier");
+        let cases = [
+            // `trait Tier { fn join }` in another module of the same file.
+            (
+                entry("t", "Trait", "src/lib.rs::t1::Tier"),
+                entry("m", "Method", "src/lib.rs::t1::Tier::join"),
+            ),
+            // `mod Tier { fn join }`.
+            (
+                entry("d", "Module", "src/lib.rs::t2::Tier"),
+                entry("m", "Function", "src/lib.rs::t2::Tier::join"),
+            ),
+            // `impl other::Tier { fn join }`: no symbol at the parent path.
+            (
+                entry("x", "Struct", "src/other.rs::Tier"),
+                entry("m", "Method", "src/lib.rs::t3::other::Tier::join"),
+            ),
+        ];
+        for (parent, look_alike) in cases {
+            let idx = index_with(vec![strukt.clone(), parent], vec![look_alike.clone()]);
+            let res = resolve_local_receiver_in_file(&idx, "Tier", "join", "src/lib.rs");
+            assert!(
+                matches!(res, PolicyResolution::NotFound),
+                "{} resolved to {:?}",
+                look_alike.qualified_name,
+                resolved_id(&res)
+            );
+        }
     }
 }

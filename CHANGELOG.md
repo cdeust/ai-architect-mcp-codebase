@@ -29,11 +29,18 @@ adheres to [Semantic Versioning](https://semver.org/).
   `use`, a path before the name, `Self`, an enum variant, a turbofish, a trait
   impl, an impl in another file, or an associated function returning
   `Option<Self>`, `Result<Self, _>`, `Box<Self>` or another type gives no hint.
-  For this source the resolver keeps only candidates defined in the caller's own
-  file, because the hint is the last path segment (#368): a namesake type in
-  another file is never a candidate, at the price of recall when the impl of a
-  type lives in another file. Two structs of the name in one file decline in the
-  parser. Inside a macro argument (`assert_eq!(Tier(1).join(..), 3)`) the scan
+  For this source the resolver keeps a candidate only when it is a `Method` whose
+  owner, the qualified name before the last `::`, is a `Struct` or `Enum` defined
+  in the caller's own file, because the hint is the last path segment (#368): a
+  namesake type in another file, a `trait Tier { fn join }` or a `mod Tier` of
+  the same file, and an `impl other::Tier` are never candidates. The price is
+  recall: an impl in a module other than the one that defines the type, an impl
+  in another file, and a `union` are not resolved by this source (the language
+  server still resolves them). The method of a trait implemented for the struct
+  in the same file is a method of that struct and resolves. Two structs of the
+  name in one file decline in the parser. A site of these shapes had no hint before, and its callee text (`t.join`, `Tier(1).join`, `Tier::new(1).join`) names no entry by
+  name, so the by-name path had no target to give it. A hint that finds no
+  candidate ends the resolution of the site, as for every other hint. Inside a macro argument (`assert_eq!(Tier(1).join(..), 3)`) the scan
   rebuilds `(1).join` from the token tree and finds no receiver, so those sites
   stay unresolved. `let t = Tier::new(..)` is unchanged (its type is still taken
   from the path alone, #370). Files that did not change keep the empty hint they

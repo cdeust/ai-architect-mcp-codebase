@@ -1,4 +1,4 @@
-// parser::spec::rust_constructed_receiver — issue #355: the receiver type of a
+// parser::spec::rust_constructed_receiver, issue #355: the receiver type of a
 // call whose receiver spells its own type, read off the expression that builds
 // it: a tuple-struct constructor `Tier(1)`, a struct literal `Named { n: 3 }`
 // or, in place only, `Type::assoc(..)` whose declared return type is `Self` or

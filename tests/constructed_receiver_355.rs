@@ -138,6 +138,12 @@ struct Analyzed {
 
 /// The crate of the issue, analyzed by `analyze_codebase` with the static pass only.
 fn analyzed() -> Analyzed {
+    analyzed_crate(LIB, Some(OTHER))
+}
+
+/// A crate of `lib` (and an optional second file `src/other.rs`), analyzed with
+/// the static pass only.
+fn analyzed_crate(lib: &str, other: Option<&str>) -> Analyzed {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     let out = tmp.path().join("out");
@@ -147,8 +153,10 @@ fn analyzed() -> Analyzed {
         "[package]\nname = \"shadow350\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     )
     .unwrap();
-    std::fs::write(repo.join("src/lib.rs"), LIB).unwrap();
-    std::fs::write(repo.join("src/other.rs"), OTHER).unwrap();
+    std::fs::write(repo.join("src/lib.rs"), lib).unwrap();
+    if let Some(other) = other {
+        std::fs::write(repo.join("src/other.rs"), other).unwrap();
+    }
     let mut server = Server::spawn();
     let analysis = server.call_tool(
         "analyze_codebase",
@@ -281,4 +289,82 @@ fn get_impact_lists_the_callers_of_the_struct_literal_receiver() {
             "{expected} in {callers:?}"
         );
     }
+}
+
+/// Each source holds exactly ONE candidate that shares only the last segment of
+/// its parent with the struct `Tier`, whose own `join` is absent: no edge may
+/// go to it (with two look-alikes the result would be ambiguous, which would
+/// hide the defect).
+#[test]
+fn a_look_alike_that_is_not_a_method_of_the_struct_gets_no_edge() {
+    let sources = [
+        // trait method of the same name in another module
+        "pub struct Tier(pub u8);\n\
+         pub mod t1 { pub trait Tier { fn join(&self); } }\n\
+         pub fn f() { Tier(1).join() }\n",
+        // function of a module named like the struct
+        "pub struct Tier(pub u8);\n\
+         pub mod t2 { pub mod Tier { pub fn join() {} } }\n\
+         pub fn f() { Tier(1).join() }\n",
+        // inherent impl of a path-qualified type of the same last segment
+        "pub struct Tier(pub u8);\n\
+         pub mod t3 { impl other::Tier { pub fn join(&self) {} } }\n\
+         pub fn f() { Tier(1).join() }\n",
+    ];
+    for lib in sources {
+        let a = analyzed_crate(lib, None);
+        let store = GraphStore::open_or_create(&a.graph).unwrap();
+        let rows = store
+            .execute_query(
+                "MATCH (cs:CallSite)-[r:Calls_CallSite_Method]->(t) \
+                 WHERE cs.callee_name = 'Tier(1).join' RETURN t.id",
+            )
+            .unwrap()
+            .rows;
+        assert!(rows.is_empty(), "{lib} gave {rows:?}");
+    }
+}
+
+fn edges_of(a: &Analyzed, callee: &str) -> Vec<Vec<String>> {
+    let store = GraphStore::open_or_create(&a.graph).unwrap();
+    store
+        .execute_query(&format!(
+            "MATCH (cs:CallSite)-[r:Calls_CallSite_Method]->(t) \
+             WHERE cs.callee_name = '{callee}' RETURN t.id, r.resolution_method"
+        ))
+        .unwrap()
+        .rows
+}
+
+/// A method of a trait implemented for the struct in the same file is a method
+/// of that struct: it resolves.
+#[test]
+fn a_trait_impl_method_in_the_same_file_resolves() {
+    let lib = "pub struct Tier(pub u8);\n\
+        pub trait Join { fn join(&self) -> u8; }\n\
+        impl Join for Tier { fn join(&self) -> u8 { self.0 } }\n\
+        pub fn f() -> u8 { Tier(1).join() }\n";
+    let a = analyzed_crate(lib, None);
+    assert_eq!(
+        edges_of(&a, "Tier(1).join"),
+        vec![vec![
+            "src/lib.rs::Tier::join".to_string(),
+            "receiver-local-binding".to_string()
+        ]]
+    );
+}
+
+/// The same trait impl in another file: no edge, exactly as before this change
+/// (a callee text `Tier(1).join` names no entry by name, so no fallback ever
+/// resolved such a site); the language server still resolves it.
+#[test]
+fn a_trait_impl_method_in_another_file_stays_without_an_edge() {
+    let lib = "mod imp;\n\
+        pub struct Tier(pub u8);\n\
+        pub fn f() -> u8 { Tier(1).join() }\n";
+    let imp = "use crate::Tier;\n\
+        pub trait Join { fn join(&self) -> u8; }\n\
+        impl Join for Tier { fn join(&self) -> u8 { self.0 } }\n";
+    let a = analyzed_crate(lib, Some(imp));
+    assert!(edges_of(&a, "Tier(1).join").is_empty());
 }
