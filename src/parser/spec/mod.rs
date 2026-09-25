@@ -31,6 +31,7 @@ mod rust;
 mod rust_call_site;
 pub(crate) mod rust_cfg_gate;
 pub(crate) mod rust_code_context;
+mod rust_constructed_receiver;
 mod rust_item_binds;
 mod rust_live_binding;
 mod rust_macro_binds;
@@ -107,6 +108,8 @@ mod rust_cfg_canonical_tests;
 mod rust_cfg_twin_tests;
 #[cfg(test)]
 mod rust_code_context_tests;
+#[cfg(test)]
+mod rust_constructed_receiver_tests;
 #[cfg(test)]
 mod rust_identity_tests;
 #[cfg(test)]

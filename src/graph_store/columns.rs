@@ -5,6 +5,8 @@
 // under the §4.1 cap. Pure move; `use super::*` provides the shared store
 // vocabulary exactly as when this lived in one module.
 
+pub(crate) mod hint_via;
+
 use super::*;
 
 // ---------------------------------------------------------------------------

@@ -66,9 +66,16 @@ pub(super) fn rust_local_receiver_gate(
     if ctx.provider.language() != "rust" || site.receiver_hint.is_empty() {
         return None;
     }
+    let constructed = site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED
+        || site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE;
     let form = receiver::classify(site.callee, &receiver::ReceiverSpelling::of(ctx.provider));
-    let receiver::ReceiverForm::Local { m, .. } = form else {
-        return None;
+    let m = match form {
+        receiver::ReceiverForm::Local { m, .. } => m,
+        // `Tier(1).join`: the receiver is an expression, so the spelling
+        // analysis finds no plain identifier before the dot. Only a hint of the
+        // constructed kind can come from such a receiver (issue #355).
+        receiver::ReceiverForm::None if constructed => receiver::in_place_method(site.callee)?,
+        _ => return None,
     };
     if site
         .receiver_hint_via
@@ -79,15 +86,19 @@ pub(super) fn rust_local_receiver_gate(
         // foreign crate's type of that name would match a repository namesake.
         return Some(PolicyResolution::NotFound);
     }
-    let via_return_type =
-        site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE;
+    let via_return_type = site.receiver_hint_via
+        == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE
+        || site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE;
     if via_return_type && receiver::names_a_type_alias(ctx.idx, site.receiver_hint) {
         // A return type that is an alias names another type; the lookup by
         // last segment would match a namesake (issues #348 and #349).
         return Some(PolicyResolution::NotFound);
     }
-    let resolution =
-        receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id);
+    let resolution = if constructed {
+        receiver::resolve_local_receiver_in_file(ctx.idx, site.receiver_hint, &m, file_id)
+    } else {
+        receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id)
+    };
     Some(if via_return_type {
         receiver::relabel_as_return_type(resolution)
     } else {

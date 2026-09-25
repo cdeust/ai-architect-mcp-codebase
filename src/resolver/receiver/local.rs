@@ -34,15 +34,7 @@ pub(in crate::resolver) fn resolve_local_receiver_bound(
     m: &str,
     caller_file: &str,
 ) -> PolicyResolution<SymbolEntry> {
-    let hint_last = strip_generics(last_segment(hint));
-    let candidates: Vec<SymbolEntry> = idx
-        .by_name
-        .get(m)
-        .into_iter()
-        .flatten()
-        .filter(|e| parent_last_segment_matches(&e.qualified_name, hint_last))
-        .cloned()
-        .collect();
+    let candidates = local_candidates(idx, hint, m);
     match candidates.len() {
         0 => PolicyResolution::NotFound,
         1 => local_receiver_bound(candidates.into_iter().next().expect("len == 1")),
@@ -51,6 +43,54 @@ pub(in crate::resolver) fn resolve_local_receiver_bound(
             None => PolicyResolution::Ambiguous { candidates },
         },
     }
+}
+
+/// Every method `m` whose parent type has the last segment of `hint`.
+fn local_candidates(idx: &SymbolIndex, hint: &str, m: &str) -> Vec<SymbolEntry> {
+    let hint_last = strip_generics(last_segment(hint));
+    idx.by_name
+        .get(m)
+        .into_iter()
+        .flatten()
+        .filter(|e| parent_last_segment_matches(&e.qualified_name, hint_last))
+        .cloned()
+        .collect()
+}
+
+/// `resolve_local_receiver_bound` for a hint the parser read off a receiver that
+/// spells its own type (issue #355): only candidates defined in `caller_file`
+/// count. The hint is the last path segment of a type the parser saw defined in
+/// this file, so a namesake type in another file must not be a candidate; the
+/// cost is the recall of a type whose impl lives in another file.
+///
+/// postcondition: `NotFound` when no candidate is in `caller_file`, `Resolved`
+/// (evidence `ReceiverLocalBinding`) when exactly one is, `Ambiguous` when two
+/// or more are.
+pub(in crate::resolver) fn resolve_local_receiver_in_file(
+    idx: &SymbolIndex,
+    hint: &str,
+    m: &str,
+    caller_file: &str,
+) -> PolicyResolution<SymbolEntry> {
+    let mut in_file: Vec<SymbolEntry> = local_candidates(idx, hint, m)
+        .into_iter()
+        .filter(|e| extract_file_prefix_or_self(&e.qualified_name) == caller_file)
+        .collect();
+    match in_file.len() {
+        0 => PolicyResolution::NotFound,
+        1 => local_receiver_bound(in_file.remove(0)),
+        _ => PolicyResolution::Ambiguous {
+            candidates: in_file,
+        },
+    }
+}
+
+/// The method name of an in-place receiver call: the identifier after the last
+/// `.` of the callee text (`Tier(1).join` gives `join`). `None` when what
+/// follows the last dot is not a plain identifier.
+pub(in crate::resolver) fn in_place_method(callee: &str) -> Option<String> {
+    let (_, m) = callee.rsplit_once('.')?;
+    is_plain_ident(m).then(|| m.to_string())
 }
 
 /// True when any symbol of the graph named like the last segment of `hint`
@@ -202,5 +242,49 @@ mod tests {
         let idx = index_with(vec![], vec![]);
         let res = resolve_local_receiver_bound(&idx, "TaskSet", "missing", "src/lib.rs");
         assert_eq!(res, PolicyResolution::NotFound);
+    }
+
+    #[test]
+    fn in_place_method_is_the_plain_identifier_after_the_last_dot() {
+        assert_eq!(in_place_method("Tier(1).join").as_deref(), Some("join"));
+        assert_eq!(
+            in_place_method("Tier::new(1).join").as_deref(),
+            Some("join")
+        );
+        assert_eq!(
+            in_place_method("Named { n: 3 }.get").as_deref(),
+            Some("get")
+        );
+        assert_eq!(in_place_method("Tier(x.y).join").as_deref(), Some("join"));
+        assert_eq!(in_place_method("Tier(1)."), None);
+        assert_eq!(in_place_method("Tier(1).join(&x)"), None);
+        assert_eq!(in_place_method("join"), None);
+    }
+
+    #[test]
+    fn a_constructed_hint_keeps_only_candidates_of_the_callers_file() {
+        let own = entry("own", "Method", "src/lib.rs::Solo::join");
+        let other = entry("other", "Method", "src/other.rs::Solo::join");
+        let idx = index_with(vec![], vec![own.clone(), other.clone()]);
+        match resolve_local_receiver_in_file(&idx, "Solo", "join", "src/lib.rs") {
+            PolicyResolution::Resolved { target, .. } => assert_eq!(target.id, "own"),
+            other => panic!("expected the caller's own candidate, got {other:?}"),
+        }
+        let only_elsewhere = index_with(vec![], vec![other]);
+        assert!(matches!(
+            resolve_local_receiver_in_file(&only_elsewhere, "Solo", "join", "src/lib.rs"),
+            PolicyResolution::NotFound
+        ));
+    }
+
+    #[test]
+    fn a_constructed_hint_with_two_candidates_in_the_callers_file_is_ambiguous() {
+        let a = entry("a", "Method", "src/lib.rs::a::Solo::join");
+        let b = entry("b", "Method", "src/lib.rs::b::Solo::join");
+        let idx = index_with(vec![], vec![a, b]);
+        assert!(matches!(
+            resolve_local_receiver_in_file(&idx, "Solo", "join", "src/lib.rs"),
+            PolicyResolution::Ambiguous { .. }
+        ));
     }
 }

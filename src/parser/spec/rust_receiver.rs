@@ -64,32 +64,49 @@ pub(super) fn receiver_hint(source: &str, node: Node) -> Option<String> {
 /// A receiver hint and how it was derived.
 pub(super) struct DerivedHint {
     pub(super) ty: String,
-    /// True when the type was read off a free function's declared return type
-    /// instead of off the binding (issues #348 and #349).
+    /// True when the type was read off a declared return type instead of off
+    /// the binding: a free function's (issues #348 and #349) or, with
+    /// `constructed`, an associated function's (issue #355).
     pub(super) via_return_type: bool,
     /// The crate an explicit `use` names the return type through, when that is
     /// the only thing showing where the type comes from.
     pub(super) import_root: Option<String>,
+    /// True when the receiver spells its own type: a tuple constructor, a
+    /// struct literal or `Type::assoc(..)` (issue #355). The resolver then keeps
+    /// only candidates of the caller's file.
+    pub(super) constructed: bool,
 }
 
 /// `receiver_hint`, and when the binding writes no type, the type read off the
-/// declared return type of the free function that initialised it. The second
-/// source is tried only when the first has nothing, so no site the binding
-/// already types changes.
+/// declared return type of the free function that initialised it, and when
+/// neither, the type the receiver's own constructor expression spells. Each
+/// source is tried only when the ones before it have nothing, so no site an
+/// earlier source already types changes.
 pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<DerivedHint> {
     if let Some(ty) = receiver_hint(source, node) {
         return Some(DerivedHint {
             ty,
             via_return_type: false,
             import_root: None,
+            constructed: false,
         });
     }
-    let receiver = receiver_identifier(node)?;
-    let found = super::rust_return_type::return_type_hint(source, node, receiver)?;
+    if let Some(receiver) = receiver_identifier(node) {
+        if let Some(found) = super::rust_return_type::return_type_hint(source, node, receiver) {
+            return Some(DerivedHint {
+                ty: found.ty,
+                via_return_type: true,
+                import_root: found.import_root,
+                constructed: false,
+            });
+        }
+    }
+    let found = super::rust_constructed_receiver::constructed_hint(source, node)?;
     Some(DerivedHint {
         ty: found.ty,
-        via_return_type: true,
-        import_root: found.import_root,
+        via_return_type: found.via_return_type,
+        import_root: None,
+        constructed: true,
     })
 }
 

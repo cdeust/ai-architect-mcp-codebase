@@ -178,7 +178,7 @@ fn binding_shape(source: &str, binding: &OnceBound) -> Option<Shape> {
 }
 
 /// True when `pattern` is exactly the identifier `name`, optionally `mut`.
-fn names_only(source: &str, pattern: Node, name: &str) -> bool {
+pub(super) fn names_only(source: &str, pattern: Node, name: &str) -> bool {
     match pattern.kind() {
         "identifier" => node_text(source, pattern) == name,
         "mut_pattern" => {
