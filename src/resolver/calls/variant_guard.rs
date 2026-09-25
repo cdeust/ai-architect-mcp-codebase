@@ -3,24 +3,29 @@
 //
 // Without this, the by-name lookup of `A` finds a lone struct `A` elsewhere in
 // the repository and resolves the call to it: a wrong `Uses_*_Struct` edge, and
-// now a wrong per-site row. The qualifier decides: when every symbol called
-// `Kind` is an enum, the call cannot construct a struct.
+// now a wrong per-site row. The qualifier decides: `Self`, or a name every
+// symbol of which is an enum or a type alias, cannot construct a struct.
 
 use super::*;
 use std::borrow::Cow;
 
-/// Whether the segment before the last `::` names only enums in the index.
-/// A module, struct or trait of the same name keeps the lookup open, because
-/// then the qualifier may be that item.
+/// Whether the segment before the last `::` can only name an enum: `Self` (a
+/// path through `Self` never names a struct, and `Self` is not in the index), or
+/// a name every entry of which is an Enum or a TypeAlias (`type K = Kind;
+/// K::A(1)`). A module, struct or trait of the same name keeps the lookup open,
+/// because then the qualifier may be that item.
 fn qualifier_names_only_enums(ctx: &ResolveContext, callee: &str) -> bool {
     let mut segments = callee.rsplit("::");
     let (Some(_last), Some(qualifier)) = (segments.next(), segments.next()) else {
         return false;
     };
-    ctx.idx
-        .by_name
-        .get(qualifier)
-        .is_some_and(|entries| !entries.is_empty() && entries.iter().all(|e| e.label == "Enum"))
+    qualifier == "Self"
+        || ctx.idx.by_name.get(qualifier).is_some_and(|entries| {
+            !entries.is_empty()
+                && entries
+                    .iter()
+                    .all(|e| e.label == "Enum" || e.label == "TypeAlias")
+        })
 }
 
 /// `candidates` without the structs, when the callee's qualifier is an enum.

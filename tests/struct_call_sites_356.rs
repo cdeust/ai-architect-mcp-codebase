@@ -264,6 +264,68 @@ fn an_enum_variant_call_gets_no_edge_to_a_struct_of_the_same_name() {
     assert!(site_rows.is_empty(), "{site_rows:?}");
 }
 
+/// The enum is reached through `Self` or through a type alias: neither name is
+/// an enum in the index, yet `Self::A(1)` and `K::A(1)` build the variant `A`,
+/// never a struct. A lone struct `A` in another file must get no edge and no row.
+fn no_struct_edge_for(callee: &str, caller: &str, lib: &str) {
+    let a = analyzed(&[("lib.rs", lib), ("other.rs", "pub struct A(pub u8);\n")]);
+    let store = GraphStore::open_or_create(&a.graph).unwrap();
+    let uses = rows(
+        &store,
+        &format!(
+            "MATCH (f)-[r:Uses_Function_Struct|Uses_Method_Struct]->(s:Struct) \
+             WHERE f.qualified_name ENDS WITH '{caller}' AND s.name = 'A' RETURN s.id"
+        ),
+    );
+    assert!(
+        uses.is_empty(),
+        "{callee}: wrong symbol-level edge {uses:?}"
+    );
+    let site_rows = rows(
+        &store,
+        &format!(
+            "MATCH (c:CallSite)-[r:Calls_CallSite_Struct]->(s:Struct) \
+             WHERE c.callee_name = '{callee}' RETURN s.id"
+        ),
+    );
+    assert!(
+        site_rows.is_empty(),
+        "{callee}: wrong per-site row {site_rows:?}"
+    );
+}
+
+#[test]
+fn an_enum_variant_called_through_self_gets_no_edge_to_a_struct() {
+    no_struct_edge_for(
+        "Self::A",
+        "Kind::f",
+        "mod other;\npub enum Kind { A(u8), B }\n\
+         impl Kind { pub fn f() -> Kind { Self::A(1) } }\n",
+    );
+}
+
+/// `Self::A(1)` in a caller the same-class gate does not take (a fn item nested
+/// in the method: its caller label is Function) reaches the by-name lookup.
+#[test]
+fn an_enum_variant_called_through_self_from_a_nested_fn_gets_no_edge_to_a_struct() {
+    no_struct_edge_for(
+        "Self::A",
+        "inner",
+        "mod other;\npub enum Kind { A(u8), B }\n\
+         impl Kind { pub fn f() -> Kind { fn inner() -> Kind { Self::A(1) } inner() } }\n",
+    );
+}
+
+#[test]
+fn an_enum_variant_called_through_a_type_alias_gets_no_edge_to_a_struct() {
+    no_struct_edge_for(
+        "K::A",
+        "::g",
+        "mod other;\npub enum Kind { A(u8), B }\npub type K = Kind;\n\
+         pub fn g() -> Kind { K::A(1) }\n",
+    );
+}
+
 #[test]
 fn a_graph_without_the_table_is_filled_by_the_next_resolve_pass() {
     let a = analyzed(&[("lib.rs", LIB)]);

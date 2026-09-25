@@ -25,13 +25,18 @@ adheres to [Semantic Versioning](https://semver.org/).
   under `users`. A graph written by an earlier build gets the table when it is
   opened for an incremental refresh, a bootstrap fill, `resolve_graph` or
   `lsp_resolve`, empty, and the next resolve pass backfills every row: no
-  reparse, no marker, no full reindex. A qualified call whose qualifier names
-  only enums, such as `Kind::A(1)`, no longer resolves to a struct `A` found by
-  name elsewhere: it builds a variant, which the index does not hold, and the
-  by-name lookup used to take it for a lone struct (an edge that already existed
-  in the graph, now refused). Not covered: a call that resolves to an Enum,
-  a Trait or a TypeAlias still has no per-site row, and a variant brought in
-  with `use Kind::*` and called bare is not told from a struct.
+  reparse, no marker, no full reindex. A qualified call whose qualifier is
+  `Self`, or names only enums and type aliases (`Kind::A(1)`, `type K = Kind;
+  K::A(1)`), no longer resolves to a struct `A` found by name elsewhere: it
+  builds a variant, which the index does not hold, and the by-name lookup used to
+  take it for a lone struct (an edge that already existed in the graph, now
+  refused). A qualifier that also names a module, a struct or a trait keeps the
+  lookup open. `Self` is not resolved to the enclosing impl type. Not covered: a
+  call that resolves to an Enum, a Trait or a TypeAlias still has no per-site
+  row; a variant brought in with `use Kind::*` and called bare, and a type alias
+  or enum renamed by `use x as K`, are not told from a struct; an incremental
+  refresh or a bootstrap fill creates the table but does not resolve, so its
+  rows appear at the next `resolve_graph`.
 
 - A receiver that spells its own type is typed statically (#355). The static
   resolver typed a receiver bound by `let t = Type::new(..)` but not a tuple
