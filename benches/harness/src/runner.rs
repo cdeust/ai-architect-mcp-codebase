@@ -11,7 +11,7 @@
 // We DO NOT link against the main crate.  The binary is a black-box
 // consumer of its own published MCP surface.
 
-use crate::corpora::{CorpusConfig, GroundTruthLabel};
+use crate::corpora::{CorpusConfig, GroundTruthLabel, FIXTURE_PATH_KEYS};
 use crate::queries;
 use crate::scoring::{
     self, score_adjusted_rand, score_exact_match, score_f1, score_precision_recall_mean, ScoreType,
@@ -19,7 +19,7 @@ use crate::scoring::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -46,7 +46,23 @@ pub struct CorpusRun {
 /// Run one full corpus.  Returns a CorpusRun even on failure — the
 /// setup_error field explains what happened.
 pub fn run_corpus(corpus: &CorpusConfig, binary: &Path) -> CorpusRun {
-    let mut run = CorpusRun {
+    let mut run = empty_run(corpus);
+    run.stale_ground_truth = report_stale_ground_truth(corpus);
+    let mut session = match open_session(corpus, binary) {
+        Ok(s) => s,
+        Err(e) => {
+            run.setup_error = Some(e);
+            return run;
+        }
+    };
+    run.index_elapsed_ms = session.index_elapsed_ms;
+    score_labels(&mut session, corpus, &mut run);
+    run.end_result_score = scoring::weighted_mean(&run.per_query_scores, &queries::weights());
+    run
+}
+
+fn empty_run(corpus: &CorpusConfig) -> CorpusRun {
+    CorpusRun {
         name: corpus.name.clone(),
         language: corpus.language.clone(),
         per_query_scores: HashMap::new(),
@@ -58,102 +74,78 @@ pub fn run_corpus(corpus: &CorpusConfig, binary: &Path) -> CorpusRun {
         labels_skipped: 0,
         setup_error: None,
         stale_ground_truth: Vec::new(),
-    };
+    }
+}
 
-    // Ground-truth staleness guard (issue #132): detect labels that reference
-    // deleted source files BEFORE scoring, so their zeros are never mistaken
-    // for a retrieval regression. Loud + enumerated, per query.
-    run.stale_ground_truth =
-        crate::corpora::stale_ground_truth(&corpus.source_path, &corpus.labels);
-    for rel in &run.stale_ground_truth {
+/// Ground-truth staleness guard (issue #132): detect labels that reference
+/// deleted source files BEFORE scoring, so their zeros are never mistaken
+/// for a retrieval regression. Loud + enumerated, per query.
+fn report_stale_ground_truth(corpus: &CorpusConfig) -> Vec<String> {
+    let stale = crate::corpora::stale_ground_truth(&corpus.source_path, &corpus.labels);
+    for rel in &stale {
         eprintln!(
             "[bench][STALE GROUND TRUTH] corpus={}: references deleted source path {:?} \
              (this expectation silently scores 0 — fix or remove the label)",
             corpus.name, rel
         );
     }
+    stale
+}
 
-    let tmp = match tempfile::tempdir() {
-        Ok(t) => t,
-        Err(e) => {
-            run.setup_error = Some(format!("tempdir: {e}"));
-            return run;
-        }
-    };
+/// One MCP process with the corpus indexed, resolved and clustered. The
+/// tempdir is held so the graph outlives every query of the corpus.
+struct Session {
+    _tmp: tempfile::TempDir,
+    client: McpClient,
+    graph_path: PathBuf,
+    index_elapsed_ms: u128,
+}
+
+fn open_session(corpus: &CorpusConfig, binary: &Path) -> Result<Session, String> {
+    let tmp = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
     let output_dir = tmp.path().join("out");
-    if let Err(e) = std::fs::create_dir_all(&output_dir) {
-        run.setup_error = Some(format!("create output dir: {e}"));
-        return run;
-    }
+    std::fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir: {e}"))?;
     let graph_path = output_dir.join("graph");
-
-    let mut client = match McpClient::spawn(binary) {
-        Ok(c) => c,
-        Err(e) => {
-            run.setup_error = Some(format!("spawn mcp: {e}"));
-            return run;
-        }
-    };
-    if let Err(e) = client.initialize() {
-        run.setup_error = Some(format!("initialize: {e}"));
-        return run;
-    }
+    let mut client = McpClient::spawn(binary).map_err(|e| format!("spawn mcp: {e}"))?;
+    client
+        .initialize()
+        .map_err(|e| format!("initialize: {e}"))?;
 
     let started = Instant::now();
-    if let Err(e) = index_corpus(&mut client, &corpus.source_path, &output_dir) {
-        run.setup_error = Some(format!("index_codebase: {e}"));
-        return run;
-    }
-    run.index_elapsed_ms = started.elapsed().as_millis();
+    index_corpus(&mut client, &corpus.source_path, &output_dir)
+        .map_err(|e| format!("index_codebase: {e}"))?;
+    let index_elapsed_ms = started.elapsed().as_millis();
 
     // Best-effort resolve + cluster; their absence shouldn't zero every query.
-    let _ = client.call_tool(
-        "resolve_graph",
-        &json!({"graph_path": graph_path.to_string_lossy()}),
-    );
-    let _ = client.call_tool(
-        "cluster_graph",
-        &json!({"graph_path": graph_path.to_string_lossy()}),
-    );
+    let graph_arg = json!({"graph_path": graph_path.to_string_lossy()});
+    let _ = client.call_tool("resolve_graph", &graph_arg);
+    let _ = client.call_tool("cluster_graph", &graph_arg);
+    Ok(Session {
+        _tmp: tmp,
+        client,
+        graph_path,
+        index_elapsed_ms,
+    })
+}
 
-    // Per-query accumulator: sum + count so we can mean at the end.
+/// Score every label, then store the per-query mean, sample count and time.
+fn score_labels(session: &mut Session, corpus: &CorpusConfig, run: &mut CorpusRun) {
     let mut sums: HashMap<String, f64> = HashMap::new();
     let mut counts: HashMap<String, usize> = HashMap::new();
     let mut elapsed: HashMap<String, u128> = HashMap::new();
-
     for label in &corpus.labels {
-        let spec = match queries::lookup(&label.query_id) {
-            Some(s) => s,
-            None => {
-                run.labels_skipped += 1;
-                continue;
-            }
+        let Some(spec) = queries::lookup(&label.query_id) else {
+            run.labels_skipped += 1;
+            continue;
         };
         let start = Instant::now();
-        let score = match dispatch_label(
-            &mut client,
-            &graph_path,
-            &corpus.corpus_dir,
-            spec.tool,
-            spec.score_type,
-            label,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!(
-                    "[bench] {}/{}: dispatch error: {}",
-                    corpus.name, label.query_id, e
-                );
-                0.0
-            }
-        };
+        let score = score_label(session, corpus, spec.tool, spec.score_type, label);
         let dt = start.elapsed().as_millis();
         *sums.entry(label.query_id.clone()).or_insert(0.0) += score;
         *counts.entry(label.query_id.clone()).or_insert(0) += 1;
         *elapsed.entry(label.query_id.clone()).or_insert(0) += dt;
         run.labels_run += 1;
     }
-
     for (q, total) in &sums {
         let n = counts.get(q).copied().unwrap_or(1).max(1);
         run.per_query_scores.insert(q.clone(), total / n as f64);
@@ -162,9 +154,31 @@ pub fn run_corpus(corpus: &CorpusConfig, binary: &Path) -> CorpusRun {
             run.per_query_elapsed_ms.insert(q.clone(), *e);
         }
     }
+}
 
-    run.end_result_score = scoring::weighted_mean(&run.per_query_scores, &queries::weights());
-    run
+/// One label's score; a dispatch error is reported and scores 0.
+fn score_label(
+    session: &mut Session,
+    corpus: &CorpusConfig,
+    tool: &str,
+    score_type: ScoreType,
+    label: &GroundTruthLabel,
+) -> f64 {
+    let dispatched = dispatch_label(
+        &mut session.client,
+        &session.graph_path,
+        &corpus.corpus_dir,
+        tool,
+        score_type,
+        label,
+    );
+    dispatched.unwrap_or_else(|e| {
+        eprintln!(
+            "[bench] {}/{}: dispatch error: {}",
+            corpus.name, label.query_id, e
+        );
+        0.0
+    })
 }
 
 /// Index a source tree via MCP.  Returns Err if the tool's response
@@ -202,13 +216,6 @@ fn dispatch_label(
     let payload = parse_tool_payload(&resp)?;
     score_response(tool, score_type, &payload, &label.expected)
 }
-
-/// Label `input` keys that name a fixture file on disk. A relative value is
-/// anchored to the corpus directory before being forwarded to the tool, so
-/// ground truth never has to embed an absolute, developer-machine-specific
-/// path (issue #210) — the corpus is the only stable anchor across checkouts
-/// and CI runners.
-const FIXTURE_PATH_KEYS: &[&str] = &["prd_path", "affected_symbols_path"];
 
 /// Assemble MCP tool args from the label's `input` plus graph_path.
 fn build_tool_args(

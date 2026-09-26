@@ -8,6 +8,24 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The benchmark no longer carries a label for a deleted file, and a label that
+  names a deleted path now fails `cargo test` (#359). Label q9 of the
+  `rust-self` corpus queried `security_gates.rs`, which #262 split into
+  `security_gates/mod.rs` and `security_gates/gates.rs` on 2026-08-25; the
+  harness refused every full run with exit 3 since then. The label is replaced
+  by one label per new file, each re-derived from the file's `use` statements
+  and checked against the imports a fresh index reports (they agree). The
+  staleness guard of #132 only ran inside a full benchmark run; a unit test of
+  the benchmark crate now loads every corpus under `benches/corpora` and
+  asserts that every source path and fixture path a label names exists. The
+  guard also read only `.rs` paths out of queries, so the `f.path = 'app.ts'`
+  labels of the TypeScript corpus were never checked; it now reads the
+  extensions of every supported language. Measured with `bench_end_result
+  --all` on the same server binary, before and after: exit 3 (stale label)
+  becomes exit 1 (score below target), the aggregate goes from 0.747 to 0.753,
+  `rust-self` from 0.613 to 0.624 (its q9 from 0.672 to 0.793) and
+  `typescript-small` stays at 0.881. The gap to the 0.85 target remains and is
+  the subject of #214.
 - A receiver that spells its own type is typed statically (#355). The static
   resolver typed a receiver bound by `let t = Type::new(..)` but not a tuple
   constructor `Tier(1)`, a struct literal `Named { n: 3 }`, or a receiver written

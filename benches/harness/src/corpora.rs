@@ -67,6 +67,13 @@ pub struct CorpusConfig {
     pub is_stub: bool,
 }
 
+/// Label `input` keys that name a fixture file on disk. A relative value is
+/// anchored to the corpus directory before being forwarded to the tool, so
+/// ground truth never has to embed an absolute, developer-machine-specific
+/// path (issue #210): the corpus is the only stable anchor across checkouts
+/// and CI runners.
+pub const FIXTURE_PATH_KEYS: &[&str] = &["prd_path", "affected_symbols_path"];
+
 /// Load one corpus by name.  Returns Err if the directory doesn't exist,
 /// corpus.toml is missing/malformed, or ground_truth.json schema is broken.
 /// An empty labels array is allowed (stub corpus) and produces is_stub=true.
@@ -151,12 +158,17 @@ fn path_of_qualified_name(qn: &str) -> &str {
     qn.split("::").next().unwrap_or(qn)
 }
 
+/// Extensions of the source files the corpora label (one per supported
+/// language of a corpus under `benches/corpora`). Only literals ending in one
+/// of them are read as paths, so RETURN targets and property names are never
+/// mistaken for paths. Before issue #359 only `.rs` was read, so every
+/// `f.path = 'app.ts'` of the TypeScript corpus went unchecked.
+const SOURCE_EXTENSIONS: &[&str] = &[".rs", ".ts", ".tsx", ".js", ".py", ".go", ".kt"];
+
 /// Extract source-file paths embedded in a Cypher query string: the
 /// `f.path = '<rel_path>'` and `s.qualified_name = '<rel_path>::<name>'`
 /// literals the file/field labels key on. For each marker occurrence the
-/// literal is the text of the first single-quoted token that follows it. Only
-/// `*.rs` literals are collected so that RETURN targets and property names are
-/// never mistaken for paths.
+/// literal is the text of the first single-quoted token that follows it.
 fn collect_query_paths(query: &str, out: &mut BTreeSet<String>) {
     for (marker, is_qn) in [("f.path", false), ("s.qualified_name", true)] {
         // `split(marker)` yields the text before the first occurrence, then
@@ -172,7 +184,7 @@ fn collect_query_paths(query: &str, out: &mut BTreeSet<String>) {
             } else {
                 literal
             };
-            if path.ends_with(".rs") {
+            if SOURCE_EXTENSIONS.iter().any(|ext| path.ends_with(ext)) {
                 out.insert(path.to_string());
             }
         }
@@ -338,6 +350,49 @@ mod tests {
         assert_eq!(
             stale,
             vec!["gone_a.rs".to_string(), "gone_b.rs".to_string()]
+        );
+    }
+
+    /// Issue #359: the guard above only warned when the whole benchmark ran,
+    /// and three module splits (#132, #210, #359) left dead labels behind. This
+    /// test reads the real corpora, so a split that deletes a labelled path
+    /// fails `cargo test` instead of silently scoring zero.
+    #[test]
+    fn every_label_of_every_corpus_references_existing_paths() {
+        let corpora_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpora");
+        let corpora = discover_all(&corpora_root).expect("load benches/corpora");
+        assert!(!corpora.is_empty(), "no labelled corpus found");
+        let mut dead = Vec::new();
+        for corpus in &corpora {
+            for rel in stale_ground_truth(&corpus.source_path, &corpus.labels) {
+                dead.push(format!("{}: source path {rel}", corpus.name));
+            }
+            for label in &corpus.labels {
+                for key in FIXTURE_PATH_KEYS {
+                    let Some(rel) = label.input.get(*key).and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if !corpus.corpus_dir.join(rel).exists() {
+                        dead.push(format!("{}: {key} {rel}", corpus.name));
+                    }
+                }
+            }
+        }
+        assert!(dead.is_empty(), "labels reference deleted paths: {dead:?}");
+    }
+
+    #[test]
+    fn stale_guard_reads_non_rust_source_paths_in_queries() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("app.ts"), "").unwrap();
+        let labels = vec![label(
+            json!({ "query": "WHERE f.path = 'app.ts' OR f.path = 'gone.ts' RETURN n.path" }),
+            json!({ "imports": [] }),
+        )];
+        assert_eq!(
+            stale_ground_truth(root, &labels),
+            vec!["gone.ts".to_string()]
         );
     }
 
