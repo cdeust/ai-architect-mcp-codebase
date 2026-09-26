@@ -162,13 +162,19 @@ impl ModuleTree<'_> {
             return Vec::new();
         }
         let owns_directory = self.crate_entries.contains(file) || file.ends_with("mod.rs");
-        rust_mod_decls::mod_decls(&source)
-            .into_iter()
-            .filter_map(|decl| {
-                let target = module_file(file, owns_directory, &decl, self.indexed)?;
-                Some((decl, target))
-            })
-            .collect()
+        let mut out = Vec::new();
+        for decl in rust_mod_decls::mod_decls(&source) {
+            for alternative in alternatives(&decl) {
+                if let Some(target) = module_file(file, owns_directory, &alternative, self.indexed)
+                {
+                    out.push((alternative, target));
+                }
+            }
+            if let Some(target) = module_file(file, owns_directory, &decl, self.indexed) {
+                out.push((decl, target));
+            }
+        }
+        out
     }
 }
 
@@ -181,6 +187,30 @@ fn reach(
     live.entry(file.to_path_buf())
         .or_default()
         .insert(features.clone())
+}
+
+/// One declaration per `cfg_attr(pred, path = ..)` of `decl` (issue #366): the
+/// same `mod`, reaching the file `path` names, gated by the declaration's own
+/// `cfg` AND `pred` (undecidable when either is).
+fn alternatives(decl: &ModDecl) -> Vec<ModDecl> {
+    decl.alt_paths
+        .iter()
+        .map(|alt| {
+            let cfg = match (&decl.cfg, &alt.pred) {
+                (Some(all), Some(pred)) => {
+                    Some(all.iter().cloned().chain([pred.clone()]).collect())
+                }
+                _ => None,
+            };
+            ModDecl {
+                name: decl.name.clone(),
+                path_attr: Some(alt.path.clone()),
+                cfg,
+                cfg_text: decl.cfg_text.clone(),
+                alt_paths: Vec::new(),
+            }
+        })
+        .collect()
 }
 
 /// The cfg gate of a declaration: `all` of its `cfg` attributes, `Unknown`

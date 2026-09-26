@@ -72,6 +72,10 @@ pub struct CargoAttributions {
     /// forward-slash), empty unless the status is `Known`. Issue #357.
     pub(crate) targets: BTreeMap<String, Option<String>>,
     pub(crate) target_owners: BTreeMap<String, BTreeSet<String>>,
+    /// The gate, module path and default-build verdict each Rust file gets from
+    /// the `mod` declarations that lead to it, for the files under a gate or
+    /// compiled out, empty unless the status is `Known`. Issue #366, part B.
+    pub(crate) file_cfg: BTreeMap<String, crate::graph_store::FileCfg>,
 }
 
 /// What the Cargo map tells the rest of an index pass, apart from the coverage
@@ -86,6 +90,7 @@ pub(crate) struct CargoFacts {
     pub target_contexts: BTreeMap<String, &'static str>,
     pub targets: BTreeMap<String, Option<String>>,
     pub target_owners: BTreeMap<String, BTreeSet<String>>,
+    pub file_cfg: BTreeMap<String, crate::graph_store::FileCfg>,
 }
 
 impl CargoFacts {
@@ -135,6 +140,7 @@ fn empty(status: CargoAttributionStatus) -> CargoAttributions {
         target_contexts: BTreeMap::new(),
         targets: BTreeMap::new(),
         target_owners: BTreeMap::new(),
+        file_cfg: BTreeMap::new(),
     }
 }
 
@@ -165,6 +171,7 @@ fn attributed(
         .map(forward_slash)
         .collect();
     let analysis = feature_gated::analyse(codebase, map, rust_files);
+    let file_cfg = super::file_scope::analyse(codebase, map, rust_files, &analysis.features);
     let feature_gated = analysis
         .gated
         .into_iter()
@@ -195,6 +202,7 @@ fn attributed(
         target_contexts,
         targets,
         target_owners,
+        file_cfg,
     }
 }
 

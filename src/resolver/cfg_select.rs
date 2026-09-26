@@ -25,7 +25,7 @@ pub(super) fn choose<'a>(
     caller_qn: &str,
     candidates: &'a [SymbolEntry],
 ) -> Option<&'a SymbolEntry> {
-    super::cfg_twins::are_twins_of_one_item(candidates)
+    super::cfg_twins::are_twins_of_one_item(view, candidates)
         .then(|| select(view, caller_qn, candidates))
         .flatten()
 }
@@ -38,7 +38,7 @@ pub(super) fn select<'a>(
     caller_qn: &str,
     twins: &'a [SymbolEntry],
 ) -> Option<&'a SymbolEntry> {
-    let caller = caller_gates(caller_qn);
+    let caller = caller_gates(view, caller_qn);
     let mut not_ruled_out = twins
         .iter()
         .map(|twin| (twin, verdict(view, &caller, &twin.id, &twin.qualified_name)))

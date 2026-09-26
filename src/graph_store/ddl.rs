@@ -19,7 +19,11 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // targets (or through a `#[cfg(test)] mod`), 'production' when a lib, bin
         // or build target reaches it, '' when nothing is decided (see
         // `indexer::target_context`). '' on a graph from before the column.
-        (NODE_FILE, "id STRING, path STRING, name STRING, extension STRING, size_bytes INT64, parse_errors INT64, target_context STRING DEFAULT ''"),
+        // cfg_gate / cfg_active / module_path: issue #366 (B): the gate a file
+        // inherits from the `mod` declarations that lead to it, whether the
+        // default build compiles it, and the module path they give it (see
+        // `graph_store::cfg_active::file_scope`). '' when nothing is known.
+        (NODE_FILE, "id STRING, path STRING, name STRING, extension STRING, size_bytes INT64, parse_errors INT64, target_context STRING DEFAULT '', cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT '', module_path STRING DEFAULT ''"),
         // cfg_gate: issue #353: on every label a Rust item can twin under, the
         // compact `#[cfg]` gate of an item whose qualified name carries a
         // `#cfg(..)` suffix; '' for every other item and for a graph written

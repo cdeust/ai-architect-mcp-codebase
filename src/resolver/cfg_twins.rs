@@ -10,26 +10,35 @@
 // one, before this reason is written, only when the caller's own gate or the
 // default features settle which twin the build compiles.
 
+use super::cfg_verdict::TwinView;
 use super::SymbolEntry;
 use crate::graph_store::GraphStore;
 use crate::graph_store::{has_cfg_gate, strip_cfg_gates};
 
 /// True when `candidates` are two or more twins of ONE item: the same label,
-/// every one carrying a `#cfg(..)` suffix, all with the same name once the
-/// suffixes are stripped. A mixed set (a twin and an unrelated symbol of the same
-/// name) is an ordinary ambiguity, not this one.
-pub(super) fn are_twins_of_one_item(candidates: &[SymbolEntry]) -> bool {
+/// every one gated (a `#cfg(..)` suffix in its id, or a gate its file inherits
+/// from `mod` declarations, issue #366), all with the same name once the
+/// suffixes are stripped. The name is read through the file's module path when
+/// the file has one, so two files one declaration picks between (`#[path]`
+/// pairs, `cfg_attr(.., path = ..)`) hold twins, and two differently named
+/// modules do not. A mixed set (a twin and an unrelated symbol of the same name)
+/// is an ordinary ambiguity, not this one.
+pub(super) fn are_twins_of_one_item(view: &TwinView, candidates: &[SymbolEntry]) -> bool {
     let Some(first) = candidates.first() else {
         return false;
     };
     if candidates.len() < 2 {
         return false;
     }
-    let shared = strip_cfg_gates(&first.qualified_name);
+    let name = |c: &SymbolEntry| {
+        let logical = view.logical_id(&c.qualified_name);
+        strip_cfg_gates(logical.as_deref().unwrap_or(&c.qualified_name))
+    };
+    let shared = name(first);
     candidates.iter().all(|c| {
         c.label == first.label
-            && has_cfg_gate(&c.qualified_name)
-            && strip_cfg_gates(&c.qualified_name) == shared
+            && (has_cfg_gate(&c.qualified_name) || view.file_is_gated(&c.qualified_name))
+            && name(c) == shared
     })
 }
 
@@ -98,7 +107,7 @@ mod tests {
             entry("Function", "src/lib.rs::pick#cfg(feature=fast)"),
             entry("Function", "src/lib.rs::pick#cfg(not(feature=fast))"),
         ];
-        assert!(are_twins_of_one_item(&pair));
+        assert!(are_twins_of_one_item(&TwinView::default(), &pair));
     }
 
     #[test]
@@ -107,7 +116,28 @@ mod tests {
             entry("Method", "src/lib.rs::S#cfg(unix)::m"),
             entry("Method", "src/lib.rs::S#cfg(not(unix))::m"),
         ];
-        assert!(are_twins_of_one_item(&pair));
+        assert!(are_twins_of_one_item(&TwinView::default(), &pair));
+    }
+
+    #[test]
+    fn two_files_one_declaration_picks_between_hold_twins() {
+        let view = TwinView::default()
+            .with_file("src/unix.rs", ("src/lib.rs::imp", "unix", "unknown"))
+            .with_file("src/windows.rs", ("src/lib.rs::imp", "windows", "unknown"))
+            .with_file("src/a.rs", ("src/lib.rs::a", "feature=fast", "inactive"));
+        let pair = [
+            entry("Function", "src/unix.rs::pick"),
+            entry("Function", "src/windows.rs::pick"),
+        ];
+        assert!(are_twins_of_one_item(&view, &pair));
+        // A gated module beside a differently named one: another module path.
+        let named = [
+            entry("Function", "src/a.rs::pick"),
+            entry("Function", "src/b.rs::pick"),
+        ];
+        assert!(!are_twins_of_one_item(&view, &named));
+        // Without the file facts nothing is known about the two files.
+        assert!(!are_twins_of_one_item(&TwinView::default(), &pair));
     }
 
     #[test]
@@ -116,7 +146,7 @@ mod tests {
             entry("Function", "src/lib.rs::pick#cfg(unix)"),
             entry("Function", "src/other.rs::pick"),
         ];
-        assert!(!are_twins_of_one_item(&mixed));
+        assert!(!are_twins_of_one_item(&TwinView::default(), &mixed));
     }
 
     #[test]
@@ -125,21 +155,21 @@ mod tests {
             entry("Function", "src/lib.rs::pick#cfg(a)"),
             entry("Method", "src/lib.rs::pick#cfg(b)"),
         ];
-        assert!(!are_twins_of_one_item(&labels));
+        assert!(!are_twins_of_one_item(&TwinView::default(), &labels));
         let names = [
             entry("Function", "src/lib.rs::pick#cfg(a)"),
             entry("Function", "src/lib.rs::other#cfg(b)"),
         ];
-        assert!(!are_twins_of_one_item(&names));
+        assert!(!are_twins_of_one_item(&TwinView::default(), &names));
     }
 
     #[test]
     fn one_candidate_and_none_are_not_twins() {
-        assert!(!are_twins_of_one_item(&[]));
-        assert!(!are_twins_of_one_item(&[entry(
-            "Function",
-            "src/lib.rs::pick#cfg(a)"
-        )]));
+        assert!(!are_twins_of_one_item(&TwinView::default(), &[]));
+        assert!(!are_twins_of_one_item(
+            &TwinView::default(),
+            &[entry("Function", "src/lib.rs::pick#cfg(a)")]
+        ));
     }
 
     /// Every parser of an id or a name that runs on a graph with twins, on a twin

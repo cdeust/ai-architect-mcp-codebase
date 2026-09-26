@@ -29,7 +29,9 @@ mod schema;
 mod serialize;
 mod writes;
 pub(crate) use cfg_active::cfg_gates_in;
-pub use cfg_active::{TwinRow, CFG_ACTIVE, CFG_INACTIVE, CFG_UNKNOWN, RESOLUTION_CFG_SELECTED};
+pub use cfg_active::{
+    FileCfg, TwinRow, CFG_ACTIVE, CFG_INACTIVE, CFG_UNKNOWN, RESOLUTION_CFG_SELECTED,
+};
 #[cfg(test)]
 pub(crate) use cfg_twins::CANONICAL_FORM_VERSION;
 pub(crate) use cfg_twins::{has_cfg_gate, strip_cfg_gates};

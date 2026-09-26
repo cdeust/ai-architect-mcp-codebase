@@ -35,6 +35,9 @@ pub const CFG_UNKNOWN: &str = "unknown";
 
 const ACTIVE_COLUMN_TYPE: &str = "STRING DEFAULT ''";
 
+mod file_scope;
+pub use file_scope::FileCfg;
+
 /// The compact gates written in `qn`, one per `#cfg(..)` suffix, in path order:
 /// `src/lib.rs::m#cfg(unix)::f#cfg(kani)` gives `["unix", "kani"]`. Their
 /// conjunction is the condition under which the item exists.
@@ -145,7 +148,8 @@ impl GraphStore {
         for label in CFG_GATE_LABELS {
             self.ensure_node_column(label, "cfg_active", ACTIVE_COLUMN_TYPE)?;
         }
-        Ok(())
+        // The file-level facts of issue #366 (part B), for the same reason.
+        self.ensure_file_cfg_columns()
     }
 
     /// Writes `cfg_active` for every `(label, id, value)`. The column is added

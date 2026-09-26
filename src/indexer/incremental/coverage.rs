@@ -129,6 +129,7 @@ fn overlay_cargo_attributions(
         target_contexts: found.target_contexts,
         targets: found.targets,
         target_owners: found.target_owners,
+        file_cfg: found.file_cfg,
     }
 }
 
@@ -155,6 +156,9 @@ pub(in crate::indexer) fn apply_cargo_facts(
     }
     if let Err(e) = store.write_target_contexts(&facts.target_contexts) {
         eprintln!("[ap] target_context pass skipped: {e}");
+    }
+    if let Err(e) = store.write_file_cfg(&facts.file_cfg) {
+        eprintln!("[ap] file cfg pass skipped: {e}");
     }
 }
 

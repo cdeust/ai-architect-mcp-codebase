@@ -172,7 +172,7 @@ fn resolve_one_call_site(
                     stage_call_edge(buf, &site, &matched, tally);
                     tally.selected_sites.push(site.cs_id.to_string());
                 }
-                None => record_ambiguous(&site, tally, &candidates),
+                None => record_ambiguous(&site, tally, &candidates, graph.twins),
             }
         }
         PolicyResolution::NotFound => {
@@ -258,8 +258,13 @@ struct MatchedCall<'a> {
 /// An ambiguous callee: dropped and labeled. When every candidate is a twin of
 /// one item under exclusive `#[cfg]` gates (issue #353) the label is `cfg_twins`
 /// and the site is queued for the reason to be persisted.
-fn record_ambiguous(site: &CallSite, tally: &mut CallTally, candidates: &[SymbolEntry]) {
-    let twins = super::cfg_twins::are_twins_of_one_item(candidates);
+fn record_ambiguous(
+    site: &CallSite,
+    tally: &mut CallTally,
+    candidates: &[SymbolEntry],
+    view: &super::cfg_select::TwinView,
+) {
+    let twins = super::cfg_twins::are_twins_of_one_item(view, candidates);
     if twins {
         tally.twin_sites.push(site.cs_id.to_string());
     }

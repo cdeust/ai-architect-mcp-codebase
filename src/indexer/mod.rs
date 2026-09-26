@@ -17,6 +17,7 @@ pub mod cargo_targets;
 mod cfg_active;
 pub mod coverage;
 mod feature_gated;
+mod file_scope;
 mod iac;
 mod incremental;
 mod light_link;
@@ -375,6 +376,7 @@ fn record_cargo_attributions(
         target_contexts: found.target_contexts,
         targets: found.targets,
         target_owners: found.target_owners,
+        file_cfg: found.file_cfg,
     }
 }
 

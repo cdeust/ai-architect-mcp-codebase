@@ -37,6 +37,10 @@ pub(crate) const COLS_FILE: ColTypes = &[
     ("parse_errors", LogicalType::Int64),
     // source: issue #354: must mirror the DDL's `target_context` column.
     ("target_context", LogicalType::String),
+    // source: issue #366 (B): must mirror the DDL's file cfg columns.
+    ("cfg_gate", LogicalType::String),
+    ("cfg_active", LogicalType::String),
+    ("module_path", LogicalType::String),
 ];
 // source: Spike B' BUG #5 + #9 — every symbol-bearing label gets a
 // `language` String column; Struct/Enum/Trait additionally gain `bases`.
