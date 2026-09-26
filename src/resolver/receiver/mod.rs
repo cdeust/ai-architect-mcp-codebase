@@ -31,12 +31,14 @@
 use super::*;
 
 mod assoc;
+mod binding;
 mod imports;
 mod local;
 mod reexport;
 mod written_path;
 pub(super) use assoc::AssocFacts;
-pub(super) use imports::{caller_scope, ModuleImports};
+pub(super) use binding::{bind, Binding};
+pub(super) use imports::ModuleImports;
 pub(super) use local::{
     in_place_method, names_a_type_alias, relabel_as_return_type, resolve_local_receiver_bound,
     resolve_local_receiver_in_file, resolve_local_receiver_strict, resolve_local_receiver_where,

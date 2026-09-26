@@ -292,3 +292,128 @@ fn a_cargo_less_tree_follows_a_module_import_and_keeps_a_crate_name_import() {
         ["src/lib.rs::Set::m"]
     );
 }
+
+/// Review of #386, rules 4 and 5: a glob `use` names the type only when the
+/// caller's module neither defines nor explicitly imports it.
+#[test]
+fn a_glob_import_beats_the_same_file_namesake() {
+    // `use b::*;` and an inline `mod a { Set }`: the root is the caller's module
+    // and does not define `Set`, so the glob gives it.
+    let lib = format!(
+        "mod b;\nuse b::*;\n\npub mod a {{\n{}}}\n\npub fn f(s: &Set) -> u8 {{\n    s.m() // glob\n}}\n",
+        set_type("    ", 1)
+    );
+    let (_tmp, _server, store) = analyzed(&[
+        ("Cargo.toml", package("gl1")),
+        ("src/lib.rs", lib.clone()),
+        ("src/b.rs", set_type("", 2)),
+    ]);
+    assert_eq!(
+        targets(&store, "src/lib.rs", &lib, "glob"),
+        ["src/b.rs::Set::m"]
+    );
+}
+
+#[test]
+fn two_globs_that_both_give_the_type_decline() {
+    let lib = format!(
+        "mod b;\nmod c;\nuse b::*;\nuse c::*;\n\npub mod a {{\n{}}}\n\n\
+         pub fn f(s: &Set) -> u8 {{\n    s.m() // two-globs\n}}\n",
+        set_type("    ", 1)
+    );
+    let (_tmp, _server, store) = analyzed(&[
+        ("Cargo.toml", package("gl2")),
+        ("src/lib.rs", lib.clone()),
+        ("src/b.rs", set_type("", 2)),
+        ("src/c.rs", set_type("", 3)),
+    ]);
+    assert!(targets(&store, "src/lib.rs", &lib, "two-globs").is_empty());
+}
+
+#[test]
+fn a_glob_that_does_not_give_the_type_keeps_the_lookup_by_name() {
+    let lib = format!(
+        "mod b;\nuse b::*;\n\n{}\npub fn f(s: &Set) -> u8 {{\n    s.m() // no-glob-hit\n}}\n",
+        set_type("", 1)
+    );
+    let (_tmp, _server, store) = analyzed(&[
+        ("Cargo.toml", package("gl3")),
+        ("src/lib.rs", lib.clone()),
+        ("src/b.rs", "pub struct Other;\n".to_string()),
+    ]);
+    assert_eq!(
+        targets(&store, "src/lib.rs", &lib, "no-glob-hit"),
+        ["src/lib.rs::Set::m"]
+    );
+}
+
+#[test]
+fn a_super_glob_reads_the_parent_module() {
+    // `mod t { use super::*; }` in src/a.rs: the parent (a.rs) imports
+    // `crate::b::Set`, and a namesake sits in another inline module of a.rs.
+    let a = format!(
+        "use crate::b::Set;\n\npub mod decoy {{\n{}}}\n\npub mod t {{\n    use super::*;\n    \
+         pub fn f(s: &Set) -> u8 {{\n        s.m() // super-glob-import\n    }}\n}}\n",
+        set_type("    ", 1)
+    );
+    // The parent defines `Set` itself.
+    let c = format!(
+        "{}\npub mod decoy {{\n{}}}\n\npub mod t {{\n    use super::*;\n    \
+         pub fn f(s: &Set) -> u8 {{\n        s.m() // super-glob-defined\n    }}\n}}\n",
+        set_type("", 4),
+        set_type("    ", 5)
+    );
+    let (_tmp, _server, store) = analyzed(&[
+        ("Cargo.toml", package("gl4")),
+        ("src/lib.rs", "mod a;\nmod b;\nmod c;\n".to_string()),
+        ("src/a.rs", a.clone()),
+        ("src/b.rs", set_type("", 2)),
+        ("src/c.rs", c.clone()),
+    ]);
+    assert_eq!(
+        targets(&store, "src/a.rs", &a, "super-glob-import"),
+        ["src/b.rs::Set::m"]
+    );
+    assert_eq!(
+        targets(&store, "src/c.rs", &c, "super-glob-defined"),
+        ["src/c.rs::Set::m"]
+    );
+}
+
+#[test]
+fn two_cfg_arms_importing_the_name_decline() {
+    let lib = format!(
+        "mod b;\nmod c;\n#[cfg(feature = \"x\")]\nuse b::Set;\n#[cfg(not(feature = \"x\"))]\nuse c::Set;\n\n\
+         pub mod a {{\n{}}}\n\npub fn f(s: &Set) -> u8 {{\n    s.m() // cfg-arms\n}}\n",
+        set_type("    ", 1)
+    );
+    let (_tmp, _server, store) = analyzed(&[
+        ("Cargo.toml", package("gl5")),
+        ("src/lib.rs", lib.clone()),
+        ("src/b.rs", set_type("", 2)),
+        ("src/c.rs", set_type("", 3)),
+    ]);
+    assert!(targets(&store, "src/lib.rs", &lib, "cfg-arms").is_empty());
+}
+
+/// Review of #386: `super::` from a file module climbs to its parent file.
+#[test]
+fn super_from_a_file_module_reads_its_parent() {
+    let a = format!(
+        "use super::Set;\n\npub mod decoy {{\n{}}}\n\npub fn bind(s: &Set) -> u8 {{\n    s.m() // super-use\n}}\n\n\
+         pub fn written() -> u8 {{\n    let s: super::Set = super::Set::new();\n    s.m() // super-path\n}}\n",
+        set_type("    ", 1)
+    );
+    let (_tmp, _server, store) = analyzed(&[
+        ("Cargo.toml", package("sp1")),
+        ("src/lib.rs", format!("mod a;\n{}", set_type("", 2))),
+        ("src/a.rs", a.clone()),
+    ]);
+    for marker in ["super-use", "super-path"] {
+        assert_eq!(
+            targets(&store, "src/a.rs", &a, marker),
+            ["src/lib.rs::Set::m"],
+            "{marker}"
+        );
+    }
+}

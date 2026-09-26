@@ -105,6 +105,24 @@ fn a_use_of_itself_ends() {
 }
 
 #[test]
+fn a_cycle_of_globs_and_re_exports_ends_without_a_bound() {
+    // `a` re-exports `b::Set`, `b` re-exports `a::Set`, and each globs the
+    // other: every path is seen once, then following stops.
+    let ev = two_crates();
+    let imports = with_imports(
+        &ev,
+        &[
+            ("src/a.rs", "crate::b::Set", false),
+            ("src/b.rs", "crate::a::Set", false),
+            ("src/a.rs", "super::b", true),
+            ("src/b.rs", "super::a", true),
+        ],
+    );
+    let out = followed(&ev, &imports, "src/a.rs", Anchor::CrateRoot(segs("a::Set")));
+    assert!(out.is_empty(), "{out:?}");
+}
+
+#[test]
 fn a_library_path_reads_only_that_library_s_imports() {
     let ev = two_crates();
     let imports = with_imports(

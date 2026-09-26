@@ -8,10 +8,11 @@
 //
 // - `crate::R`: an owner whose module path, from the root of the caller's
 //   crate, is exactly `R`.
-// - `self::R`: `R`, read like a relative path.
-// - `super::R` (one or more): `R` from the parent of the caller's inline
-//   module; a caller that sits at the root of its file declines, because the
-//   parent of a file module is not read here.
+// - `self::R`: `R` from the caller's module (its file's module path, then the
+//   inline modules around it), exactly.
+// - `super::R` (one or more): `R` from the parent of the caller's module, each
+//   `super` leaving one inline module or one file module; a `super` past the
+//   crate root declines.
 // - `<lib>::R` where `<lib>` is a library crate of the repository: an owner of
 //   that library whose module path from the library root is exactly `R`.
 // - any other path: an owner of the caller's crate whose module path ends with
@@ -19,7 +20,7 @@
 //
 // Issues #373 and #380 add two things. A one-segment type that a `use` of the
 // caller's module binds is read as the path of that `use`, from that module
-// (`WrittenPath::imported`). And an exact path (`crate::`, `super::`, `<lib>::`,
+// (`WrittenPath::imported`, in the order `binding` gives). And an exact path (`crate::`, `super::`, `<lib>::`,
 // or one read from a `use`) follows the `use` declarations of the module it
 // ends in (`reexport`): `crate::Set` with `pub use task::Set;` at the root names
 // `task::Set`, and with `pub use ext::Set;` it names a path no module of the
@@ -99,7 +100,7 @@ impl Anchor {
 
 impl<'e> WrittenPath<'e> {
     /// The admission rule of `hint`, or `None` when the path cannot be read
-    /// (a `super` from the root of a file, a path reduced to nothing), which
+    /// (a `super` past the crate root, a path reduced to nothing), which
     /// declines the call. `hint` has at least two segments.
     pub(in crate::resolver) fn of(
         facts: &PathFacts<'e>,
@@ -108,45 +109,58 @@ impl<'e> WrittenPath<'e> {
     ) -> Option<WrittenPath<'e>> {
         let evidence = facts.evidence;
         let segments = path_segments(hint);
-        let anchor = match segments.first().map(String::as_str)? {
-            "crate" => Anchor::CrateRoot(segments[1..].to_vec()),
-            "self" => Anchor::Suffix(segments[1..].to_vec()),
-            "super" => Anchor::CrateRoot(above_caller(facts.idx, evidence, caller_qn, &segments)?),
-            first if evidence.crate_names.contains(first) => Anchor::Library {
-                lib: first.to_string(),
-                segments: segments[1..].to_vec(),
-            },
-            _ => Anchor::Suffix(segments),
+        let first = segments.first().map(String::as_str)?;
+        let caller_file = extract_file_prefix_or_self(caller_qn);
+        let anchor = if ["crate", "self", "super"].contains(&first)
+            || evidence.crate_names.contains(first)
+        {
+            let module = scope_module_path(evidence, &caller_scope(facts.idx, caller_qn));
+            reexport::anchor_in(evidence, None, &module, &segments)?
+        } else {
+            Anchor::Suffix(segments)
         };
-        Self::following(facts, caller_qn, anchor)
+        Self::following(facts, &caller_file, anchor)
     }
 
-    /// The admission rule of the path a `use` of the caller's module writes
-    /// (`use b::Set;` gives `b::Set`), read from that module: a relative path
+    /// The admission rule of `path`, written by a `use` of `module` (`use
+    /// b::Set;` gives `b::Set`) and read from that module: a relative path
     /// names a child of the module, not any module that ends with it.
     pub(in crate::resolver) fn imported(
         facts: &PathFacts<'e>,
-        caller_qn: &str,
+        caller_file: &str,
+        module: &[String],
         path: &str,
     ) -> Option<WrittenPath<'e>> {
-        let module = scope_module_path(facts.evidence, &caller_scope(facts.idx, caller_qn));
-        let anchor = reexport::anchor_in(facts.evidence, None, &module, &path_segments(path))?;
-        Self::following(facts, caller_qn, anchor)
+        let anchor = reexport::anchor_in(facts.evidence, None, module, &path_segments(path))?;
+        Self::following(facts, caller_file, anchor)
+    }
+
+    /// The admission rule of a type the module `anchor` ends in defines: the
+    /// definition is the name, so no `use` of that module is followed.
+    pub(super) fn exact(
+        facts: &PathFacts<'e>,
+        caller_file: &str,
+        anchor: Anchor,
+    ) -> WrittenPath<'e> {
+        WrittenPath {
+            evidence: facts.evidence,
+            caller_file: caller_file.to_string(),
+            anchors: vec![anchor],
+        }
     }
 
     fn following(
         facts: &PathFacts<'e>,
-        caller_qn: &str,
+        caller_file: &str,
         anchor: Anchor,
     ) -> Option<WrittenPath<'e>> {
         if anchor.written().is_empty() {
             return None;
         }
-        let caller_file = extract_file_prefix_or_self(caller_qn);
-        let anchors = reexport::follow(facts, &caller_file, anchor);
+        let anchors = reexport::follow(facts, caller_file, anchor);
         Some(WrittenPath {
             evidence: facts.evidence,
-            caller_file,
+            caller_file: caller_file.to_string(),
             anchors,
         })
     }
@@ -157,8 +171,7 @@ impl<'e> WrittenPath<'e> {
             return false;
         };
         let owner_file = extract_file_prefix_or_self(owner);
-        let mut path = file_module_path(self.evidence, &owner_file);
-        path.extend(path_segments(owner.strip_prefix(&owner_file).unwrap_or("")));
+        let path = module_path_of(self.evidence, owner);
         let same_crate = || same_crate(self.evidence, &self.caller_file, &owner_file);
         self.anchors.iter().any(|anchor| match anchor {
             Anchor::CrateRoot(written) => same_crate() && path.as_slice() == written.as_slice(),
@@ -184,22 +197,13 @@ pub(super) fn same_crate(evidence: &CrateEvidence, caller_file: &str, file: &str
     }
 }
 
-/// The module path `super::..::R` names, from the root of the caller's crate:
-/// each `super` leaves one inline module around the caller. `None` when the
-/// `super`s climb past the caller's file.
-fn above_caller(
-    idx: &SymbolIndex,
-    evidence: &CrateEvidence,
-    caller_qn: &str,
-    segments: &[String],
-) -> Option<Vec<String>> {
-    let ups = segments.iter().take_while(|s| *s == "super").count();
-    let inline = inline_modules(idx, caller_qn);
-    let kept = inline.len().checked_sub(ups)?;
-    let mut path = file_module_path(evidence, &extract_file_prefix_or_self(caller_qn));
-    path.extend(inline[..kept].iter().cloned());
-    path.extend(segments[ups..].iter().cloned());
-    Some(path)
+/// The module path of the item `qn` names, from the root of its crate: its
+/// file's, then the segments after the file (generic arguments removed).
+pub(super) fn module_path_of(evidence: &CrateEvidence, qn: &str) -> Vec<String> {
+    let file = extract_file_prefix_or_self(qn);
+    let mut path = file_module_path(evidence, &file);
+    path.extend(path_segments(qn.strip_prefix(&file).unwrap_or("")));
+    path
 }
 
 /// True when a target of the library named `lib` reaches `file`.

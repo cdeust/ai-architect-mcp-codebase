@@ -22,8 +22,16 @@ adheres to [Semantic Versioning](https://semver.org/).
   its path beside the definition, and `pub use ext::Set;` leads to a crate the
   repository does not hold, so a library module's `use crate::Set;` (on a
   binding or a return type) no longer reaches an unrelated `Set` of the
-  repository. A tree without Cargo facts keeps its old lookup when a `use`
-  starts with a name that may be a crate. `CRATE_EVIDENCE_FORM` goes to 4, so a
+  repository. The name is read in Rust's order, from the caller's module
+  outwards: a type the module defines keeps the lookup by name; one explicit
+  `use` gives its path; two distinct explicit `use`s (two `#[cfg]` arms)
+  decline; only `use super::*` globs read the parent module the same way; other
+  globs (`use b::*;`) give `b::Set` when exactly one glob has a candidate,
+  decline when two do, and keep the lookup by name when none does. `super::`
+  and `self::` are read from the caller's module, file module included:
+  `super::Set` in `src/a.rs` names the root's `Set`, and `self::b::Set` names
+  one module, not every module ending in `b`. A tree without Cargo facts keeps
+  its old lookup when a `use` starts with a name that may be a crate. `CRATE_EVIDENCE_FORM` goes to 4, so a
   graph needs one full reindex before an incremental refresh. Not covered:
   `use` inside a function body (not indexed), `#[path]` layouts.
 

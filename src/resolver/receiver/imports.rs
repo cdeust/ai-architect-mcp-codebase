@@ -91,20 +91,6 @@ impl ModuleImports {
         self.by_scope.get(scope).map_or(&[], Vec::as_slice)
     }
 
-    /// The distinct paths of the explicit (non-glob) imports of `scope` that
-    /// bind `name`.
-    pub(in crate::resolver) fn naming(&self, scope: &str, name: &str) -> Vec<String> {
-        let mut paths: Vec<String> = self
-            .of_scope(scope)
-            .iter()
-            .filter(|r| !r.is_glob && r.binds() == name)
-            .map(|r| r.path.clone())
-            .collect();
-        paths.sort();
-        paths.dedup();
-        paths
-    }
-
     /// The scopes whose module path, from the root of their crate, is `module`.
     pub(in crate::resolver) fn scopes_at(&self, module: &[String]) -> &[String] {
         self.by_module.get(module).map_or(&[], Vec::as_slice)

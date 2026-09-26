@@ -13,8 +13,7 @@
 //   definition shadows a glob but the index cannot tell which one exists.
 //
 // A path to a crate outside the repository is read like a child module, which
-// no owner has, so it admits nothing. Following stops on a path already seen
-// and after `MAX_STEPS` paths.
+// no owner has, so it admits nothing. Following stops on a path already seen.
 // source: The Rust Reference, "Use declarations" (`use` paths are relative to
 // the module, a glob is shadowed by an item of the same name) and "Paths".
 
@@ -23,11 +22,6 @@ use super::written_path::{library_owns, path_segments, same_crate, Anchor, PathF
 use super::*;
 use crate::graph_store::import_roots::CrateEvidence;
 
-/// Upper bound on the paths one written path may lead to.
-/// source: provisional heuristic; a re-export chain in practice is one or two
-/// hops, and the bound only guards against a cycle the visited set misses.
-const MAX_STEPS: usize = 64;
-
 /// The paths `start` leads to once the `use` declarations of each module it
 /// ends in are followed. A suffix anchor is kept as it is.
 pub(super) fn follow(facts: &PathFacts, caller_file: &str, start: Anchor) -> Vec<Anchor> {
@@ -35,7 +29,10 @@ pub(super) fn follow(facts: &PathFacts, caller_file: &str, start: Anchor) -> Vec
     let mut seen = HashSet::new();
     let mut work = vec![start];
     while let Some(anchor) = work.pop() {
-        if seen.len() >= MAX_STEPS || !seen.insert(anchor.clone()) {
+        // Terminates: a path leads further only through the `use` rows of a
+        // module that has some, which are finitely many, so finitely many
+        // paths are ever produced, and `seen` visits each one once.
+        if !seen.insert(anchor.clone()) {
             continue;
         }
         let Some((module, name)) = anchor.exact_split() else {

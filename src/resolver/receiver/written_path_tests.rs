@@ -330,3 +330,56 @@ fn path_segments_drop_generic_arguments() {
     assert_eq!(path_segments("a::Gen<a::B>::C"), ["a", "Gen", "C"]);
     assert_eq!(path_segments("::std::fmt"), ["std", "fmt"]);
 }
+
+#[test]
+fn self_is_read_exactly_at_the_caller_module() {
+    // A suffix `b::Set` would also match `x::b::Set`; `self::` names one module.
+    let (ev, idx) = (unknown(), index(&["src/lib.rs::c"]));
+    let site = || Site {
+        caller: "src/lib.rs::run",
+        hint: "self::b::Set",
+    };
+    assert!(!admits(&ev, &idx, site(), "src/x/b.rs::Set::m"));
+    assert!(admits(
+        &ev,
+        &idx,
+        Site {
+            caller: "src/lib.rs::c::run",
+            hint: "self::Set"
+        },
+        "src/lib.rs::c::Set::m"
+    ));
+    assert!(!admits(
+        &ev,
+        &idx,
+        Site {
+            caller: "src/lib.rs::c::run",
+            hint: "self::Set"
+        },
+        "src/lib.rs::Set::m"
+    ));
+}
+
+#[test]
+fn super_climbs_out_of_a_file_module() {
+    let (ev, idx) = (unknown(), index(&[]));
+    assert!(admits(
+        &ev,
+        &idx,
+        Site {
+            caller: "src/a.rs::run",
+            hint: "super::Set"
+        },
+        "src/lib.rs::Set::m"
+    ));
+    assert!(admits(
+        &ev,
+        &idx,
+        Site {
+            caller: "src/a/b.rs::run",
+            hint: "super::Set"
+        },
+        "src/a/mod.rs::Set::m"
+    ));
+    assert!(of(&idx, &ev, "src/a.rs::run", "super::super::Set").is_none());
+}

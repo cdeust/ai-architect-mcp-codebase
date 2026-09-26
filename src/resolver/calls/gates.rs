@@ -161,8 +161,8 @@ struct PathRule<'e> {
 
 /// The receiver call resolved against the owner a path names, when the hint
 /// comes with one: written in the binding (`b::Set::new()`, #368), shown by a
-/// `use crate::..` for a return type (#373), or bound by a `use` of the
-/// caller's module (#380). `None` when no path applies (the caller then keeps
+/// `use crate::..` for a return type (#373), or bound by a `use` (explicit or
+/// glob) of the caller's module, in the order `receiver::bind` gives (#380). `None` when no path applies (the caller then keeps
 /// the lookup by name). No same-file preference applies to a path.
 fn written_path_gate(
     ctx: &ResolveContext,
@@ -174,7 +174,7 @@ fn written_path_gate(
         evidence: ctx.evidence,
         imports: ctx.imports,
     };
-    let rule = path_rule(ctx, &facts, site)?;
+    let rule = path_rule(ctx, &facts, site, m)?;
     let assoc = site
         .receiver_hint_via
         .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_ASSOC_PREFIX);
@@ -199,6 +199,7 @@ fn path_rule<'e>(
     ctx: &ResolveContext,
     facts: &receiver::PathFacts<'e>,
     site: &CallSite,
+    m: &str,
 ) -> Option<PathRule<'e>> {
     use crate::graph_store::{
         RECEIVER_HINT_VIA_ASSOC_PREFIX as ASSOC, RECEIVER_HINT_VIA_CONSTRUCTED as CONSTRUCTED,
@@ -236,25 +237,23 @@ fn path_rule<'e>(
         // A return type is named in the module of its function, not the caller's.
         return None;
     }
-    let scope = receiver::caller_scope(ctx.idx, site.caller_qn);
-    match facts
-        .imports
-        .naming(&scope, receiver::strip_generics(hint))
-        .as_slice()
-    {
-        [] => None,
-        [path] => {
-            let first = path.split("::").next().unwrap_or("");
-            Some(PathRule {
-                fallback: !ctx.evidence.known && !["crate", "self", "super"].contains(&first),
-                ..rule(
-                    path,
-                    receiver::WrittenPath::imported(facts, site.caller_qn, path),
-                    via == CONSTRUCTED_RETURN_TYPE,
-                )
-            })
-        }
-        // Two `use` declarations bind the name: in doubt.
-        _ => Some(rule(hint, None, false)),
+    let assoc = via.strip_prefix(ASSOC);
+    let admits_any = |hint: &str, path: &receiver::WrittenPath| {
+        receiver::resolve_local_receiver_strict(ctx.idx, hint, m, |c| {
+            path.admits(c) && assoc.is_none_or(|a| ctx.assoc.builds_owner(c, a))
+        }) != PolicyResolution::NotFound
+    };
+    let name = receiver::strip_generics(hint);
+    match receiver::bind(facts, site.caller_qn, name, &admits_any) {
+        receiver::Binding::ByName => None,
+        receiver::Binding::Decline => Some(rule(hint, None, false)),
+        receiver::Binding::Path {
+            hint: path_hint,
+            path,
+            fallback,
+        } => Some(PathRule {
+            fallback,
+            ..rule(&path_hint, Some(path), via == CONSTRUCTED_RETURN_TYPE)
+        }),
     }
 }
