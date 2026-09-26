@@ -55,6 +55,7 @@ use prd_security::{
 pub(crate) const HELD_GRAPH_TOOLS: &[&str] = &[
     "index_codebase",
     "index_status",
+    "ingest_traces",
     "analyze_codebase",
     "resolve_graph",
     "cluster_graph",

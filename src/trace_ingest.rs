@@ -8,7 +8,6 @@
 use serde_json::{json, Value};
 use std::path::Path;
 
-use crate::graph_cache;
 use crate::history_handlers::{annotate_static_call, callable_label, upsert_observed_call};
 use crate::indexing_handlers::COVERAGE_LIST_CAP;
 
@@ -119,7 +118,10 @@ pub(crate) fn do_ingest_traces(arguments: &Value) -> Result<Value, String> {
         .and_then(|v| v.as_array())
         .ok_or("missing required field 'traces' (array of {caller, callee, count})")?;
 
-    let store = graph_cache::open_cached(graph_path)?;
+    // A write tool (issue #352): a fresh handle through the guarded open, which
+    // releases the read cache's handle first and refuses while a running request
+    // still holds it. Writing through the shared read handle bypassed the rule.
+    let store = crate::graph_store::GraphStore::open_or_create(graph_path)?;
     let mut tally = TraceTally::default();
     for ((caller, callee), count) in aggregate_traces(traces)? {
         tally.absorb(&store, &caller, &callee, count)?;
@@ -152,3 +154,7 @@ pub(crate) fn do_ingest_traces(arguments: &Value) -> Result<Value, String> {
                  nodes (wrong qualified name, or an uncovered/unindexed symbol).",
     }))
 }
+
+#[cfg(test)]
+#[path = "trace_ingest_handles_tests.rs"]
+mod handles_tests;

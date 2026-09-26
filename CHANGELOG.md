@@ -18,7 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   `counts_unavailable` with the reason instead of zeros, and the incremental
   export skips the artifact rather than record zero totals in it. The note
   appended to the schema of the tools that can be refused said that nothing
-  was written: that holds for the seven tools that open the graph once,
+  was written: that holds for the eight tools that open the graph once,
   before any write, but `analyze_codebase` can be refused when its resolve
   stage opens the graph (the graph is then indexed but unresolved) or at its
   final LSP check (after every stage wrote), and `lsp_resolve` when it
@@ -26,7 +26,13 @@ adheres to [Semantic Versioning](https://semver.org/).
   tools was kept by hand and did not include `index_status`; a test now holds
   a handle on a real graph, calls every graph tool through the dispatch table
   and requires the tools that return the refusal to be exactly the listed
-  ones.
+  ones. That test found `ingest_traces` writing its `OBSERVED_CALLS` edges
+  through the read cache's shared handle, the one a running request may hold,
+  instead of the guarded open every other write tool uses, so it was never
+  refused. It now opens the graph like the other write tools and is refused
+  while another request holds the handle. The read cache's open is the only
+  other open that does not release the cache, and every tool that uses it
+  only reads.
 - The benchmark no longer carries a label for a deleted file, and a label that
   names a deleted path now fails `cargo test` (#359). Label q9 of the
   `rust-self` corpus queried `security_gates.rs`, which #262 split into
