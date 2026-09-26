@@ -33,7 +33,7 @@ use super::*;
 mod local;
 pub(super) use local::{
     in_place_method, names_a_type_alias, relabel_as_return_type, resolve_local_receiver_bound,
-    resolve_local_receiver_in_file,
+    resolve_local_receiver_in_file, resolve_local_receiver_where,
 };
 
 #[cfg(test)]

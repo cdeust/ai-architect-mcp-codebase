@@ -136,6 +136,10 @@ pub struct CrateRoot {
     pub default_features: BTreeSet<String>,
     /// What the target builds (issue #354).
     pub kind: TargetKind,
+    /// The crate name other code imports it by, for a library-like target
+    /// (`lib`, `proc-macro`, ...); `None` for a bin, test, bench, example or
+    /// build script, whose `crate` is its own tree (issue #357).
+    pub lib_name: Option<String>,
 }
 
 impl TargetMap {
@@ -298,12 +302,13 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
     for pkg in meta.packages {
         let default_features = cargo_features::default_closure(&pkg.features);
         for t in pkg.targets {
-            if !t.name.is_empty()
-                && t.kind
-                    .iter()
-                    .any(|k| IMPORTABLE_KINDS.contains(&k.as_str()))
-            {
-                crate_names.insert(t.name.replace('-', "_"));
+            let importable = t
+                .kind
+                .iter()
+                .any(|k| IMPORTABLE_KINDS.contains(&k.as_str()));
+            let lib_name = importable.then(|| t.name.replace('-', "_"));
+            if let Some(name) = lib_name.as_ref().filter(|n| !n.is_empty()) {
+                crate_names.insert(name.clone());
             }
             let kind = TargetKind::from_cargo(&t.kind);
             let abs = PathBuf::from(&t.src_path);
@@ -320,6 +325,7 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
                 entry: rel.clone(),
                 default_features: default_features.clone(),
                 kind,
+                lib_name,
             });
             target_files.insert(rel);
         }

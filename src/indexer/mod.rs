@@ -164,6 +164,7 @@ pub fn index_codebase_with_language(
     if existing {
         store.require_cfg_gate_metadata()?;
         store.require_code_context_metadata()?;
+        store.require_crate_evidence_metadata()?;
     }
     // No current marker while this index runs: a failure leaves a graph that the
     // next incremental refresh refuses (#353).
@@ -289,13 +290,14 @@ pub fn index_codebase_with_language(
     // is `or_insert`, see `coverage.rs`. The same `cargo metadata` map also
     // drives the feature-gated attribution (issue #291).
     let facts = record_cargo_attributions(&mut collector, codebase_path, &source_files);
-    // Receiver hints read off a return type named by an external-looking `use`
-    // are kept only for a crate of this workspace (issues #348 and #349); every
-    // `#[cfg]` twin learns whether the default build compiles it (issue #353).
+    // The workspace's crate names, read by the resolver to accept a receiver
+    // type named through a `use` (issues #348, #349 and #358); every `#[cfg]`
+    // twin learns whether the default build compiles it (issue #353).
     incremental::apply_cargo_facts(&store, &facts);
 
     store.write_canonical_marker()?;
     store.write_code_context_marker()?;
+    store.write_crate_evidence_marker()?;
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -364,11 +366,15 @@ fn record_cargo_attributions(
     for (rel, detail) in found.feature_gated {
         collector.record_feature_gated(&rel, detail);
     }
+    let known = found.status == cargo_attribution::CargoAttributionStatus::Known;
     collector.set_cargo_attribution(found.status);
     cargo_attribution::CargoFacts {
+        known,
         crate_names: found.crate_names,
         file_features: found.file_features,
         target_contexts: found.target_contexts,
+        targets: found.targets,
+        target_owners: found.target_owners,
     }
 }
 

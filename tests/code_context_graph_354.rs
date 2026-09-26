@@ -246,7 +246,10 @@ fn a_full_index_writes_both_markers() {
         ("src/lib.rs", "pub fn f() {}\n"),
     ]);
     let mut values: Vec<String> = p
-        .rows("MATCH (m:GraphMarker) RETURN m.id, m.value")
+        .rows(
+            "MATCH (m:GraphMarker) WHERE m.id IN ['cfg_canonical_form', 'code_context_form'] \
+             RETURN m.id, m.value",
+        )
         .into_iter()
         .map(|r| format!("{}={}", r[0], r[1]))
         .collect();

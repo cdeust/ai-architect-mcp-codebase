@@ -23,6 +23,7 @@ fn known(roots: &[(&str, &[&str])]) -> TargetMap {
                 entry: PathBuf::from(entry),
                 default_features: features.iter().map(|f| f.to_string()).collect(),
                 kind: crate::indexer::cargo_targets::TargetKind::Production,
+                lib_name: None,
             })
             .collect(),
         crate_names: BTreeSet::new(),

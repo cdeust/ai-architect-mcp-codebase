@@ -67,6 +67,11 @@ pub struct CargoAttributions {
     /// `test`, `bench`, `example`; root-relative, forward-slash keys), empty
     /// unless the status is `Known`. Issue #354.
     pub(crate) target_contexts: BTreeMap<String, &'static str>,
+    /// Every target entry file, with its crate name for a library-like target,
+    /// and the entries whose module tree reaches each file (root-relative,
+    /// forward-slash), empty unless the status is `Known`. Issue #357.
+    pub(crate) targets: BTreeMap<String, Option<String>>,
+    pub(crate) target_owners: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// What the Cargo map tells the rest of an index pass, apart from the coverage
@@ -74,9 +79,26 @@ pub struct CargoAttributions {
 /// each file is compiled with (issue #353). Empty when the map is unknown.
 #[derive(Debug, Default)]
 pub(crate) struct CargoFacts {
+    /// True when the Cargo map was known on this pass.
+    pub known: bool,
     pub crate_names: BTreeSet<String>,
     pub file_features: BTreeMap<String, FileFeatures>,
     pub target_contexts: BTreeMap<String, &'static str>,
+    pub targets: BTreeMap<String, Option<String>>,
+    pub target_owners: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl CargoFacts {
+    /// What the resolver reads to accept a receiver type named through a `use`
+    /// (issues #348, #349 and #358).
+    pub(crate) fn crate_evidence(&self) -> crate::graph_store::import_roots::CrateEvidence {
+        crate::graph_store::import_roots::CrateEvidence {
+            known: self.known,
+            crate_names: self.crate_names.clone(),
+            targets: self.targets.clone(),
+            owners: self.target_owners.clone(),
+        }
+    }
 }
 
 /// Attributes `rust_files` (root-relative `.rs` paths indexed this pass)
@@ -111,6 +133,8 @@ fn empty(status: CargoAttributionStatus) -> CargoAttributions {
         crate_names: BTreeSet::new(),
         file_features: BTreeMap::new(),
         target_contexts: BTreeMap::new(),
+        targets: BTreeMap::new(),
+        target_owners: BTreeMap::new(),
     }
 }
 
@@ -120,9 +144,19 @@ fn attributed(
     rust_files: &BTreeSet<PathBuf>,
     map: &TargetMap,
 ) -> CargoAttributions {
-    let crate_names = match map {
-        TargetMap::Known { crate_names, .. } => crate_names.clone(),
-        TargetMap::Unknown { .. } => BTreeSet::new(),
+    let (crate_names, targets) = match map {
+        TargetMap::Known {
+            crate_names,
+            crate_roots,
+            ..
+        } => (
+            crate_names.clone(),
+            crate_roots
+                .iter()
+                .map(|r| (forward_slash(&r.entry), r.lib_name.clone()))
+                .collect(),
+        ),
+        TargetMap::Unknown { .. } => (BTreeSet::new(), BTreeMap::new()),
     };
     let outside_targets = rust_files
         .iter()
@@ -145,6 +179,13 @@ fn attributed(
         .into_iter()
         .map(|(rel, context)| (forward_slash(&rel), context))
         .collect();
+    let target_owners = target_context::owners(codebase, map, rust_files)
+        .into_iter()
+        .map(|(rel, entries)| {
+            let entries = entries.iter().map(|e| forward_slash(e)).collect();
+            (forward_slash(&rel), entries)
+        })
+        .collect();
     CargoAttributions {
         status: CargoAttributionStatus::Known,
         outside_targets,
@@ -152,6 +193,8 @@ fn attributed(
         crate_names,
         file_features,
         target_contexts,
+        targets,
+        target_owners,
     }
 }
 

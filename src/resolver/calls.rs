@@ -7,6 +7,7 @@
 use super::*;
 use crate::graph_store::{call_rel_table, call_site_rel_table};
 
+mod crate_scope;
 mod gates;
 mod variant_guard;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
@@ -46,6 +47,9 @@ pub(super) fn resolve_calls(
     // reason an earlier pass wrote on them is stale.
     let mut selected_site_ids: Vec<String> = Vec::new();
     let twins = super::cfg_select::TwinView::load(store);
+    // Issue #358: the facts of the latest index pass, not those of the pass
+    // that parsed each file.
+    let evidence = store.crate_evidence();
 
     for row in &qr.rows {
         if row.len() < 5 {
@@ -73,6 +77,7 @@ pub(super) fn resolve_calls(
             idx,
             file_imports,
             twins: &twins,
+            evidence: &evidence,
         };
         let row_input = RowInput {
             cs_id: &row[0],
@@ -128,6 +133,7 @@ fn resolve_one_call_site(
         idx: graph.idx,
         provider,
         file_imports: graph.file_imports,
+        evidence: graph.evidence,
     };
     let resolved_before = *tally.resolved;
     match resolve_single_call(&ctx, &site, &file_id) {
@@ -206,6 +212,8 @@ struct ResolveContext<'a> {
     idx: &'a SymbolIndex,
     provider: &'a dyn crate::language_provider::LanguageProvider,
     file_imports: &'a HashMap<String, Vec<String>>,
+    /// The Cargo facts of the latest index pass (issue #358).
+    evidence: &'a crate::graph_store::import_roots::CrateEvidence,
 }
 
 /// The per-run, read-only graph state `resolve_one_call_site` needs —
@@ -217,6 +225,7 @@ struct GraphContext<'a> {
     file_imports: &'a HashMap<String, Vec<String>>,
     /// `cfg_active` of every `#[cfg]` twin (issue #353).
     twins: &'a super::cfg_select::TwinView,
+    evidence: &'a crate::graph_store::import_roots::CrateEvidence,
 }
 
 /// One `CallSite` scan row, grouped for the same reason as `GraphContext`.

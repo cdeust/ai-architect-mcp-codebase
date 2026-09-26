@@ -285,7 +285,8 @@ pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> R
     let store = graph_store::GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
     store.require_cfg_gate_metadata()?;
-    store.require_code_context_metadata()
+    store.require_code_context_metadata()?;
+    store.require_crate_evidence_metadata()
 }
 
 /// Imports the snapshot into `graph_dir` and builds the bootstrap response

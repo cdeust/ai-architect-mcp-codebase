@@ -361,8 +361,12 @@ fn a_return_type_that_is_an_alias_elsewhere_in_the_repository_gets_no_edge() {
         .expect("query site");
     assert_eq!(
         site.rows,
-        vec![vec!["S".to_string(), "return-type".to_string()]],
-        "the parser sees an alias only in its own file, so the hint is read here"
+        vec![vec![
+            "S".to_string(),
+            "return-type-local-import:crate::alias::S".to_string()
+        ]],
+        "the parser sees an alias only in its own file, so the hint is read here \
+         (with the path of the same-crate import, issue #357)"
     );
 }
 

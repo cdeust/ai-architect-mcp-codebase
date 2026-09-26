@@ -77,27 +77,49 @@ pub(super) fn rust_local_receiver_gate(
         receiver::ReceiverForm::None if constructed => receiver::in_place_method(site.callee)?,
         _ => return None,
     };
-    if site
+    let imported_from = site
         .receiver_hint_via
-        .starts_with(crate::graph_store::RECEIVER_HINT_VIA_IMPORT_PREFIX)
-    {
-        // A return type named only by a `use` of a path the indexer could not
-        // show to be a crate of this repository (issues #348 and #349): a
-        // foreign crate's type of that name would match a repository namesake.
+        .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_IMPORT_PREFIX);
+    if imported_from.is_some_and(|root| !ctx.evidence.crate_names.contains(root)) {
+        // A return type named only by a `use` of a crate the latest index pass
+        // did not record as a library of this repository (issues #348, #349,
+        // #358): a foreign crate's type of that name would match a namesake.
         return Some(PolicyResolution::NotFound);
     }
-    let via_return_type = site.receiver_hint_via
-        == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE
+    let local_path = site
+        .receiver_hint_via
+        .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX);
+    let via_return_type = imported_from.is_some()
+        || local_path.is_some()
+        || site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_RETURN_TYPE
         || site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE;
     if via_return_type && receiver::names_a_type_alias(ctx.idx, site.receiver_hint) {
         // A return type that is an alias names another type; the lookup by
         // last segment would match a namesake (issues #348 and #349).
         return Some(PolicyResolution::NotFound);
     }
-    let resolution = if constructed {
-        receiver::resolve_local_receiver_in_file(ctx.idx, site.receiver_hint, &m, file_id)
-    } else {
-        receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id)
+    let scope = local_path.map(|path| {
+        super::crate_scope::CrateScope::of(ctx.evidence, ctx.file_imports, file_id, path)
+    });
+    let resolution = match scope.filter(super::crate_scope::CrateScope::restricts) {
+        _ if constructed => {
+            receiver::resolve_local_receiver_in_file(ctx.idx, site.receiver_hint, &m, file_id)
+        }
+        // `use crate::X` in a test, bench, example or bin target: only the
+        // candidates of the target `crate` names there (issue #357).
+        Some(scope) => receiver::resolve_local_receiver_where(
+            ctx.idx,
+            site.receiver_hint,
+            &m,
+            file_id,
+            |candidate| {
+                scope.admits(
+                    ctx.evidence,
+                    &extract_file_prefix_or_self(&candidate.qualified_name),
+                )
+            },
+        ),
+        None => receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id),
     };
     Some(if via_return_type {
         receiver::relabel_as_return_type(resolution)

@@ -245,6 +245,12 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     // profile and the caller's gate, either of which may have changed since
     // (issue #353).
     store.reset_cfg_selected()?;
+    // Likewise a receiver typed through a `use`: whether its crate belongs to
+    // the repository follows the latest Cargo facts, and a file an incremental
+    // pass did not reparse keeps the row an earlier run wrote (issue #358).
+    store.reset_call_rows(crate::ambiguity_policy::resolution_label(
+        crate::ambiguity_policy::Evidence::ReceiverReturnType,
+    ))?;
     let existing = load_existing_edges(store)?;
     let mut buf = EdgeBuffer::new(existing);
 

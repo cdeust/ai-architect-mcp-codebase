@@ -159,6 +159,7 @@ pub fn index_incremental(
     store.require_entry_metadata()?;
     store.require_cfg_gate_metadata()?;
     store.require_code_context_metadata()?;
+    store.require_crate_evidence_metadata()?;
     store.ensure_cfg_active_columns()?;
     store.ensure_rel_tables()?;
     // No create_schema() here: the graph already exists (this path is reached

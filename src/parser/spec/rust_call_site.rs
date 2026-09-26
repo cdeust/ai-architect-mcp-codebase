@@ -63,7 +63,8 @@ impl RustConventions {
         let via = hinted.derived.as_ref().and_then(|d| {
             use crate::graph_store::{
                 RECEIVER_HINT_VIA_CONSTRUCTED, RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE,
-                RECEIVER_HINT_VIA_IMPORT_PREFIX, RECEIVER_HINT_VIA_RETURN_TYPE,
+                RECEIVER_HINT_VIA_IMPORT_PREFIX, RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX,
+                RECEIVER_HINT_VIA_RETURN_TYPE,
             };
             match (d.constructed, d.via_return_type, &d.import_root) {
                 (true, false, _) => Some(RECEIVER_HINT_VIA_CONSTRUCTED.to_string()),
@@ -72,7 +73,10 @@ impl RustConventions {
                 (false, true, Some(root)) => {
                     Some(format!("{RECEIVER_HINT_VIA_IMPORT_PREFIX}{root}"))
                 }
-                (false, true, None) => Some(RECEIVER_HINT_VIA_RETURN_TYPE.to_string()),
+                (false, true, None) => Some(match &d.local_import {
+                    Some(path) => format!("{RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX}{path}"),
+                    None => RECEIVER_HINT_VIA_RETURN_TYPE.to_string(),
+                }),
             }
         });
         let mut entry = Self::call_site_spanning(

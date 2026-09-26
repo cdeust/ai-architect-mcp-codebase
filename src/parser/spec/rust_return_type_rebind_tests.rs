@@ -206,7 +206,8 @@ fn a_file_without_a_glob_keeps_the_hint_for_an_imported_type_until_a_crate_is_sh
         "use dy::Set;\nfn make() -> Set { todo!() }\nfn run() { let s = make(); s.m(); }",
     );
     // The hint is recorded, marked unverified with the crate the path starts
-    // with; the indexer promotes it only for a crate of the repository.
+    // with; the resolver accepts it only for a crate the latest index pass
+    // recorded as a library of the repository (issue #358).
     assert_eq!(
         hint_of(&src, "s.m"),
         (Some("Set".into()), Some("return-type-import:dy".into()))
@@ -250,7 +251,14 @@ fn a_type_of_the_root_reaches_a_module_only_through_an_import() {
              \x20   pub fn run() {{ let s = make(); s.m(); }}\n}}"
         ))
     };
-    assert_eq!(hint_of(&body("use super::Set;"), "s.m"), derived("Set"));
+    // Shown by a same-crate import: the origin keeps the path (issue #357).
+    assert_eq!(
+        hint_of(&body("use super::Set;"), "s.m"),
+        (
+            Some("Set".into()),
+            Some("return-type-local-import:super::Set".into())
+        )
+    );
     assert_eq!(hint_of(&body("use super::*;"), "s.m"), derived("Set"));
     // Nothing shows where the name comes from: not valid Rust, so not a guess.
     assert_eq!(hint_of(&body(""), "s.m"), NONE);
@@ -271,4 +279,31 @@ fn a_glob_of_the_root_does_not_reach_a_module_that_globs_super() {
          \x20   pub fn run() { let s = make(); s.m(); }\n}",
     );
     assert_eq!(hint_of(&src, "s.m"), derived("Set"));
+}
+
+/// Issue #357: a return type shown by a `use` of the same crate keeps its whole
+/// path in the origin, because which crate `crate` names depends on the target
+/// the file belongs to; a type defined in the module keeps plain `return-type`.
+#[test]
+fn a_same_crate_import_records_its_whole_path_and_a_definition_does_not() {
+    for (import, path) in [
+        ("use crate::Set;", "crate::Set"),
+        ("use crate::shapes::Set;", "crate::shapes::Set"),
+        ("use super::Set;", "super::Set"),
+        ("use crate::{shapes::Set, other};", "crate::shapes::Set"),
+    ] {
+        let src = without_local_set(&format!(
+            "{import}\nfn make() -> Set {{ todo!() }}\nfn run() {{ let s = make(); s.m(); }}"
+        ));
+        assert_eq!(
+            hint_of(&src, "s.m"),
+            (
+                Some("Set".into()),
+                Some(format!("return-type-local-import:{path}"))
+            ),
+            "{import}"
+        );
+    }
+    let defined = with_set("fn make() -> Set { todo!() }\nfn run() { let s = make(); s.m(); }");
+    assert_eq!(hint_of(&defined, "s.m"), derived("Set"));
 }
