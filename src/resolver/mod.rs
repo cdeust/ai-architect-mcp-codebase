@@ -15,6 +15,7 @@ use std::time::Instant;
 
 mod calls;
 mod cfg_select;
+pub(crate) mod cfg_verdict;
 mod cfg_twins;
 mod extends;
 mod implements;

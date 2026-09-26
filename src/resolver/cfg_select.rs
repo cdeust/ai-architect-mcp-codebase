@@ -2,16 +2,9 @@
 // compiles, when the build decides it (issue #353, part B).
 //
 // `cfg_twins` leaves a call to a twin set open, because the twins are distinct
-// nodes and nothing separates them. This module reads the two facts that can:
-//
-// 1. The caller's own gate. A caller whose id carries `#cfg(unix)` exists only
-//    when `unix` holds, so among `helper#cfg(unix)` and `helper#cfg(not(unix))`
-//    it reaches the first, whatever the default build says. This is syntactic:
-//    the twin is compiled when every conjunct of its gate is a conjunct of the
-//    caller's, and is compiled out when the caller holds the negation of one of
-//    its conjuncts. Nothing is solved; a gate that needs reasoning stays open.
-// 2. The default profile: the `cfg_active` column the indexer wrote from the
-//    package's default features (`indexer::cfg_active`).
+// nodes and nothing separates them. Two facts can: the caller's own gate and the
+// default build profile, both read by the verdict `cfg_verdict` shares with the
+// language-server pass (issue #366).
 //
 // A twin is chosen only when exactly one twin is not ruled out AND that twin is
 // shown compiled. A lone survivor that is merely undecided is not chosen: two
@@ -19,84 +12,10 @@
 // to a twin the build might not compile. Every case that is not decided leaves
 // the site open with the reason `cfg_twins`, as before.
 
-use std::collections::HashMap;
-
+use super::cfg_verdict::{caller_gates, verdict, Verdict};
 use super::SymbolEntry;
-use crate::graph_store::{cfg_gates_in, GraphStore, CFG_ACTIVE, CFG_INACTIVE};
-use crate::parser::cfg_compact::parse_compact;
-use crate::parser::cfg_expr::CfgPredicate;
 
-/// `cfg_active` of every twin of the graph, read once per resolve pass.
-#[derive(Default)]
-pub(super) struct TwinView {
-    active: HashMap<String, String>,
-}
-
-impl TwinView {
-    pub(super) fn load(store: &GraphStore) -> Self {
-        TwinView {
-            active: store.cfg_active_by_id(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn with(entries: &[(&str, &str)]) -> Self {
-        TwinView {
-            active: entries
-                .iter()
-                .map(|(id, v)| (id.to_string(), v.to_string()))
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Verdict {
-    Compiled,
-    NotCompiled,
-    Undecided,
-}
-
-/// The conjuncts of the gates written in `qn`, or `None` when one gate does not
-/// parse (nothing is then known about the item).
-fn conjuncts(qn: &str) -> Option<Vec<CfgPredicate>> {
-    let mut out: Vec<CfgPredicate> = Vec::new();
-    for gate in cfg_gates_in(qn) {
-        let parts = match parse_compact(gate)? {
-            CfgPredicate::All(items) => items,
-            single => vec![single],
-        };
-        for part in parts {
-            if !out.contains(&part) {
-                out.push(part);
-            }
-        }
-    }
-    Some(out)
-}
-
-fn negation(predicate: &CfgPredicate) -> CfgPredicate {
-    match predicate {
-        CfgPredicate::Not(inner) => (**inner).clone(),
-        other => CfgPredicate::Not(Box::new(other.clone())),
-    }
-}
-
-fn verdict(view: &TwinView, caller: &[CfgPredicate], twin: &SymbolEntry) -> Verdict {
-    if let Some(gate) = conjuncts(&twin.qualified_name) {
-        if !gate.is_empty() && gate.iter().all(|c| caller.contains(c)) {
-            return Verdict::Compiled;
-        }
-        if gate.iter().any(|c| caller.contains(&negation(c))) {
-            return Verdict::NotCompiled;
-        }
-    }
-    match view.active.get(&twin.id).map(String::as_str) {
-        Some(CFG_ACTIVE) => Verdict::Compiled,
-        Some(CFG_INACTIVE) => Verdict::NotCompiled,
-        _ => Verdict::Undecided,
-    }
-}
+pub(super) use super::cfg_verdict::TwinView;
 
 /// The twin a call to `candidates` reaches, when every candidate is a twin of
 /// one item and the build decides which one it compiles; `None` otherwise (an
@@ -119,10 +38,10 @@ pub(super) fn select<'a>(
     caller_qn: &str,
     twins: &'a [SymbolEntry],
 ) -> Option<&'a SymbolEntry> {
-    let caller = conjuncts(caller_qn).unwrap_or_default();
+    let caller = caller_gates(caller_qn);
     let mut not_ruled_out = twins
         .iter()
-        .map(|twin| (twin, verdict(view, &caller, twin)))
+        .map(|twin| (twin, verdict(view, &caller, &twin.id, &twin.qualified_name)))
         .filter(|(_, v)| *v != Verdict::NotCompiled);
     let (twin, verdict) = not_ruled_out.next()?;
     if not_ruled_out.next().is_some() {
