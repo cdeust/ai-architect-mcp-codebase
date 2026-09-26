@@ -117,15 +117,17 @@ impl LspPass {
                 crate::graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS,
             )?;
         }
-        let twin_ids: Vec<&str> = self
-            .compiled_out_twin_ids
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
-        store.set_callsite_unresolved_reason(
-            &twin_ids,
-            crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
-        )?;
+        if !self.compiled_out_twin_ids.is_empty() {
+            let twin_ids: Vec<&str> = self
+                .compiled_out_twin_ids
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            store.set_callsite_unresolved_reason(
+                &twin_ids,
+                crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
+            )?;
+        }
         Ok(())
     }
 

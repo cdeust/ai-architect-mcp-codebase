@@ -232,9 +232,10 @@ impl GraphStore {
                  AND b.id CONTAINS {} RETURN a.id, b.id",
                 cypher_str(TWIN_MARK)
             );
-            let Ok(rows) = self.execute_query(&cypher) else {
-                continue;
-            };
+            // `resolve_graph` creates every missing relationship table before
+            // this runs, so a failed read is a real error: a stale row to a
+            // compiled-out twin must not survive it silently.
+            let rows = self.execute_query(&cypher)?;
             for row in rows.rows.iter().filter(|r| drop(&r[0], &r[1])) {
                 self.run(&format!(
                     "MATCH (a:{from} {{id: {}}})-[r:{rel}]->(b:{to} {{id: {}}}) \

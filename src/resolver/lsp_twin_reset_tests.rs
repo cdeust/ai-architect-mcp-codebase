@@ -163,10 +163,17 @@ fn resolve_graph_drops_a_language_server_row_to_a_compiled_out_twin() {
         "the row to the compiled-out twin must be deleted: {site:?}"
     );
     assert_eq!(site, [pair(SLOW, "cfg-selected")]);
+    // Caller level: no row of any method to the compiled-out twin, and a row
+    // to the compiled twin (caller-level rows are one per target, so its
+    // method may be another site's).
     let caller = rows(&store, "Calls_Function_Function", CALLER);
     assert!(
-        !caller.contains(&pair(FAST, "lsp-definition")),
-        "the caller-level row to the compiled-out twin must be deleted: {caller:?}"
+        !caller.iter().any(|(t, _)| t == FAST),
+        "the caller must keep no row to the compiled-out twin: {caller:?}"
+    );
+    assert!(
+        caller.iter().any(|(t, _)| t == SLOW),
+        "the caller must reach the compiled twin: {caller:?}"
     );
 
     // Rows to a compiled or an undecided twin, and a row of another method
