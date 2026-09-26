@@ -8,6 +8,25 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A graph whose totals cannot be read is no longer reported as an empty one
+  (#361), and the note on the handle refusal says what each tool has already
+  written when it arrives (#363). `index_status` read its counts through a
+  helper that turned any failure into zeros, so while a running request held
+  the graph's handle it answered `status: ok` with `node_count`, `edge_count`
+  and `call_site_target_count` at 0. It now fails with the reason (the
+  refusal code opens it); the bootstrap responses of `index_codebase` report
+  `counts_unavailable` with the reason instead of zeros, and the incremental
+  export skips the artifact rather than record zero totals in it. The note
+  appended to the schema of the tools that can be refused said that nothing
+  was written: that holds for the seven tools that open the graph once,
+  before any write, but `analyze_codebase` can be refused when its resolve
+  stage opens the graph (the graph is then indexed but unresolved) or at its
+  final LSP check (after every stage wrote), and `lsp_resolve` when it
+  reopens the graph to count its rows; each now says so. The list of those
+  tools was kept by hand and did not include `index_status`; a test now holds
+  a handle on a real graph, calls every graph tool through the dispatch table
+  and requires the tools that return the refusal to be exactly the listed
+  ones.
 - The benchmark no longer carries a label for a deleted file, and a label that
   names a deleted path now fails `cargo test` (#359). Label q9 of the
   `rust-self` corpus queried `security_gates.rs`, which #262 split into

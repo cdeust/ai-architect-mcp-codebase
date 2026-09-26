@@ -357,7 +357,11 @@ pub(crate) fn do_index_status(arguments: &Value) -> Result<Value, String> {
     if !graph_path.exists() {
         return Err(format!("graph_path does not exist: {graph_str}"));
     }
-    let counts = graph_counts(graph_path);
+    // A total that cannot be read is an error, never zeros that read as an
+    // empty graph (issue #361); the reason names the refusal, for example
+    // `graph_handle_in_use` while a running request holds the handle.
+    let counts = try_graph_counts(graph_path)
+        .map_err(|e| format!("counts unavailable for {graph_str}: {e}"))?;
     let mut coverage = coverage_summary_for_graph(graph_path);
     let twins = crate::indexing_handlers_coverage::cfg_twin_status(graph_path);
     if let (Some((_, items)), Some(gated)) = (&twins, coverage.get_mut("feature_gated")) {
@@ -375,3 +379,7 @@ pub(crate) fn do_index_status(arguments: &Value) -> Result<Value, String> {
         "cfg_twins": twins.map(|(t, _)| t),
     }))
 }
+
+#[cfg(test)]
+#[path = "index_status_counts_tests.rs"]
+mod index_status_counts_tests;

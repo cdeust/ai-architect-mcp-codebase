@@ -393,6 +393,9 @@ mod artifact_bootstrap_tests;
 #[path = "coverage_tools_tests.rs"]
 mod coverage_tools_tests;
 #[cfg(test)]
+#[path = "held_graph_tools_tests.rs"]
+mod held_graph_tools_tests;
+#[cfg(test)]
 #[path = "pagination_tests.rs"]
 mod pagination_tests;
 #[cfg(test)]

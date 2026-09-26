@@ -169,7 +169,16 @@ pub(crate) fn finish_incremental_response(
         // Whole-graph totals are needed only for the export sidecar; compute
         // them lazily here (a full table scan the incremental pass itself skips)
         // and surface them in the response alongside the artifact stats.
-        let counts = graph_counts(graph_dir);
+        // The artifact records the totals, so it is not exported without them
+        // (issue #361): zeros would be a false record of the graph's size.
+        let counts = match try_graph_counts(graph_dir) {
+            Ok(c) => c,
+            Err(e) => {
+                response["counts_unavailable"] = json!(e);
+                response["artifact_error"] = json!(format!("counts unavailable: {e}"));
+                return response;
+            }
+        };
         let (node_count, edge_count) = (counts.nodes, counts.edges);
         response["node_count"] = json!(node_count);
         response["edge_count"] = json!(edge_count);
@@ -305,19 +314,16 @@ pub(crate) fn bootstrap_import(
     let meta_err = write_graph_meta(output_dir, codebase).err().inspect(|e| {
         eprintln!("[ap] graph meta sidecar write failed (bootstrap succeeded): {e}");
     });
-    let counts = graph_counts(graph_dir);
     let mut resp = json!({
         "stage": 3,
         "status": "ok",
         "tool": "index_codebase",
         "source": "artifact_bootstrap",
         "graph_path": graph_dir.to_string_lossy(),
-        "node_count": counts.nodes,
-        "edge_count": counts.edges,
-        "call_site_target_count": counts.call_site_targets,
         "artifact_commit": meta.commit,
         "artifact_tool_version": meta.tool_version,
     });
+    merge_fields(&mut resp, count_fields(graph_dir));
     if let Some(info) = stale {
         resp["graph_state"] = json!("accepted_stale");
         resp["stale_artifact"] = serde_json::to_value(&info).unwrap_or_else(|_| json!({}));
@@ -384,7 +390,6 @@ pub(crate) fn bootstrap_import_and_fill(
         indexer::FillMethod::GitDiff => "git_diff",
         indexer::FillMethod::ContentHash => "content_hash",
     };
-    let counts = graph_counts(graph_dir);
     let mut resp = json!({
         "stage": 3,
         "status": "ok",
@@ -392,9 +397,6 @@ pub(crate) fn bootstrap_import_and_fill(
         "source": "artifact_bootstrap_fill",
         "graph_state": "filled_to_working_tree",
         "graph_path": graph_dir.to_string_lossy(),
-        "node_count": counts.nodes,
-        "edge_count": counts.edges,
-        "call_site_target_count": counts.call_site_targets,
         "artifact_commit": meta.commit,
         "artifact_tool_version": meta.tool_version,
         "head_sha": info.head_sha,
@@ -407,6 +409,7 @@ pub(crate) fn bootstrap_import_and_fill(
         "files_reparsed": fill.result.files_reparsed,
         "fill_elapsed_ms": fill.result.elapsed_ms,
     });
+    merge_fields(&mut resp, count_fields(graph_dir));
     if let Some(behind) = info.commits_behind {
         resp["artifact_commits_behind"] = json!(behind);
     }
@@ -456,33 +459,6 @@ pub(crate) fn run_cochange(
     }
 }
 
-/// Reads node and relationship counts from an on-disk graph. Best-effort: an
-/// open/query failure yields zeros rather than aborting the bootstrap
-/// response, because the counts are informational and the graph is already in
-/// place. A caller that must tell "empty" from "unreadable" uses
-/// `try_graph_counts`.
-pub(crate) fn graph_counts(graph_dir: &Path) -> graph_store::GraphCounts {
-    try_graph_counts(graph_dir).unwrap_or_default()
-}
-
-/// `graph_counts` without the zero fallback: the reason when the graph cannot
-/// be opened or queried.
-pub(crate) fn try_graph_counts(graph_dir: &Path) -> Result<graph_store::GraphCounts, String> {
-    if !graph_dir.exists() {
-        return Err(format!("graph not found: {}", graph_dir.display()));
-    }
-    graph_store::GraphStore::open_or_create(graph_dir)?.graph_counts()
-}
-
-#[cfg(test)]
-mod graph_counts_tests {
-    use super::try_graph_counts;
-
-    #[test]
-    fn a_missing_graph_path_is_an_error_and_is_not_created() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let missing = tmp.path().join("no-such-graph");
-        assert!(try_graph_counts(&missing).is_err());
-        assert!(!missing.exists(), "a read must not create a graph");
-    }
-}
+#[path = "history_counts.rs"]
+mod counts;
+pub(crate) use counts::{count_fields, merge_fields, try_graph_counts};
