@@ -71,6 +71,9 @@ pub(super) struct DerivedHint {
     /// The crate an explicit `use` names the return type through, when that is
     /// the only thing showing where the type comes from.
     pub(super) import_root: Option<String>,
+    /// The whole path of a `use` of the same crate that shows the return type
+    /// (issue #357).
+    pub(super) local_import: Option<String>,
     /// True when the receiver spells its own type: a tuple constructor, a
     /// struct literal or `Type::assoc(..)` (issue #355). The resolver then keeps
     /// only candidates of the caller's file.
@@ -88,6 +91,7 @@ pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<Deri
             ty,
             via_return_type: false,
             import_root: None,
+            local_import: None,
             constructed: false,
         });
     }
@@ -97,6 +101,7 @@ pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<Deri
                 ty: found.ty,
                 via_return_type: true,
                 import_root: found.import_root,
+                local_import: found.local_import,
                 constructed: false,
             });
         }
@@ -106,6 +111,7 @@ pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<Deri
         ty: found.ty,
         via_return_type: found.via_return_type,
         import_root: None,
+        local_import: None,
         constructed: true,
     })
 }

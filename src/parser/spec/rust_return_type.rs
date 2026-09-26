@@ -59,6 +59,10 @@ enum Wrapper {
 pub(super) struct ReturnTypeHint {
     pub(super) ty: String,
     pub(super) import_root: Option<String>,
+    /// The whole path when the type is shown by a `use` of the same crate
+    /// (`crate::shapes::Set`): which crate `crate` names depends on the target
+    /// the file belongs to, which only the resolver knows (issue #357).
+    pub(super) local_import: Option<String>,
 }
 
 /// How the binding takes its value from the initialiser.
@@ -117,12 +121,18 @@ pub(super) fn return_type_hint(
     if is_own_generic(source, function, &ty) || file_declares_alias(source, call, &ty) {
         return None;
     }
-    let import_root = match super::rust_type_scope::type_source(source, function, &ty) {
-        Shown::No => return None,
-        Shown::Local => None,
-        Shown::Import(root) => Some(root),
-    };
-    Some(ReturnTypeHint { ty, import_root })
+    let (import_root, local_import) =
+        match super::rust_type_scope::type_source(source, function, &ty) {
+            Shown::No => return None,
+            Shown::Local => (None, None),
+            Shown::LocalImport(path) => (None, Some(path)),
+            Shown::Import(root) => (Some(root), None),
+        };
+    Some(ReturnTypeHint {
+        ty,
+        import_root,
+        local_import,
+    })
 }
 
 /// True when the file declares `type <ty> = ..`: the return type then names

@@ -101,6 +101,40 @@ pub(crate) fn analyse(
         .collect()
 }
 
+/// The entry files of every target whose module tree reaches each indexed file,
+/// by root-relative path (issue #357): inside a file, `crate` names each of these
+/// targets. Every declaration is followed, gated or not, so the `#[cfg(test)]`
+/// modules of a library are owned by the library, whose `crate` they see. A
+/// file no declaration reaches has no entry. Empty unless the Cargo map is known.
+pub(crate) fn owners(
+    root: &Path,
+    map: &TargetMap,
+    indexed: &BTreeSet<PathBuf>,
+) -> BTreeMap<PathBuf, BTreeSet<PathBuf>> {
+    let TargetMap::Known { crate_roots, .. } = map else {
+        return BTreeMap::new();
+    };
+    let tree = ModuleTree::new(root, indexed, crate_roots);
+    let mut owned: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
+    for crate_root in crate_roots {
+        if !indexed.contains(&crate_root.entry) {
+            continue;
+        }
+        let mut pending = vec![crate_root.entry.clone()];
+        while let Some(file) = pending.pop() {
+            if !owned
+                .entry(file.clone())
+                .or_default()
+                .insert(crate_root.entry.clone())
+            {
+                continue;
+            }
+            pending.extend(tree.children(&file).into_iter().map(|(_, target)| target));
+        }
+    }
+    owned
+}
+
 /// True when the declaration exists only under `cfg(test)`. A declaration whose
 /// `cfg` did not parse (`None`) is not test-gated: it keeps the class above it.
 fn requires_test(cfg: &Option<Vec<CfgPredicate>>) -> bool {

@@ -7,6 +7,7 @@
 use super::*;
 use crate::graph_store::{call_rel_table, call_site_rel_table};
 
+mod crate_scope;
 mod gates;
 mod variant_guard;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};

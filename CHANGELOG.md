@@ -8,6 +8,30 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A receiver typed through `use crate::X` in a test, bench, example or binary
+  target no longer reaches a library namesake (#357). In such a target, `crate`
+  names the target, not the library: a test file whose root re-exports an
+  external type (`pub use some_ext::Set;`) and reaches it through
+  `use crate::Set;` got an edge to the library's unrelated `Set::answer` at
+  0.85, because a `crate::`, `self::` or `super::` import counted as proof the
+  type was local and the lookup went by last segment. The parser now records
+  the whole path of such an import (`return-type-local-import:crate::Set`; a
+  type defined in the module keeps `return-type`), and every index pass records
+  each target's entry file, with its crate name for a library, and in
+  `File.target_owners` the entries whose module tree reaches each file. For a
+  file one of whose targets is not a library, a candidate is kept only when that
+  target's own tree defines it, or, for exactly `crate::X`, when the target's
+  root imports `X` from a library crate of the repository (then only that
+  library's candidates); a re-export of any other path gives no edge, and a file
+  reached by several targets must pass for each. A file owned only by library
+  targets is resolved as before. **When the Cargo facts are unknown** (no
+  `Cargo.toml`, `cargo` missing or failing) **or no target reaches the file,
+  the lookup is not restricted**, as before: without cargo there is no
+  non-library target to confuse, and declining would lose every `crate::` edge
+  of a cargo-less tree. Not covered: a library root that re-exports an external
+  type (#373), and a type re-exported more than one module away from the
+  target's root, which declines. Graphs written before need the full reindex
+  described for #358.
 - A receiver typed through `use <crate>::X` is decided from the Cargo facts of
   the latest index pass (#358). The parser marks such a hint
   `return-type-import:<crate>`, and the indexer used to rewrite an accepted mark

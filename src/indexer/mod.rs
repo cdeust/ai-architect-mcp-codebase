@@ -373,6 +373,8 @@ fn record_cargo_attributions(
         crate_names: found.crate_names,
         file_features: found.file_features,
         target_contexts: found.target_contexts,
+        targets: found.targets,
+        target_owners: found.target_owners,
     }
 }
 

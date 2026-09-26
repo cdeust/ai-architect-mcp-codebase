@@ -23,6 +23,7 @@ fn known(roots: &[(&str, TargetKind)]) -> TargetMap {
                 entry: PathBuf::from(entry),
                 default_features: BTreeSet::new(),
                 kind: *kind,
+                lib_name: None,
             })
             .collect(),
         crate_names: BTreeSet::new(),

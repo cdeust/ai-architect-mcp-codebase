@@ -34,7 +34,24 @@ pub(in crate::resolver) fn resolve_local_receiver_bound(
     m: &str,
     caller_file: &str,
 ) -> PolicyResolution<SymbolEntry> {
-    let candidates = local_candidates(idx, hint, m);
+    resolve_local_receiver_where(idx, hint, m, caller_file, |_| true)
+}
+
+/// `resolve_local_receiver_bound` over the candidates `keep` accepts only
+/// (issue #357: the files of the target `crate` names). A candidate `keep`
+/// rejects is dropped before the count, so it can neither be chosen nor make
+/// the call ambiguous.
+pub(in crate::resolver) fn resolve_local_receiver_where(
+    idx: &SymbolIndex,
+    hint: &str,
+    m: &str,
+    caller_file: &str,
+    keep: impl Fn(&SymbolEntry) -> bool,
+) -> PolicyResolution<SymbolEntry> {
+    let candidates: Vec<SymbolEntry> = local_candidates(idx, hint, m)
+        .into_iter()
+        .filter(|e| keep(e))
+        .collect();
     match candidates.len() {
         0 => PolicyResolution::NotFound,
         1 => local_receiver_bound(candidates.into_iter().next().expect("len == 1")),
