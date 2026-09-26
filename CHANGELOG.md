@@ -8,6 +8,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The language-server pass no longer records a call against a `#[cfg]` twin
+  the build compiles out (#366, part A). The server answers from its own cfg
+  set, so a site could get an `lsp-definition` row to one twin next to the
+  `cfg-selected` row the resolver writes to the other. Both passes now read
+  one verdict (the caller's own gate first, then the default-feature
+  `cfg_active`): a definition in a twin that verdict rules out gets no row and
+  the site keeps the reason `cfg_twins`; a twin the verdict leaves undecided is
+  kept, because the server's cfg decided it. `resolve_graph` also deletes the
+  `lsp-definition` rows an earlier run wrote to a twin that is now compiled
+  out, caller-level and per-site, and reopens those sites, so an edit of
+  `Cargo.toml` features cannot leave a site with rows to two twins. Rows of
+  other methods, and rows to nodes that are not twins, are untouched. Not
+  covered yet (part B): twins in different files, files selected by
+  `#[cfg_attr(.., path = ..)]`, and a module gate inherited from a `mod`
+  declaration in another file.
 - `index_status` reads through the cache's handle like the other read tools
   (#379). It only reads (its counts and its `#[cfg]` twin summary are MATCH
   queries), yet it opened the graph exclusively, and since #352 an exclusive
