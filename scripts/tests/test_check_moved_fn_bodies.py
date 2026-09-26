@@ -140,6 +140,16 @@ class Issue362(unittest.TestCase):
         text = "fn f() -> char {\n    let _ = '}';\n    '\\''\n}\nfn g() -> char { '\\\\' }\nfn h() {}\n"
         self.assertEqual(sorted(name for name, _ in moved.fn_bodies(text)), ["f", "g", "h"])
 
+    def test_a_semicolon_in_an_array_type_does_not_end_the_signature(self):
+        before = "fn f(x: [u8; 4]) -> [u32; 2] { [1, 2] }\nfn g() {}\n"
+        after = "fn f(x: [u8; 4]) -> [u32; 2] { [9, 9] }\nfn g() {}\n"
+        self.assertNotEqual(moved.fn_bodies(before), moved.fn_bodies(after))
+        self.assertEqual(sorted(name for name, _ in moved.fn_bodies(before)), ["f", "g"])
+
+    def test_a_declaration_without_a_body_still_ends_at_its_semicolon(self):
+        text = "trait T {\n    fn f(x: [u8; 4]);\n}\nfn g() { 1 }\n"
+        self.assertEqual(sorted(name for name, _ in moved.fn_bodies(text)), ["f", "g"])
+
     def test_lifetimes_are_not_char_literals(self):
         text = "fn f<'a>(x: &'a str) -> &'a str {\n    x\n}\nfn g() {}\n"
         self.assertEqual(sorted(name for name, _ in moved.fn_bodies(text)), ["f", "g"])

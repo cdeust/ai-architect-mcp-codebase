@@ -22,7 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   to end on a fixture pair kept in `scripts/tests/fixtures/moved_fn_bodies`: a
   pure move must pass and a copy without its `#[should_panic]` and with one
   space removed inside a string literal must fail; the script before this
-  change passed that copy. On the real split of `src/graph_cache.rs` in #352
+  change passed that copy; the step requires exit 1 exactly, so a broken
+  fixture path (exit 2) cannot pass for a caught change. A `;` inside an array
+  type of a signature (`[u8; 4]`) no longer ends the declaration early, which
+  let a changed body pass. On the real split of `src/graph_cache.rs` in #352
   (commit `560bc83`) the hardened script still exits 0, 16 functions on each
   side.
 - The benchmark no longer carries a label for a deleted file, and a label that

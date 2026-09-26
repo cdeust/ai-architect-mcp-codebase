@@ -243,8 +243,10 @@ jobs:
         run: |
           F=scripts/tests/fixtures/moved_fn_bodies
           python3 scripts/check_moved_fn_bodies.py "dir:$F/before" "dir:$F/after" lib.rs lib_tests.rs
-          if python3 scripts/check_moved_fn_bodies.py "dir:$F/before" "dir:$F/mutated" lib.rs lib_tests.rs; then
-            echo "::error::the move proof passed a mutated copy"; exit 1
+          code=0
+          python3 scripts/check_moved_fn_bodies.py "dir:$F/before" "dir:$F/mutated" lib.rs lib_tests.rs || code=$?
+          if [ "$code" -ne 1 ]; then
+            echo "::error::the mutated copy must exit 1 (bodies differ), got $code"; exit 1
           fi
 
       - name: Install Linux build deps

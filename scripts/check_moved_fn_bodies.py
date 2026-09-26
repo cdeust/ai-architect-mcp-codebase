@@ -140,9 +140,11 @@ def _matching(text, i, open_char, close_char):
 def _body_end(text, start):
     """Index after the body of the function whose name ends at `start`.
 
-    A declaration without a body (`fn f();`) ends before its semicolon.
+    A declaration without a body (`fn f();`) ends before its semicolon. Before
+    the body opens, a `;` inside parentheses or brackets belongs to the
+    signature (`[u8; 4]`), not to the end of a declaration.
     """
-    depth, i, opened = 0, start, False
+    depth, nest, i, opened = 0, 0, start, False
     while i < len(text):
         skipped = _skip(text, i)
         if skipped != i:
@@ -153,7 +155,11 @@ def _body_end(text, start):
             depth, opened = depth + 1, True
         elif char == "}":
             depth -= 1
-        elif char == ";" and not opened:
+        elif not opened and char in "([":
+            nest += 1
+        elif not opened and char in ")]":
+            nest -= 1
+        elif char == ";" and not opened and nest == 0:
             return i
         i += 1
         if opened and depth == 0:
