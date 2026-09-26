@@ -135,7 +135,7 @@ impl GraphStore {
 mod tests {
     use super::*;
     use crate::graph_store::schema::{
-        call_site_rel_table, NODE_FUNCTION, NODE_METHOD, NODE_STDLIB_SYMBOL,
+        call_site_rel_table, NODE_FUNCTION, NODE_METHOD, NODE_STDLIB_SYMBOL, NODE_STRUCT,
     };
 
     /// The writer side (`call_site_rel_table`) and the counter must agree on
@@ -143,7 +143,7 @@ mod tests {
     /// to one side cannot be counted as an edge by the other.
     #[test]
     fn per_site_tables_written_and_per_site_tables_counted_are_the_same_set() {
-        let mut written: Vec<&str> = [NODE_FUNCTION, NODE_METHOD, NODE_STDLIB_SYMBOL]
+        let mut written: Vec<&str> = [NODE_FUNCTION, NODE_METHOD, NODE_STDLIB_SYMBOL, NODE_STRUCT]
             .into_iter()
             .filter_map(call_site_rel_table)
             .collect();
@@ -161,7 +161,7 @@ mod tests {
     /// source, so the shape rule reaches it.
     #[test]
     fn every_written_per_site_table_is_declared_with_a_call_site_source() {
-        for target in [NODE_FUNCTION, NODE_METHOD, NODE_STDLIB_SYMBOL] {
+        for target in [NODE_FUNCTION, NODE_METHOD, NODE_STDLIB_SYMBOL, NODE_STRUCT] {
             let rel = call_site_rel_table(target).expect("a per-site table");
             let declared = REL_TABLES.iter().find(|&&(name, _, _)| name == rel);
             let &(_, from, to) = declared.expect("declared in REL_TABLES");

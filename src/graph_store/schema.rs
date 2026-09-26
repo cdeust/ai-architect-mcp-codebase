@@ -213,6 +213,9 @@ pub const REL_TABLES: &[(&str, &str, &str)] = &[
         NODE_CALL_SITE,
         NODE_STDLIB_SYMBOL,
     ),
+    // A call naming a type (`Tier(1)`, a class instantiation) resolves to a
+    // Struct; its symbol-level twin stays `Uses_*_Struct` (issue #356).
+    ("Calls_CallSite_Struct", NODE_CALL_SITE, NODE_STRUCT),
     // Implements — source: stages/stage-3b.md §2, §3
     ("Implements_Struct_Trait", NODE_STRUCT, NODE_TRAIT),
     ("Implements_Enum_Trait", NODE_ENUM, NODE_TRAIT),
@@ -458,12 +461,13 @@ pub fn call_rel_table(caller_label: &str, target_label: &str) -> Option<String> 
 
 /// The per-site twin of a resolved call's `Calls_*` edge: the table holding
 /// one row from the `CallSite` itself to the same target (issue #335). `None`
-/// for a target no such table is declared for (a `Uses_`-degraded type).
+/// for a target no such table is declared for (an Enum, Trait or TypeAlias).
 pub fn call_site_rel_table(target_label: &str) -> Option<&'static str> {
     match target_label {
         NODE_FUNCTION => Some("Calls_CallSite_Function"),
         NODE_METHOD => Some("Calls_CallSite_Method"),
         NODE_STDLIB_SYMBOL => Some("Calls_CallSite_StdlibSymbol"),
+        NODE_STRUCT => Some("Calls_CallSite_Struct"),
         _ => None,
     }
 }

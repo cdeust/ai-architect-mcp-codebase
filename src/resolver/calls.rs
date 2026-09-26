@@ -8,6 +8,7 @@ use super::*;
 use crate::graph_store::{call_rel_table, call_site_rel_table};
 
 mod gates;
+mod variant_guard;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
 
 // ---------------------------------------------------------------------------
@@ -385,6 +386,7 @@ fn resolve_single_call(
         return PolicyResolution::NotFound;
     };
     let candidates = visible_candidates(ctx, site, candidates, last != callee);
+    let candidates = variant_guard::drop_struct_targets(ctx, callee, candidates);
     let ev = crate::call_evidence::CallEvidence {
         imports_hint: &imports_hint,
         caller_file: file_id,

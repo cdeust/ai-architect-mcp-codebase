@@ -233,6 +233,9 @@ fn build_symbol_index(store: &GraphStore) -> Result<SymbolIndex, String> {
 
 pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     let start = Instant::now();
+    // A graph written before a relationship table existed gets it here, empty,
+    // and this pass fills it (issue #356).
+    store.ensure_rel_tables()?;
     let idx = build_symbol_index(store)?;
     let file_imports = build_file_import_map(store)?;
     // Before the existing edges are read: a macro row from an earlier run
