@@ -213,3 +213,65 @@ fn typed_closure_parameter_still_yields_its_type() {
     let src = "fn f(ys: &[T]) { let v: Vec<u64> = ys.iter().map(|s: &T| s.m(1)).collect(); }";
     assert_eq!(hint_of(src, "s.m"), Some("T".to_string()));
 }
+
+/// The property of `callee`'s site named `key`.
+fn property_of(src: &str, callee: &str, key: &str) -> Option<String> {
+    let result = parse_file(src, "src/lib.rs", Language::Rust).expect("parse");
+    result
+        .nodes
+        .iter()
+        .find(|n| n.label == "CallSite" && n.name == callee)
+        .unwrap_or_else(|| panic!("no CallSite with callee '{callee}'"))
+        .properties
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.clone())
+}
+
+/// Issue #370: a `Type::assoc(..)` binding records `assoc` beside the hint, and
+/// an annotated binding records nothing.
+#[test]
+fn an_assoc_binding_records_the_assoc_function() {
+    let src = r#"
+struct TaskSet;
+impl TaskSet {
+    fn new() -> TaskSet { TaskSet }
+    fn m(&self) {}
+}
+fn run(t: TaskSet) {
+    let s = TaskSet::new();
+    s.m();
+    t.m();
+}
+"#;
+    assert_eq!(
+        property_of(src, "s.m", "receiver_hint_via"),
+        Some("assoc:new".to_string())
+    );
+    assert_eq!(property_of(src, "t.m", "receiver_hint_via"), None);
+}
+
+/// Issue #370 keeps `?`, `.unwrap()` and `.expect(..)` out of the receiver
+/// hint: only the macro destination lookup looks through them (issue #339).
+#[test]
+fn a_try_or_unwrap_initialiser_still_gives_no_hint() {
+    let src = r#"
+struct TaskSet;
+impl TaskSet {
+    fn open() -> Result<TaskSet, ()> { Ok(TaskSet) }
+    fn m(&self) {}
+}
+fn run() -> Result<(), ()> {
+    let a = TaskSet::open()?;
+    a.m();
+    let b = TaskSet::open().unwrap();
+    b.m();
+    let c = TaskSet::open().expect("set");
+    c.m();
+    Ok(())
+}
+"#;
+    for callee in ["a.m", "b.m", "c.m"] {
+        assert_eq!(hint_of(src, callee), None, "{callee}");
+    }
+}

@@ -187,7 +187,7 @@ fn a_receiver_typed_by_a_constructor_keeps_the_local_binding_tier() {
     let line = line_of("answer(1)");
     assert_eq!(
         site(&store, &line),
-        ("true".into(), "Set".into(), "".into())
+        ("true".into(), "Set".into(), "assoc:new".into())
     );
     assert_eq!(
         rows(&store, &line),

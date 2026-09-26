@@ -23,3 +23,11 @@ pub(crate) const RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE: &str = "constructed-
 /// to (issue #357). A type defined in the module keeps `return-type`.
 /// source: parser::spec::rust_return_type writes it, resolver::calls::gates reads it.
 pub(crate) const RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX: &str = "return-type-local-import:";
+
+/// The `receiver_hint_via` prefix of a hint read off `let x = Type::assoc(..)`;
+/// the name of `assoc` follows the colon (`assoc:new`). The written path names
+/// the type `assoc` belongs to, not the type it returns, so the resolver keeps a
+/// candidate only when `assoc` of that type returns `Self`, the type or the type
+/// with generic arguments (issue #370).
+/// source: parser::spec::rust_call_site writes it, resolver::calls::gates reads it.
+pub(crate) const RECEIVER_HINT_VIA_ASSOC_PREFIX: &str = "assoc:";

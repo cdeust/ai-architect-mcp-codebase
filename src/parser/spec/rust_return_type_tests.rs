@@ -237,12 +237,14 @@ fn a_name_bound_twice_takes_the_binding_live_at_the_call() {
 fn a_qualified_callee_is_left_to_the_language_server() {
     // The pre-existing `T::assoc` reading takes the module `u` for a type
     // and gives the hint `u`, which finds no method; what this pass owns is
-    // that it adds nothing of its own to a qualified callee.
+    // that it adds nothing of its own to a qualified callee. Since issue #370
+    // the `T::assoc` reading records `assoc`, and the resolver finds no method
+    // `make` of a type `u`.
     let src = with_set(
         "mod u { pub fn make() -> super::Set { super::Set } }\nfn run() { let s = u::make(); s.m(); }",
     );
     let (_, via) = hint_of(&src, "s.m");
-    assert_eq!(via, None);
+    assert_eq!(via, Some("assoc:make".to_string()));
 }
 
 #[test]

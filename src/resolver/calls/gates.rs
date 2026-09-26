@@ -77,6 +77,20 @@ pub(super) fn rust_local_receiver_gate(
         receiver::ReceiverForm::None if constructed => receiver::in_place_method(site.callee)?,
         _ => return None,
     };
+    if let Some(assoc) = site
+        .receiver_hint_via
+        .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_ASSOC_PREFIX)
+    {
+        // `let x = Type::assoc(..)`: `Type` is where `assoc` lives, not what it
+        // returns (issue #370). Only an owner whose `assoc` builds it counts.
+        return Some(receiver::resolve_local_receiver_where(
+            ctx.idx,
+            site.receiver_hint,
+            &m,
+            file_id,
+            |candidate| ctx.assoc.builds_owner(candidate, assoc),
+        ));
+    }
     let imported_from = site
         .receiver_hint_via
         .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_IMPORT_PREFIX);

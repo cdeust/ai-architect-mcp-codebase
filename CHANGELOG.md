@@ -17,6 +17,30 @@ adheres to [Semantic Versioning](https://semver.org/).
   in the list of tools whose schema documents the refusal. A total that
   cannot be read is still an error, never zeros (#361), and a missing graph
   path is an error that creates nothing.
+- A receiver bound by `let x = Type::assoc(..)` is typed as `Type` only when
+  `assoc` returns it (#370). The static pass read the type off the written
+  path, so `let o = Opt::new(); o.m()` got an edge to `Opt::m` at 0.87 even when
+  `new` returns `Option<Opt>`, `Result<Opt, E>`, `Box<Opt>`, `impl Trait` or
+  another type. The parser now records the associated function beside the hint
+  (`receiver_hint_via = "assoc:new"`) and the resolver keeps a candidate only
+  when that function of the candidate's type declares `Self`, the type or the
+  type with generic arguments as its return type, or when it is a variant of
+  the candidate enum (`Response::Refused(..)` builds a `Response`). The type and
+  its impl may sit in another file than the call: the check reads the declared
+  return type the graph already stores. When the type's impl blocks are split
+  over several files, a function found in another file than the type is not
+  seen, and the call does not resolve (lost, not wrong). `#[cfg]` twins of the function must all agree. What no longer
+  resolves: a `Box<Type>` constructor (its method calls go through `Deref`, so
+  the edge was right; it is lost, not made wrong), a constructor inherited from
+  a trait, a derive or a macro, and one with no declared return type in the
+  graph. `Gen::<u8>::new()` and `Self::new()` still give no hint, as before. `?`,
+  `.unwrap()` and `.expect(..)` stay outside the receiver hint. On dy-wcet
+  v4.1.6 the 101 `TaskSet::response_of` sites resolve as before (99, none to a
+  wrong target) and the 403 rows of the `receiver-local-binding` tier are
+  unchanged. A graph written before this change holds hints no pass checked, so
+  the crate evidence form goes to 2: an incremental refresh, a bootstrap fill
+  and an artifact import of such a graph are refused until one full reindex
+  (`index_codebase` with `full: true`), which rebuilds it.
 - A graph whose totals cannot be read is no longer reported as an empty one
   (#361), and the note on the handle refusal says what each tool has already
   written when it arrives (#363). `index_status` read its counts through a

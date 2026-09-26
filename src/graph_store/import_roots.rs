@@ -36,7 +36,7 @@ use super::{cypher_str, GraphStore, BULK_BATCH_SIZE};
 
 /// The version of the crate evidence a graph records and of the rules that
 /// read it. Bump it when either changes what a graph stores.
-pub(crate) const CRATE_EVIDENCE_FORM: u32 = 1;
+pub(crate) const CRATE_EVIDENCE_FORM: u32 = 2;
 const FORM_MARKER_ID: &str = "crate_evidence_form";
 const FACTS_MARKER_ID: &str = "crate_evidence";
 
