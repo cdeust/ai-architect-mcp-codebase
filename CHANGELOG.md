@@ -16,9 +16,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   (`receiver_hint_via = "assoc:new"`) and the resolver keeps a candidate only
   when that function of the candidate's type declares `Self`, the type or the
   type with generic arguments as its return type, or when it is a variant of
-  the candidate enum (`Response::Refused(..)` builds a `Response`). The impl may
-  sit in another file: the check reads the declared return type the graph
-  already stores. `#[cfg]` twins of the function must all agree. What no longer
+  the candidate enum (`Response::Refused(..)` builds a `Response`). The type and
+  its impl may sit in another file than the call: the check reads the declared
+  return type the graph already stores. When the type's impl blocks are split
+  over several files, a function found in another file than the type is not
+  seen, and the call does not resolve (lost, not wrong). `#[cfg]` twins of the function must all agree. What no longer
   resolves: a `Box<Type>` constructor (its method calls go through `Deref`, so
   the edge was right; it is lost, not made wrong), a constructor inherited from
   a trait, a derive or a macro, and one with no declared return type in the
