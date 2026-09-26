@@ -38,7 +38,7 @@ const VALUE_FIELD: &str = "value";
 /// somewhere inside a parsed Rust function/closure body.
 /// postcondition: `Some(T)` iff `node`'s receiver is a plain local
 /// identifier bound EXACTLY ONCE in the enclosing scope by a parameter or
-/// `let` whose type is determinable (plan §2.2 palier 3) — `T.ty` is that
+/// `let` whose type is determinable (plan §2.2 palier 3): `T.ty` is that
 /// type's last `::` segment with generics stripped, and `T.assoc` the
 /// associated function of a `Type::assoc(..)` initialiser (issue #370). `None` for every other
 /// shape: a chained/indexed/field-access receiver (`self.tasks.get`,
