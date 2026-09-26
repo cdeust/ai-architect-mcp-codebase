@@ -8,6 +8,31 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Twin items spread over two files that one `mod` declaration picks between are
+  now recognised as twins (#366, part B). `#[cfg(unix)] #[path = "unix.rs"] mod
+  imp;` next to `#[cfg(windows)] #[path = "windows.rs"] mod imp;` gives two items
+  whose ids share only their name, so a call to `imp::pick()` was a bare
+  ambiguity with no reason. The module walk now gives every Rust file the gate
+  and the logical module path of the `mod` declarations that lead to it, and
+  follows `cfg_attr(pred, path = "..")` as an alternative path under `pred`
+  (a nested `cfg_attr` counts as undecided). Three `File` columns carry these
+  facts: `cfg_gate`, `module_path` and `cfg_active`, rewritten on every index
+  pass, full or incremental. Two candidates whose files carry a gate and the same
+  module path are twins; a call to them resolves to the file the default
+  features compile (`cfg-selected`, 0.85), or stays open with the reason
+  `cfg_twins` when the build does not decide (`unix` against `windows`). A
+  caller inside a gated file reaches the twin under its own file's gate. The
+  file gate is never folded into an item's `cfg_active`, so same-file twins
+  inside a `cfg(unix)` file are still decided by their own gates. Two
+  differently named gated modules are not twins. A file reached in more than one
+  way keeps no module path, so its items stay an ordinary ambiguity. Not
+  covered: the language-server reset of part A still scans only targets whose
+  id carries a gate, so a stale `lsp-definition` row into a compiled-out twin
+  FILE written before this change stays until a full reindex; a `#[path]` file
+  that is not a `mod.rs` still resolves its own nested `mod` declarations from a
+  directory named after its stem. A graph written before the columns reads
+  `''`, which behaves as before this change.
+
 - The language-server pass no longer records a call against a `#[cfg]` twin
   the build compiles out (#366, part A). The server answers from its own cfg
   set, so a site could get an `lsp-definition` row to one twin next to the

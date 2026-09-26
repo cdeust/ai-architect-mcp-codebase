@@ -16,6 +16,7 @@ fn manifest(features: &str) -> String {
 
 struct Project {
     _tmp: tempfile::TempDir,
+    root: PathBuf,
     graph: PathBuf,
 }
 
@@ -35,7 +36,16 @@ impl Project {
         let store = GraphStore::open_or_create(&graph).expect("open graph");
         resolver::resolve_graph(&store).expect("resolve");
         drop(store);
-        Project { _tmp: tmp, graph }
+        Project {
+            _tmp: tmp,
+            root,
+            graph,
+        }
+    }
+
+    fn resolve(&self) {
+        let store = GraphStore::open_or_create(&self.graph).expect("open graph");
+        resolver::resolve_graph(&store).expect("resolve");
     }
 
     fn rows(&self, cypher: &str) -> Vec<Vec<String>> {
@@ -273,5 +283,41 @@ fn a_gated_module_beside_a_differently_named_one_is_not_a_twin() {
             .iter()
             .any(|(_, reason)| reason == "cfg_twins"),
         "an ordinary ambiguity keeps its own reason"
+    );
+}
+
+/// The file facts are rewritten on every pass: a `Cargo.toml` edit that turns
+/// `fast` on moves the edge to the other file without reparsing either.
+#[test]
+fn an_incremental_refresh_follows_a_features_change_across_files() {
+    let p = Project::new(
+        "fast = []",
+        &[
+            ("src/lib.rs", PATH_PAIR),
+            ("src/fast.rs", FAST),
+            ("src/slow.rs", SLOW),
+        ],
+    );
+    let manifest_path = p.graph.parent().unwrap().join("manifest.json");
+    indexer::write_full_manifest(&p.root, &manifest_path, &indexer::IndexOptions::default())
+        .expect("manifest");
+    fs::write(
+        p.root.join("Cargo.toml"),
+        manifest("default = [\"fast\"]\nfast = []"),
+    )
+    .unwrap();
+    let prior = indexer::manifest::load(&manifest_path).expect("manifest loads");
+    indexer::index_incremental(
+        &p.root,
+        &p.graph,
+        &manifest_path,
+        &indexer::IndexOptions::default(),
+        &prior,
+    )
+    .expect("incremental refresh");
+    p.resolve();
+    assert_eq!(
+        p.targets("caller", "pick"),
+        [row("src/fast.rs::pick", "cfg-selected")]
     );
 }
