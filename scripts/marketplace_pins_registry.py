@@ -21,6 +21,11 @@ REGISTRY_API = "https://registry.modelcontextprotocol.io/v0/servers"
 
 # source: ADR-0756
 PENDING_REGISTRY: dict[str, str] = {
+    "io.github.cdeust/ai-architect-mcp-codebase": (
+        "release 0.14.0: release.yml::publish-mcp-registry publishes it on the "
+        "v0.14.0 tag push, after this PR merges; remove this entry once the "
+        "registry serves 0.14.0"
+    ),
     "io.github.cdeust/hypermnesia-mcp": (
         "release.yml::publish-mcp-registry (this PR) resolves it on the next "
         "v* tag push; no CI credential exists to publish it sooner"
