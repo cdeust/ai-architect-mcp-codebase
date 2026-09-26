@@ -32,7 +32,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   refused. It now opens the graph like the other write tools and is refused
   while another request holds the handle. The read cache's open is the only
   other open that does not release the cache, and every tool that uses it
-  only reads.
+  only reads. The probed tools are those whose input schema names or builds a
+  graph, read from the registry, so a new graph tool without probe arguments
+  fails the test instead of being skipped; the list and each tool's note are
+  one table.
 - The benchmark no longer carries a label for a deleted file, and a label that
   names a deleted path now fails `cargo test` (#359). Label q9 of the
   `rust-self` corpus queried `security_gates.rs`, which #262 split into

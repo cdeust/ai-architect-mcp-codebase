@@ -108,53 +108,78 @@ fn probe_args(name: &str, p: &Paths) -> Option<Value> {
     })
 }
 
+/// A tool takes a graph when its input schema names one (`graph_path` or a
+/// `*_graph_path`), or builds one (`path` plus `output_dir`). Derived from the
+/// registry so a new graph tool cannot be skipped silently.
+fn takes_a_graph(tool: &Value) -> bool {
+    let Some(props) = tool["inputSchema"]["properties"].as_object() else {
+        return false;
+    };
+    props
+        .keys()
+        .any(|k| k == "graph_path" || k.ends_with("_graph_path"))
+        || (props.contains_key("path") && props.contains_key("output_dir"))
+}
+
 fn refused(response: &Value) -> bool {
     let text = response.to_string();
     text.contains("graph_handle_in_use") || text.contains("graph_cache_busy")
 }
 
-#[test]
-fn the_tools_that_document_the_refusal_are_the_tools_that_return_it() {
-    let tmp = tempfile::tempdir().expect("tmp");
-    let (code, out) = (tmp.path().join("code"), tmp.path().join("out"));
-    let other_out = tmp.path().join("other");
+/// Two indexed copies of the fixture crate: the probed graph and a second one
+/// for the two-graph tool. The temp dir must outlive the paths.
+fn indexed_fixture(tmp: &Path) -> Paths {
+    let (code, out, other_out) = (tmp.join("code"), tmp.join("out"), tmp.join("other"));
     fixture(&code);
-    let index = |out: &Path| {
-        crate::dispatch_tool(
+    for dir in [&out, &other_out] {
+        let response = crate::dispatch_tool(
             "index_codebase",
-            &json!({ "path": code.to_string_lossy(), "output_dir": out.to_string_lossy(),
+            &json!({ "path": code.to_string_lossy(), "output_dir": dir.to_string_lossy(),
                 "language": "rust" }),
             ToolProfile::Full,
         )
-        .expect("index_codebase is registered")
-    };
-    assert_eq!(index(&out)["status"], "ok");
-    assert_eq!(index(&other_out)["status"], "ok");
-    let (graph, other) = (out.join("graph"), other_out.join("graph"));
-    let paths = Paths {
-        code: code.clone(),
-        out: out.clone(),
-        graph: graph.clone(),
-        other,
-    };
+        .expect("index_codebase is registered");
+        assert_eq!(response["status"], "ok", "{response}");
+    }
+    Paths {
+        graph: out.join("graph"),
+        other: other_out.join("graph"),
+        code,
+        out,
+    }
+}
 
+/// The registry's graph tools, by name.
+fn graph_tools() -> Vec<String> {
     let tools = crate::tool_schemas::tools_list();
     let names: Vec<String> = tools["tools"]
         .as_array()
         .expect("tools")
         .iter()
+        .filter(|t| takes_a_graph(t))
         .filter_map(|t| t["name"].as_str().map(str::to_string))
         .collect();
+    assert!(
+        names.len() >= 18,
+        "the registry filter lost graph tools: {names:?}"
+    );
+    names
+}
+
+#[test]
+fn the_tools_that_document_the_refusal_are_the_tools_that_return_it() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let paths = indexed_fixture(tmp.path());
     let mut returns_it = Vec::new();
-    for name in &names {
-        let Some(args) = probe_args(name, &paths) else {
-            continue;
-        };
-        let held = open_cached(&graph).expect("cached open");
-        let response = crate::dispatch_tool(name, &args, ToolProfile::Full).expect("registered");
+    for name in graph_tools() {
+        let args = probe_args(&name, &paths).unwrap_or_else(|| {
+            panic!("{name} takes a graph but has no probe arguments: add them to probe_args")
+        });
+        let held = open_cached(&paths.graph).expect("cached open");
+        let response = crate::dispatch_tool(&name, &args, ToolProfile::Full).expect("registered");
         drop(held);
         if refused(&response) {
-            returns_it.push(name.clone());
+            returns_it.push(name);
             continue;
         }
         // A probe that failed for another reason says nothing: its arguments
@@ -164,7 +189,10 @@ fn the_tools_that_document_the_refusal_are_the_tools_that_return_it() {
             "{name} did not reach the graph: {response}"
         );
     }
-    let mut listed: Vec<String> = HELD_GRAPH_TOOLS.iter().map(|s| s.to_string()).collect();
+    let mut listed: Vec<String> = HELD_GRAPH_TOOLS
+        .iter()
+        .map(|(s, _)| s.to_string())
+        .collect();
     returns_it.sort();
     listed.sort();
     assert_eq!(returns_it, listed, "measured refusals vs HELD_GRAPH_TOOLS");

@@ -462,3 +462,7 @@ pub(crate) fn run_cochange(
 #[path = "history_counts.rs"]
 mod counts;
 pub(crate) use counts::{count_fields, merge_fields, try_graph_counts};
+
+#[cfg(test)]
+#[path = "history_counts_tests.rs"]
+mod counts_tests;

@@ -45,24 +45,49 @@ use prd_security::{
     verify_semantic_diff_schema,
 };
 
+/// What a refused call has already written (issue #363).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HeldGraphEffect {
+    /// The graph is opened once, before any write: a refused call wrote nothing.
+    SingleOpen,
+    /// The graph is opened again at a later stage: a refusal there comes after
+    /// earlier stages wrote. The text says which.
+    Staged(&'static str),
+}
+
 /// Tools whose call opens, rewrites, removes or imports a graph through
 /// `GraphStore::open_or_create` or the removal and import helpers, and so can
-/// be refused by the handle release of issue #352. The read tools reuse the
-/// cache's handle and never release, so they cannot return these codes. The
-/// list is measured, not kept by hand: `held_graph_tools_tests` holds a handle
-/// on a real graph, calls every graph tool and requires the refusing set to
-/// equal this list (issue #363).
-pub(crate) const HELD_GRAPH_TOOLS: &[&str] = &[
-    "index_codebase",
-    "index_status",
-    "ingest_traces",
-    "analyze_codebase",
-    "resolve_graph",
-    "cluster_graph",
-    "lsp_resolve",
-    "index_history",
-    "prepare_prd_input",
-    "verify_semantic_diff",
+/// be refused by the handle release of issue #352, with what a refused call
+/// has already written. The read tools reuse the cache's handle and never
+/// release, so they cannot return these codes. The list is measured, not kept
+/// by hand: `held_graph_tools_tests` holds a handle on a real graph, calls
+/// every graph tool and requires the refusing set to equal this list.
+pub(crate) const HELD_GRAPH_TOOLS: &[(&str, HeldGraphEffect)] = &[
+    ("index_codebase", HeldGraphEffect::SingleOpen),
+    ("index_status", HeldGraphEffect::SingleOpen),
+    ("ingest_traces", HeldGraphEffect::SingleOpen),
+    (
+        "analyze_codebase",
+        HeldGraphEffect::Staged(
+            " A refusal before indexing writes nothing. A refusal when the resolve stage opens \
+            the graph comes after the index wrote it: the graph is indexed but unresolved. A \
+            refusal at the final LSP durability check comes after every stage wrote. Rerun \
+            analyze_codebase once the other request has returned.",
+        ),
+    ),
+    ("resolve_graph", HeldGraphEffect::SingleOpen),
+    ("cluster_graph", HeldGraphEffect::SingleOpen),
+    (
+        "lsp_resolve",
+        HeldGraphEffect::Staged(
+            " A refusal when the pass opens the graph writes nothing. A refusal when it reopens \
+            the graph to count its rows comes after the pass wrote them, so whether they are \
+            durable is unknown: rerun lsp_resolve once the other request has returned.",
+        ),
+    ),
+    ("index_history", HeldGraphEffect::SingleOpen),
+    ("prepare_prd_input", HeldGraphEffect::SingleOpen),
+    ("verify_semantic_diff", HeldGraphEffect::SingleOpen),
 ];
 
 /// The part of the note every refusable tool shares.
@@ -70,29 +95,9 @@ const HELD_GRAPH_CODES: &str = " GRAPH HANDLE ERRORS (issue #352): the call fail
     graph_handle_in_use when a running request still holds the graph's read handle, and with \
     graph_cache_busy when the handle cache is being modified; the code opens the error message.";
 
-/// What is already written when the refusal arrives (issue #363). A tool that
-/// opens the graph once, before any write, writes nothing; a tool that opens it
-/// again at a later stage may already have written the earlier stages.
-fn held_graph_effect(name: &str) -> &'static str {
-    match name {
-        "analyze_codebase" => {
-            " A refusal before indexing writes nothing. A refusal when the \
-            resolve stage opens the graph comes after the index wrote it: the graph is indexed \
-            but unresolved. A refusal at the final LSP durability check comes after every stage \
-            wrote. Rerun analyze_codebase once the other request has returned."
-        }
-        "lsp_resolve" => {
-            " A refusal when the pass opens the graph writes nothing. A refusal \
-            when it reopens the graph to count its rows comes after the pass wrote them, so \
-            whether they are durable is unknown: rerun lsp_resolve once the other request has \
-            returned."
-        }
-        _ => {
-            " The graph is opened once, before anything is written, so a refused call wrote \
-            nothing. Retry once the other request has returned."
-        }
-    }
-}
+/// The note of a tool that opens the graph once, before any write.
+const HELD_GRAPH_SINGLE_OPEN: &str = " The graph is opened once, before anything is written, \
+    so a refused call wrote nothing. Retry once the other request has returned.";
 
 /// Restarting the server releases every handle.
 const HELD_GRAPH_RESTART: &str = " Restarting the server clears both codes.";
@@ -129,10 +134,13 @@ pub fn tools_list() -> Value {
     ];
     for tool in &mut tools {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
-        if !HELD_GRAPH_TOOLS.contains(&name) {
+        let Some(&(_, effect)) = HELD_GRAPH_TOOLS.iter().find(|(tool, _)| *tool == name) else {
             continue;
-        }
-        let effect = held_graph_effect(name);
+        };
+        let effect = match effect {
+            HeldGraphEffect::SingleOpen => HELD_GRAPH_SINGLE_OPEN,
+            HeldGraphEffect::Staged(text) => text,
+        };
         if let Some(Value::String(description)) = tool.get_mut("description") {
             description.push_str(HELD_GRAPH_CODES);
             description.push_str(effect);
@@ -204,7 +212,7 @@ mod held_graph_tests {
     // (issue #352); a client can only act on them if the schema names them.
     #[test]
     fn every_tool_that_can_be_refused_documents_both_codes() {
-        for name in HELD_GRAPH_TOOLS {
+        for (name, _) in HELD_GRAPH_TOOLS {
             let description = description_of(name);
             for code in ["graph_handle_in_use", "graph_cache_busy"] {
                 assert!(
@@ -220,9 +228,9 @@ mod held_graph_tests {
     // stage say what the earlier stages already wrote.
     #[test]
     fn only_single_open_tools_claim_that_nothing_was_written() {
-        for name in HELD_GRAPH_TOOLS {
+        for (name, effect) in HELD_GRAPH_TOOLS {
             let description = description_of(name);
-            let staged = matches!(*name, "analyze_codebase" | "lsp_resolve");
+            let staged = matches!(effect, HeldGraphEffect::Staged(_));
             assert_eq!(
                 description.contains("wrote nothing"),
                 !staged,
