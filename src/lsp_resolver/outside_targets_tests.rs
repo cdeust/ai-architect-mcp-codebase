@@ -154,6 +154,7 @@ fn run_pass_and_capture_log(
         ctx: edges::SiteContext {
             node_index: &node_index,
             canonical_root: &fx.root,
+            twins: &crate::resolver::cfg_verdict::TwinView::default(),
         },
         target_map,
     };

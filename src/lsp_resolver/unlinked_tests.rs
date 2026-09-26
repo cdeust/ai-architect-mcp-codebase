@@ -61,6 +61,7 @@ fn run_pass(root: &Path, store: &GraphStore, log: &Path) -> LspResolutionResult 
         ctx: edges::SiteContext {
             node_index: &node_index,
             canonical_root: root,
+            twins: &crate::resolver::cfg_verdict::TwinView::default(),
         },
         target_map: &target_map,
     };

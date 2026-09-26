@@ -85,6 +85,10 @@ fn spawn_fake(script: &str, log_path: &Path, root: &Path) -> LspClient {
     .expect("spawn fake server")
 }
 
+/// No twin in these fixtures: the health gate is what they exercise.
+static NO_TWINS: std::sync::LazyLock<crate::resolver::cfg_verdict::TwinView> =
+    std::sync::LazyLock::new(crate::resolver::cfg_verdict::TwinView::default);
+
 /// A minimal `PassPlan` over `fixture`'s root and `node_index` — a bare
 /// deadline/budget is enough since these tests assert on the health gate,
 /// never on `drive_pass`'s per-site behavior.
@@ -102,6 +106,7 @@ fn plan_for<'a>(
         ctx: edges::SiteContext {
             node_index,
             canonical_root: &fixture.root,
+            twins: &NO_TWINS,
         },
         target_map,
     }

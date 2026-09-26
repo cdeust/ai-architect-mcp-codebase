@@ -64,7 +64,7 @@ impl UnresolvedCallSite {
     /// e.g. `self.response_of` -> `"response_of"`, a bare `helper` ->
     /// `"helper"`.
     ///
-    /// Used by `edges::try_add_lsp_edge` to refuse a resolved definition
+    /// Used by `edges::lsp_edge` to refuse a resolved definition
     /// whose OWN name does not match this identifier — the defense against
     /// a same-line collision `find_node_at_position` cannot rule out on
     /// line-only data (fabricated `total -> total` self-edge, PR #267

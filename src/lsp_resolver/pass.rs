@@ -4,7 +4,7 @@
 // Owning the counters in one type is what lets `skipped` be derived from an
 // invariant rather than accumulated across branches — see `LspPass`.
 
-use super::edges::{try_add_lsp_edge, SiteContext};
+use super::edges::{lsp_edge, LspEdge, SiteContext};
 use super::sites::UnresolvedCallSite;
 use crate::graph_store::GraphStore;
 use crate::lsp_client::{self, LspResolutionResult, ServerHealth, UnlinkedFileCheck};
@@ -36,6 +36,9 @@ pub(super) struct LspPass {
     /// Ids to write `unresolved_reason` on at the end of the pass — see
     /// `mark_outside_targets` / `mark_resolved`.
     outside_target_ids: Vec<String>,
+    /// Issue #366: sites the server resolved to a `#[cfg]` twin the build
+    /// compiles out; they keep the reason `cfg_twins`.
+    compiled_out_twin_ids: Vec<String>,
     /// Issue #292: rust-analyzer's `unlinked-file` cross-check (ADR-9845).
     pub(super) unlinked: UnlinkedFileCheck,
 }
@@ -49,6 +52,7 @@ impl LspPass {
             outside_targets: 0,
             newly_resolved: Vec::new(),
             outside_target_ids: Vec::new(),
+            compiled_out_twin_ids: Vec::new(),
             unlinked: UnlinkedFileCheck {
                 pull_supported,
                 ..UnlinkedFileCheck::default()
@@ -79,14 +83,17 @@ impl LspPass {
         ctx: &SiteContext<'_>,
     ) {
         match definition {
-            Ok(Some(def)) => {
-                if try_add_lsp_edge(store, site, &def, ctx) {
+            Ok(Some(def)) => match lsp_edge(store, site, &def, ctx) {
+                LspEdge::Added => {
                     self.resolved += 1;
                     self.newly_resolved.push(site.id.clone());
-                } else {
-                    self.failed += 1;
                 }
-            }
+                LspEdge::CompiledOutTwin => {
+                    self.failed += 1;
+                    self.compiled_out_twin_ids.push(site.id.clone());
+                }
+                LspEdge::NotAdded => self.failed += 1,
+            },
             Ok(None) => self.failed += 1,
             // A timed-out request produced no answer, so it is neither
             // resolved nor failed and falls into `skipped` by the identity.
@@ -110,6 +117,15 @@ impl LspPass {
                 crate::graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS,
             )?;
         }
+        let twin_ids: Vec<&str> = self
+            .compiled_out_twin_ids
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        store.set_callsite_unresolved_reason(
+            &twin_ids,
+            crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
+        )?;
         Ok(())
     }
 
@@ -176,6 +192,7 @@ mod tests {
         let ctx = SiteContext {
             node_index: &index,
             canonical_root: &root,
+            twins: &crate::resolver::cfg_verdict::TwinView::default(),
         };
 
         // Ten sites in the pass; only four ever get an answer.
@@ -230,6 +247,7 @@ mod tests {
         let ctx = SiteContext {
             node_index: &index,
             canonical_root: &root,
+            twins: &crate::resolver::cfg_verdict::TwinView::default(),
         };
 
         let mut pass = LspPass::new(10, false);
@@ -312,6 +330,7 @@ mod tests {
         let ctx = SiteContext {
             node_index: &index,
             canonical_root: &root,
+            twins: &crate::resolver::cfg_verdict::TwinView::default(),
         };
         let mut pass = LspPass::new(1, false);
         let def = lsp_client::DefinitionResult {
@@ -354,6 +373,7 @@ mod tests {
         let ctx = SiteContext {
             node_index: &index,
             canonical_root: &root,
+            twins: &crate::resolver::cfg_verdict::TwinView::default(),
         };
 
         let mut pass = LspPass::new(2, false);
