@@ -20,7 +20,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   asserts that every source path and fixture path a label names exists. The
   guard also read only `.rs` paths out of queries, so the `f.path = 'app.ts'`
   labels of the TypeScript corpus were never checked; it now reads the
-  extensions of every supported language. Measured with `bench_end_result
+  extensions of the languages the corpora cover (Rust, TypeScript,
+  JavaScript, Python, Go, Kotlin), and it flags an absolute path, which
+  passes only on the machine that wrote it. Measured with `bench_end_result
   --all` on the same server binary, before and after: exit 3 (stale label)
   becomes exit 1 (score below target), the aggregate goes from 0.747 to 0.753,
   `rust-self` from 0.613 to 0.624 (its q9 from 0.672 to 0.793) and

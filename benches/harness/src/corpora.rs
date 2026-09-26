@@ -226,8 +226,10 @@ pub fn stale_ground_truth(source_root: &Path, labels: &[GroundTruthLabel]) -> Ve
         collect_referenced_paths(&label.input, &mut refs);
         collect_referenced_paths(&label.expected, &mut refs);
     }
+    // An absolute path is never portable: `join` would return it unchanged, so
+    // it passes on the machine that wrote it and fails everywhere else.
     refs.into_iter()
-        .filter(|rel| !source_root.join(rel).exists())
+        .filter(|rel| Path::new(rel).is_absolute() || !source_root.join(rel).exists())
         .collect()
 }
 
@@ -372,13 +374,27 @@ mod tests {
                     let Some(rel) = label.input.get(*key).and_then(Value::as_str) else {
                         continue;
                     };
-                    if !corpus.corpus_dir.join(rel).exists() {
+                    if Path::new(rel).is_absolute() || !corpus.corpus_dir.join(rel).exists() {
                         dead.push(format!("{}: {key} {rel}", corpus.name));
                     }
                 }
             }
         }
         assert!(dead.is_empty(), "labels reference deleted paths: {dead:?}");
+    }
+
+    #[test]
+    fn stale_guard_flags_an_absolute_path_even_when_it_exists() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let abs = root.join("here.rs");
+        std::fs::write(&abs, "").unwrap();
+        let abs = abs.to_str().expect("utf-8 path").to_string();
+        let labels = vec![label(
+            json!({ "query": format!("WHERE f.path = '{abs}' RETURN n.path") }),
+            json!({ "imports": [] }),
+        )];
+        assert_eq!(stale_ground_truth(root, &labels), vec![abs]);
     }
 
     #[test]
