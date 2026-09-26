@@ -26,8 +26,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   outwards: a type the module defines keeps the lookup by name; one explicit
   `use` gives its path; two distinct explicit `use`s (two `#[cfg]` arms)
   decline; only `use super::*` globs read the parent module the same way; other
-  globs (`use b::*;`) give `b::Set` when exactly one glob has a candidate,
-  decline when two do, and keep the lookup by name when none does. `super::`
+  globs (`use b::*;`) give `b::Set` when exactly one glob has a candidate and
+  decline when two do; when none does, the lookup by name is kept only if
+  every glob reads a module of the repository, and a glob of a crate outside
+  it (`use ext::*;`, which may give the name) declines (a tree without Cargo
+  facts keeps the lookup by name). `super::`
   and `self::` are read from the caller's module, file module included:
   `super::Set` in `src/a.rs` names the root's `Set`, and `self::b::Set` names
   one module, not every module ending in `b`. A tree without Cargo facts keeps

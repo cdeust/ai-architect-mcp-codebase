@@ -160,6 +160,13 @@ pub mod x {{
         s.m() // foreign
     }}
 }}
+
+pub mod y {{
+    use ext::*;
+    pub fn g(s: &Set) -> u8 {{
+        s.m() // external-glob
+    }}
+}}
 ",
         set_type("    ", 1)
     )
@@ -187,6 +194,10 @@ fn a_use_of_another_module_beats_the_same_file_namesake() {
     assert!(
         targets(&store, "src/lib.rs", &lib, "foreign").is_empty(),
         "a type imported from a crate outside the repository gets no edge"
+    );
+    assert!(
+        targets(&store, "src/lib.rs", &lib, "external-glob").is_empty(),
+        "a glob of a crate outside the repository may give the type: no edge"
     );
 }
 
@@ -416,4 +427,21 @@ fn super_from_a_file_module_reads_its_parent() {
             "{marker}"
         );
     }
+}
+
+#[test]
+fn a_type_the_module_defines_beats_a_glob_that_gives_it_too() {
+    let lib = format!(
+        "mod b;\nuse b::*;\n\n{}\npub fn f(s: &Set) -> u8 {{\n    s.m() // local-over-glob\n}}\n",
+        set_type("", 1)
+    );
+    let (_tmp, _server, store) = analyzed(&[
+        ("Cargo.toml", package("gl6")),
+        ("src/lib.rs", lib.clone()),
+        ("src/b.rs", set_type("", 2)),
+    ]);
+    assert_eq!(
+        targets(&store, "src/lib.rs", &lib, "local-over-glob"),
+        ["src/lib.rs::Set::m"]
+    );
 }

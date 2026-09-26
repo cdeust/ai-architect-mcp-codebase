@@ -12,15 +12,20 @@
 // 4. only `use super::*` globs: the same rules, one module up;
 // 5. other globs: each glob's `prefix::Name`; the one prefix that admits a
 //    candidate names it, and two or more decline (Rust rejects a name two
-//    globs give, so the index is missing a gate);
-// 6. nothing (no binding, or no glob gives the name): the lookup by name.
+//    globs give, so the index is missing a gate); when none does, a glob of a
+//    crate outside the repository may give the name, so the call declines;
+// 6. nothing (no binding, or only globs of repository modules that lack the
+//    name): the lookup by name.
 //
 // source: The Rust Reference, "Use declarations" (an item or explicit `use`
 // shadows a glob; a name two globs give is an error only when used) and
 // "Paths" (`super`).
 
 use super::imports::{caller_scope, scope_module_path, ImportRow};
-use super::written_path::{module_path_of, same_crate, Anchor, PathFacts, WrittenPath};
+use super::reexport::anchor_in;
+use super::written_path::{
+    library_owns, module_path_of, path_segments, same_crate, Anchor, PathFacts, WrittenPath,
+};
 use super::*;
 
 /// What a one-segment type name of the caller's module refers to.
@@ -103,6 +108,10 @@ pub(in crate::resolver) fn bind<'e>(
 }
 
 /// Rule 5: the one glob of `globs` whose `prefix::name` admits a candidate.
+/// When none does, the lookup by name applies only if every glob is a module
+/// of the repository (which then lacks the name); a glob of a crate outside
+/// the repository may give it, so the call declines. Without Cargo facts no
+/// crate is known, and the lookup by name stays (#357).
 fn through_globs<'e>(
     facts: &PathFacts<'e>,
     caller_file: &str,
@@ -117,13 +126,42 @@ fn through_globs<'e>(
         admits_any(&written, &path).then_some((written, path))
     });
     match (hits.next(), hits.next()) {
-        (None, _) => Binding::ByName,
+        (None, _) => {
+            let known = |glob: &String| in_repository(facts, caller_file, module, glob);
+            if !facts.evidence.known || globs.iter().all(known) {
+                Binding::ByName
+            } else {
+                Binding::Decline
+            }
+        }
         (Some((hint, path)), None) => Binding::Path {
             fallback: may_be_this_crate(facts, &hint),
             hint,
             path,
         },
         (Some(_), Some(_)) => Binding::Decline,
+    }
+}
+
+/// True when the glob `glob` of `module` reads a module (a file, an inline
+/// `mod`, an enum) of the repository: of the caller's crate, or of a library
+/// of the repository.
+fn in_repository(facts: &PathFacts, caller_file: &str, module: &[String], glob: &str) -> bool {
+    let Some(anchor) = anchor_in(facts.evidence, None, module, &path_segments(glob)) else {
+        return false;
+    };
+    match &anchor {
+        Anchor::CrateRoot(path) => facts
+            .imports
+            .module_files(path)
+            .iter()
+            .any(|f| same_crate(facts.evidence, caller_file, f)),
+        Anchor::Library { lib, segments } => facts
+            .imports
+            .module_files(segments)
+            .iter()
+            .any(|f| library_owns(facts.evidence, lib, f)),
+        Anchor::Suffix(_) => false,
     }
 }
 

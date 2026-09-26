@@ -36,6 +36,9 @@ pub(in crate::resolver) struct ModuleImports {
     by_scope: HashMap<String, Vec<ImportRow>>,
     /// Module path (from the root of its crate) to the scopes that have it.
     by_module: HashMap<Vec<String>, Vec<String>>,
+    /// Module path of every file, inline `mod` and enum (a glob of its
+    /// variants) of the repository, to the files that hold it.
+    modules: HashMap<Vec<String>, Vec<String>>,
 }
 
 impl ModuleImports {
@@ -54,6 +57,20 @@ impl ModuleImports {
             }
         }
         let mut imports = ModuleImports::default();
+        for query in [
+            "MATCH (n:File) RETURN n.id",
+            "MATCH (n:Module) RETURN n.id",
+            "MATCH (n:Enum) RETURN n.qualified_name",
+        ] {
+            let Ok(qr) = store.execute_query(query) else {
+                continue;
+            };
+            for row in qr.rows.iter().filter_map(|r| r.first()) {
+                if extract_file_prefix_or_self(row).ends_with(".rs") {
+                    imports.add_module(evidence, row);
+                }
+            }
+        }
         for row in rows {
             imports.insert(
                 evidence,
@@ -84,6 +101,19 @@ impl ModuleImports {
             .entry(scope.to_string())
             .or_default()
             .push(row);
+    }
+
+    /// Records the module (file, inline `mod` or enum) `qn` names.
+    pub(in crate::resolver) fn add_module(&mut self, evidence: &CrateEvidence, qn: &str) {
+        self.modules
+            .entry(scope_module_path(evidence, qn))
+            .or_default()
+            .push(extract_file_prefix_or_self(qn));
+    }
+
+    /// The files holding a module (file, inline `mod` or enum) at `module`.
+    pub(in crate::resolver) fn module_files(&self, module: &[String]) -> &[String] {
+        self.modules.get(module).map_or(&[], Vec::as_slice)
     }
 
     /// The imports `scope` declares.
