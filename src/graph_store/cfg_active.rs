@@ -184,6 +184,14 @@ impl GraphStore {
     /// earlier run wrote can name a twin the build no longer compiles.
     /// Same precedent as `reset_macro_expansion`.
     pub(crate) fn reset_cfg_selected(&self) -> Result<(), String> {
+        self.reset_call_rows(RESOLUTION_CFG_SELECTED)
+    }
+
+    /// Deletes every `Calls_*` row whose `resolution_method` is `method`, and
+    /// opens again the call sites that had a per-site row of that method, so the
+    /// resolve that follows decides them from the current facts. Rows of every
+    /// other method are untouched.
+    pub fn reset_call_rows(&self, method: &str) -> Result<(), String> {
         for &(rel, from, _) in super::schema::REL_TABLES {
             if !rel.starts_with("Calls_") {
                 continue;
@@ -193,12 +201,12 @@ impl GraphStore {
                 self.run(&format!(
                     "MATCH (cs:CallSite)-[r:{rel}]->() WHERE r.resolution_method = {} \
                      SET cs.is_resolved = false",
-                    cypher_str(RESOLUTION_CFG_SELECTED)
+                    cypher_str(method)
                 ))?;
             }
             self.run(&format!(
                 "MATCH ()-[r:{rel}]->() WHERE r.resolution_method = {} DELETE r",
-                cypher_str(RESOLUTION_CFG_SELECTED)
+                cypher_str(method)
             ))?;
         }
         Ok(())

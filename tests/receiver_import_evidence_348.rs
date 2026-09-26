@@ -217,15 +217,16 @@ fn a_repository_without_cargo_metadata_declines_a_type_from_an_external_path() {
     assert!(targets(&store, "x").is_empty());
 }
 
-/// A graph whose hint was never verified (an old build, an index that could
-/// not run cargo) is declined at resolve time and does not crash.
+/// The decision follows the crate evidence recorded by the latest index pass,
+/// never the one recorded when the file was parsed (issue #358): the hint keeps
+/// its mark, and a resolve under facts that no longer name the crate declines it.
 #[test]
-fn an_unverified_hint_is_declined_and_resolve_does_not_fail() {
+fn an_import_hint_is_decided_by_the_latest_recorded_evidence() {
     if !cargo_available() {
         return;
     }
     let (store, _tmp) = index_only(
-        "import_evidence_unverified_",
+        "import_evidence_latest_",
         &[
             ("Cargo.toml", manifest("mine", "")),
             ("src/lib.rs", "pub mod shapes;\npub mod user;\n".into()),
@@ -233,17 +234,33 @@ fn an_unverified_hint_is_declined_and_resolve_does_not_fail() {
             ("src/user.rs", user("use mine::shapes::Set;", "x")),
         ],
     );
-    store
+    let via = store
         .execute_query(
-            "MATCH (cs:CallSite) WHERE cs.receiver_hint_via = 'return-type' \
-             SET cs.receiver_hint_via = 'return-type-import:mine'",
+            "MATCH (cs:CallSite) WHERE cs.callee_name = 'x.answer' RETURN cs.receiver_hint_via",
         )
-        .expect("mark the hint unverified");
+        .expect("via")
+        .rows;
+    assert_eq!(
+        via,
+        vec![vec!["return-type-import:mine".to_string()]],
+        "the mark stays as written"
+    );
     resolver::resolve_graph(&store).expect("resolve");
-    assert!(targets(&store, "x").is_empty());
-    // Verifying it with the crate name restores the edge on the next resolve.
-    let names = std::collections::BTreeSet::from(["mine".to_string()]);
-    assert_eq!(store.verify_repo_crate_roots(&names).expect("verify"), 1);
+    assert_eq!(targets(&store, "x"), vec!["src/shapes.rs::Set::answer"]);
+    let recorded = store.crate_evidence();
+    let mut renamed = recorded.clone();
+    renamed.crate_names = std::collections::BTreeSet::from(["other".to_string()]);
+    store
+        .write_crate_evidence(&renamed)
+        .expect("record other facts");
+    resolver::resolve_graph(&store).expect("resolve under the new facts");
+    assert!(
+        targets(&store, "x").is_empty(),
+        "an earlier run's row must not survive"
+    );
+    store
+        .write_crate_evidence(&recorded)
+        .expect("record the facts again");
     resolver::resolve_graph(&store).expect("resolve again");
     assert_eq!(targets(&store, "x"), vec!["src/shapes.rs::Set::answer"]);
 }

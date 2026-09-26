@@ -74,9 +74,22 @@ pub struct CargoAttributions {
 /// each file is compiled with (issue #353). Empty when the map is unknown.
 #[derive(Debug, Default)]
 pub(crate) struct CargoFacts {
+    /// True when the Cargo map was known on this pass.
+    pub known: bool,
     pub crate_names: BTreeSet<String>,
     pub file_features: BTreeMap<String, FileFeatures>,
     pub target_contexts: BTreeMap<String, &'static str>,
+}
+
+impl CargoFacts {
+    /// What the resolver reads to accept a receiver type named through a `use`
+    /// (issues #348, #349 and #358).
+    pub(crate) fn crate_evidence(&self) -> crate::graph_store::import_roots::CrateEvidence {
+        crate::graph_store::import_roots::CrateEvidence {
+            known: self.known,
+            crate_names: self.crate_names.clone(),
+        }
+    }
 }
 
 /// Attributes `rust_files` (root-relative `.rs` paths indexed this pass)

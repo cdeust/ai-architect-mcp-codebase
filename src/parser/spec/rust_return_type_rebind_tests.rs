@@ -206,7 +206,8 @@ fn a_file_without_a_glob_keeps_the_hint_for_an_imported_type_until_a_crate_is_sh
         "use dy::Set;\nfn make() -> Set { todo!() }\nfn run() { let s = make(); s.m(); }",
     );
     // The hint is recorded, marked unverified with the crate the path starts
-    // with; the indexer promotes it only for a crate of the repository.
+    // with; the resolver accepts it only for a crate the latest index pass
+    // recorded as a library of the repository (issue #358).
     assert_eq!(
         hint_of(&src, "s.m"),
         (Some("Set".into()), Some("return-type-import:dy".into()))

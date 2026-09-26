@@ -8,6 +8,27 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A receiver typed through `use <crate>::X` is decided from the Cargo facts of
+  the latest index pass (#358). The parser marks such a hint
+  `return-type-import:<crate>`, and the indexer used to rewrite an accepted mark
+  into a plain `return-type`, which no later run could check again: after a
+  crate rename, an incremental pass kept the edge of every file it did not
+  reparse, while a fresh full index of the same tree declined it, so the graph
+  depended on the order of the runs. The mark now stays as written; every index
+  pass, full or incremental, records the workspace's library crate names in a
+  `GraphMarker` row (`crate_evidence`), and the resolver accepts the hint only
+  when its crate is among the names recorded by the latest pass. Each
+  `resolve_graph` first deletes every row of the `receiver-return-type` tier and
+  opens its call sites again (rows of every other tier are untouched), so each
+  site is decided again from the current facts. The language-server pass still
+  resolves a site the static pass declined, from rust-analyzer's own
+  definition, as it does for any open site. No Cargo facts (no `Cargo.toml`,
+  `cargo` missing) still means no crate name, so such a hint is declined, as
+  before. **A graph written by an earlier build needs one full reindex**: an
+  incremental refresh, a bootstrap fill, an artifact import and a library full
+  index over it are refused with "full reindex required" (a `crate_evidence_form`
+  marker row, written last by a full index, as for #354), since an earlier pass
+  may have rewritten a hint as accepted. Reads are unaffected.
 - A call that names a type gets a per-site row (#356). A call to a tuple-struct
   constructor such as `Tier(1)`, or a class instantiation, was marked
   `is_resolved` and had its symbol-level `Uses_Function_Struct` or

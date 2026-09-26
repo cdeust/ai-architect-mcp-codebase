@@ -120,8 +120,10 @@ fn overlay_cargo_attributions(
             error_ranges: Vec::new(),
         });
     }
+    let known = found.status == cargo_attribution::CargoAttributionStatus::Known;
     report.cargo_attribution = Some(found.status);
     cargo_attribution::CargoFacts {
+        known,
         crate_names: found.crate_names,
         file_features: found.file_features,
         target_contexts: found.target_contexts,
@@ -132,9 +134,9 @@ fn overlay_cargo_attributions(
 /// written. Best-effort: a failure degrades the graph to what it was before
 /// the fact was known, which both readers treat as "not decided".
 ///
-/// - Promotes the receiver hints that need crate evidence, now that the
-///   workspace's crate names are known (issues #348 and #349); a hint that stays
-///   unverified is declined by the resolver.
+/// - Records the crate evidence of this pass (issues #348, #349 and #358): the
+///   resolver accepts a receiver type named through a `use` only against the
+///   facts recorded by the latest pass, so no earlier decision outlives them.
 /// - Writes `cfg_active` on every `#[cfg]` twin (issue #353): a twin the
 ///   default build cannot be shown to compile stays `unknown`, never `active`.
 /// - Writes `File.target_context` on every file (issue #354): what the Cargo
@@ -143,8 +145,8 @@ pub(in crate::indexer) fn apply_cargo_facts(
     store: &crate::graph_store::GraphStore,
     facts: &cargo_attribution::CargoFacts,
 ) {
-    if let Err(e) = store.verify_repo_crate_roots(&facts.crate_names) {
-        eprintln!("[ap] import-root verification skipped: {e}");
+    if let Err(e) = store.write_crate_evidence(&facts.crate_evidence()) {
+        eprintln!("[ap] crate evidence not recorded: {e}");
     }
     if let Err(e) = super::super::cfg_active::write(store, &facts.file_features) {
         eprintln!("[ap] cfg_active pass skipped: {e}");

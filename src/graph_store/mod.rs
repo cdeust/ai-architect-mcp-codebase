@@ -18,7 +18,7 @@ mod config;
 mod counts;
 mod ddl;
 mod handles;
-mod import_roots;
+pub mod import_roots;
 mod macro_reset;
 pub(crate) use columns::hint_via::*;
 pub(crate) use columns::{RECEIVER_HINT_VIA_IMPORT_PREFIX, RECEIVER_HINT_VIA_RETURN_TYPE};
