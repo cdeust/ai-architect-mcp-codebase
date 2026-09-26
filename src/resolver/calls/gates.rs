@@ -77,10 +77,29 @@ pub(super) fn rust_local_receiver_gate(
         receiver::ReceiverForm::None if constructed => receiver::in_place_method(site.callee)?,
         _ => return None,
     };
-    if let Some(assoc) = site
+    let assoc = site
         .receiver_hint_via
-        .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_ASSOC_PREFIX)
-    {
+        .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_ASSOC_PREFIX);
+    let read_off_binding = site.receiver_hint_via.is_empty() || assoc.is_some();
+    if read_off_binding && site.receiver_hint.contains("::") {
+        // A type written as a path (`b::Set::new()`, `s: &crate::a::Set`): the
+        // path says which owner, so a namesake elsewhere is not a candidate and
+        // no same-file preference applies (issue #368).
+        let Some(path) =
+            receiver::WrittenPath::of(ctx.idx, ctx.evidence, site.caller_qn, site.receiver_hint)
+        else {
+            return Some(PolicyResolution::NotFound);
+        };
+        return Some(receiver::resolve_local_receiver_strict(
+            ctx.idx,
+            site.receiver_hint,
+            &m,
+            |candidate| {
+                path.admits(candidate) && assoc.is_none_or(|a| ctx.assoc.builds_owner(candidate, a))
+            },
+        ));
+    }
+    if let Some(assoc) = assoc {
         // `let x = Type::assoc(..)`: `Type` is where `assoc` lives, not what it
         // returns (issue #370). Only an owner whose `assoc` builds it counts.
         return Some(receiver::resolve_local_receiver_where(

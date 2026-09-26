@@ -221,7 +221,15 @@ pub(super) fn typed_local_paths(source: &str, call_node: Node) -> HashMap<String
     types_only(typed_local_map(source, call_node, true))
 }
 
-fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<String, Declared> {
+/// Both readings keep the type as written, path included (`b::Set`): the
+/// resolver needs the path to tell `a::Set` from `b::Set` (issue #368) and the
+/// macro pass to tell a std type from a namesake (issue #339). Only the macro
+/// pass looks through `?`, `.unwrap()` and `.expect(..)` (`through_results`).
+fn typed_local_map(
+    source: &str,
+    call_node: Node,
+    through_results: bool,
+) -> HashMap<String, Declared> {
     let mut counts: HashMap<String, u32> = HashMap::new();
     let mut typed: HashMap<String, Declared> = HashMap::new();
     let Some(scope) = enclosing_scope(call_node) else {
@@ -237,7 +245,7 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
         let reaches = node.kind() != "let_declaration"
             || super::rust_item_binds::declaration_reaches(node, call_node);
         if let Some(simple_name) = simple_identifier_name(source, pattern).filter(|_| reaches) {
-            if let Some(ty) = binding_declared(source, node, full_path) {
+            if let Some(ty) = binding_declared(source, node, through_results) {
                 typed.insert(simple_name, ty);
             }
         }
@@ -253,7 +261,7 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
         if simple.as_deref() != Some(live.name.as_str()) {
             continue;
         }
-        if let Some(ty) = binding_declared(source, live.declaration, full_path) {
+        if let Some(ty) = binding_declared(source, live.declaration, through_results) {
             result.insert(live.name, ty);
         }
     }
@@ -348,21 +356,21 @@ pub(super) struct Declared {
 ///      generic-parameter list.
 ///   2. `let x = T::assoc(...)` — no `type` field; the initializer's callee
 ///      must be a `scoped_identifier` (`T::assoc`, or `mod::T::assoc`), and
-///      the type is that path's own last segment.
+///      the type is that path as written (`mod::T`, issue #368).
 ///
 /// A bare `let x = make();` (callee has no `::`) or any other initializer
 /// shape (`let x = 5;`, `let x = other_call();` with a non-scoped callee)
 /// returns `None` — "un initialiseur non typable", plan §2.2.
-fn binding_declared(source: &str, binding_node: Node, full_path: bool) -> Option<Declared> {
+fn binding_declared(source: &str, binding_node: Node, through_results: bool) -> Option<Declared> {
     if let Some(ty) = binding_node.child_by_field_name(TYPE_FIELD) {
-        let ty = type_name(source, ty, full_path)?;
+        let ty = type_name(source, ty)?;
         return Some(Declared { ty, assoc: None });
     }
     if binding_node.kind() != "let_declaration" {
         return None;
     }
     let value = binding_node.child_by_field_name(VALUE_FIELD)?;
-    let (call, unwrapped) = constructor_call(source, value, full_path)?;
+    let (call, unwrapped) = constructor_call(source, value, through_results)?;
     let func = call.child_by_field_name(FUNCTION_FIELD)?;
     if func.kind() != "scoped_identifier" {
         return None;
@@ -374,7 +382,7 @@ fn binding_declared(source: &str, binding_node: Node, full_path: bool) -> Option
     let assoc = func
         .child_by_field_name(NAME_FIELD)
         .map(|n| node_text(source, n));
-    let ty = expr_path_name(source, path, full_path)?;
+    let ty = expr_path_name(source, path)?;
     Some(Declared { ty, assoc })
 }
 
@@ -441,43 +449,31 @@ fn is_known_constructor(source: &str, scoped: Node) -> bool {
         .is_some_and(|n| KNOWN_CONSTRUCTORS.contains(&node_text(source, n).as_str()))
 }
 
-/// A TYPE expression's last segment with generics stripped: unwraps
-/// `reference_type` (`&T`, `&mut T`) and `generic_type` (`Wrapper<T>` ->
-/// `Wrapper`) recursively, then reads a `type_identifier` verbatim or a
-/// `scoped_type_identifier`'s own `name` field (`mod::Type` -> `Type`).
-/// Anything else (tuple types, slice/array types, `dyn Trait`, primitive
-/// types, ...) is not a plain named type this rule covers: `None`.
-fn type_name(source: &str, node: Node, full_path: bool) -> Option<String> {
+/// A TYPE expression as written, generics stripped: unwraps `reference_type`
+/// (`&T`, `&mut T`) and `generic_type` (`Wrapper<T>` -> `Wrapper`) recursively,
+/// then reads a `type_identifier` or a `scoped_type_identifier` verbatim
+/// (`mod::Type`). Anything else (tuple, slice or array types, `dyn Trait`,
+/// primitive types) is not a plain named type this rule covers: `None`.
+fn type_name(source: &str, node: Node) -> Option<String> {
     match node.kind() {
         "reference_type" | "generic_type" => node
             .child_by_field_name(TYPE_FIELD)
-            .and_then(|n| type_name(source, n, full_path)),
-        "type_identifier" => Some(node_text(source, node)),
-        "scoped_type_identifier" if full_path => Some(node_text(source, node)),
-        "scoped_type_identifier" => node
-            .child_by_field_name(NAME_FIELD)
-            .map(|n| node_text(source, n)),
+            .and_then(|n| type_name(source, n)),
+        "type_identifier" | "scoped_type_identifier" => Some(node_text(source, node)),
         _ => None,
     }
 }
 
-/// An EXPRESSION path's last segment (mirrors `type_name` for the
-/// `T::assoc(...)` constructor-call form, whose callee is parsed as an
-/// expression path, not a type path): a bare `identifier` (`T::assoc`'s
-/// path IS `T`) verbatim, a `scoped_identifier`'s own `name` field
-/// (`mod::T::assoc`'s path is itself `mod::T`, whose last segment is `T`),
-/// or a `generic_type` path's `type` field recursively (turbofish-shaped
-/// paths, rare in this position). Anything else: `None`.
-fn expr_path_name(source: &str, node: Node, full_path: bool) -> Option<String> {
+/// An EXPRESSION path as written (mirrors `type_name` for the `T::assoc(..)`
+/// form, whose callee is an expression path): a bare `identifier` (`T`), a
+/// `scoped_identifier` (`mod::T`), or a `generic_type` path's `type` field
+/// recursively (turbofish-shaped paths). Anything else: `None`.
+fn expr_path_name(source: &str, node: Node) -> Option<String> {
     match node.kind() {
-        "identifier" => Some(node_text(source, node)),
-        "scoped_identifier" if full_path => Some(node_text(source, node)),
-        "scoped_identifier" => node
-            .child_by_field_name(NAME_FIELD)
-            .map(|n| node_text(source, n)),
+        "identifier" | "scoped_identifier" => Some(node_text(source, node)),
         "generic_type" => node
             .child_by_field_name(TYPE_FIELD)
-            .and_then(|n| expr_path_name(source, n, full_path)),
+            .and_then(|n| expr_path_name(source, n)),
         _ => None,
     }
 }

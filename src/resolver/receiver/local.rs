@@ -62,6 +62,26 @@ pub(in crate::resolver) fn resolve_local_receiver_where(
     }
 }
 
+/// `resolve_local_receiver_where` without the same-file tiebreak, for a hint
+/// written as a path (issue #368): the path already names the owner, so two
+/// candidates the path admits are ambiguous wherever they live.
+pub(in crate::resolver) fn resolve_local_receiver_strict(
+    idx: &SymbolIndex,
+    hint: &str,
+    m: &str,
+    keep: impl Fn(&SymbolEntry) -> bool,
+) -> PolicyResolution<SymbolEntry> {
+    let mut candidates: Vec<SymbolEntry> = local_candidates(idx, hint, m)
+        .into_iter()
+        .filter(|e| keep(e))
+        .collect();
+    match candidates.len() {
+        0 => PolicyResolution::NotFound,
+        1 => local_receiver_bound(candidates.remove(0)),
+        _ => PolicyResolution::Ambiguous { candidates },
+    }
+}
+
 /// Every method `m` whose parent type has the last segment of `hint`.
 fn local_candidates(idx: &SymbolIndex, hint: &str, m: &str) -> Vec<SymbolEntry> {
     let hint_last = strip_generics(last_segment(hint));
