@@ -163,9 +163,8 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
 /// covers modules through its `files` and, through `items`, the twin ITEMS the
 /// default build compiles out: the same word, one level down, so an item under
 /// `#[cfg(feature = "x")]` is not invisible just because its file is compiled.
-/// `null` when the graph cannot be opened.
-pub(crate) fn cfg_twin_status(graph_dir: &Path) -> Option<(Value, Value)> {
-    let store = crate::graph_store::GraphStore::open_or_create(graph_dir).ok()?;
+/// Reads through the store the caller already opened (issue #379).
+pub(crate) fn cfg_twin_status(store: &crate::graph_store::GraphStore) -> Option<(Value, Value)> {
     let s = store.cfg_twin_summary();
     let examples: Vec<Value> = s
         .inactive_examples

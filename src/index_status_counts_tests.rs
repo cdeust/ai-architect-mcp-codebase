@@ -1,13 +1,14 @@
-// index_status_counts_tests: issue #361. A graph whose totals cannot be read
-// must not be reported as an empty graph. Since #360 an open of a graph whose
-// cached handle is held by a running request is refused; index_status used to
-// swallow that refusal and answer zeros with `status: ok`.
+// index_status_counts_tests: issues #361 and #379. index_status only reads, so
+// it reads through the cache's handle like the other read tools: a handle held
+// by a running request neither refuses it nor is evicted by it, and a total
+// that cannot be read is still an error, never zeros.
 
 use super::run_index_status;
 use crate::graph_cache::open_cached;
 use crate::graph_store::GraphStore;
 use serde_json::json;
 use std::path::Path;
+use std::rc::Rc;
 
 fn seed(path: &Path) {
     let store = GraphStore::open_or_create(path).expect("open");
@@ -18,27 +19,33 @@ fn seed(path: &Path) {
 }
 
 #[test]
-fn index_status_does_not_report_zeros_when_the_graph_is_held() {
+fn index_status_reads_real_counts_while_the_graph_is_held() {
     let tmp = tempfile::tempdir().expect("tmp");
     let path = tmp.path().join("g");
     seed(&path);
     let args = json!({ "graph_path": path.to_string_lossy() });
 
     let held = open_cached(&path).expect("cached open");
-    let refused = run_index_status(&args);
-    assert_ne!(
-        refused["status"], "ok",
-        "a refused read is not a measurement: {refused}"
-    );
-    assert!(
-        refused.get("node_count").is_none(),
-        "no count may be reported when none was read: {refused}"
-    );
-    let message = refused["message"].as_str().unwrap_or_default();
-    assert!(message.contains("graph_handle_in_use"), "{refused}");
-    drop(held);
-
     let answered = run_index_status(&args);
-    assert_eq!(answered["status"], "ok", "{answered}");
+    assert_eq!(
+        answered["status"], "ok",
+        "a read must not be refused: {answered}"
+    );
     assert_eq!(answered["node_count"], 1, "{answered}");
+    let again = open_cached(&path).expect("cached open");
+    assert!(
+        Rc::ptr_eq(&held, &again),
+        "index_status must reuse the cached handle, not evict it"
+    );
+}
+
+#[test]
+fn index_status_on_a_missing_graph_is_an_error_and_creates_nothing() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let missing = tmp.path().join("no-such-graph");
+    let args = json!({ "graph_path": missing.to_string_lossy() });
+    let answered = run_index_status(&args);
+    assert_eq!(answered["status"], "error", "{answered}");
+    assert!(answered.get("node_count").is_none(), "{answered}");
+    assert!(!missing.exists(), "a status read must not create a graph");
 }
