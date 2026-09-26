@@ -310,11 +310,14 @@ fn a_super_from_the_file_root_or_an_unknown_path_declines() {
 }
 
 #[test]
-fn an_alias_import_gives_no_edge() {
-    // `use crate::b::Set as S; S::new()`: the hint is `S`, which names no type.
-    // Recorded behaviour, unchanged by #368 (a one-segment hint).
+fn an_alias_import_resolves_through_the_use_it_names() {
+    // `use crate::b::Set as S; S::new()`: the hint is `S`, and the module's
+    // `use` says `S` is `crate::b::Set` (issue #380; no edge before it).
     let (_tmp, _server, store) = issue_crate();
-    assert!(targets(&store, "src/lib.rs", LIB, "alias").is_empty());
+    assert_eq!(
+        targets(&store, "src/lib.rs", LIB, "alias"),
+        ["src/b.rs::Set::m"]
+    );
 }
 
 #[test]
