@@ -170,9 +170,6 @@ impl ModuleTree<'_> {
                     out.push((alternative, target));
                 }
             }
-            if let Some(target) = module_file(file, owns_directory, &decl, self.indexed) {
-                out.push((decl, target));
-            }
         }
         out
     }
@@ -189,28 +186,44 @@ fn reach(
         .insert(features.clone())
 }
 
-/// One declaration per `cfg_attr(pred, path = ..)` of `decl` (issue #366): the
-/// same `mod`, reaching the file `path` names, gated by the declaration's own
-/// `cfg` AND `pred` (undecidable when either is).
+/// The files one declaration can name, each with the gate under which it does
+/// (issue #366): one declaration per `cfg_attr(pred, path = ..)`, reaching the
+/// file `path` names under the declaration's own `cfg` AND `pred`, then the
+/// declaration itself, reaching its `#[path]` or default-name file under its
+/// own `cfg` AND the negation of every such `pred` (the file is used only when
+/// no `cfg_attr` path applies). A gate one part of which did not parse is
+/// undecidable (`None`). A declaration without `cfg_attr` paths is returned as
+/// it is.
 fn alternatives(decl: &ModDecl) -> Vec<ModDecl> {
-    decl.alt_paths
+    let gated = |extra: Option<CfgPredicate>| -> Option<Vec<CfgPredicate>> {
+        let mut all = decl.cfg.clone()?;
+        all.push(extra?);
+        Some(all)
+    };
+    let mut out: Vec<ModDecl> = decl
+        .alt_paths
         .iter()
-        .map(|alt| {
-            let cfg = match (&decl.cfg, &alt.pred) {
-                (Some(all), Some(pred)) => {
-                    Some(all.iter().cloned().chain([pred.clone()]).collect())
-                }
-                _ => None,
-            };
-            ModDecl {
-                name: decl.name.clone(),
-                path_attr: Some(alt.path.clone()),
-                cfg,
-                cfg_text: decl.cfg_text.clone(),
-                alt_paths: Vec::new(),
-            }
+        .map(|alt| ModDecl {
+            name: decl.name.clone(),
+            path_attr: Some(alt.path.clone()),
+            cfg: gated(alt.pred.clone()),
+            cfg_text: decl.cfg_text.clone(),
+            alt_paths: Vec::new(),
         })
-        .collect()
+        .collect();
+    let fallback_cfg = || -> Option<Vec<CfgPredicate>> {
+        let mut all = decl.cfg.clone()?;
+        for alt in &decl.alt_paths {
+            all.push(CfgPredicate::Not(Box::new(alt.pred.clone()?)));
+        }
+        Some(all)
+    };
+    out.push(ModDecl {
+        cfg: fallback_cfg(),
+        alt_paths: Vec::new(),
+        ..decl.clone()
+    });
+    out
 }
 
 /// The cfg gate of a declaration: `all` of its `cfg` attributes, `Unknown`

@@ -15,7 +15,7 @@
 // or a target; those stay `unknown` because the source alone does not decide
 // them. `indexer::cfg_active` documents where a second profile would plug in.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::cfg_twins::{closing_paren, strip_cfg_gates, TWIN_MARK};
 use super::{cypher_str, GraphStore, BULK_BATCH_SIZE, CFG_GATE_LABELS};
@@ -221,35 +221,37 @@ impl GraphStore {
     /// call sites that lose a per-site row, with the reason `cfg_twins` (issue
     /// #366). A row to a twin the current build compiles out was written by an
     /// earlier run, before an edit of `Cargo.toml` or a server with another cfg
-    /// set; the resolve that follows decides those sites again. Rows of every
-    /// other method, and rows to a node that is not a twin, are untouched.
-    /// Returns the number of rows deleted.
-    pub fn reset_lsp_twin_rows(&self, drop: impl Fn(&str, &str) -> bool) -> Result<usize, String> {
+    /// set; the resolve that follows decides those sites again. A twin is a
+    /// node whose id carries `#cfg(`, or any node of one of `twin_files`: the
+    /// files a `mod` declaration gates or the build compiles out (part B),
+    /// whose item ids carry no gate. Rows of every other method, and rows to
+    /// any other node, are untouched. Returns the number of rows deleted.
+    pub fn reset_lsp_twin_rows(
+        &self,
+        twin_files: &[String],
+        drop: impl Fn(&str, &str) -> bool,
+    ) -> Result<usize, String> {
         let mut deleted = 0;
         let mut reopened: Vec<String> = Vec::new();
+        let prefixes: Vec<Value> = twin_files
+            .iter()
+            .map(|f| Value::String(format!("{f}::")))
+            .collect();
         for &(rel, from, to) in super::schema::REL_TABLES {
             if !rel.starts_with("Calls_") {
                 continue;
             }
-            let cypher = format!(
-                "MATCH (a:{from})-[r:{rel}]->(b:{to}) WHERE r.resolution_method = 'lsp-definition' \
-                 AND b.id CONTAINS {} RETURN a.id, b.id",
-                cypher_str(TWIN_MARK)
-            );
-            // `resolve_graph` creates every missing relationship table before
-            // this runs, so a failed read is a real error: a stale row to a
-            // compiled-out twin must not survive it silently.
-            let rows = self.execute_query(&cypher)?;
-            for row in rows.rows.iter().filter(|r| drop(&r[0], &r[1])) {
+            let candidates = self.lsp_twin_candidates((rel, from, to), &prefixes)?;
+            for (caller, target) in candidates.iter().filter(|(a, b)| drop(a, b)) {
                 self.run(&format!(
                     "MATCH (a:{from} {{id: {}}})-[r:{rel}]->(b:{to} {{id: {}}}) \
                      WHERE r.resolution_method = 'lsp-definition' DELETE r",
-                    cypher_str(&row[0]),
-                    cypher_str(&row[1])
+                    cypher_str(caller),
+                    cypher_str(target)
                 ))?;
                 deleted += 1;
                 if from == super::schema::NODE_CALL_SITE {
-                    reopened.push(row[0].clone());
+                    reopened.push(caller.clone());
                 }
             }
         }
@@ -265,6 +267,42 @@ impl GraphStore {
             self.set_callsite_unresolved_reason(&ids, super::CALLSITE_UNRESOLVED_REASON_CFG_TWINS)?;
         }
         Ok(deleted)
+    }
+
+    /// `(from id, to id)` of every `lsp-definition` row of `rel` into a node
+    /// whose id carries `#cfg(` or starts with one of `prefixes` (`<file>::`).
+    /// `resolve_graph` creates every missing relationship table before this
+    /// runs, so a failed read is a real error: a stale row to a compiled-out
+    /// twin must not survive it silently.
+    fn lsp_twin_candidates(
+        &self,
+        (rel, from, to): (&str, &str, &str),
+        prefixes: &[Value],
+    ) -> Result<BTreeSet<(String, String)>, String> {
+        let pair = |r: Vec<String>| (r[0].clone(), r[1].clone());
+        let gated = format!(
+            "MATCH (a:{from})-[r:{rel}]->(b:{to}) WHERE r.resolution_method = 'lsp-definition' \
+             AND b.id CONTAINS {} RETURN a.id, b.id",
+            cypher_str(TWIN_MARK)
+        );
+        let mut out: BTreeSet<_> = self
+            .execute_query(&gated)?
+            .rows
+            .into_iter()
+            .map(pair)
+            .collect();
+        if prefixes.is_empty() {
+            return Ok(out);
+        }
+        let in_files = format!(
+            "UNWIND $files AS prefix MATCH (a:{from})-[r:{rel}]->(b:{to}) \
+             WHERE r.resolution_method = 'lsp-definition' AND b.id STARTS WITH prefix \
+             RETURN a.id, b.id"
+        );
+        let files = Value::List(LogicalType::String, prefixes.to_vec());
+        let rows = self.query_prepared_params(&in_files, vec![("files", files)])?;
+        out.extend(rows.rows.into_iter().map(pair));
+        Ok(out)
     }
 
     /// `id -> cfg_active` of every twin node, normalized. Read-only: a label

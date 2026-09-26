@@ -162,3 +162,58 @@ fn a_file_two_crate_roots_compile_with_the_same_features_is_decided() {
         Some(&FileFeatures::Enabled(feature_set(&["x"])))
     );
 }
+
+/// Review of #385: the default-name file of a `mod` with `cfg_attr` paths is
+/// used only when no `cfg_attr` path applies, so its gate is the declaration's
+/// own `cfg` AND the negation of every `cfg_attr` predicate.
+#[test]
+fn the_default_name_file_is_gated_by_the_negation_of_every_cfg_attr_path() {
+    let decls = rust_mod_decls::mod_decls(
+        "#[cfg_attr(feature = \"x\", path = \"x.rs\")]\n\
+         #[cfg_attr(unix, path = \"u.rs\")]\nmod imp;\n",
+    );
+    let all = alternatives(&decls[0]);
+    let x = CfgPredicate::Feature("x".into());
+    let unix = CfgPredicate::Option {
+        key: "unix".into(),
+        value: None,
+    };
+    let not = |p: &CfgPredicate| CfgPredicate::Not(Box::new(p.clone()));
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0].cfg, Some(vec![x.clone()]));
+    assert_eq!(all[1].cfg, Some(vec![unix.clone()]));
+    assert_eq!(
+        (all[2].path_attr.as_deref(), &all[2].cfg),
+        (None, &Some(vec![not(&x), not(&unix)]))
+    );
+
+    let (dir, indexed) = tree(&[
+        (
+            "src/lib.rs",
+            "#[cfg_attr(feature = \"x\", path = \"x.rs\")]\nmod imp;\n",
+        ),
+        ("src/imp.rs", ""),
+        ("src/x.rs", ""),
+    ]);
+    let off = analyse(dir.path(), &known(&[("src/lib.rs", &[])]), &indexed);
+    assert_eq!(gated_paths(&off.gated), ["src/x.rs"]);
+    let on = analyse(dir.path(), &known(&[("src/lib.rs", &["x"])]), &indexed);
+    assert_eq!(gated_paths(&on.gated), ["src/imp.rs"]);
+}
+
+#[test]
+fn an_unparsed_cfg_attr_predicate_leaves_the_default_name_file_undecided() {
+    let decl = ModDecl {
+        name: "imp".into(),
+        path_attr: None,
+        cfg: Some(Vec::new()),
+        cfg_text: String::new(),
+        alt_paths: vec![rust_mod_decls::AltPath {
+            pred: None,
+            path: "x.rs".into(),
+        }],
+    };
+    let all = alternatives(&decl);
+    assert_eq!(all.len(), 2);
+    assert!(all.iter().all(|d| d.cfg.is_none()), "{all:?}");
+}

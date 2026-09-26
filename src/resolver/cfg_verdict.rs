@@ -191,7 +191,12 @@ pub(crate) fn reset_compiled_out_lsp_rows(store: &GraphStore) -> Result<usize, S
     if view.active.is_empty() && view.files.is_empty() {
         return Ok(0);
     }
-    store.reset_lsp_twin_rows(|caller, target| is_compiled_out(&view, caller, target))
+    // The gated and the compiled-out files: their items are twins whose ids
+    // carry no gate, so the store finds their rows through the file.
+    let twin_files: Vec<String> = view.files.keys().cloned().collect();
+    store.reset_lsp_twin_rows(&twin_files, |caller, target| {
+        is_compiled_out(&view, caller, target)
+    })
 }
 
 #[cfg(test)]

@@ -321,3 +321,66 @@ fn an_incremental_refresh_follows_a_features_change_across_files() {
         [row("src/fast.rs::pick", "cfg-selected")]
     );
 }
+
+/// Writes what an earlier run left: a language-server row, caller-level and
+/// per-site, from `caller`'s call to `pick` into the compiled-out `fast.rs`.
+/// Unless `keep_static_row`, the static rows go and the site stays resolved.
+fn plant_stale_lsp_row(p: &Project, keep_static_row: bool) {
+    let store = GraphStore::open_or_create(&p.graph).expect("open graph");
+    let site = p.rows(
+        "MATCH (c:CallSite) WHERE c.callee_name ENDS WITH 'pick' \
+         AND c.id CONTAINS '::caller::call@' RETURN c.id",
+    )[0][0]
+        .clone();
+    if !keep_static_row {
+        store.reset_call_rows("cfg-selected").expect("static rows");
+        let mark = format!("MATCH (c:CallSite {{id: '{site}'}}) SET c.is_resolved = true");
+        store.execute_query(&mark).expect("mark resolved");
+    }
+    let props = [
+        ("confidence", "0.9"),
+        ("resolution_method", "'lsp-definition'"),
+    ];
+    for (rel, from) in [
+        ("Calls_CallSite_Function", site.as_str()),
+        ("Calls_Function_Function", "src/lib.rs::caller"),
+    ] {
+        store
+            .insert_edge_if_absent(rel, from, "src/fast.rs::pick", &props)
+            .expect("stale row");
+    }
+}
+
+/// A language-server row an earlier run wrote to the file twin the build now
+/// compiles out (review of #385). The ids of the file twins carry no
+/// `#cfg(..)`, so the reset must find the row through the file's facts; else
+/// the stale row survives next to the one the static pass writes, and the site
+/// has two targets.
+#[test]
+fn a_stale_language_server_row_to_a_compiled_out_twin_file_is_reset() {
+    for keep_static_row in [false, true] {
+        let p = Project::new(
+            "fast = []",
+            &[
+                ("src/lib.rs", PATH_PAIR),
+                ("src/fast.rs", FAST),
+                ("src/slow.rs", SLOW),
+            ],
+        );
+        plant_stale_lsp_row(&p, keep_static_row);
+        p.resolve();
+        assert_eq!(
+            p.targets("caller", "pick"),
+            [row("src/slow.rs::pick", "cfg-selected")],
+            "one target per site, the compiled file's (static row kept: {keep_static_row})"
+        );
+        let caller = p.rows(
+            "MATCH (a:Function {id: 'src/lib.rs::caller'})-[r:Calls_Function_Function]->(t) \
+             RETURN t.id",
+        );
+        assert!(
+            !caller.iter().any(|r| r[0] == "src/fast.rs::pick"),
+            "the caller keeps no row to the compiled-out file: {caller:?}"
+        );
+    }
+}
