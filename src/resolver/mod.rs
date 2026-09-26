@@ -15,8 +15,8 @@ use std::time::Instant;
 
 mod calls;
 mod cfg_select;
-pub(crate) mod cfg_verdict;
 mod cfg_twins;
+pub(crate) mod cfg_verdict;
 mod extends;
 mod implements;
 mod imports;
@@ -478,3 +478,6 @@ fn determine_caller_label(idx: &SymbolIndex, caller_qn: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lsp_twin_reset_tests;

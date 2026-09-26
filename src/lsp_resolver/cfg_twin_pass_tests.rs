@@ -7,9 +7,7 @@
 //! `health_gate_tests` and `unlinked_tests`.
 
 use super::*;
-use crate::graph_store::{
-    GraphStore, CFG_ACTIVE, CFG_INACTIVE, NODE_CALL_SITE, NODE_FUNCTION,
-};
+use crate::graph_store::{GraphStore, CFG_ACTIVE, CFG_INACTIVE, NODE_CALL_SITE, NODE_FUNCTION};
 use crate::lsp_client::LspClient;
 use crate::resolver::cfg_verdict::TwinView;
 use std::path::Path;
@@ -175,7 +173,11 @@ fn run_scripted_pass(root: &Path, store: &GraphStore, script: &Path, log: &Path)
     );
     let mut client = LspClient::start_unchecked(
         "python3",
-        &[server, log.to_str().expect("utf8"), script.to_str().expect("utf8")],
+        &[
+            server,
+            log.to_str().expect("utf8"),
+            script.to_str().expect("utf8"),
+        ],
         root,
         Duration::from_secs(10),
     )
