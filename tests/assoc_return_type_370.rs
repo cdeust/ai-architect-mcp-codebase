@@ -315,7 +315,7 @@ fn a_constructor_returning_the_type_keeps_its_edge() {
     let store = GraphStore::open_or_create(&a.graph()).unwrap();
     assert_eq!(rows_of(&store, "by-self"), bound("src/lib.rs::Set::m"));
     assert_eq!(rows_of(&store, "by-name"), bound("src/lib.rs::Named::m"));
-    assert_eq!(rows_of(&store, "by-generic"), bound("src/lib.rs::Gen::m"));
+    assert_eq!(rows_of(&store, "by-generic"), bound("src/lib.rs::Gen<T>::m"));
 }
 
 #[test]

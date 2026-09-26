@@ -62,14 +62,17 @@ impl RustConventions {
     ) -> CallEntry {
         let via = hinted.derived.as_ref().and_then(|d| {
             use crate::graph_store::{
-                RECEIVER_HINT_VIA_CONSTRUCTED, RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE,
-                RECEIVER_HINT_VIA_IMPORT_PREFIX, RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX,
-                RECEIVER_HINT_VIA_RETURN_TYPE,
+                RECEIVER_HINT_VIA_ASSOC_PREFIX, RECEIVER_HINT_VIA_CONSTRUCTED,
+                RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE, RECEIVER_HINT_VIA_IMPORT_PREFIX,
+                RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX, RECEIVER_HINT_VIA_RETURN_TYPE,
             };
             match (d.constructed, d.via_return_type, &d.import_root) {
                 (true, false, _) => Some(RECEIVER_HINT_VIA_CONSTRUCTED.to_string()),
                 (true, true, _) => Some(RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE.to_string()),
-                (false, false, _) => None,
+                (false, false, _) => d
+                    .assoc
+                    .as_ref()
+                    .map(|f| format!("{RECEIVER_HINT_VIA_ASSOC_PREFIX}{f}")),
                 (false, true, Some(root)) => {
                     Some(format!("{RECEIVER_HINT_VIA_IMPORT_PREFIX}{root}"))
                 }

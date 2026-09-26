@@ -6,7 +6,7 @@
 // ADR-<pending> (content in the PR body pending publication — coordinator
 // note 2026-09-09).
 //
-// THE SPLIT: `rust_scope::typed_local_bindings` owns "what names are bound
+// THE SPLIT: `rust_scope::typed_local_declared` owns "what names are bound
 // in this scope, and with what simplified type" (a scope/binding concern
 // shared with issue #87's `bound_names_in_scope`, same traversal, richer
 // read). This module owns only the call-site-shaped question: "does THIS
@@ -38,16 +38,17 @@ const VALUE_FIELD: &str = "value";
 /// somewhere inside a parsed Rust function/closure body.
 /// postcondition: `Some(T)` iff `node`'s receiver is a plain local
 /// identifier bound EXACTLY ONCE in the enclosing scope by a parameter or
-/// `let` whose type is determinable (plan §2.2 palier 3) — `T` is that
-/// type's last `::` segment with generics stripped. `None` for every other
+/// `let` whose type is determinable (plan §2.2 palier 3) — `T.ty` is that
+/// type's last `::` segment with generics stripped, and `T.assoc` the
+/// associated function of a `Type::assoc(..)` initialiser (issue #370). `None` for every other
 /// shape: a chained/indexed/field-access receiver (`self.tasks.get`,
 /// `sets[0].response_of`, `x.trim().len`), a `self`/`Self` receiver
 /// (paliers 1-2 own those, gated to `Method` callers only — this palier
 /// applies to ANY caller, so it deliberately does not special-case `self`;
 /// `self`'s node kind is `self`, never `identifier`, so it structurally
-/// never reaches `typed_local_bindings`' lookup), or a receiver not bound
+/// never reaches `typed_local_declared`' lookup), or a receiver not bound
 /// exactly once with a typed simple pattern.
-pub(super) fn receiver_hint(source: &str, node: Node) -> Option<String> {
+pub(super) fn receiver_hint(source: &str, node: Node) -> Option<super::rust_scope::Declared> {
     let receiver = receiver_identifier(node)?;
     let name = node_text(source, receiver);
     if name.is_empty() {
@@ -58,7 +59,7 @@ pub(super) fn receiver_hint(source: &str, node: Node) -> Option<String> {
     // `call_expression`, or the same node when `node` is already the
     // receiver identifier) — either walks `enclosing_scope` to the same
     // ancestor, so looking the name up via `node` is exact, not a guess.
-    super::rust_scope::typed_local_bindings(source, node).remove(&name)
+    super::rust_scope::typed_local_declared(source, node).remove(&name)
 }
 
 /// A receiver hint and how it was derived.
@@ -78,6 +79,9 @@ pub(super) struct DerivedHint {
     /// struct literal or `Type::assoc(..)` (issue #355). The resolver then keeps
     /// only candidates of the caller's file.
     pub(super) constructed: bool,
+    /// The associated function of a `let x = Type::assoc(..)` binding: the
+    /// resolver keeps the hint only when `assoc` returns the type (issue #370).
+    pub(super) assoc: Option<String>,
 }
 
 /// `receiver_hint`, and when the binding writes no type, the type read off the
@@ -86,13 +90,14 @@ pub(super) struct DerivedHint {
 /// source is tried only when the ones before it have nothing, so no site an
 /// earlier source already types changes.
 pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<DerivedHint> {
-    if let Some(ty) = receiver_hint(source, node) {
+    if let Some(declared) = receiver_hint(source, node) {
         return Some(DerivedHint {
-            ty,
+            ty: declared.ty,
             via_return_type: false,
             import_root: None,
             local_import: None,
             constructed: false,
+            assoc: declared.assoc,
         });
     }
     if let Some(receiver) = receiver_identifier(node) {
@@ -103,6 +108,7 @@ pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<Deri
                 import_root: found.import_root,
                 local_import: found.local_import,
                 constructed: false,
+                assoc: None,
             });
         }
     }
@@ -113,6 +119,7 @@ pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<Deri
         import_root: None,
         local_import: None,
         constructed: true,
+        assoc: None,
     })
 }
 

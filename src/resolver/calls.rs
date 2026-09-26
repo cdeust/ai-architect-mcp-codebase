@@ -50,6 +50,8 @@ pub(super) fn resolve_calls(
     // Issue #358: the facts of the latest index pass, not those of the pass
     // that parsed each file.
     let evidence = store.crate_evidence();
+    // Issue #370: what each associated function returns, and every variant.
+    let assoc = super::receiver::AssocFacts::load(store);
 
     for row in &qr.rows {
         if row.len() < 5 {
@@ -78,6 +80,7 @@ pub(super) fn resolve_calls(
             file_imports,
             twins: &twins,
             evidence: &evidence,
+            assoc: &assoc,
         };
         let row_input = RowInput {
             cs_id: &row[0],
@@ -134,6 +137,7 @@ fn resolve_one_call_site(
         provider,
         file_imports: graph.file_imports,
         evidence: graph.evidence,
+        assoc: graph.assoc,
     };
     let resolved_before = *tally.resolved;
     match resolve_single_call(&ctx, &site, &file_id) {
@@ -214,6 +218,8 @@ struct ResolveContext<'a> {
     file_imports: &'a HashMap<String, Vec<String>>,
     /// The Cargo facts of the latest index pass (issue #358).
     evidence: &'a crate::graph_store::import_roots::CrateEvidence,
+    /// Return types of associated functions and enum variants (issue #370).
+    assoc: &'a super::receiver::AssocFacts,
 }
 
 /// The per-run, read-only graph state `resolve_one_call_site` needs —
@@ -226,6 +232,7 @@ struct GraphContext<'a> {
     /// `cfg_active` of every `#[cfg]` twin (issue #353).
     twins: &'a super::cfg_select::TwinView,
     evidence: &'a crate::graph_store::import_roots::CrateEvidence,
+    assoc: &'a super::receiver::AssocFacts,
 }
 
 /// One `CallSite` scan row, grouped for the same reason as `GraphContext`.

@@ -203,21 +203,27 @@ const NAME_FIELD: &str = "name";
 /// `let x = T::assoc(...)` constructor call. A name bound more than once,
 /// bound only by a destructuring pattern, or bound with an untypable
 /// initializer is simply absent from the map — never a `None` value, so
-/// callers can use plain `.get(name)`.
-pub(super) fn typed_local_bindings(source: &str, call_node: Node) -> HashMap<String, String> {
+/// callers can use plain `.get(name)`. With each type, for a type read off
+/// `Type::assoc(..)`, the name of `assoc`: the resolver checks what `assoc`
+/// returns (issue #370).
+pub(super) fn typed_local_declared(source: &str, call_node: Node) -> HashMap<String, Declared> {
     typed_local_map(source, call_node, false)
+}
+
+fn types_only(map: HashMap<String, Declared>) -> HashMap<String, String> {
+    map.into_iter().map(|(name, d)| (name, d.ty)).collect()
 }
 
 /// `typed_local_bindings` with each type as written, path included
 /// (`fmt::Formatter`, `std::fs::File`) instead of its last segment. The macro
 /// pass needs the qualifier to tell a std type from a namesake (issue #339).
 pub(super) fn typed_local_paths(source: &str, call_node: Node) -> HashMap<String, String> {
-    typed_local_map(source, call_node, true)
+    types_only(typed_local_map(source, call_node, true))
 }
 
-fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<String, String> {
+fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<String, Declared> {
     let mut counts: HashMap<String, u32> = HashMap::new();
-    let mut typed: HashMap<String, String> = HashMap::new();
+    let mut typed: HashMap<String, Declared> = HashMap::new();
     let Some(scope) = enclosing_scope(call_node) else {
         return HashMap::new();
     };
@@ -231,13 +237,13 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
         let reaches = node.kind() != "let_declaration"
             || super::rust_item_binds::declaration_reaches(node, call_node);
         if let Some(simple_name) = simple_identifier_name(source, pattern).filter(|_| reaches) {
-            if let Some(ty) = binding_declared_type(source, node, full_path) {
+            if let Some(ty) = binding_declared(source, node, full_path) {
                 typed.insert(simple_name, ty);
             }
         }
     }
     let rebound = other_binders(source, scope);
-    let mut result: HashMap<String, String> = counts
+    let mut result: HashMap<String, Declared> = counts
         .into_iter()
         .filter(|(name, n)| *n == 1 && !rebound.contains(name))
         .filter_map(|(name, _)| typed.remove(&name).map(|ty| (name, ty)))
@@ -247,7 +253,7 @@ fn typed_local_map(source: &str, call_node: Node, full_path: bool) -> HashMap<St
         if simple.as_deref() != Some(live.name.as_str()) {
             continue;
         }
-        if let Some(ty) = binding_declared_type(source, live.declaration, full_path) {
+        if let Some(ty) = binding_declared(source, live.declaration, full_path) {
             result.insert(live.name, ty);
         }
     }
@@ -327,6 +333,14 @@ fn simple_identifier_name(source: &str, pattern: Node) -> Option<String> {
     }
 }
 
+/// A binding's declared type and, when the type was read off `Type::assoc(..)`,
+/// the name of `assoc` (issue #370): the written path says which type `assoc`
+/// belongs to, not what it returns.
+pub(super) struct Declared {
+    pub(super) ty: String,
+    pub(super) assoc: Option<String>,
+}
+
 /// The simplified type ONE `parameter`/`let_declaration` binding declares or
 /// constructs, per plan §2.2 palier 3's three concrete forms:
 ///   1. `x: [&][mut] T` (parameter's required `type` field, or a `let`'s
@@ -339,9 +353,10 @@ fn simple_identifier_name(source: &str, pattern: Node) -> Option<String> {
 /// A bare `let x = make();` (callee has no `::`) or any other initializer
 /// shape (`let x = 5;`, `let x = other_call();` with a non-scoped callee)
 /// returns `None` — "un initialiseur non typable", plan §2.2.
-fn binding_declared_type(source: &str, binding_node: Node, full_path: bool) -> Option<String> {
+fn binding_declared(source: &str, binding_node: Node, full_path: bool) -> Option<Declared> {
     if let Some(ty) = binding_node.child_by_field_name(TYPE_FIELD) {
-        return type_name(source, ty, full_path);
+        let ty = type_name(source, ty, full_path)?;
+        return Some(Declared { ty, assoc: None });
     }
     if binding_node.kind() != "let_declaration" {
         return None;
@@ -356,7 +371,11 @@ fn binding_declared_type(source: &str, binding_node: Node, full_path: bool) -> O
         return None;
     }
     let path = func.child_by_field_name(PATH_FIELD)?;
-    expr_path_name(source, path, full_path)
+    let assoc = func
+        .child_by_field_name(NAME_FIELD)
+        .map(|n| node_text(source, n));
+    let ty = expr_path_name(source, path, full_path)?;
+    Some(Declared { ty, assoc })
 }
 
 // source: std constructors that return `Self`, or `Result<Self, _>` through
