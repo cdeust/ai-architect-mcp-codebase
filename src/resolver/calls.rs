@@ -52,6 +52,8 @@ pub(super) fn resolve_calls(
     let evidence = store.crate_evidence();
     // Issue #370: what each associated function returns, and every variant.
     let assoc = super::receiver::AssocFacts::load(store);
+    // Issues #373 and #380: the `use` declarations of every Rust module.
+    let imports = super::receiver::ModuleImports::load(store, &evidence);
 
     for row in &qr.rows {
         if row.len() < 5 {
@@ -81,6 +83,7 @@ pub(super) fn resolve_calls(
             twins: &twins,
             evidence: &evidence,
             assoc: &assoc,
+            imports: &imports,
         };
         let row_input = RowInput {
             cs_id: &row[0],
@@ -138,6 +141,7 @@ fn resolve_one_call_site(
         file_imports: graph.file_imports,
         evidence: graph.evidence,
         assoc: graph.assoc,
+        imports: graph.imports,
     };
     let resolved_before = *tally.resolved;
     match resolve_single_call(&ctx, &site, &file_id) {
@@ -220,6 +224,8 @@ struct ResolveContext<'a> {
     evidence: &'a crate::graph_store::import_roots::CrateEvidence,
     /// Return types of associated functions and enum variants (issue #370).
     assoc: &'a super::receiver::AssocFacts,
+    /// The `use` declarations of each Rust module (issues #373, #380).
+    imports: &'a super::receiver::ModuleImports,
 }
 
 /// The per-run, read-only graph state `resolve_one_call_site` needs —
@@ -233,6 +239,7 @@ struct GraphContext<'a> {
     twins: &'a super::cfg_select::TwinView,
     evidence: &'a crate::graph_store::import_roots::CrateEvidence,
     assoc: &'a super::receiver::AssocFacts,
+    imports: &'a super::receiver::ModuleImports,
 }
 
 /// One `CallSite` scan row, grouped for the same reason as `GraphContext`.

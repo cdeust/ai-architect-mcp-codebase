@@ -56,6 +56,25 @@ fn two_crates() -> CrateEvidence {
     }
 }
 
+/// `WrittenPath::of` with no `use` declaration anywhere.
+fn of<'e>(
+    idx: &'e SymbolIndex,
+    evidence: &'e CrateEvidence,
+    caller: &str,
+    hint: &str,
+) -> Option<WrittenPath<'e>> {
+    let imports: &'static ModuleImports = Box::leak(Box::default());
+    WrittenPath::of(
+        &PathFacts {
+            idx,
+            evidence,
+            imports,
+        },
+        caller,
+        hint,
+    )
+}
+
 /// A caller and the path its binding writes.
 struct Site<'a> {
     caller: &'a str,
@@ -64,7 +83,7 @@ struct Site<'a> {
 
 fn admits(ev: &CrateEvidence, idx: &SymbolIndex, site: Site, method: &str) -> bool {
     let Site { caller, hint } = site;
-    WrittenPath::of(idx, ev, caller, hint)
+    of(idx, ev, caller, hint)
         .unwrap_or_else(|| panic!("{hint} from {caller} declined"))
         .admits(&entry("Method", method))
 }
@@ -280,15 +299,15 @@ fn super_climbs_out_of_the_caller_inline_module() {
 #[test]
 fn super_from_the_root_of_a_file_declines() {
     let (ev, idx) = (unknown(), index(&["src/lib.rs::c"]));
-    assert!(WrittenPath::of(&idx, &ev, "src/lib.rs::run", "super::a::Set").is_none());
-    assert!(WrittenPath::of(&idx, &ev, "src/lib.rs::c::run", "super::super::Set").is_none());
+    assert!(of(&idx, &ev, "src/lib.rs::run", "super::a::Set").is_none());
+    assert!(of(&idx, &ev, "src/lib.rs::c::run", "super::super::Set").is_none());
 }
 
 #[test]
 fn a_method_caller_is_not_mistaken_for_a_module() {
     // `src/lib.rs::Set::run`: `Set` is the impl type, not a module.
     let (ev, idx) = (unknown(), index(&[]));
-    assert!(WrittenPath::of(&idx, &ev, "src/lib.rs::Set::run", "super::Set").is_none());
+    assert!(of(&idx, &ev, "src/lib.rs::Set::run", "super::Set").is_none());
 }
 
 #[test]
@@ -303,7 +322,7 @@ fn self_reads_like_a_relative_path_and_an_empty_rest_declines() {
         },
         "src/b.rs::Set::m"
     ));
-    assert!(WrittenPath::of(&idx, &ev, "src/lib.rs::run", "crate::").is_none());
+    assert!(of(&idx, &ev, "src/lib.rs::run", "crate::").is_none());
 }
 
 #[test]

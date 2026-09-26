@@ -272,10 +272,8 @@ fn a_crate_name_import_reaches_a_type_the_library_root_defines() {
 #[test]
 fn a_cargo_less_tree_follows_a_module_import_and_keeps_a_crate_name_import() {
     let lib = issue_380_lib();
-    let (_tmp, _server, store) = analyzed(&[
-        ("src/lib.rs", lib.clone()),
-        ("src/b.rs", set_type("", 2)),
-    ]);
+    let (_tmp, _server, store) =
+        analyzed(&[("src/lib.rs", lib.clone()), ("src/b.rs", set_type("", 2))]);
     assert_eq!(
         targets(&store, "src/lib.rs", &lib, "bind"),
         ["src/b.rs::Set::m"]

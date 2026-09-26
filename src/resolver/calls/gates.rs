@@ -77,28 +77,12 @@ pub(super) fn rust_local_receiver_gate(
         receiver::ReceiverForm::None if constructed => receiver::in_place_method(site.callee)?,
         _ => return None,
     };
+    if let Some(resolution) = written_path_gate(ctx, site, &m) {
+        return Some(resolution);
+    }
     let assoc = site
         .receiver_hint_via
         .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_ASSOC_PREFIX);
-    let read_off_binding = site.receiver_hint_via.is_empty() || assoc.is_some();
-    if read_off_binding && site.receiver_hint.contains("::") {
-        // A type written as a path (`b::Set::new()`, `s: &crate::a::Set`): the
-        // path says which owner, so a namesake elsewhere is not a candidate and
-        // no same-file preference applies (issue #368).
-        let Some(path) =
-            receiver::WrittenPath::of(ctx.idx, ctx.evidence, site.caller_qn, site.receiver_hint)
-        else {
-            return Some(PolicyResolution::NotFound);
-        };
-        return Some(receiver::resolve_local_receiver_strict(
-            ctx.idx,
-            site.receiver_hint,
-            &m,
-            |candidate| {
-                path.admits(candidate) && assoc.is_none_or(|a| ctx.assoc.builds_owner(candidate, a))
-            },
-        ));
-    }
     if let Some(assoc) = assoc {
         // `let x = Type::assoc(..)`: `Type` is where `assoc` lives, not what it
         // returns (issue #370). Only an owner whose `assoc` builds it counts.
@@ -159,4 +143,118 @@ pub(super) fn rust_local_receiver_gate(
     } else {
         resolution
     })
+}
+
+/// How a hint that names its owner by a path is read (issues #368, #373, #380).
+struct PathRule<'e> {
+    /// The hint the candidates are looked up with: its last segment is the
+    /// type name.
+    hint: String,
+    /// `None`: the path cannot be read, so the call declines.
+    path: Option<receiver::WrittenPath<'e>>,
+    /// The call goes back to the lookup by name when no owner matches: a
+    /// cargo-less tree whose `use` starts with a name that may be this crate.
+    fallback: bool,
+    /// The hint was read off a return type: the weaker evidence applies.
+    return_type: bool,
+}
+
+/// The receiver call resolved against the owner a path names, when the hint
+/// comes with one: written in the binding (`b::Set::new()`, #368), shown by a
+/// `use crate::..` for a return type (#373), or bound by a `use` of the
+/// caller's module (#380). `None` when no path applies (the caller then keeps
+/// the lookup by name). No same-file preference applies to a path.
+fn written_path_gate(
+    ctx: &ResolveContext,
+    site: &CallSite,
+    m: &str,
+) -> Option<PolicyResolution<SymbolEntry>> {
+    let facts = receiver::PathFacts {
+        idx: ctx.idx,
+        evidence: ctx.evidence,
+        imports: ctx.imports,
+    };
+    let rule = path_rule(ctx, &facts, site)?;
+    let assoc = site
+        .receiver_hint_via
+        .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_ASSOC_PREFIX);
+    let resolution = match &rule.path {
+        None => PolicyResolution::NotFound,
+        Some(path) => receiver::resolve_local_receiver_strict(ctx.idx, &rule.hint, m, |c| {
+            path.admits(c) && assoc.is_none_or(|a| ctx.assoc.builds_owner(c, a))
+        }),
+    };
+    if rule.fallback && resolution == PolicyResolution::NotFound {
+        return None;
+    }
+    Some(if rule.return_type {
+        receiver::relabel_as_return_type(resolution)
+    } else {
+        resolution
+    })
+}
+
+/// The path rule of `site`'s hint, as described on `written_path_gate`.
+fn path_rule<'e>(
+    ctx: &ResolveContext,
+    facts: &receiver::PathFacts<'e>,
+    site: &CallSite,
+) -> Option<PathRule<'e>> {
+    use crate::graph_store::{
+        RECEIVER_HINT_VIA_ASSOC_PREFIX as ASSOC, RECEIVER_HINT_VIA_CONSTRUCTED as CONSTRUCTED,
+        RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE as CONSTRUCTED_RETURN_TYPE,
+        RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX as LOCAL_IMPORT,
+    };
+    let (hint, via) = (site.receiver_hint, site.receiver_hint_via);
+    let read_off_binding = via.is_empty() || via.starts_with(ASSOC);
+    let rule = |hint: &str, path, return_type| PathRule {
+        hint: hint.to_string(),
+        path,
+        fallback: false,
+        return_type,
+    };
+    if hint.contains("::") {
+        let path = receiver::WrittenPath::of(facts, site.caller_qn, hint);
+        return read_off_binding.then(|| rule(hint, path, false));
+    }
+    if let Some(local) = via.strip_prefix(LOCAL_IMPORT) {
+        // `use crate::X` for a return type in a module of the library (#373);
+        // a test, bench, example or bin target keeps its `CrateScope` (#357).
+        let file_id = extract_file_prefix_or_self(site.caller_qn);
+        let scope =
+            super::crate_scope::CrateScope::of(ctx.evidence, ctx.file_imports, &file_id, local);
+        if !local.starts_with("crate::") || scope.restricts() {
+            return None;
+        }
+        return Some(rule(
+            local,
+            receiver::WrittenPath::of(facts, site.caller_qn, local),
+            true,
+        ));
+    }
+    if !(read_off_binding || via == CONSTRUCTED || via == CONSTRUCTED_RETURN_TYPE) {
+        // A return type is named in the module of its function, not the caller's.
+        return None;
+    }
+    let scope = receiver::caller_scope(ctx.idx, site.caller_qn);
+    match facts
+        .imports
+        .naming(&scope, receiver::strip_generics(hint))
+        .as_slice()
+    {
+        [] => None,
+        [path] => {
+            let first = path.split("::").next().unwrap_or("");
+            Some(PathRule {
+                fallback: !ctx.evidence.known && !["crate", "self", "super"].contains(&first),
+                ..rule(
+                    path,
+                    receiver::WrittenPath::imported(facts, site.caller_qn, path),
+                    via == CONSTRUCTED_RETURN_TYPE,
+                )
+            })
+        }
+        // Two `use` declarations bind the name: in doubt.
+        _ => Some(rule(hint, None, false)),
+    }
 }
