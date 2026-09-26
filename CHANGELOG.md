@@ -53,6 +53,26 @@ adheres to [Semantic Versioning](https://semver.org/).
   index over it are refused with "full reindex required" (a `crate_evidence_form`
   marker row, written last by a full index, as for #354), since an earlier pass
   may have rewritten a hint as accepted. Reads are unaffected.
+- `scripts/check_moved_fn_bodies.py`, the proof that a code move changed no
+  function body, could pass a change it should catch (#362). It now fails with
+  exit 2 when either side has no function, so a mistyped ref or path no longer
+  compares nothing with nothing and passes. The compared text of a function
+  starts at its outer attributes and doc comments and includes its visibility
+  and qualifiers, so dropping `#[test]` or changing `#[should_panic(..)]`,
+  `#[cfg(..)]`, `///` or `pub(crate)` is reported. Whitespace is collapsed
+  outside literals only: string, raw string (`r#".."#`, any number of `#`),
+  byte string and char literals are compared byte for byte, and the scanner
+  reads raw strings, nested block comments and char literals such as `'\''`
+  while leaving lifetimes such as `'a` alone. CI now also runs the script end
+  to end on a fixture pair kept in `scripts/tests/fixtures/moved_fn_bodies`: a
+  pure move must pass and a copy without its `#[should_panic]` and with one
+  space removed inside a string literal must fail; the script before this
+  change passed that copy; the step requires exit 1 exactly, so a broken
+  fixture path (exit 2) cannot pass for a caught change. A `;` inside an array
+  type of a signature (`[u8; 4]`) no longer ends the declaration early, which
+  let a changed body pass. On the real split of `src/graph_cache.rs` in #352
+  (commit `560bc83`) the hardened script still exits 0, 16 functions on each
+  side.
 - The benchmark no longer carries a label for a deleted file, and a label that
   names a deleted path now fails `cargo test` (#359). Label q9 of the
   `rust-self` corpus queried `security_gates.rs`, which #262 split into
