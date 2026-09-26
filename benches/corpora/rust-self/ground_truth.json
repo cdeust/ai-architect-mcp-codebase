@@ -903,19 +903,44 @@
     },
     {
       "query_id": "q9",
+      "_note": "imports in security_gates/mod.rs (issue #359: security_gates.rs was split into security_gates/{mod,gates}.rs by #262 on 2026-08-25; re-derived from the file's top-level use statements and checked against the Defines_File_Import edges of a fresh index, 2026-09-26; #[cfg(test)] imports excluded and `mod gates;` implied by `use gates::...`, as for the other q9 labels)",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'security_gates.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'security_gates/mod.rs' RETURN n.path"
       },
       "expected": {
         "imports": [
           "crate::graph_store::GraphStore",
           "crate::search",
-          "serde_json::json",
+          "gates::find_auth_communities",
+          "gates::run_s1",
+          "gates::run_s2",
+          "gates::run_s3",
+          "gates::run_s4",
+          "gates::run_s5",
           "serde_json::Value",
-          "std::collections::BTreeSet",
+          "serde_json::json",
           "std::fs",
           "std::path::Path",
           "std::path::PathBuf"
+        ]
+      }
+    },
+    {
+      "query_id": "q9",
+      "_note": "imports in security_gates/gates.rs (issue #359, second half of the split of security_gates.rs; re-derived from the file's use statements and checked against a fresh index, 2026-09-26; the aliased import `community_of as membership_community_of` is the path it imports)",
+      "input": {
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'security_gates/gates.rs' RETURN n.path"
+      },
+      "expected": {
+        "imports": [
+          "crate::graph_store::GraphStore",
+          "crate::graph_store::SymbolMatch",
+          "crate::graph_store::community_of",
+          "crate::graph_store::cypher_str",
+          "serde_json::json",
+          "std::collections::BTreeSet",
+          "super::AUTH_CRITICAL_PATTERNS",
+          "super::SecurityFlag"
         ]
       }
     },
