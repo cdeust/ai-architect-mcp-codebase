@@ -66,6 +66,9 @@ pub struct ImpactResult {
     /// `impact_reasons::unresolved_callsite_attribution`. source: issue #284
     /// (lot 5, the `get_impact` half — the LSP-pass half is `lsp_resolve`).
     pub unresolved_callsites_outside_targets: u64,
+    /// The files of those outside-target sites, sorted, one entry per file.
+    /// Empty when `unresolved_callsites_outside_targets` is 0. Issue #318.
+    pub unresolved_callsite_outside_target_files: Vec<String>,
     /// Of `unresolved_callsites_naming_target`, how many were left open on
     /// purpose: every candidate for the callee is a twin of one item under
     /// exclusive `#[cfg]` gates and the default build does not choose one
@@ -135,6 +138,7 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         epistemic_reasons,
         unresolved_callsites_naming_target: attribution.total,
         unresolved_callsites_outside_targets: attribution.outside_targets,
+        unresolved_callsite_outside_target_files: attribution.outside_target_files,
         unresolved_callsites_cfg_twins: attribution.cfg_twins,
         cfg_twins,
         code_context_basis,
