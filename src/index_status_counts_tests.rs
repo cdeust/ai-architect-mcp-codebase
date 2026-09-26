@@ -27,7 +27,10 @@ fn index_status_reads_real_counts_while_the_graph_is_held() {
 
     let held = open_cached(&path).expect("cached open");
     let answered = run_index_status(&args);
-    assert_eq!(answered["status"], "ok", "a read must not be refused: {answered}");
+    assert_eq!(
+        answered["status"], "ok",
+        "a read must not be refused: {answered}"
+    );
     assert_eq!(answered["node_count"], 1, "{answered}");
     let again = open_cached(&path).expect("cached open");
     assert!(

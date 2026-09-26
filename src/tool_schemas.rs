@@ -64,7 +64,6 @@ pub(crate) enum HeldGraphEffect {
 /// every graph tool and requires the refusing set to equal this list.
 pub(crate) const HELD_GRAPH_TOOLS: &[(&str, HeldGraphEffect)] = &[
     ("index_codebase", HeldGraphEffect::SingleOpen),
-    ("index_status", HeldGraphEffect::SingleOpen),
     ("ingest_traces", HeldGraphEffect::SingleOpen),
     (
         "analyze_codebase",

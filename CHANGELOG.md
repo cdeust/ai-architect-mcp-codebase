@@ -8,13 +8,23 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `index_status` reads through the cache's handle like the other read tools
+  (#379). It only reads (its counts and its `#[cfg]` twin summary are MATCH
+  queries), yet it opened the graph exclusively, and since #352 an exclusive
+  open releases the cached read handle first: every status call evicted the
+  read cache, and a call made while a running request held the handle was
+  refused with `graph_handle_in_use`. It is no longer refusable and no longer
+  in the list of tools whose schema documents the refusal. A total that
+  cannot be read is still an error, never zeros (#361), and a missing graph
+  path is an error that creates nothing.
 - A graph whose totals cannot be read is no longer reported as an empty one
   (#361), and the note on the handle refusal says what each tool has already
   written when it arrives (#363). `index_status` read its counts through a
   helper that turned any failure into zeros, so while a running request held
   the graph's handle it answered `status: ok` with `node_count`, `edge_count`
-  and `call_site_target_count` at 0. It now fails with the reason (the
-  refusal code opens it); the bootstrap responses of `index_codebase` report
+  and `call_site_target_count` at 0. It now fails with the reason when the
+  counts cannot be read (#379 then made it read through the cache, so a
+  held handle no longer refuses it); the bootstrap responses of `index_codebase` report
   `counts_unavailable` with the reason instead of zeros, and the incremental
   export skips the artifact rather than record zero totals in it. The note
   appended to the schema of the tools that can be refused said that nothing
@@ -23,7 +33,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   stage opens the graph (the graph is then indexed but unresolved) or at its
   final LSP check (after every stage wrote), and `lsp_resolve` when it
   reopens the graph to count its rows; each now says so. The list of those
-  tools was kept by hand and did not include `index_status`; a test now holds
+  tools was kept by hand; a test now holds
   a handle on a real graph, calls every graph tool through the dispatch table
   and requires the tools that return the refusal to be exactly the listed
   ones. That test found `ingest_traces` writing its `OBSERVED_CALLS` edges
