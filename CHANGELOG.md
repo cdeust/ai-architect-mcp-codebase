@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-26
+
+This is a minor release. The resolver now types a Rust receiver from what the
+code names (the live binding, the written path, the `use` that brings the type
+in, a constructor, the return type of `Type::assoc`) and declines when that is
+not provable, so fewer calls resolve to a homonym. `#[cfg]` twins get their own
+nodes and are selected by the default build profile, across files and through
+`cfg_attr(path)`. `get_impact` tells production callers from test, bench and
+example callers. A graph written by an earlier version needs one full reindex
+before an incremental refresh or a bootstrap fill: the tools refuse otherwise
+and say so, and a full reindex through `index_codebase` or `analyze_codebase`
+works because it removes the old graph first.
+
 ### Fixed
 
 - A receiver whose type the caller's module names through a `use` resolves to
