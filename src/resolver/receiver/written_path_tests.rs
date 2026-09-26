@@ -77,7 +77,7 @@ fn a_relative_path_admits_only_the_owner_it_names() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "b::Set"
         },
         "src/b.rs::Set::m"
@@ -86,7 +86,7 @@ fn a_relative_path_admits_only_the_owner_it_names() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "b::Set"
         },
         "src/lib.rs::b::Set::m"
@@ -95,7 +95,7 @@ fn a_relative_path_admits_only_the_owner_it_names() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "b::Set"
         },
         "src/lib.rs::a::Set::m"
@@ -104,7 +104,7 @@ fn a_relative_path_admits_only_the_owner_it_names() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "b::Set"
         },
         "src/a.rs::Set::m"
@@ -119,7 +119,7 @@ fn a_mod_rs_file_and_generic_owners_read_like_their_module() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "c::Set"
         },
         "src/c/mod.rs::Set::m"
@@ -128,7 +128,7 @@ fn a_mod_rs_file_and_generic_owners_read_like_their_module() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "c::Gen"
         },
         "src/c.rs::Gen<T>::m"
@@ -143,7 +143,7 @@ fn a_crate_path_is_read_from_the_crate_root_exactly() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "crate::a::Set"
         },
         "src/lib.rs::a::Set::m"
@@ -152,7 +152,7 @@ fn a_crate_path_is_read_from_the_crate_root_exactly() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "crate::a::Set"
         },
         "src/lib.rs::x::a::Set::m"
@@ -162,7 +162,7 @@ fn a_crate_path_is_read_from_the_crate_root_exactly() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "crate::b::Set"
         },
         "tests/b.rs::Set::m"
@@ -171,7 +171,7 @@ fn a_crate_path_is_read_from_the_crate_root_exactly() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "crate::b::Set"
         },
         "src/b.rs::Set::m"
@@ -209,7 +209,7 @@ fn a_library_path_is_read_from_that_library_root() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "fx::b::Set"
         },
         "src/b.rs::Set::m"
@@ -218,7 +218,7 @@ fn a_library_path_is_read_from_that_library_root() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "fx::b::Set"
         },
         "tests/b.rs::Set::m"
@@ -227,7 +227,7 @@ fn a_library_path_is_read_from_that_library_root() {
         &ev,
         &idx,
         Site {
-            caller: caller,
+            caller,
             hint: "fx::Set"
         },
         "src/b.rs::Set::m"
