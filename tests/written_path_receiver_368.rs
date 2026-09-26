@@ -351,3 +351,65 @@ fn a_library_crate_path_resolves_into_that_library() {
         ["alib/src/lib.rs::Set::m"]
     );
 }
+
+const AMBIG_LIB: &str = "mod x;
+
+pub mod a {
+    pub struct Set;
+    impl Set {
+        pub fn new() -> Self {
+            Set
+        }
+        pub fn m(&self) -> u8 {
+            1
+        }
+    }
+}
+
+pub fn caller() -> u8 {
+    let s = a::Set::new();
+    s.m() // ambiguous
+}
+";
+
+const AMBIG_X: &str = "pub mod a;
+";
+
+const AMBIG_XA: &str = "pub struct Set;
+impl Set {
+    pub fn new() -> Self {
+        Set
+    }
+    pub fn m(&self) -> u8 {
+        2
+    }
+}
+";
+
+#[test]
+fn a_path_two_owners_end_with_is_ambiguous_even_when_one_is_in_the_caller_file() {
+    // `a::Set` is a suffix of both `crate::a::Set` (the caller file's inline
+    // module) and `crate::x::a::Set` (another file). The same-file tiebreak
+    // would pick the caller file's one; the written path does not say which,
+    // so the call gets no edge.
+    let manifest = package("wp368amb");
+    let (_tmp, _server, store) = analyzed(&[
+        ("Cargo.toml", &manifest),
+        ("src/lib.rs", AMBIG_LIB),
+        ("src/x/mod.rs", AMBIG_X),
+        ("src/x/a.rs", AMBIG_XA),
+    ]);
+    assert!(
+        targets(&store, "src/lib.rs", AMBIG_LIB, "ambiguous").is_empty(),
+        "a written path two owners match must not resolve"
+    );
+    let line = line_of(AMBIG_LIB, "ambiguous");
+    let rows = store
+        .execute_query(&format!(
+            "MATCH (cs:CallSite) WHERE cs.line = {line} AND cs.id STARTS WITH 'src/lib.rs::' \
+             AND cs.callee_name ENDS WITH '.m' RETURN cs.is_resolved, cs.receiver_hint"
+        ))
+        .unwrap()
+        .rows;
+    assert_eq!(rows, [["false".to_string(), "a::Set".to_string()]]);
+}
