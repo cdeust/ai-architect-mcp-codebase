@@ -83,5 +83,67 @@ class MovedFnBodies(unittest.TestCase):
         self.assertEqual(run({"a.rs": PRODUCTION}, {"a.rs": PRODUCTION}, ["a.rs", "gone.rs"]), 0)
 
 
+class Issue362(unittest.TestCase):
+    """Each case below passed silently before issue #362."""
+
+    def test_a_wrong_path_on_both_sides_fails(self):
+        # Zero bodies against zero bodies proves nothing: a typo must not pass.
+        self.assertNotEqual(run({"a.rs": PRODUCTION}, {"a.rs": PRODUCTION}, ["typo.rs"]), 0)
+
+    def test_an_empty_side_fails(self):
+        self.assertNotEqual(run({"a.rs": PRODUCTION}, {"b.rs": PRODUCTION}, ["a.rs"]), 0)
+
+    def test_a_removed_test_attribute_fails(self):
+        before = {"a.rs": "#[test]\nfn t() {\n    assert!(true);\n}\n"}
+        after = {"a.rs": "fn t() {\n    assert!(true);\n}\n"}
+        self.assertEqual(run(before, after, ["a.rs"]), 1)
+
+    def test_a_changed_should_panic_attribute_fails(self):
+        before = {"a.rs": '#[test]\n#[should_panic(expected = "x")]\nfn t() {}\n'}
+        after = {"a.rs": '#[test]\n#[should_panic(expected = "y")]\nfn t() {}\n'}
+        self.assertEqual(run(before, after, ["a.rs"]), 1)
+
+    def test_a_multi_line_attribute_is_part_of_the_body(self):
+        before = {"a.rs": "#[cfg(all(\n    test,\n    unix\n))]\nfn t() {}\n"}
+        after = {"a.rs": "#[cfg(all(\n    test,\n    windows\n))]\nfn t() {}\n"}
+        self.assertEqual(run(before, after, ["a.rs"]), 1)
+
+    def test_a_removed_doc_comment_or_visibility_fails(self):
+        base = "/// Opens it.\npub fn open() -> u32 {\n    1\n}\n"
+        self.assertEqual(run({"a.rs": base}, {"a.rs": "pub fn open() -> u32 {\n    1\n}\n"}, ["a.rs"]), 1)
+        self.assertEqual(run({"a.rs": base}, {"a.rs": "/// Opens it.\nfn open() -> u32 {\n    1\n}\n"}, ["a.rs"]), 1)
+
+    def test_indenting_attributes_does_not_count(self):
+        before = {"a.rs": "#[test]\nfn t() {}\n"}
+        after = {"a.rs": "mod tests {\n    #[test]\n    fn t() {}\n}\n"}
+        self.assertEqual(run(before, after, ["a.rs"]), 0)
+
+    def test_whitespace_inside_a_string_literal_counts(self):
+        before = {"a.rs": 'fn f() -> &\'static str {\n    "a  b"\n}\n'}
+        after = {"a.rs": 'fn f() -> &\'static str {\n    "a b"\n}\n'}
+        self.assertEqual(run(before, after, ["a.rs"]), 1)
+
+    def test_whitespace_inside_a_raw_string_counts(self):
+        before = {"a.rs": 'fn f() -> &\'static str {\n    r#"a  "b"#\n}\n'}
+        after = {"a.rs": 'fn f() -> &\'static str {\n    r#"a "b"#\n}\n'}
+        self.assertEqual(run(before, after, ["a.rs"]), 1)
+
+    def test_a_raw_string_holding_a_brace_and_a_quote_does_not_end_a_function(self):
+        text = 'fn f() -> &\'static str {\n    r##"} "# {"##\n}\nfn g() {}\n'
+        self.assertEqual(sorted(name for name, _ in moved.fn_bodies(text)), ["f", "g"])
+
+    def test_a_byte_raw_string_does_not_end_a_function(self):
+        text = 'fn f() -> &\'static [u8] {\n    br#"}"#\n}\nfn g() {}\n'
+        self.assertEqual(sorted(name for name, _ in moved.fn_bodies(text)), ["f", "g"])
+
+    def test_an_escaped_quote_char_literal_does_not_end_a_function(self):
+        text = "fn f() -> char {\n    let _ = '}';\n    '\\''\n}\nfn g() -> char { '\\\\' }\nfn h() {}\n"
+        self.assertEqual(sorted(name for name, _ in moved.fn_bodies(text)), ["f", "g", "h"])
+
+    def test_lifetimes_are_not_char_literals(self):
+        text = "fn f<'a>(x: &'a str) -> &'a str {\n    x\n}\nfn g() {}\n"
+        self.assertEqual(sorted(name for name, _ in moved.fn_bodies(text)), ["f", "g"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -235,6 +235,18 @@ jobs:
             scripts/tests/test_doc_claim_sources.py \
             scripts/tests/test_check_moved_fn_bodies.py -v 2>&1 | tail -5
 
+      # The move proof of #352 run on a real before/after pair kept in the
+      # repository, both ways (issue #362): a pure move must pass, and a copy
+      # that drops a `#[should_panic]` and changes whitespace inside a string
+      # literal must fail. Unit tests alone never ran the script end to end.
+      - name: Move proof on the fixture pair (must pass, then must fail)
+        run: |
+          F=scripts/tests/fixtures/moved_fn_bodies
+          python3 scripts/check_moved_fn_bodies.py "dir:$F/before" "dir:$F/after" lib.rs lib_tests.rs
+          if python3 scripts/check_moved_fn_bodies.py "dir:$F/before" "dir:$F/mutated" lib.rs lib_tests.rs; then
+            echo "::error::the move proof passed a mutated copy"; exit 1
+          fi
+
       - name: Install Linux build deps
         run: |
           sudo apt-get update -qq
