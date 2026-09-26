@@ -139,28 +139,30 @@ pub(crate) fn impact_next_steps(impact: &clustering::ImpactResult, qn: &str) -> 
                 .to_string(),
         );
     }
-    // issue #283 (a): an empty `callers` list reads as "no callers" unless a
-    // caller also sees `unresolved_callsites_naming_target > 0` — this hint
-    // makes the distinguishing action explicit instead of leaving the caller
-    // to notice the structured field on their own. Issue #284 (lot 5): when
-    // some of those sites are attributed outside the compiled Cargo targets,
-    // names that so the caller does not waste a run on `lsp_resolve` for the
-    // sites it can never reach.
-    if impact.callers.is_empty() && impact.unresolved_callsites_naming_target > 0 {
-        let mut hint = format!(
-            "{} call site(s) name this symbol but none resolved — run analyze_codebase \
-             with lsp: true (Rust receiver calls need it) or check \
-             query_graph(graph=\"missed\") for files the language server cannot see",
-            impact.unresolved_callsites_naming_target
-        );
-        if impact.unresolved_callsites_outside_targets > 0 {
-            hint.push_str(&format!(
-                "; {} of them sit outside the compiled Cargo targets and lsp_resolve will \
-                 never reach them — see query_graph(graph=\"missed\").coverage.outside_build_targets",
-                impact.unresolved_callsites_outside_targets
-            ));
-        }
-        steps.push(hint);
+    // Issue #283 (a): an empty `callers` list reads as "no callers" unless the
+    // caller also sees `unresolved_callsites_naming_target > 0`; this hint
+    // names the distinguishing action. The language-server advice covers only
+    // the sites it can reach: sites outside every compiled Cargo target get
+    // their own entry below (issue #318), whatever `callers` holds.
+    let outside = impact.unresolved_callsites_outside_targets;
+    let unresolved = impact.unresolved_callsites_naming_target;
+    if impact.callers.is_empty() && unresolved > 0 {
+        steps.push(if outside >= unresolved {
+            format!(
+                "{unresolved} call site(s) name this symbol but none resolved, and all of \
+                 them sit outside the compiled Cargo targets, which the language server \
+                 cannot see: see the next step"
+            )
+        } else {
+            format!(
+                "{unresolved} call site(s) name this symbol but none resolved: run \
+                 analyze_codebase with lsp: true (Rust receiver calls need it) or check \
+                 query_graph(graph=\"missed\") for files the language server cannot see"
+            )
+        });
+    }
+    if outside > 0 {
+        steps.push(outside_targets_step(impact, qn));
     }
     if impact.epistemic == epistemic::Boundary::LowerBound {
         steps.push(format!(
@@ -175,6 +177,26 @@ pub(crate) fn impact_next_steps(impact: &clustering::ImpactResult, qn: &str) -> 
         );
     }
     json!(steps)
+}
+
+/// The `next_steps` entry for unresolved call sites that sit outside every
+/// compiled Cargo target (issue #318): which files, why `lsp_resolve` cannot
+/// resolve them, and the two read-only calls that list them.
+fn outside_targets_step(impact: &clustering::ImpactResult, qn: &str) -> String {
+    let files = &impact.unresolved_callsite_outside_target_files;
+    let where_ = if files.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", files.join(", "))
+    };
+    format!(
+        "{n} unresolved call site(s) naming this symbol sit in files outside every compiled \
+         Cargo target{where_}; the language server never loads those files, so lsp_resolve \
+         cannot resolve them. List the sites with query_graph(query=\"{query}\"), and the \
+         files with query_graph(graph=\"missed\") under coverage.outside_build_targets.files",
+        n = impact.unresolved_callsites_outside_targets,
+        query = clustering::outside_target_sites_query(qn),
+    )
 }
 
 #[cfg(test)]
@@ -205,6 +227,7 @@ mod impact_next_steps_tests {
             epistemic_reasons: Vec::new(),
             unresolved_callsites_naming_target: 0,
             unresolved_callsites_outside_targets: 0,
+            unresolved_callsite_outside_target_files: Vec::new(),
             unresolved_callsites_cfg_twins: 0,
             cfg_twins: Vec::new(),
             code_context_basis: "absent",
@@ -300,6 +323,94 @@ mod impact_next_steps_tests {
         assert!(
             !joined.contains("outside the compiled Cargo targets"),
             "clause must be absent when nothing is attributed outside targets, got: {joined}"
+        );
+    }
+
+    fn joined(steps: &Value) -> String {
+        steps
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|s| s.as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// Issue #318: the outside-targets entry was only reachable when `callers`
+    /// was empty, so a symbol with resolved callers AND sites in a Kani harness
+    /// (dy-wcet `Response::meets`) got no pointer at those sites.
+    #[test]
+    fn names_outside_target_sites_even_with_resolved_callers() {
+        let mut impact = base_impact();
+        impact.callers = vec![caller_node("src/lib.rs::caller")];
+        impact.unresolved_callsites_naming_target = 4;
+        impact.unresolved_callsites_outside_targets = 4;
+        impact.unresolved_callsite_outside_target_files = vec!["kani/response_bounds.rs".into()];
+
+        let text = joined(&impact_next_steps(&impact, "src/lib.rs::Response::meets"));
+
+        assert!(
+            text.contains("outside every compiled Cargo target"),
+            "{text}"
+        );
+        assert!(text.contains("(kani/response_bounds.rs)"), "{text}");
+        assert!(
+            text.contains("cs.unresolved_reason = 'outside_compiled_targets'"),
+            "the step must hand out the query that lists the sites: {text}"
+        );
+        assert!(text.contains("cs.callee_name ENDS WITH '.meets'"), "{text}");
+        assert!(
+            text.contains("coverage.outside_build_targets.files"),
+            "{text}"
+        );
+    }
+
+    /// With every unresolved site outside the compiled targets, running the
+    /// language server again cannot help, so the hint must not suggest it.
+    #[test]
+    fn does_not_suggest_lsp_when_every_site_is_outside_the_targets() {
+        let mut impact = base_impact();
+        impact.unresolved_callsites_naming_target = 2;
+        impact.unresolved_callsites_outside_targets = 2;
+
+        let text = joined(&impact_next_steps(&impact, "src/lib.rs::f"));
+
+        assert!(!text.contains("lsp: true"), "{text}");
+        assert!(
+            text.contains("outside every compiled Cargo target"),
+            "{text}"
+        );
+    }
+
+    /// Some sites reachable, some not: the language-server advice stays for
+    /// the reachable ones and the outside entry is added.
+    #[test]
+    fn keeps_the_lsp_advice_when_some_sites_are_reachable() {
+        let mut impact = base_impact();
+        impact.unresolved_callsites_naming_target = 3;
+        impact.unresolved_callsites_outside_targets = 1;
+
+        let text = joined(&impact_next_steps(&impact, "src/lib.rs::f"));
+
+        assert!(text.contains("lsp: true"), "{text}");
+        assert!(
+            text.contains("outside every compiled Cargo target"),
+            "{text}"
+        );
+    }
+
+    /// No outside-target site, resolved callers: no outside entry.
+    #[test]
+    fn omits_the_outside_entry_when_no_site_is_outside() {
+        let mut impact = base_impact();
+        impact.callers = vec![caller_node("src/lib.rs::caller")];
+        impact.unresolved_callsites_naming_target = 2;
+
+        let text = joined(&impact_next_steps(&impact, "src/lib.rs::f"));
+
+        assert!(
+            !text.contains("outside every compiled Cargo target"),
+            "{text}"
         );
     }
 }

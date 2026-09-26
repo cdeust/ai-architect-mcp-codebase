@@ -8,6 +8,17 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `get_impact` points at the call sites that sit outside every compiled Cargo
+  target even when the symbol has resolved callers (#318). The entry of
+  `next_steps` that names them was only reached when `callers` was empty, so on
+  dy-wcet `Response::meets`, which has library callers and four sites in the
+  Kani harness `kani/response_bounds.rs`, it never appeared. It now appears
+  whenever `unresolved_callsites_outside_targets` is above 0: it names the
+  files, says the language server never loads them, and hands out a read-only
+  `query_graph` statement that lists exactly the sites that count covers (the
+  same filter), plus `query_graph(graph="missed")` for the file list. When every
+  unresolved site is outside the targets, the hint no longer advises running
+  the language server again.
 - A receiver typed through `use crate::X` in a test, bench, example or binary
   target no longer reaches a library namesake (#357). In such a target, `crate`
   names the target, not the library: a test file whose root re-exports an

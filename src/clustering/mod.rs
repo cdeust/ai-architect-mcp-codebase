@@ -44,5 +44,6 @@ pub use community::{
 #[allow(unused_imports)]
 pub use impact::{get_impact, ImpactNode, ImpactResult};
 pub use impact_context::summarize as summarize_caller_contexts;
+pub use impact_reasons::outside_target_sites_query;
 #[allow(unused_imports)]
 pub use process::{get_processes, trace_processes, ProcessInfo};

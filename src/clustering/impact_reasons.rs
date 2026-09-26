@@ -57,13 +57,7 @@ pub(super) fn unresolved_callsite_attribution(
     store: &GraphStore,
     target_bare_name: &str,
 ) -> UnresolvedCallsiteAttribution {
-    let esc_bare = cypher_str(target_bare_name);
-    let esc_dot_suffix = cypher_str(&format!(".{target_bare_name}"));
-    let esc_scope_suffix = cypher_str(&format!("::{target_bare_name}"));
-    let name_filter = format!(
-        "cs.is_resolved = false AND (cs.callee_name = {esc_bare} OR cs.callee_name ENDS WITH \
-         {esc_dot_suffix} OR cs.callee_name ENDS WITH {esc_scope_suffix})"
-    );
+    let name_filter = unresolved_name_filter(target_bare_name);
 
     let has_reason_col = store
         .node_column_exists(NODE_CALL_SITE, "unresolved_reason")
@@ -113,6 +107,37 @@ pub(super) fn unresolved_callsite_attribution(
         outside_target_files: outside_target_files.into_iter().collect(),
         cfg_twins,
     }
+}
+
+/// The Cypher filter of the unresolved `CallSite` nodes that name
+/// `target_bare_name` under the three call shapes the parsers emit (bare,
+/// receiver, path-qualified), bound to `cs`. One definition, so the count
+/// `get_impact` reports and the query its `next_steps` hands out select the
+/// same sites.
+fn unresolved_name_filter(target_bare_name: &str) -> String {
+    let esc_bare = cypher_str(target_bare_name);
+    let esc_dot_suffix = cypher_str(&format!(".{target_bare_name}"));
+    let esc_scope_suffix = cypher_str(&format!("::{target_bare_name}"));
+    format!(
+        "cs.is_resolved = false AND (cs.callee_name = {esc_bare} OR cs.callee_name ENDS WITH \
+         {esc_dot_suffix} OR cs.callee_name ENDS WITH {esc_scope_suffix})"
+    )
+}
+
+/// A read-only `query_graph` statement that lists the unresolved call sites
+/// naming `qualified_name` that are attributed outside every compiled Cargo
+/// target: the sites `unresolved_callsites_outside_targets` counts (issue
+/// #318). `#[cfg]` gates are stripped before the bare name is taken, as for the
+/// count.
+pub fn outside_target_sites_query(qualified_name: &str) -> String {
+    let plain = crate::graph_store::strip_cfg_gates(qualified_name);
+    let bare = crate::bridge::last_segment(&plain);
+    let reason = cypher_str(crate::graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS);
+    format!(
+        "MATCH (cs:{NODE_CALL_SITE}) WHERE {} AND cs.unresolved_reason = {reason} \
+         RETURN cs.id ORDER BY cs.id",
+        unresolved_name_filter(bare)
+    )
 }
 
 /// Plain `COUNT(cs)` over `name_filter` — the whole answer on a graph that
