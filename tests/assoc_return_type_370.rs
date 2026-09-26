@@ -315,7 +315,10 @@ fn a_constructor_returning_the_type_keeps_its_edge() {
     let store = GraphStore::open_or_create(&a.graph()).unwrap();
     assert_eq!(rows_of(&store, "by-self"), bound("src/lib.rs::Set::m"));
     assert_eq!(rows_of(&store, "by-name"), bound("src/lib.rs::Named::m"));
-    assert_eq!(rows_of(&store, "by-generic"), bound("src/lib.rs::Gen<T>::m"));
+    assert_eq!(
+        rows_of(&store, "by-generic"),
+        bound("src/lib.rs::Gen<T>::m")
+    );
 }
 
 #[test]
@@ -363,7 +366,9 @@ fn a_graph_of_the_previous_form_is_rebuilt_by_a_full_reindex() {
     let mut a = analyzed();
     {
         let store = GraphStore::open_or_create(&a.graph()).unwrap();
-        store.require_crate_evidence_metadata().expect("current form");
+        store
+            .require_crate_evidence_metadata()
+            .expect("current form");
         store
             .execute_query("MATCH (m:GraphMarker {id: 'crate_evidence_form'}) SET m.value = '1'")
             .expect("set the previous form");

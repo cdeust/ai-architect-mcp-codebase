@@ -27,7 +27,8 @@ impl AssocFacts {
     /// yields no facts, so every `assoc:` hint then finds no candidate.
     pub(in crate::resolver) fn load(store: &GraphStore) -> AssocFacts {
         let mut facts = AssocFacts::default();
-        if let Ok(qr) = store.execute_query("MATCH (m:Method) RETURN m.qualified_name, m.return_type")
+        if let Ok(qr) =
+            store.execute_query("MATCH (m:Method) RETURN m.qualified_name, m.return_type")
         {
             for row in qr.rows.iter().filter(|r| r.len() >= 2) {
                 facts
