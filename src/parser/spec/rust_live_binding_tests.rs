@@ -24,7 +24,14 @@ fn hint_of(src: &str, callee: &str) -> Hint {
     (prop("receiver_hint"), prop("receiver_hint_via"))
 }
 
+/// A receiver bound by `Ty::new()`: the hint and the associated function the
+/// resolver checks (issue #370).
 fn ctor(ty: &str) -> Hint {
+    (Some(ty.into()), Some("assoc:new".into()))
+}
+
+/// A receiver whose type is written at its parameter.
+fn written(ty: &str) -> Hint {
     (Some(ty.into()), None)
 }
 
@@ -81,7 +88,7 @@ fn the_initialiser_of_a_rebinding_sees_the_earlier_binding() {
 #[test]
 fn a_typed_parameter_then_a_let_types_each_site_by_its_own_binding() {
     let src = body("fn run(s: &A) { s.first(); let s = B::new(); s.second(); }");
-    assert_eq!(hint_of(&src, "s.first"), ctor("A"));
+    assert_eq!(hint_of(&src, "s.first"), written("A"));
     assert_eq!(hint_of(&src, "s.second"), ctor("B"));
 }
 
@@ -172,7 +179,7 @@ fn a_binding_of_a_nested_function_is_not_live_in_the_outer_one() {
     let src =
         body("fn run() { let s = A::new(); fn inner(s: B) { s.second(); } inner(B); s.first(); }");
     assert_eq!(hint_of(&src, "s.first"), ctor("A"));
-    assert_eq!(hint_of(&src, "s.second"), ctor("B"));
+    assert_eq!(hint_of(&src, "s.second"), written("B"));
 }
 
 #[test]

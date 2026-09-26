@@ -111,7 +111,10 @@ fn an_enum_with_an_inherent_constructor_is_typed_like_a_struct() {
 #[test]
 fn a_type_written_at_the_binding_or_typed_by_new_keeps_its_earlier_source() {
     let src = tier("fn f() -> u8 { let t = Tier::new(1); t.join(&Tier(2)) }");
-    assert_eq!(hint_of(&src, "t.join"), (Some("Tier".into()), None));
+    assert_eq!(
+        hint_of(&src, "t.join"),
+        (Some("Tier".into()), Some("assoc:new".into()))
+    );
     let typed = tier("fn f() -> u8 { let t: Tier = make(); t.join(&Tier(2)) }");
     assert_eq!(hint_of(&typed, "t.join"), (Some("Tier".into()), None));
 }
