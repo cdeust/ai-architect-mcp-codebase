@@ -39,7 +39,8 @@ const VALUE_FIELD: &str = "value";
 /// postcondition: `Some(T)` iff `node`'s receiver is a plain local
 /// identifier bound EXACTLY ONCE in the enclosing scope by a parameter or
 /// `let` whose type is determinable (plan §2.2 palier 3): `T.ty` is that
-/// type's last `::` segment with generics stripped, and `T.assoc` the
+/// type as written, path included and generics stripped (`b::Set`, issue
+/// #368; the resolver reads the path), and `T.assoc` the
 /// associated function of a `Type::assoc(..)` initialiser (issue #370). `None` for every other
 /// shape: a chained/indexed/field-access receiver (`self.tasks.get`,
 /// `sets[0].response_of`, `x.trim().len`), a `self`/`Self` receiver

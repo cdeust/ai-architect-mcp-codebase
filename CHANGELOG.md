@@ -23,6 +23,28 @@ adheres to [Semantic Versioning](https://semver.org/).
   covered yet (part B): twins in different files, files selected by
   `#[cfg_attr(.., path = ..)]`, and a module gate inherited from a `mod`
   declaration in another file.
+- A receiver typed by a path written with more than one segment resolves to
+  the owner that path names (#368). The static pass kept only the last segment
+  (`let s = b::Set::new();` reached the resolver as `Set`), so a file that also
+  defines `a::Set` got an edge to `a::Set::m` through the same-file preference.
+  The hint now keeps the path as written (`CallSite.receiver_hint` holds
+  `b::Set`) and the resolver keeps only a method whose owner the path names:
+  `crate::R` from the root of the caller's crate, `self::R` like `R`,
+  `super::R` from the parent of the caller's inline module, `<lib>::R` from the
+  root of that library of the repository, and any other path as a suffix of
+  the owner's module path within the caller's crate. The module path of an
+  owner is the one its file's location gives (`src/a.rs` and `src/a/mod.rs`
+  are `a`, `lib.rs`, `main.rs` and every target entry file are the root),
+  followed by its inline modules. When several owners match, the call is
+  ambiguous: no same-file preference applies to a written path. Paths that do
+  not resolve (a `super` from the root of a file, a `#[path]` layout, a module
+  re-exported by `pub use`, a module of another crate reached by a relative
+  path) give no edge: those edges are lost, none is made wrong. A one-segment
+  hint (`Set`, including one imported by `use b::Set;`) keeps today's
+  behaviour: the case of a `use`-imported name next to a namesake in the same
+  file is #380. Graphs written before this change carry last-segment hints, so
+  the crate evidence form goes to 3 and an incremental refresh, a bootstrap
+  fill or an artifact import asks for one full reindex.
 - `index_status` reads through the cache's handle like the other read tools
   (#379). It only reads (its counts and its `#[cfg]` twin summary are MATCH
   queries), yet it opened the graph exclusively, and since #352 an exclusive
