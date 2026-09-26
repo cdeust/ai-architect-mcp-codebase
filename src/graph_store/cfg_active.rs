@@ -212,6 +212,56 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Deletes the language-server rows (`lsp-definition`) from `from` to a
+    /// `#[cfg]` twin for which `drop(from, target)` holds, and opens again the
+    /// call sites that lose a per-site row, with the reason `cfg_twins` (issue
+    /// #366). A row to a twin the current build compiles out was written by an
+    /// earlier run, before an edit of `Cargo.toml` or a server with another cfg
+    /// set; the resolve that follows decides those sites again. Rows of every
+    /// other method, and rows to a node that is not a twin, are untouched.
+    /// Returns the number of rows deleted.
+    pub fn reset_lsp_twin_rows(&self, drop: impl Fn(&str, &str) -> bool) -> Result<usize, String> {
+        let mut deleted = 0;
+        let mut reopened: Vec<String> = Vec::new();
+        for &(rel, from, to) in super::schema::REL_TABLES {
+            if !rel.starts_with("Calls_") {
+                continue;
+            }
+            let cypher = format!(
+                "MATCH (a:{from})-[r:{rel}]->(b:{to}) WHERE r.resolution_method = 'lsp-definition' \
+                 AND b.id CONTAINS {} RETURN a.id, b.id",
+                cypher_str(TWIN_MARK)
+            );
+            let Ok(rows) = self.execute_query(&cypher) else {
+                continue;
+            };
+            for row in rows.rows.iter().filter(|r| drop(&r[0], &r[1])) {
+                self.run(&format!(
+                    "MATCH (a:{from} {{id: {}}})-[r:{rel}]->(b:{to} {{id: {}}}) \
+                     WHERE r.resolution_method = 'lsp-definition' DELETE r",
+                    cypher_str(&row[0]),
+                    cypher_str(&row[1])
+                ))?;
+                deleted += 1;
+                if from == super::schema::NODE_CALL_SITE {
+                    reopened.push(row[0].clone());
+                }
+            }
+        }
+        if !reopened.is_empty() {
+            self.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
+            for id in &reopened {
+                self.run(&format!(
+                    "MATCH (cs:CallSite {{id: {}}}) SET cs.is_resolved = false",
+                    cypher_str(id)
+                ))?;
+            }
+            let ids: Vec<&str> = reopened.iter().map(String::as_str).collect();
+            self.set_callsite_unresolved_reason(&ids, super::CALLSITE_UNRESOLVED_REASON_CFG_TWINS)?;
+        }
+        Ok(deleted)
+    }
+
     /// `id -> cfg_active` of every twin node, normalized. Read-only: a label
     /// without the column contributes `unknown` for its twins.
     pub fn cfg_active_by_id(&self) -> HashMap<String, String> {

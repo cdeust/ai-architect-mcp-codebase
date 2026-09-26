@@ -110,6 +110,16 @@ pub(crate) fn is_compiled_out(view: &TwinView, caller: &str, id: &str) -> bool {
     verdict(view, &caller_gates(caller), id, id) == Verdict::NotCompiled
 }
 
+/// Deletes the language-server rows to a twin `is_compiled_out` rules out for
+/// their caller, before the resolve pass decides those sites again.
+pub(crate) fn reset_compiled_out_lsp_rows(store: &GraphStore) -> Result<usize, String> {
+    let view = TwinView::load(store);
+    if view.active.is_empty() {
+        return Ok(0);
+    }
+    store.reset_lsp_twin_rows(|caller, target| is_compiled_out(&view, caller, target))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
