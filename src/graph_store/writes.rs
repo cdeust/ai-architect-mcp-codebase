@@ -311,8 +311,12 @@ impl GraphStore {
         if ids.is_empty() {
             return Ok(());
         }
+        // Issue #393: a reason written here replaces the whole attribution, so
+        // the detail of an earlier reason cannot outlive it.
+        self.ensure_node_column("CallSite", "unresolved_detail", "STRING DEFAULT ''")?;
         let cypher = format!(
-            "UNWIND $rows AS rid MATCH (n:CallSite {{id: rid}}) SET n.unresolved_reason = {}",
+            "UNWIND $rows AS rid MATCH (n:CallSite {{id: rid}}) \
+             SET n.unresolved_reason = {}, n.unresolved_detail = ''",
             cypher_str(reason)
         );
         for chunk in ids.chunks(BULK_BATCH_SIZE) {
@@ -322,28 +326,6 @@ impl GraphStore {
                 .collect();
             let list = Value::List(LogicalType::String, values);
             self.run_prepared(&cypher, list)?;
-        }
-        Ok(())
-    }
-
-    /// Empties `unresolved_reason` on every `CallSite` in `ids` whose reason is
-    /// `reason`: the site was resolved since, and a reason names only an open
-    /// site. A site with another reason is left alone.
-    pub(crate) fn clear_callsite_reason(&self, ids: &[&str], reason: &str) -> Result<(), String> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let cypher = format!(
-            "UNWIND $rows AS rid MATCH (n:CallSite {{id: rid}}) \
-             WHERE n.unresolved_reason = {} SET n.unresolved_reason = ''",
-            cypher_str(reason)
-        );
-        for chunk in ids.chunks(BULK_BATCH_SIZE) {
-            let values: Vec<Value> = chunk
-                .iter()
-                .map(|id| Value::String((*id).to_string()))
-                .collect();
-            self.run_prepared(&cypher, Value::List(LogicalType::String, values))?;
         }
         Ok(())
     }

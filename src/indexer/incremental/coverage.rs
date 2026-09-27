@@ -106,6 +106,7 @@ fn overlay_cargo_attributions(
         .map(|d| PathBuf::from(&d.rel))
         .collect();
     let found = cargo_attribution::attribute(codebase, &rust_files);
+    let outside_targets = found.outside_targets.iter().cloned().collect();
     for rel in found.outside_targets {
         report.files.entry(rel).or_insert_with(|| FileCoverage {
             kind: coverage::CoverageKind::OutsideBuildTargets,
@@ -130,6 +131,7 @@ fn overlay_cargo_attributions(
         targets: found.targets,
         target_owners: found.target_owners,
         file_cfg: found.file_cfg,
+        outside_targets,
     }
 }
 

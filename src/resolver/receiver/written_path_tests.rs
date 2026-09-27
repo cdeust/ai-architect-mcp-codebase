@@ -28,6 +28,7 @@ fn unknown() -> CrateEvidence {
         crate_names: BTreeSet::new(),
         targets: BTreeMap::new(),
         owners: BTreeMap::new(),
+        outside_targets: BTreeSet::new(),
     }
 }
 
@@ -53,6 +54,7 @@ fn two_crates() -> CrateEvidence {
             ("tests/it.rs".to_string(), None),
         ]),
         owners,
+        outside_targets: BTreeSet::new(),
     }
 }
 

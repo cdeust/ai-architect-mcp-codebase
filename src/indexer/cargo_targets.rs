@@ -96,6 +96,12 @@ pub enum TargetMap {
         /// crate of this repository from a `use` of a foreign one (issues
         /// #348 and #349).
         crate_names: BTreeSet<String>,
+        /// Files outside every target directory that a crate root's module
+        /// tree still reaches, through a `#[path]` that climbs out of it
+        /// (`#[cfg(kani)] #[path = "../kani/proofs.rs"] mod proofs;`). They
+        /// are compiled, so they are never outside the targets. Filled by
+        /// `discover`, which reads the tree; empty from `parse_metadata_json`.
+        module_files: BTreeSet<PathBuf>,
     },
 }
 
@@ -157,6 +163,7 @@ impl TargetMap {
         let Self::Known {
             target_dirs,
             target_files,
+            module_files,
             ..
         } = self
         else {
@@ -165,7 +172,7 @@ impl TargetMap {
         if rel.extension().and_then(|e| e.to_str()) != Some("rs") {
             return false;
         }
-        if target_files.contains(rel) {
+        if target_files.contains(rel) || module_files.contains(rel) {
             return false;
         }
         !target_dirs.iter().any(|dir| rel.starts_with(dir))
@@ -227,7 +234,33 @@ pub fn discover(root: &Path) -> TargetMap {
     let Ok(text) = String::from_utf8(output.stdout) else {
         return unknown("cargo metadata printed non-UTF-8 output".to_string());
     };
-    parse_metadata_json(&text, root)
+    with_module_files(parse_metadata_json(&text, root), root)
+}
+
+/// `map` with the files its crate roots reach through a `#[path]` outside every
+/// target directory (see `TargetMap::Known::module_files`).
+fn with_module_files(map: TargetMap, root: &Path) -> TargetMap {
+    let TargetMap::Known {
+        target_dirs,
+        target_files,
+        crate_roots,
+        crate_names,
+        ..
+    } = map
+    else {
+        return map;
+    };
+    let module_files = super::feature_gated::reached_on_disk(root, &crate_roots)
+        .into_iter()
+        .filter(|file| !target_dirs.iter().any(|dir| file.starts_with(dir)))
+        .collect();
+    TargetMap::Known {
+        target_dirs,
+        target_files,
+        crate_roots,
+        crate_names,
+        module_files,
+    }
 }
 
 fn unknown(detail: String) -> TargetMap {
@@ -335,6 +368,7 @@ pub(crate) fn parse_metadata_json(json: &str, root: &Path) -> TargetMap {
         target_files,
         crate_roots,
         crate_names,
+        module_files: BTreeSet::new(),
     }
 }
 

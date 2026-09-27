@@ -4,10 +4,11 @@
 // Owning the counters in one type is what lets `skipped` be derived from an
 // invariant rather than accumulated across branches — see `LspPass`.
 
-use super::edges::{lsp_edge, LspEdge, SiteContext};
+use super::edges::{lsp_edge, LspEdge, NotAdded, SiteContext};
 use super::sites::UnresolvedCallSite;
 use crate::graph_store::GraphStore;
 use crate::lsp_client::{self, LspResolutionResult, ServerHealth, UnlinkedFileCheck};
+use std::collections::BTreeMap;
 
 /// Running tally of one LSP resolution pass.
 ///
@@ -39,8 +40,13 @@ pub(super) struct LspPass {
     /// Issue #366: sites the server resolved to a `#[cfg]` twin the build
     /// compiles out; they keep the reason `cfg_twins`.
     compiled_out_twin_ids: Vec<String>,
+    /// Issue #393: sites the server answered with a definition outside the
+    /// analyzed root: their callee is external, whatever the static pass knew.
+    external_ids: Vec<String>,
     /// Issue #292: rust-analyzer's `unlinked-file` cross-check (ADR-9845).
     pub(super) unlinked: UnlinkedFileCheck,
+    /// Issue #393: the failed sites by what the answer lacked.
+    failed_by_reason: BTreeMap<String, u64>,
 }
 
 impl LspPass {
@@ -53,11 +59,19 @@ impl LspPass {
             newly_resolved: Vec::new(),
             outside_target_ids: Vec::new(),
             compiled_out_twin_ids: Vec::new(),
+            external_ids: Vec::new(),
             unlinked: UnlinkedFileCheck {
                 pull_supported,
                 ..UnlinkedFileCheck::default()
             },
+            failed_by_reason: BTreeMap::new(),
         }
+    }
+
+    /// Counts one failed site under `why`.
+    fn fail(&mut self, why: &str) {
+        self.failed += 1;
+        *self.failed_by_reason.entry(why.to_string()).or_insert(0) += 1;
     }
 
     /// Attributes every site in `sites` to "outside every compiled Cargo
@@ -89,12 +103,17 @@ impl LspPass {
                     self.newly_resolved.push(site.id.clone());
                 }
                 LspEdge::CompiledOutTwin => {
-                    self.failed += 1;
+                    self.fail("compiled_out_twin");
                     self.compiled_out_twin_ids.push(site.id.clone());
                 }
-                LspEdge::NotAdded => self.failed += 1,
+                LspEdge::NotAdded(why) => {
+                    self.fail(why.as_str());
+                    if why == NotAdded::External {
+                        self.external_ids.push(site.id.clone());
+                    }
+                }
             },
-            Ok(None) => self.failed += 1,
+            Ok(None) => self.fail("no_definition"),
             // A timed-out request produced no answer, so it is neither
             // resolved nor failed and falls into `skipped` by the identity.
             // Matched on the sentinel `lsp_client` raises, never on the word
@@ -102,13 +121,15 @@ impl LspPass {
             // merely mentions it is a real failure, and counting it as skipped
             // hid it from `failed_count`.
             Err(e) if lsp_client::is_lsp_timeout(&e) => {}
-            Err(_) => self.failed += 1,
+            Err(_) => self.fail("error"),
         }
     }
 
     pub(super) fn mark_resolved(&self, store: &GraphStore) -> Result<(), String> {
         let ids: Vec<&str> = self.newly_resolved.iter().map(|s| s.as_str()).collect();
         store.mark_nodes_resolved("CallSite", &ids)?;
+        // Issue #393: a resolved site carries no reason.
+        store.clear_callsite_reasons(&ids)?;
         if !self.outside_target_ids.is_empty() {
             let outside_ids: Vec<&str> =
                 self.outside_target_ids.iter().map(|s| s.as_str()).collect();
@@ -128,6 +149,8 @@ impl LspPass {
                 crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS,
             )?;
         }
+        let external: Vec<&str> = self.external_ids.iter().map(String::as_str).collect();
+        store.promote_callsite_reason_to_external(&external, "lsp_definition")?;
         Ok(())
     }
 
@@ -152,6 +175,8 @@ impl LspPass {
             elapsed_ms,
             server_health,
             unlinked_check: self.unlinked,
+            failed_by_reason: self.failed_by_reason,
+            open_by_reason: Default::default(),
         }
     }
 }
@@ -355,6 +380,52 @@ mod tests {
             1,
             "an unmapped definition is a failure, not a resolution"
         );
+    }
+
+    /// Issue #393: a definition outside the analyzed root proves the callee
+    /// external; the site's gap reason becomes `external_callee`, and each
+    /// failure is counted under what the answer lacked.
+    #[test]
+    fn an_out_of_root_definition_makes_a_gap_site_external() {
+        let dir = tempfile::Builder::new()
+            .prefix("lsp_pass_external")
+            .tempdir()
+            .expect("tempdir");
+        let root = std::fs::canonicalize(dir.path()).expect("canonicalize");
+        let store = store_with_one_unresolved_site(&root);
+        let id = "src/a.rs::caller::call@1:1";
+        store
+            .write_callsite_reasons(&[(
+                id.to_string(),
+                crate::graph_store::callsite_reasons::REASON_NO_RECEIVER_TYPE,
+                String::new(),
+            )])
+            .expect("static reason");
+        let index = super::super::sites::build_node_position_index(&store).expect("index");
+        let ctx = SiteContext {
+            node_index: &index,
+            canonical_root: &root,
+            twins: &crate::resolver::cfg_verdict::TwinView::default(),
+        };
+        let mut pass = LspPass::new(2, false);
+        let def = lsp_client::DefinitionResult {
+            uri: lsp_client::path_to_file_uri(std::path::Path::new("/elsewhere/core/num.rs")),
+            start_line: 0,
+            start_col: 0,
+        };
+        pass.record(&store, &site(id), Ok(Some(def)), &ctx);
+        pass.record(&store, &site("s2"), Ok(None), &ctx);
+        pass.mark_resolved(&store).expect("mark");
+        let rows = store
+            .execute_query(&format!(
+                "MATCH (cs:CallSite {{id: '{id}'}}) RETURN cs.unresolved_reason, cs.unresolved_detail"
+            ))
+            .expect("query");
+        assert_eq!(rows.rows[0], ["external_callee", "lsp_definition"]);
+        let out = pass.into_result(0, ServerHealth::not_probed());
+        assert_eq!(out.failed_by_reason["external_definition"], 1);
+        assert_eq!(out.failed_by_reason["no_definition"], 1);
+        assert_eq!(out.failed_by_reason.values().sum::<u64>(), out.failed_count);
     }
 
     /// B.6. `skipped` used to be decided by `e.contains("timeout")`, so any

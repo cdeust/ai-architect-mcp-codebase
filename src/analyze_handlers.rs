@@ -420,6 +420,8 @@ mod confirm_lsp_rows_tests {
             elapsed_ms: 0,
             server_health: ServerHealth::not_probed(),
             unlinked_check: UnlinkedFileCheck::default(),
+            failed_by_reason: Default::default(),
+            open_by_reason: Default::default(),
         })
     }
 

@@ -73,6 +73,8 @@ pub(super) fn run_phases(
             },
         },
     )?;
+    // Issue #393: every open call site now carries its reason.
+    store.write_callsite_reason_marker()?;
 
     Ok(PhaseTallies {
         imports,

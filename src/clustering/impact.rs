@@ -75,6 +75,10 @@ pub struct ImpactResult {
     /// (`CallSite.unresolved_reason = cfg_twins`). 0 on a graph without the
     /// column. Issue #353.
     pub unresolved_callsites_cfg_twins: u64,
+    /// `unresolved_callsites_naming_target` split by the reason each site
+    /// carries (issue #393); a site with no recorded reason counts as
+    /// `not_recorded`, and the values sum to that count.
+    pub unresolved_callsites_by_reason: std::collections::BTreeMap<String, u64>,
     /// The twins of the target, itself included, with their gate and whether the
     /// default build compiles them; empty when the target is not a twin.
     /// Issue #353.
@@ -140,6 +144,7 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         unresolved_callsites_outside_targets: attribution.outside_targets,
         unresolved_callsite_outside_target_files: attribution.outside_target_files,
         unresolved_callsites_cfg_twins: attribution.cfg_twins,
+        unresolved_callsites_by_reason: attribution.by_reason,
         cfg_twins,
         code_context_basis,
     })

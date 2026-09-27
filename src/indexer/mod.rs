@@ -364,6 +364,7 @@ fn record_cargo_attributions(
     for rel in &found.outside_targets {
         collector.record_outside_targets(rel, cargo_targets::OUTSIDE_TARGETS_DETAIL);
     }
+    let outside_targets = found.outside_targets.iter().cloned().collect();
     for (rel, detail) in found.feature_gated {
         collector.record_feature_gated(&rel, detail);
     }
@@ -377,6 +378,7 @@ fn record_cargo_attributions(
         targets: found.targets,
         target_owners: found.target_owners,
         file_cfg: found.file_cfg,
+        outside_targets,
     }
 }
 

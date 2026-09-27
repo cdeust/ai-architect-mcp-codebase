@@ -29,7 +29,35 @@ pub(super) enum LspEdge {
     /// The definition is a `#[cfg]` twin the build compiles out for this
     /// caller: no row, and the site keeps the reason `cfg_twins` (issue #366).
     CompiledOutTwin,
-    NotAdded,
+    NotAdded(NotAdded),
+}
+
+/// Why a definition answer wrote no row (issue #393).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotAdded {
+    /// The definition lies outside the analyzed root (std, the cargo registry).
+    External,
+    /// No indexed node starts on the definition's line.
+    NoNode,
+    /// The node there has another name than the call's identifier.
+    NameMismatch,
+    /// The schema has no table for the caller and target labels.
+    NoRelTable,
+    /// The row could not be written.
+    WriteFailed,
+}
+
+impl NotAdded {
+    /// The wire name of the failure, a key of `failed_by_reason`.
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            NotAdded::External => "external_definition",
+            NotAdded::NoNode => "no_node_at_definition",
+            NotAdded::NameMismatch => "name_mismatch",
+            NotAdded::NoRelTable => "no_rel_table",
+            NotAdded::WriteFailed => "write_failed",
+        }
+    }
 }
 
 /// `lsp_edge` reduced to whether a row was written (the tests' view).
@@ -57,7 +85,7 @@ pub(super) fn lsp_edge(
     // Convert LSP URI to a codebase-root-relative file path — the key space
     // of `node_index` (fleet-watch#18).
     let Some(file_path) = uri_to_relative_path(&def.uri, ctx.canonical_root) else {
-        return LspEdge::NotAdded;
+        return LspEdge::NotAdded(NotAdded::External);
     };
 
     // Look up the definition in our node index.
@@ -67,21 +95,21 @@ pub(super) fn lsp_edge(
     // Exact line match only — no nearby-line scan. See `find_node_at_position`
     // for the fail-closed rationale.
     let Some(target) = find_node_at_position(ctx.node_index, &file_path, target_line) else {
-        return LspEdge::NotAdded;
+        return LspEdge::NotAdded(NotAdded::NoNode);
     };
     if !resolved_target_matches(target, site) {
-        return LspEdge::NotAdded;
+        return LspEdge::NotAdded(NotAdded::NameMismatch);
     }
     if is_compiled_out(ctx.twins, &site.id, &target.id) {
         return LspEdge::CompiledOutTwin;
     }
     let Some(rel_type) = call_rel_table(&site.caller_label, &target.label) else {
-        return LspEdge::NotAdded;
+        return LspEdge::NotAdded(NotAdded::NoRelTable);
     };
     if insert_lsp_edge(store, &rel_type, site, target) {
         LspEdge::Added
     } else {
-        LspEdge::NotAdded
+        LspEdge::NotAdded(NotAdded::WriteFailed)
     }
 }
 

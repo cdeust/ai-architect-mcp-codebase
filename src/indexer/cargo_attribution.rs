@@ -91,6 +91,8 @@ pub(crate) struct CargoFacts {
     pub targets: BTreeMap<String, Option<String>>,
     pub target_owners: BTreeMap<String, BTreeSet<String>>,
     pub file_cfg: BTreeMap<String, crate::graph_store::FileCfg>,
+    /// The files outside every compiled target (issue #393).
+    pub outside_targets: BTreeSet<String>,
 }
 
 impl CargoFacts {
@@ -102,6 +104,7 @@ impl CargoFacts {
             crate_names: self.crate_names.clone(),
             targets: self.targets.clone(),
             owners: self.target_owners.clone(),
+            outside_targets: self.outside_targets.clone(),
         }
     }
 }

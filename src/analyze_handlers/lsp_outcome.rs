@@ -35,6 +35,8 @@ impl LspOutcome {
                 "skipped_count": r.skipped_count,
                 "outside_targets_count": r.outside_targets_count,
                 "macro_sites_count": r.macro_sites_count,
+                "failed_by_reason": r.failed_by_reason,
+                "open_by_reason": r.open_by_reason,
                 "unlinked_file_check": super::lsp_coverage::unlinked_check_json(&r.unlinked_check),
                 "elapsed_ms": r.elapsed_ms,
             }),
@@ -93,6 +95,8 @@ mod tests {
             outside_targets_count: 0,
             macro_sites_count: 0,
             unlinked_check: crate::lsp_client::UnlinkedFileCheck::default(),
+            failed_by_reason: Default::default(),
+            open_by_reason: Default::default(),
             elapsed_ms: 0,
             server_health: ServerHealth {
                 level: crate::lsp_client::ServerHealthLevel::Ok,

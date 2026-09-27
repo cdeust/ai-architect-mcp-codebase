@@ -138,6 +138,8 @@ fn lsp_resolve_envelope(result: &lsp_client::LspResolutionResult, coverage_merge
         "skipped_count": result.skipped_count,
         "outside_targets_count": result.outside_targets_count,
         "macro_sites_count": result.macro_sites_count,
+        "failed_by_reason": result.failed_by_reason,
+        "open_by_reason": result.open_by_reason,
         "unlinked_file_check": lsp_coverage::unlinked_check_json(&result.unlinked_check),
         "coverage_merge": coverage_merge,
         "elapsed_ms": result.elapsed_ms,

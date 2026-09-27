@@ -227,6 +227,7 @@ mod impact_next_steps_tests {
             epistemic_reasons: Vec::new(),
             unresolved_callsites_naming_target: 0,
             unresolved_callsites_outside_targets: 0,
+            unresolved_callsites_by_reason: Default::default(),
             unresolved_callsite_outside_target_files: Vec::new(),
             unresolved_callsites_cfg_twins: 0,
             cfg_twins: Vec::new(),
