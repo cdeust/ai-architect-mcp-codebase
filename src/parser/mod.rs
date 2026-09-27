@@ -13,6 +13,7 @@
 pub(crate) mod cfg_compact;
 pub(crate) mod cfg_expr;
 mod cfg_lex;
+pub(crate) mod rust_item_gates;
 mod spec;
 #[cfg(test)]
 pub(crate) use spec::rust_cfg_gate::TWIN_MARK as CFG_TWIN_MARK;

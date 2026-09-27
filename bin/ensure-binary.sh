@@ -28,7 +28,7 @@ EXPECTED_SIGNER_WORKFLOW="${EXPECTED_REPO}/.github/workflows/release.yml"
 # This is a release pin, not a floating minimum. The distribution identity gate
 # requires it to match Cargo.toml and every public manifest before merge.
 EXPECTED_VERSION="0.14.0"
-EXPECTED_PLUGIN_MANIFEST_SHA256="d181de55274149ac9d74a3433541b95479f38b493f76041f602b9f21f27e2764"
+EXPECTED_PLUGIN_MANIFEST_SHA256="365ac94297e4d7ec5fcc79127db26c0665328fee766afa5e85ce55094e488db1"
 EXPECTED_CARGO_MANIFEST_SHA256="175aeea73945ecfdd7ce618f37f308861b091a293ea831c4fa342144c058a972"
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"

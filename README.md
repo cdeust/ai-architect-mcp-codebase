@@ -7,7 +7,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
-  <img src="https://img.shields.io/badge/Tools-26-orange" alt="26 MCP tools">
+  <img src="https://img.shields.io/badge/Tools-27-orange" alt="27 MCP tools">
   <img src="https://img.shields.io/badge/Tests-2700+_passing-brightgreen" alt="2700+ tests">
   <img src="https://img.shields.io/badge/Coverage-92%25-brightgreen" alt="92% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
@@ -24,7 +24,7 @@
   <a href="#what-it-is">What it is</a> ·
   <a href="#install-and-register">Install</a> ·
   <a href="#a-first-session">First session</a> ·
-  <a href="#26-mcp-tools">Tools</a> ·
+  <a href="#27-mcp-tools">Tools</a> ·
   <a href="#how-answers-state-their-limits">Limits</a> ·
   <a href="#development">Development</a>
 </p>
@@ -120,18 +120,18 @@ or the `AP_PROFILE` environment variable (the flag wins).
 | Profile | Tools | Use |
 |---|---|---|
 | `core` | 8: `health_check`, `analyze_codebase`, `search_codebase`, `get_context`, `get_symbol`, `get_impact`, `query_graph`, `detect_changes` | Recommended for agents. Analyze once, then search, inspect and measure impact. |
-| `full` | all 26 | Adds the manual graph passes, history, runtime traces, the verification tools, the artifact builder and the finding-record tools. |
+| `full` | all 27 | Adds the manual graph passes, history, runtime traces, the verification tools, the artifact builder and the finding-record tools. |
 
 ```bash
 ai-architect-mcp-codebase --profile core   # the 8 core tools
 AP_PROFILE=core ai-architect-mcp-codebase  # same, through the environment
-ai-architect-mcp-codebase                  # default: full (all 26)
+ai-architect-mcp-codebase                  # default: full (all 27)
 ```
 
 The default stays `full` until the next major version, because shrinking the
 default tool surface is a breaking change. New agent setups should use the
 `core` profile (8 read-only tools): `analyze_codebase` already runs index,
-resolve and cluster in one call, and leaving out the 18 hidden tools keeps the
+resolve and cluster in one call, and leaving out the 19 hidden tools keeps the
 tool prompt small.
 
 ## A first session
@@ -164,11 +164,11 @@ query_graph(graph_path, graph: "missed")
 
 Re-run `analyze_codebase` after edits; indexing is incremental by default.
 
-## 26 MCP Tools
+## 27 MCP Tools
 
 Each tool takes JSON arguments checked against its JSON Schema and returns
 structured JSON, with a named reason code on error. No tool calls a language
-model. Agent installs rarely need all 26; the `core` profile registers just
+model. Agent installs rarely need all 27; the `core` profile registers just
 the 8 code-intelligence tools.
 
 ```
@@ -178,7 +178,7 @@ Coverage:                index_status
 Search and context:      search_codebase · get_symbol · get_context · query_graph
 Impact and processes:    get_impact · get_processes · detect_changes
 History:                 index_history
-Verification:            check_security_gates · verify_semantic_diff · validate_prd_against_graph
+Verification:            check_security_gates · verify_semantic_diff · validate_prd_against_graph · check_doc_claims
 Artifact export:         prepare_prd_input
 Finding records:         extract_finding · refine_finding · start_verification · append_clarification · finalize_verification · abort_verification
 ```
@@ -204,6 +204,7 @@ Finding records:         extract_finding · refine_finding · start_verification
 | `check_security_gates` | | Checks a list of changed symbols for auth-community touch, public-API change, unresolved imports and test-coverage gaps. |
 | `verify_semantic_diff` | | Compares a before graph and an after graph: added and removed nodes and edges, dangling references, new unresolved imports, new cycles (Tarjan SCC), and a heuristic regression score. |
 | `validate_prd_against_graph` | | Checks a product requirements document against the graph: symbols it names that do not exist, changes that span several communities, and "does not affect X" claims contradicted by process membership. |
+| `check_doc_claims` | | Checks what a document claims about the code, one claim at a time, each anchored to the exact text at a `file:line`: symbols, files and modules that exist, items declared `pub`, test and proof counts, enum variant counts. Every row is supported, contradicted, not found, not verifiable (with the reason) or rejected for a bad anchor, with a replayable query as evidence. An absence, or a count the graph holds only as a lower bound, is never called contradicted. |
 | `prepare_prd_input` | | Writes a JSON bundle of graph facts (matched symbols, affected communities and processes, graph statistics) for a finding or a free-text feature description. |
 | `extract_finding`, `refine_finding` | | Normalize an incoming finding to a canonical JSON record and store an agent's refinement of it. |
 | `start_verification`, `append_clarification`, `finalize_verification`, `abort_verification` | | Record a question-and-answer clarification of a finding, finalized with a SHA-256 digest of the transcript. |

@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `check_doc_claims`, a read-only tool that checks what a document says about
+  the code against the graph, one claim at a time (part 1 of 3 of the
+  claim-to-evidence matrix). The caller supplies each claim with the exact text
+  it read and the `file:line` it read it at; a text not found verbatim there is
+  `rejected_anchor`, and the tool never interprets prose. This part checks
+  `symbol_exists`, `module_exists`, `file_exists`, `is_public` (declared with a
+  bare `pub`, Rust only), `test_count`, `proof_count` and `enum_variant_count`;
+  any other kind is `not_verifiable` with reason `kind_not_supported_yet`.
+  Every row is `supported`, `contradicted`, `not_found`, `not_verifiable` (with
+  its reason) or `rejected_anchor`, and carries a Cypher query `query_graph`
+  can replay or a repository `file:line`. An absence is `not_found`, never
+  `contradicted`. A test or proof count is contradicted only when the
+  declarations the harness certainly compiles already outnumber the claim, and
+  supported only when they reach it: the tool reads each counted function's
+  `#[cfg]` gates from the source (the graph keeps a gate only on a `#[cfg]`
+  twin), and leaves out functions under another option, a `cfg_attr` adding a
+  `cfg`, a nested function, or a file of a target the harness does not run.
+  The output has no clock and a fixed row order, so two calls answer the same
+  bytes. On dy-wcet, the README of v4.1.2 says "the 85 tests" while its 96
+  test functions are all compiled by `cargo test`: `contradicted`.
+
 ## [0.14.0] - 2026-09-26
 
 This is a minor release. The resolver now types a Rust receiver from what the

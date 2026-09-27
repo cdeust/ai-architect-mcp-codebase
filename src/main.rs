@@ -25,6 +25,7 @@ mod call_evidence;
 mod cli;
 mod clustering;
 mod cochange;
+mod doc_claims;
 mod epistemic;
 mod git_diff;
 mod git_provenance;
@@ -96,7 +97,8 @@ const FULL_INSTRUCTIONS: &str =
      cluster_graph (or analyze_codebase for all three), then search_codebase / get_context / \
      get_symbol / get_impact / detect_changes / query_graph; (4/6) PRD grounding — \
      prepare_prd_input → validate_prd_against_graph; (8/9) gates — check_security_gates, \
-     verify_semantic_diff. Absence from the graph is NOT proof of absence — verify negatives \
+     verify_semantic_diff; check_doc_claims checks a document's anchored claims against the \
+     graph. Absence from the graph is NOT proof of absence — verify negatives \
      with query_graph(graph=\"missed\"). Guided workflows are published via prompts/list: \
      explore_codebase, review_change_impact, verify_finding, ground_prd. For the read-only \
      code-intelligence subset only, restart with --profile core.";
@@ -154,6 +156,7 @@ fn tools_list(profile: ToolProfile) -> Value {
 }
 
 mod analyze_handlers;
+mod doc_claims_handlers;
 mod finding_extract;
 mod finding_index;
 mod finding_refine;
@@ -171,6 +174,7 @@ mod verification_core;
 mod verification_ops;
 
 pub(crate) use analyze_handlers::*;
+pub(crate) use doc_claims_handlers::*;
 pub(crate) use finding_extract::*;
 pub(crate) use finding_refine::*;
 #[cfg(test)]
@@ -281,6 +285,7 @@ fn dispatch_tool(name: &str, arguments: &Value, profile: ToolProfile) -> Option<
         "validate_prd_against_graph" => run_validate_prd_against_graph(arguments),
         "check_security_gates" => run_check_security_gates(arguments),
         "verify_semantic_diff" => run_verify_semantic_diff(arguments),
+        "check_doc_claims" => run_check_doc_claims(arguments),
         _ => return None,
     };
     Some(payload)

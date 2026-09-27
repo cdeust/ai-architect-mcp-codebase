@@ -88,7 +88,7 @@ fn claim_file_path(token: &str) -> Option<&str> {
 //      the file was pruned (dependency scope), excluded by a language
 //      filter, or simply never walked. Same observable effect: unverifiable.
 // Distinguished only in the message text; both return Some(reason).
-fn unverifiable_reason(store: &GraphStore, token: &str) -> Option<String> {
+pub(crate) fn unverifiable_reason(store: &GraphStore, token: &str) -> Option<String> {
     let file_path = claim_file_path(token)?;
     let ext = Path::new(file_path).extension().and_then(|e| e.to_str());
     if let Some(ext) = ext {
