@@ -312,7 +312,11 @@ impl GraphStore {
             return Ok(());
         }
         // Issue #393: a reason written here replaces the whole attribution, so
-        // the detail of an earlier reason cannot outlive it.
+        // the detail of an earlier reason cannot outlive it. Unlike
+        // `write_callsite_reasons`, no `is_resolved` guard: every caller writes
+        // on sites it has just found open (the language-server pass's failed
+        // sites, the twins `cfg_active` reopens, the sites `stale_sites` marks
+        // unresolved), or clears the reason with "".
         self.ensure_node_column("CallSite", "unresolved_detail", "STRING DEFAULT ''")?;
         let cypher = format!(
             "UNWIND $rows AS rid MATCH (n:CallSite {{id: rid}}) \

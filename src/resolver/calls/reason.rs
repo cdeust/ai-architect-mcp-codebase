@@ -2,12 +2,16 @@
 // open (issue #393).
 //
 // One reason per site, from the closed set of `graph_store::callsite_reasons`,
-// the first that applies in this order: the file no Cargo target compiles,
-// twins the build does not decide between, a callee proven to live outside the
-// repository, a scope rule that declined, several candidates, a method call on
-// a receiver of no known type, a callee whose name the repository holds but
-// not for this call, and last a callee nothing is known about. The macro pass
-// gives the macro reasons (`resolver_layers`).
+// the first that applies in this order (`classify`): the file no Cargo target
+// compiles; a target found with no edge table for its label (`not_a_call` with
+// `names_<Label>` for a non-callable item such as a constant, else `not_found`
+// with `no_rel_table:<Label>`); a path ending in a variant of an enum of the
+// repository (`not_a_call`, `enum_variant`); twins the build does not decide
+// between; a callee proven to live outside the repository; a scope rule that
+// declined; several candidates; a method call on a receiver of no known type;
+// a callee whose name the repository holds but not for this call; and last a
+// callee nothing is known about. The macro pass gives the macro reasons
+// (`resolver_layers`).
 //
 // `external_callee` needs evidence, never absence alone: the std or core root
 // the callee's path is written or imported from, a name of the Rust prelude or

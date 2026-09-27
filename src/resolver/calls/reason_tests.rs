@@ -13,6 +13,9 @@ const LIB: &str = r#"use std::io;
 use rand::Rng;
 pub mod a;
 pub mod b;
+pub mod c;
+pub mod d;
+pub mod e;
 #[cfg(kani)]
 #[path = "../kani/proofs.rs"]
 mod proofs;
@@ -36,6 +39,8 @@ pub type K = Kind;
 pub struct Set {
     v: Vec<u64>,
 }
+
+pub type Al = Set;
 
 impl Set {
     pub fn new() -> Self {
@@ -64,6 +69,8 @@ pub fn text() {
 pub fn calls(x: &[u8]) -> usize {
     helper();
     dup();
+    a::dup();
+    crate::a::dup();
     nothing_here();
     my_macro!();
     let _k = Kind::A(1);
@@ -74,6 +81,26 @@ pub fn calls(x: &[u8]) -> usize {
     x.iter().count()
 }
 "#;
+
+/// `use ext::*;` of a crate outside the repository may give `Set`: the call
+/// declines rather than take the library's `Set` by name.
+const GLOB_USER: &str =
+    "use ext::*;\n\npub fn glob_user() {\n    let g = Set::new();\n    g.go();\n}\n";
+
+/// A return type imported from a crate that is no library of the repository.
+const FOREIGN_RETURN: &str =
+    "use serde_json::Value;\n\npub fn make_v() -> Value {\n    todo!()\n}\n\n\
+pub fn use_v() {\n    let v = make_v();\n    v.as_str();\n}\n";
+
+/// A return type named through the library's own crate name that is an alias.
+const ALIAS_RETURN: &str = "use probe::Al;\n\npub fn make_al() -> Al {\n    todo!()\n}\n\n\
+pub fn use_al() {\n    let x = make_al();\n    x.go();\n}\n";
+
+/// In a test target `crate` is the test crate, whose root re-exports a foreign
+/// `Set`: the library's `Set` is out of scope.
+const TEST_TARGET: &str = "pub use some_ext::Set;\n\nmod inner {\n    use crate::Set;\n\n\
+    pub fn make_s() -> Set {\n        todo!()\n    }\n\n    \
+pub fn run_s() {\n        let s = make_s();\n        s.go();\n    }\n}\n";
 
 fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
@@ -100,6 +127,10 @@ fn resolved_fixture() -> (tempfile::TempDir, GraphStore) {
     write(&src, "src/lib.rs", LIB);
     write(&src, "src/a.rs", "pub fn dup() {}\npub struct A(pub u8);\n");
     write(&src, "src/b.rs", "pub fn dup() {}\n");
+    write(&src, "src/c.rs", GLOB_USER);
+    write(&src, "src/d.rs", FOREIGN_RETURN);
+    write(&src, "src/e.rs", ALIAS_RETURN);
+    write(&src, "tests/it.rs", TEST_TARGET);
     write(
         &src,
         "kani/proofs.rs",
@@ -168,6 +199,20 @@ const EXPECTED: &[(&str, &str, &str)] = &[
     ("other", reasons::REASON_OUTSIDE_TARGETS, ""),
     // kani/proofs.rs is in the library through its #[path], not outside it.
     ("undefined_fn", reasons::REASON_UNKNOWN_CALLEE, ""),
+    // A module path of the repository is not an external path. The lookup by
+    // name does not read the module, so both `dup` stay candidates (as on main).
+    ("a::dup", reasons::REASON_AMBIGUOUS, "2"),
+    ("crate::a::dup", reasons::REASON_AMBIGUOUS, "2"),
+    // The scope rules of the receiver gates, one site each (gates.rs).
+    ("g.go", reasons::REASON_DECLINED_BY_SCOPE, "written_path"),
+    ("s.go", reasons::REASON_DECLINED_BY_SCOPE, "crate_scope"),
+    (
+        "x.go",
+        reasons::REASON_DECLINED_BY_SCOPE,
+        "type_alias_return",
+    ),
+    // Declined as a foreign return type: the crate the type is imported from.
+    ("v.as_str", reasons::REASON_EXTERNAL_CALLEE, "serde_json"),
 ];
 
 #[test]
@@ -180,7 +225,10 @@ fn every_open_site_names_its_reason_and_no_resolved_site_does() {
     let all = sites(&store);
     // A lone `Set::new` of the repository must not take a path into std.
     let edges = store
-        .execute_query("MATCH (c:CallSite)-[]->(t) WHERE t.id = 'src/lib.rs::Set::new' RETURN c.id")
+        .execute_query(
+            "MATCH (c:CallSite)-[]->(t) WHERE t.id = 'src/lib.rs::Set::new' \
+             AND c.id STARTS WITH 'src/lib.rs' RETURN c.id",
+        )
         .expect("edges");
     assert!(edges.rows.is_empty(), "{:?}", edges.rows);
     for (callee, reason, detail) in EXPECTED {
@@ -201,6 +249,28 @@ fn every_open_site_names_its_reason_and_no_resolved_site_does() {
     }
 }
 
+/// Without Cargo facts no crate is known to be foreign, so a return type
+/// imported from one declines under that rule rather than as an external callee.
+#[test]
+fn a_foreign_return_type_without_cargo_facts_declines_as_unknown_facts() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let src = dir.path().join("tree");
+    write(
+        &src,
+        "src/lib.rs",
+        FOREIGN_RETURN.replace("serde_json", "ext").as_str(),
+    );
+    std::fs::create_dir_all(dir.path().join("out")).expect("mkdir out");
+    let graph = dir.path().join("out/graph");
+    crate::indexer::index_codebase(&src, &graph).expect("index");
+    let store = GraphStore::open_or_create(&graph).expect("open");
+    crate::resolver::resolve_graph(&store).expect("resolve");
+    assert_eq!(
+        reason_of(&sites(&store), "v.as_str"),
+        (reasons::REASON_DECLINED_BY_SCOPE, "unknown_cargo_facts")
+    );
+}
+
 #[test]
 fn the_summary_partitions_the_open_sites() {
     if !cargo_available() {
@@ -208,9 +278,13 @@ fn the_summary_partitions_the_open_sites() {
         return;
     }
     let (_dir, store) = resolved_fixture();
-    let open = sites(&store)
-        .values()
-        .filter(|(resolved, ..)| !resolved)
+    // Counted per row: several sites share a callee name (`todo!`).
+    let open = store
+        .execute_query("MATCH (cs:CallSite) RETURN cs.is_resolved")
+        .expect("sites")
+        .rows
+        .iter()
+        .filter(|r| !(r[0] == "True" || r[0] == "true"))
         .count() as u64;
     let summary = store.unresolved_site_summary().expect("summary");
     assert!(summary.reasons_recorded);

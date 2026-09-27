@@ -307,6 +307,8 @@ fn module_file(
 /// `path` with its `.` and `..` components folded away, `None` when it climbs
 /// above its first component or is absolute. The indexed set holds such
 /// root-relative paths, so `src/../kani/x.rs` must read `kani/x.rs` to be found.
+/// The bound is lexical, not canonical: symbolic links are not followed, so a
+/// link inside the root that points outside it is not detected here.
 fn lexical(path: &Path) -> Option<PathBuf> {
     use std::path::Component;
     let mut out = PathBuf::new();
