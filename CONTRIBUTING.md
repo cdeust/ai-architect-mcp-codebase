@@ -1,7 +1,7 @@
 # Contributing to ai-architect-mcp-codebase
 
 Thanks for considering a contribution. This is a Rust MCP server with
-**26 tools, 1500+ tests, zero warnings, every constant sourced**. Every
+**27 tools, 1500+ tests, zero warnings, every constant sourced**. Every
 change is held to that bar.
 
 ---
@@ -101,7 +101,7 @@ Each new tool must:
 4. **Have an integration test** that exercises the full stdio path
    (request envelope → JSON-RPC frame → handler → response). Unit tests
    alone are insufficient.
-5. **Be documented in the README's tool table** (`## 26 MCP Tools`), which
+5. **Be documented in the README's tool table** (`## 27 MCP Tools`), which
    `scripts/check_doc_claims.py` checks by name.
 
 Reference: look at `src/handlers/health_check.rs` for the simplest tool
