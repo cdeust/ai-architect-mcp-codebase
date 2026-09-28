@@ -7,10 +7,12 @@
 use super::*;
 use crate::graph_store::{call_rel_table, call_site_rel_table};
 
+mod candidate_scope;
 mod crate_scope;
 mod gates;
 mod reason;
 mod variant_guard;
+use candidate_scope::{qualified_path_gate, visible_candidates};
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
 use reason::{Decline, Failure, Gated};
 
@@ -446,6 +448,9 @@ fn resolve_single_call(ctx: &ResolveContext, site: &CallSite, file_id: &str) -> 
     // The variant guard refused every candidate left (issue #393).
     let guarded = (visible > 0 && candidates.is_empty())
         .then_some(Decline::Scope(reason::SCOPE_VARIANT_GUARD));
+    if let Some(gated) = qualified_path_gate(ctx, site, &candidates) {
+        return gated;
+    }
     let ev = crate::call_evidence::CallEvidence {
         imports_hint: &imports_hint,
         caller_file: file_id,
@@ -458,40 +463,4 @@ fn resolve_single_call(ctx: &ResolveContext, site: &CallSite, file_id: &str) -> 
         &ev,
     );
     (resolution, guarded)
-}
-
-/// The candidates a call at `site` can actually name under the caller
-/// language's scoping rules, before any evidence is weighed.
-///
-/// Rust block-scoped fn items (issue #327): a nested fn shadows every other
-/// candidate inside its enclosing callable and is invisible outside. Python
-/// (`bare_call_binds_methods == false`): an unqualified call never names a
-/// method, so a same-named method is not a rival of the module function it
-/// really calls (pg_store.py `_now_iso()`, which the #30 policy used to drop
-/// as ambiguous, #335) and is never a target on its own.
-fn visible_candidates<'a>(
-    ctx: &ResolveContext,
-    site: &CallSite,
-    candidates: &'a [SymbolEntry],
-    qualified: bool,
-) -> std::borrow::Cow<'a, [SymbolEntry]> {
-    use std::borrow::Cow;
-    if ctx.provider.language() == "rust" {
-        return Cow::Owned(nested_scope::visible_candidates(
-            ctx.idx,
-            candidates,
-            site.caller_qn,
-            qualified,
-        ));
-    }
-    if qualified || ctx.provider.bare_call_binds_methods() {
-        return Cow::Borrowed(candidates);
-    }
-    Cow::Owned(
-        candidates
-            .iter()
-            .filter(|c| c.label != "Method")
-            .cloned()
-            .collect(),
-    )
 }

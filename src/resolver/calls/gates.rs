@@ -259,7 +259,13 @@ fn path_rule<'e>(
         }) != PolicyResolution::NotFound
     };
     let name = receiver::strip_generics(hint);
-    match receiver::bind(facts, site.caller_qn, name, &admits_any) {
+    match receiver::bind(
+        facts,
+        site.caller_qn,
+        name,
+        &admits_any,
+        receiver::Defines::Types,
+    ) {
         receiver::Binding::ByName => None,
         receiver::Binding::Decline => Some(rule(hint, None, false)),
         receiver::Binding::Path {

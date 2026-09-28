@@ -199,10 +199,6 @@ const EXPECTED: &[(&str, &str, &str)] = &[
     ("other", reasons::REASON_OUTSIDE_TARGETS, ""),
     // kani/proofs.rs is in the library through its #[path], not outside it.
     ("undefined_fn", reasons::REASON_UNKNOWN_CALLEE, ""),
-    // A module path of the repository is not an external path. The lookup by
-    // name does not read the module, so both `dup` stay candidates (as on main).
-    ("a::dup", reasons::REASON_AMBIGUOUS, "2"),
-    ("crate::a::dup", reasons::REASON_AMBIGUOUS, "2"),
     // The scope rules of the receiver gates, one site each (gates.rs).
     ("g.go", reasons::REASON_DECLINED_BY_SCOPE, "written_path"),
     ("s.go", reasons::REASON_DECLINED_BY_SCOPE, "crate_scope"),
@@ -223,16 +219,32 @@ fn every_open_site_names_its_reason_and_no_resolved_site_does() {
     }
     let (_dir, store) = resolved_fixture();
     let all = sites(&store);
-    // A lone `Set::new` of the repository must not take a path into std.
+    // A lone `Set::new` of the repository must not take a path into std, nor
+    // the `Set::new()` of src/c.rs, whose `Set` only a foreign glob can give
+    // (issue #398).
     let edges = store
-        .execute_query(
-            "MATCH (c:CallSite)-[]->(t) WHERE t.id = 'src/lib.rs::Set::new' \
-             AND c.id STARTS WITH 'src/lib.rs' RETURN c.id",
-        )
+        .execute_query("MATCH (c:CallSite)-[]->(t) WHERE t.id = 'src/lib.rs::Set::new' RETURN c.id")
         .expect("edges");
     assert!(edges.rows.is_empty(), "{:?}", edges.rows);
     for (callee, reason, detail) in EXPECTED {
         assert_eq!(reason_of(&all, callee), (*reason, *detail), "{callee}");
+    }
+    // A module path names that module's `dup` (issue #398), so it is resolved
+    // and carries no reason.
+    for callee in ["a::dup", "crate::a::dup"] {
+        let targets = store
+            .execute_query(&format!(
+                "MATCH (c:CallSite)-[]->(t) WHERE c.callee_name = {} RETURN t.id",
+                crate::graph_store::cypher_str(callee)
+            ))
+            .expect("targets")
+            .rows;
+        assert_eq!(targets, [["src/a.rs::dup".to_string()]], "{callee}");
+        assert_eq!(
+            all[callee],
+            (true, String::new(), String::new()),
+            "{callee}"
+        );
     }
     let chained = all
         .iter()

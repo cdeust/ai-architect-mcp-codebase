@@ -23,6 +23,7 @@ fn two_crates() -> CrateEvidence {
         ]),
         owners,
         outside_targets: BTreeSet::new(),
+        logical_modules: BTreeMap::new(),
     }
 }
 
@@ -97,12 +98,14 @@ fn a_glob_adds_its_path_beside_the_definition() {
     );
 }
 
+/// A `use` of the path it is read at ends, and keeps that path (issue #398:
+/// `use crate::service;` in the root made `service::f()` name nothing).
 #[test]
 fn a_use_of_itself_ends() {
     let ev = two_crates();
     let imports = with_imports(&ev, &[("src/lib.rs", "crate::Set", false)]);
     let out = followed(&ev, &imports, "src/task.rs", Anchor::CrateRoot(segs("Set")));
-    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(out, [Anchor::CrateRoot(segs("Set"))]);
 }
 
 #[test]
