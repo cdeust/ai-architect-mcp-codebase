@@ -55,6 +55,11 @@ pub struct CrateEvidence {
     /// `File.target_owners`, not in the marker row.
     #[serde(skip)]
     pub owners: BTreeMap<String, BTreeSet<String>>,
+    /// The Rust files no Cargo target compiles (root-relative, forward-slash):
+    /// a call site in one is open for that reason first (issue #393). Absent
+    /// from the facts of an older pass, which read as none.
+    #[serde(default)]
+    pub outside_targets: BTreeSet<String>,
 }
 
 const OWNERS_COLUMN_TYPE: &str = "STRING DEFAULT ''";

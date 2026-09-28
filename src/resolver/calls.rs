@@ -9,8 +9,10 @@ use crate::graph_store::{call_rel_table, call_site_rel_table};
 
 mod crate_scope;
 mod gates;
+mod reason;
 mod variant_guard;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
+use reason::{Decline, Failure, Gated};
 
 // ---------------------------------------------------------------------------
 // Phase 2: Call resolution
@@ -40,12 +42,8 @@ pub(super) fn resolve_calls(
     let mut unresolved = Vec::new();
     // §10.4 — CallSite nodes whose callee was resolved to a graph target.
     let mut resolved_ids: Vec<String> = Vec::new();
-    // Issue #353: CallSites left unresolved because every candidate is a twin
-    // of one item under mutually exclusive `#[cfg]` predicates.
-    let mut twin_site_ids: Vec<String> = Vec::new();
-    // Sites of a twin set the build profile decided: resolved, so a `cfg_twins`
-    // reason an earlier pass wrote on them is stale.
-    let mut selected_site_ids: Vec<String> = Vec::new();
+    // Issue #393: why each site left open is open.
+    let mut reasons: Vec<crate::graph_store::callsite_reasons::SiteReasonRow> = Vec::new();
     let twins = super::cfg_select::TwinView::load(store);
     // Issue #358: the facts of the latest index pass, not those of the pass
     // that parsed each file.
@@ -74,8 +72,7 @@ pub(super) fn resolve_calls(
         let mut tally = CallTally {
             resolved: &mut resolved,
             unresolved: &mut unresolved,
-            twin_sites: &mut twin_site_ids,
-            selected_sites: &mut selected_site_ids,
+            reasons: &mut reasons,
         };
         let graph = GraphContext {
             idx,
@@ -98,7 +95,11 @@ pub(super) fn resolve_calls(
     }
     let id_refs: Vec<&str> = resolved_ids.iter().map(|s| s.as_str()).collect();
     store.mark_nodes_resolved("CallSite", &id_refs)?;
-    super::cfg_twins::persist_twin_reason(store, &twin_site_ids, &selected_site_ids)?;
+    // One writer for the reasons of this phase (issue #393): a resolved site
+    // carries none, an open one its own, and a site a later pass (the language
+    // server) resolved keeps none, whatever this pass could not do.
+    store.clear_callsite_reasons(&id_refs)?;
+    store.write_callsite_reasons(&reasons)?;
     Ok((resolved, total, unresolved))
 }
 
@@ -144,7 +145,8 @@ fn resolve_one_call_site(
         imports: graph.imports,
     };
     let resolved_before = *tally.resolved;
-    match resolve_single_call(&ctx, &site, &file_id) {
+    let (resolution, decline) = resolve_single_call(&ctx, &site, &file_id);
+    let failure = match resolution {
         PolicyResolution::Resolved {
             target,
             evidence,
@@ -156,6 +158,8 @@ fn resolve_one_call_site(
                 confidence,
             };
             stage_call_edge(buf, &site, &matched, tally);
+            let label = target.label.clone();
+            (*tally.resolved == resolved_before).then_some(label)
         }
         // Genuinely ambiguous (no evidence tier discriminates the
         // candidates): labeled and dropped rather than guessed — see
@@ -174,19 +178,46 @@ fn resolve_one_call_site(
                         ),
                     };
                     stage_call_edge(buf, &site, &matched, tally);
-                    tally.selected_sites.push(site.cs_id.to_string());
+                    let label = twin.label.clone();
+                    (*tally.resolved == resolved_before).then_some(label)
                 }
-                None => record_ambiguous(&site, tally, &candidates, graph.twins),
+                None => {
+                    let twins = record_ambiguous(&site, tally, &candidates, graph.twins);
+                    let failure = Failure::Ambiguous {
+                        count: candidates.len(),
+                        twins,
+                    };
+                    record_reason(&ctx, &site, &file_id, &failure, tally);
+                    None
+                }
             }
         }
         PolicyResolution::NotFound => {
-            record_call_unresolved(&site, tally, "no target found".to_string())
+            record_call_unresolved(&site, tally, "no target found".to_string());
+            record_reason(&ctx, &site, &file_id, &Failure::NotFound(decline), tally);
+            None
         }
+    };
+    // A target was found but no edge could be staged for it.
+    if let Some(label) = failure {
+        record_reason(&ctx, &site, &file_id, &Failure::NoRelTable(&label), tally);
     }
     // The callee resolved to a graph target — flip the CallSite's
     // is_resolved (§10.4). Applies to both Calls and Uses edges (both mean
     // "target found").
     *tally.resolved > resolved_before
+}
+
+/// Queues the reason `failure` gives the site (issue #393).
+fn record_reason(
+    ctx: &ResolveContext,
+    site: &CallSite,
+    file_id: &str,
+    failure: &Failure,
+    tally: &mut CallTally,
+) {
+    let (why, detail) = reason::classify(ctx, site, file_id, failure);
+    tally.reasons.push((site.cs_id.to_string(), why, detail));
 }
 
 /// Records one unresolved `Calls` reference with the given reason.
@@ -263,18 +294,15 @@ struct MatchedCall<'a> {
 }
 
 /// An ambiguous callee: dropped and labeled. When every candidate is a twin of
-/// one item under exclusive `#[cfg]` gates (issue #353) the label is `cfg_twins`
-/// and the site is queued for the reason to be persisted.
+/// one item under exclusive `#[cfg]` gates (issue #353) the label is `cfg_twins`;
+/// returns whether it is.
 fn record_ambiguous(
     site: &CallSite,
     tally: &mut CallTally,
     candidates: &[SymbolEntry],
     view: &super::cfg_select::TwinView,
-) {
+) -> bool {
     let twins = super::cfg_twins::are_twins_of_one_item(view, candidates);
-    if twins {
-        tally.twin_sites.push(site.cs_id.to_string());
-    }
     let label = if twins {
         crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS
     } else {
@@ -285,6 +313,7 @@ fn record_ambiguous(
         tally,
         format!("{label} ({} candidates)", candidates.len()),
     );
+    twins
 }
 
 /// Running counters for `resolve_calls`, grouped so helpers take one
@@ -292,10 +321,8 @@ fn record_ambiguous(
 struct CallTally<'a> {
     resolved: &'a mut u64,
     unresolved: &'a mut Vec<UnresolvedRef>,
-    /// Ids of the sites whose every candidate is a cfg twin (issue #353).
-    twin_sites: &'a mut Vec<String>,
-    /// Ids of the sites a twin set was resolved for by the build profile.
-    selected_sites: &'a mut Vec<String>,
+    /// Why each site left open is open (issue #393).
+    reasons: &'a mut Vec<crate::graph_store::callsite_reasons::SiteReasonRow>,
 }
 
 /// Stages the Calls/Uses edge for one resolved callee, or records why it
@@ -383,17 +410,17 @@ fn stage_call_edge(
 /// each of which is itself evidence (the callee's own receiver
 /// spelling, or the parser's derived local-binding type), not a
 /// spelling-dependent shortcut around the policy.
-fn resolve_single_call(
-    ctx: &ResolveContext,
-    site: &CallSite,
-    file_id: &str,
-) -> PolicyResolution<SymbolEntry> {
+fn resolve_single_call(ctx: &ResolveContext, site: &CallSite, file_id: &str) -> Gated {
     let callee = site.callee;
-    if let Some(res) = same_class_receiver_gate(ctx, site) {
-        return res;
+    if let Some(gated) = same_class_receiver_gate(ctx, site) {
+        return gated;
     }
-    if let Some(res) = rust_local_receiver_gate(ctx, site, file_id) {
-        return res;
+    if let Some(gated) = rust_local_receiver_gate(ctx, site, file_id) {
+        return gated;
+    }
+    // A path into std or a foreign crate names no repository item (issue #393).
+    if reason::names_external_path(ctx, site, file_id) {
+        return (PolicyResolution::NotFound, None);
     }
 
     // Fully qualified: the callee's own spelling is the import-match
@@ -411,21 +438,26 @@ fn resolve_single_call(
             )
         };
     let Some(candidates) = ctx.idx.by_name.get(last) else {
-        return PolicyResolution::NotFound;
+        return (PolicyResolution::NotFound, None);
     };
     let candidates = visible_candidates(ctx, site, candidates, last != callee);
+    let visible = candidates.len();
     let candidates = variant_guard::drop_struct_targets(ctx, callee, candidates);
+    // The variant guard refused every candidate left (issue #393).
+    let guarded = (visible > 0 && candidates.is_empty())
+        .then_some(Decline::Scope(reason::SCOPE_VARIANT_GUARD));
     let ev = crate::call_evidence::CallEvidence {
         imports_hint: &imports_hint,
         caller_file: file_id,
     };
-    crate::call_evidence::resolve_two_pass(
+    let resolution = crate::call_evidence::resolve_two_pass(
         &candidates,
         |e: &SymbolEntry| e.qualified_name.clone(),
         |e: &SymbolEntry| extract_file_prefix_or_self(&e.qualified_name),
         ctx.provider,
         &ev,
-    )
+    );
+    (resolution, guarded)
 }
 
 /// The candidates a call at `site` can actually name under the caller

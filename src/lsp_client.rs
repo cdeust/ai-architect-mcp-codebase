@@ -110,6 +110,14 @@ pub struct LspResolutionResult {
     /// Issue #292: rust-analyzer's `unlinked-file` verdicts for the files the
     /// pass opened, cross-checked against the cargo attribution (ADR-9845).
     pub unlinked_check: UnlinkedFileCheck,
+    /// Issue #393: the failed sites by what the server's answer lacked
+    /// (`no_definition`, `external_definition`, `no_node_at_definition`,
+    /// `name_mismatch`, `no_rel_table`, `compiled_out_twin`, `error`); the
+    /// values sum to `failed_count`.
+    pub failed_by_reason: std::collections::BTreeMap<String, u64>,
+    /// Issue #393: every call site still open after the pass, macro sites
+    /// included, by the reason the resolution passes recorded on it.
+    pub open_by_reason: std::collections::BTreeMap<String, u64>,
 }
 
 // ---------------------------------------------------------------------------

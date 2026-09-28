@@ -29,8 +29,8 @@ pub const NODE_PROCESS: &str = "Process"; // source: stages/stage-3c.md §4.1
 pub const NODE_STDLIB_SYMBOL: &str = "StdlibSymbol"; // source: stages/stage-3b-v2.md §5 Layer 5
 
 // Issue #284 (lot 5) — attribution of an unresolvable `CallSite`. The value
-// `CallSite.unresolved_reason` carries when the LSP pass proves the site's
-// file sits outside every compiled Cargo target
+// `CallSite.unresolved_reason` carries when the site's file sits outside every
+// compiled Cargo target (written by the resolution passes, #393, and LSP pass)
 // (`indexer::cargo_targets::TargetMap::is_outside_targets`): the language
 // server's crate graph never includes that file, so a
 // `textDocument/definition` request would always answer `[]`, indistinguishable

@@ -195,6 +195,35 @@ fn file_pass<T: Clone>(
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The segments of a `::`-qualified callee, turbofish and generic arguments
+/// removed: `io::BufWriter::new` gives `["io", "BufWriter", "new"]`,
+/// `Vec::<u8>::with_capacity` gives `["Vec", "with_capacity"]`. `None` for a
+/// callee that is not a plain path (`x.len`, `(a + b).m`, `f`).
+pub fn callee_path_segments(callee: &str) -> Option<Vec<&str>> {
+    if !callee.contains("::") || callee.contains(['.', '(', '[']) {
+        return None;
+    }
+    let segments: Vec<&str> = callee
+        .split("::")
+        .map(|s| s.split('<').next().unwrap_or(s))
+        .filter(|s| !s.is_empty())
+        .collect();
+    (segments.len() >= 2).then_some(segments)
+}
+
+/// The qualifier a `::`-qualified callee names before its last segment, which
+/// is the type of an associated call: `TaskSet::new` and `crate::a::TaskSet::new`
+/// give `TaskSet`, `io::BufWriter::new` gives `BufWriter`, `Vec::<u8>::new`
+/// gives `Vec`. For a free function reached through a module path the
+/// qualifier is the module (`a::helper` gives `a`). `None` when the callee is
+/// not a path. Shared by the reasons of open call sites (issue #393) and by
+/// the count of unresolved sites naming a target (issue #392), so the two read
+/// one spelling rule.
+pub fn callee_names_type(callee: &str) -> Option<&str> {
+    let segments = callee_path_segments(callee)?;
+    segments.get(segments.len() - 2).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +356,21 @@ mod tests {
             }
             other => panic!("expected Resolved via ImportMatch (file pass), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn callee_names_type_reads_the_qualifier_before_the_last_segment() {
+        assert_eq!(callee_names_type("TaskSet::new"), Some("TaskSet"));
+        assert_eq!(callee_names_type("crate::a::TaskSet::new"), Some("TaskSet"));
+        assert_eq!(callee_names_type("io::BufWriter::new"), Some("BufWriter"));
+        assert_eq!(callee_names_type("Vec::<u8>::with_capacity"), Some("Vec"));
+        assert_eq!(callee_names_type("a::helper"), Some("a"));
+        assert_eq!(callee_names_type("x.len"), None);
+        assert_eq!(callee_names_type("helper"), None);
+        assert_eq!(callee_names_type("(a + b).m"), None);
+        assert_eq!(
+            callee_path_segments("io::BufWriter::new"),
+            Some(vec!["io", "BufWriter", "new"])
+        );
     }
 }

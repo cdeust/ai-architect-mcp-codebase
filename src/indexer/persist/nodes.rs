@@ -339,8 +339,8 @@ fn append_callsite_properties(props: &mut Vec<(String, String)>, node: &parser::
     props.push(("is_resolved".to_string(), "false".to_string()));
     // Issue #284 (lot 5): freshly indexed sites carry no attribution yet —
     // '' is the column's own DEFAULT (ensure_node_column backfills existing
-    // rows with it too). The LSP pass is the only writer that ever sets this
-    // to a non-empty value (`graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS`).
+    // rows with it too). The resolution passes write the reason of every site
+    // they leave open (issue #393, `graph_store::callsite_reasons`).
     props.push(("unresolved_reason".to_string(), cypher_str("")));
     // Issue #283 (lot 6, palier 3): empty when the Rust spec found no
     // single-typed local receiver, and for any non-Rust CallSite, which never

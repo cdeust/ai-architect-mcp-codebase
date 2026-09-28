@@ -89,6 +89,58 @@ fn a_crate_cargo_loads_is_known_and_attributes_the_harness() {
     assert_eq!(out.outside_targets, ["kani/h.rs"]);
 }
 
+/// The dy-wcet shape (`src/lib.rs` of v4.1.6, lines 1272-1277): a library
+/// declares `#[cfg(kani)] #[path = "../kani/response_bounds.rs"] mod proofs;`.
+/// rustc reads `#[path]` relative to the declaring file's directory, `..`
+/// included, so the harness file is part of the library under the `cfg(kani)`
+/// gate, not outside every target. A nested declaration inside it follows the
+/// same rule from its own directory.
+#[test]
+fn a_file_a_crate_root_reaches_through_a_climbing_path_is_inside_the_target() {
+    if !cargo_available() {
+        eprintln!("skipping: cargo not on PATH (cargo_targets::discover needs it)");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("temp dir");
+    let manifest = CRATE_MANIFEST.to_string() + "\n[workspace]\n";
+    write(dir.path(), "Cargo.toml", &manifest);
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn f() {}\n#[cfg(kani)]\n#[path = \"../kani/response_bounds.rs\"]\nmod proofs;\n",
+    );
+    write(
+        dir.path(),
+        "kani/response_bounds.rs",
+        "#[path = \"deeper/helpers.rs\"]\nmod helpers;\nfn proof() { crate::f(); }\n",
+    );
+    write(dir.path(), "kani/deeper/helpers.rs", "fn help() {}\n");
+    write(dir.path(), "kani/orphan.rs", "fn lone() {}\n");
+    let files = [
+        "src/lib.rs",
+        "kani/response_bounds.rs",
+        "kani/deeper/helpers.rs",
+        "kani/orphan.rs",
+    ];
+    let out = attribute(dir.path(), &rust_files(&files));
+    assert_eq!(out.status, CargoAttributionStatus::Known);
+    assert_eq!(
+        out.outside_targets,
+        ["kani/orphan.rs"],
+        "only the file no declaration reaches is outside"
+    );
+    let proofs = &out.file_cfg["kani/response_bounds.rs"];
+    assert_eq!(proofs.gate, "kani");
+    assert_eq!(proofs.module_path, "src/lib.rs::proofs");
+    assert_eq!(proofs.active, crate::graph_store::CFG_UNKNOWN);
+    assert_eq!(out.file_cfg["kani/deeper/helpers.rs"].gate, "kani");
+    assert_eq!(
+        out.target_owners["kani/response_bounds.rs"],
+        BTreeSet::from(["src/lib.rs".to_string()])
+    );
+    assert!(!out.target_owners.contains_key("kani/orphan.rs"));
+}
+
 #[test]
 fn the_status_serializes_as_a_tagged_object() {
     let unknown = CargoAttributionStatus::Unknown {

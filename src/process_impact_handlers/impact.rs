@@ -289,6 +289,7 @@ fn impact_envelope(
         "epistemic_reasons": impact.epistemic_reasons,
         "unresolved_callsites_naming_target": impact.unresolved_callsites_naming_target,
         "unresolved_callsites_outside_targets": impact.unresolved_callsites_outside_targets,
+        "unresolved_callsites_by_reason": impact.unresolved_callsites_by_reason,
     });
     attach_cfg_twins(&mut out, impact, qn);
     attach_caller_contexts(&mut out, impact, sections.dependents_total);

@@ -64,6 +64,15 @@ impl AssocFacts {
     }
 }
 
+impl AssocFacts {
+    /// True when `qn` (`<enum qualified name>::<variant>`) is a variant of the
+    /// repository (issue #393: a call through it builds a value, it calls
+    /// nothing).
+    pub(in crate::resolver) fn has_variant(&self, qn: &str) -> bool {
+        self.variants.contains(without_twin_suffix(qn))
+    }
+}
+
 fn without_twin_suffix(qn: &str) -> &str {
     qn.split(TWIN_SUFFIX).next().unwrap_or(qn)
 }

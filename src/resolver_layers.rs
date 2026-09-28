@@ -4,6 +4,7 @@
 // new passes are added. source: stages/stage-3b-v2.md §5.
 
 use crate::ambiguity_policy::{confidence_for, resolution_label, Evidence};
+use crate::graph_store::callsite_reasons::{self as reasons, SiteReasonRow};
 use crate::graph_store::rust_macro_site_predicate;
 use crate::graph_store::{call_site_rel_table, cypher_str, GraphStore, NODE_STDLIB_SYMBOL};
 use crate::language_provider::extract_file_prefix_or_self;
@@ -109,18 +110,26 @@ impl MacroPass<'_> {
     fn run(&mut self) -> PhaseResult {
         self.imports = self.read_imports()?;
         let rows = self.read_rows()?;
+        let outside = self.store.crate_evidence().outside_targets;
         let (mut resolved, mut total, mut unresolved) = (0u64, 0u64, Vec::new());
         let mut resolved_ids: Vec<&str> = Vec::new();
+        let mut reasons: Vec<SiteReasonRow> = Vec::new();
         for row in &rows {
             let (r, t, u) = self.resolve_one(row)?;
             if r > 0 {
                 resolved_ids.push(&row.cs_id);
+            } else {
+                let file = extract_file_prefix_or_self(&row.cs_id);
+                reasons.push(macro_reason(row, &u, outside.contains(&file)));
             }
             resolved += r;
             total += t;
             unresolved.extend(u);
         }
         self.store.mark_nodes_resolved("CallSite", &resolved_ids)?;
+        // Issue #393: a macro site this pass leaves open says why.
+        self.store.clear_callsite_reasons(&resolved_ids)?;
+        self.store.write_callsite_reasons(&reasons)?;
         Ok((resolved, total, unresolved))
     }
 
@@ -243,6 +252,31 @@ impl MacroPass<'_> {
 
     fn ensure_symbol(&mut self, canonical: &str) -> Result<(), String> {
         ensure_stdlib_symbol(self.store, &mut self.created, canonical, "rust")
+    }
+}
+
+/// The reason of a macro site the pass left open (issue #393): its file outside
+/// every Cargo target first, then a macro that calls nothing (`matches!`), then
+/// an expansion with no target, detailed by why.
+fn macro_reason(row: &MacroRow, unresolved: &[UnresolvedRef], outside: bool) -> SiteReasonRow {
+    let (reason, detail) = match unresolved.first() {
+        _ if outside => (reasons::REASON_OUTSIDE_TARGETS, ""),
+        None => (reasons::REASON_NOT_A_CALL, ""),
+        Some(miss) => (reasons::REASON_MACRO_SITE, macro_detail(&miss.reason)),
+    };
+    (row.cs_id.clone(), reason, detail.to_string())
+}
+
+/// The detail slug of one of this pass's reasons.
+fn macro_detail(reason: &str) -> &'static str {
+    match reason {
+        REASON_NOT_CALLABLE => "not_callable",
+        REASON_NO_TABLE_ENTRY => "no_table_entry",
+        REASON_NO_EMIT_CALLS => "no_emit_calls",
+        REASON_INTERNAL_CALLEES => "internal_callees",
+        REASON_CALLEE_BY_ARGUMENTS => "callee_by_arguments",
+        REASON_TYPE_NOT_DETERMINED => "type_not_determined",
+        _ => "no_rel_table",
     }
 }
 

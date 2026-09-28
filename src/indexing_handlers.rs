@@ -382,6 +382,7 @@ pub(crate) fn do_index_status(arguments: &Value) -> Result<Value, String> {
         "call_site_target_count": counts.call_site_targets,
         "coverage": coverage,
         "cfg_twins": twins.map(|(t, _)| t),
+        "unresolved_call_sites": crate::indexing_handlers_coverage::unresolved_call_sites(&store),
     }))
 }
 

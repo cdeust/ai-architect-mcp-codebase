@@ -2,6 +2,7 @@
 // before the by-name ambiguity policy (same-class receiver, Rust local binding).
 // Moved out of `calls.rs` to keep it under the size cap; behavior unchanged.
 
+use super::reason::{self, Decline, Gated};
 use super::*;
 
 /// Same-class receiver call on a Method caller — Rust `self.<m>` /
@@ -23,10 +24,7 @@ use super::*;
 /// rather than `None` for those outcomes (receiver/mod.rs postcondition) —
 /// this is what preserves the zero-false-callers property this module's
 /// tests defend.
-pub(super) fn same_class_receiver_gate(
-    ctx: &ResolveContext,
-    site: &CallSite,
-) -> Option<PolicyResolution<SymbolEntry>> {
+pub(super) fn same_class_receiver_gate(ctx: &ResolveContext, site: &CallSite) -> Option<Gated> {
     let spelling = receiver::ReceiverSpelling::of(ctx.provider);
     if !spelling.binds_same_class_receiver() || site.caller_label != "Method" {
         return None;
@@ -39,6 +37,7 @@ pub(super) fn same_class_receiver_gate(
         return None;
     }
     receiver::resolve_receiver_bound(ctx.idx, &form, receiver::impl_qn_of(site.caller_qn))
+        .map(|resolution| (resolution, None))
 }
 
 /// Rust `<local>.<m>` on ANY caller (not gated to `Method`, unlike the
@@ -58,11 +57,12 @@ pub(super) fn same_class_receiver_gate(
 /// caller must fall through to the pre-existing by-name path. `Some(_)` is a
 /// final answer for a hinted local receiver and is NEVER a bare-name-lookup
 /// fallback, mirroring `same_class_receiver_gate`'s zero-false-callers discipline.
+/// A declined call carries why (issue #393), so its site can name the rule.
 pub(super) fn rust_local_receiver_gate(
     ctx: &ResolveContext,
     site: &CallSite,
     file_id: &str,
-) -> Option<PolicyResolution<SymbolEntry>> {
+) -> Option<Gated> {
     if ctx.provider.language() != "rust" || site.receiver_hint.is_empty() {
         return None;
     }
@@ -77,8 +77,8 @@ pub(super) fn rust_local_receiver_gate(
         receiver::ReceiverForm::None if constructed => receiver::in_place_method(site.callee)?,
         _ => return None,
     };
-    if let Some(resolution) = written_path_gate(ctx, site, &m) {
-        return Some(resolution);
+    if let Some(gated) = written_path_gate(ctx, site, &m) {
+        return Some(gated);
     }
     let assoc = site
         .receiver_hint_via
@@ -86,13 +86,14 @@ pub(super) fn rust_local_receiver_gate(
     if let Some(assoc) = assoc {
         // `let x = Type::assoc(..)`: `Type` is where `assoc` lives, not what it
         // returns (issue #370). Only an owner whose `assoc` builds it counts.
-        return Some(receiver::resolve_local_receiver_where(
+        let resolution = receiver::resolve_local_receiver_where(
             ctx.idx,
             site.receiver_hint,
             &m,
             file_id,
             |candidate| ctx.assoc.builds_owner(candidate, assoc),
-        ));
+        );
+        return Some((resolution, None));
     }
     let imported_from = site
         .receiver_hint_via
@@ -101,7 +102,13 @@ pub(super) fn rust_local_receiver_gate(
         // A return type named only by a `use` of a crate the latest index pass
         // did not record as a library of this repository (issues #348, #349,
         // #358): a foreign crate's type of that name would match a namesake.
-        return Some(PolicyResolution::NotFound);
+        // Without recorded facts no crate is known to be foreign.
+        let decline = if ctx.evidence.known {
+            Decline::ForeignReturnType
+        } else {
+            Decline::Scope(reason::SCOPE_UNKNOWN_CARGO_FACTS)
+        };
+        return Some((PolicyResolution::NotFound, Some(decline)));
     }
     let local_path = site
         .receiver_hint_via
@@ -113,11 +120,15 @@ pub(super) fn rust_local_receiver_gate(
     if via_return_type && receiver::names_a_type_alias(ctx.idx, site.receiver_hint) {
         // A return type that is an alias names another type; the lookup by
         // last segment would match a namesake (issues #348 and #349).
-        return Some(PolicyResolution::NotFound);
+        let decline = Decline::Scope(reason::SCOPE_TYPE_ALIAS_RETURN);
+        return Some((PolicyResolution::NotFound, Some(decline)));
     }
     let scope = local_path.map(|path| {
         super::crate_scope::CrateScope::of(ctx.evidence, ctx.file_imports, file_id, path)
     });
+    let restricted = scope
+        .as_ref()
+        .is_some_and(super::crate_scope::CrateScope::restricts);
     let resolution = match scope.filter(super::crate_scope::CrateScope::restricts) {
         _ if constructed => {
             receiver::resolve_local_receiver_in_file(ctx.idx, site.receiver_hint, &m, file_id)
@@ -138,11 +149,14 @@ pub(super) fn rust_local_receiver_gate(
         ),
         None => receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id),
     };
-    Some(if via_return_type {
+    let declined = restricted && !constructed && resolution == PolicyResolution::NotFound;
+    let decline = declined.then_some(Decline::Scope(reason::SCOPE_CRATE));
+    let resolution = if via_return_type {
         receiver::relabel_as_return_type(resolution)
     } else {
         resolution
-    })
+    };
+    Some((resolution, decline))
 }
 
 /// How a hint that names its owner by a path is read (issues #368, #373, #380).
@@ -164,11 +178,7 @@ struct PathRule<'e> {
 /// `use crate::..` for a return type (#373), or bound by a `use` (explicit or
 /// glob) of the caller's module, in the order `receiver::bind` gives (#380). `None` when no path applies (the caller then keeps
 /// the lookup by name). No same-file preference applies to a path.
-fn written_path_gate(
-    ctx: &ResolveContext,
-    site: &CallSite,
-    m: &str,
-) -> Option<PolicyResolution<SymbolEntry>> {
+fn written_path_gate(ctx: &ResolveContext, site: &CallSite, m: &str) -> Option<Gated> {
     let facts = receiver::PathFacts {
         idx: ctx.idx,
         evidence: ctx.evidence,
@@ -178,6 +188,10 @@ fn written_path_gate(
     let assoc = site
         .receiver_hint_via
         .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_ASSOC_PREFIX);
+    let decline = rule
+        .path
+        .is_none()
+        .then_some(Decline::Scope(reason::SCOPE_WRITTEN_PATH));
     let resolution = match &rule.path {
         None => PolicyResolution::NotFound,
         Some(path) => receiver::resolve_local_receiver_strict(ctx.idx, &rule.hint, m, |c| {
@@ -187,11 +201,12 @@ fn written_path_gate(
     if rule.fallback && resolution == PolicyResolution::NotFound {
         return None;
     }
-    Some(if rule.return_type {
+    let resolution = if rule.return_type {
         receiver::relabel_as_return_type(resolution)
     } else {
         resolution
-    })
+    };
+    Some((resolution, decline))
 }
 
 /// The path rule of `site`'s hint, as described on `written_path_gate`.

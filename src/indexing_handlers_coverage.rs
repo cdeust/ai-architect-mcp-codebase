@@ -184,6 +184,24 @@ pub(crate) fn cfg_twin_status(store: &crate::graph_store::GraphStore) -> Option<
     Some((twins, items))
 }
 
+/// Every open call site by its reason (issue #393): the total, each reason's
+/// count, how many no static resolver should resolve (`by_construction`) and how
+/// many name a resolver gap (`improvable`), and whether the graph recorded the
+/// reasons at all (`reasons_recorded`; an older graph reads `not_recorded`).
+pub(crate) fn unresolved_call_sites(store: &crate::graph_store::GraphStore) -> Value {
+    use crate::graph_store::callsite_reasons::{BY_CONSTRUCTION, IMPROVABLE};
+    match store.unresolved_site_summary() {
+        Ok(s) => json!({
+            "total": s.total,
+            "by_reason": s.by_reason,
+            "by_construction": s.sum_of(&BY_CONSTRUCTION),
+            "improvable": s.sum_of(&IMPROVABLE),
+            "reasons_recorded": s.reasons_recorded,
+        }),
+        Err(e) => json!({ "error": e }),
+    }
+}
+
 /// Loads the coverage sidecar for a graph at `graph_dir` (its `output_dir` is the
 /// parent) and renders the summary, or `null` when no coverage is available.
 pub(crate) fn coverage_summary_for_graph(graph_dir: &Path) -> Value {

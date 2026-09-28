@@ -85,6 +85,7 @@ pub fn resolve_with_lsp(
     if unresolved.is_empty() {
         return Ok(LspResolutionResult {
             macro_sites_count: macro_sites,
+            open_by_reason: open_by_reason(store),
             ..nothing_to_resolve(start)
         });
     }
@@ -126,8 +127,18 @@ pub fn resolve_with_lsp(
     let result = run_pass(store, client, &plan, &unresolved)?;
     Ok(LspResolutionResult {
         macro_sites_count: macro_sites,
+        open_by_reason: open_by_reason(store),
         ..result
     })
+}
+
+/// Every call site still open, by its recorded reason (issue #393). A graph
+/// whose reasons cannot be read reports none rather than failing the pass.
+fn open_by_reason(store: &GraphStore) -> std::collections::BTreeMap<String, u64> {
+    store
+        .unresolved_site_summary()
+        .map(|summary| summary.by_reason)
+        .unwrap_or_default()
 }
 
 /// The result when no site is unresolved: no client was ever started, so
@@ -142,6 +153,8 @@ fn nothing_to_resolve(start: Instant) -> LspResolutionResult {
         elapsed_ms: start.elapsed().as_millis() as u64,
         server_health: ServerHealth::not_probed(),
         unlinked_check: UnlinkedFileCheck::default(),
+        failed_by_reason: Default::default(),
+        open_by_reason: Default::default(),
     }
 }
 

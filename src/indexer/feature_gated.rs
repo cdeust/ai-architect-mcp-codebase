@@ -155,24 +155,62 @@ impl ModuleTree<'_> {
 
     /// The `mod name;` declarations of `file` that resolve to an indexed file.
     pub(super) fn children(&self, file: &Path) -> Vec<(ModDecl, PathBuf)> {
-        let Ok(source) = std::fs::read_to_string(self.root.join(file)) else {
-            return Vec::new();
-        };
-        if !source.contains("mod") {
-            return Vec::new();
-        }
         let owns_directory = self.crate_entries.contains(file) || file.ends_with("mod.rs");
-        let mut out = Vec::new();
-        for decl in rust_mod_decls::mod_decls(&source) {
-            for alternative in alternatives(&decl) {
-                if let Some(target) = module_file(file, owns_directory, &alternative, self.indexed)
-                {
-                    out.push((alternative, target));
-                }
+        declared_children(self.root, file, owns_directory, &|p| {
+            self.indexed.contains(p)
+        })
+    }
+}
+
+/// The `mod name;` declarations of `file` that resolve to a file `exists`
+/// accepts, each alternative of a `cfg_attr(.., path = ..)` apart.
+fn declared_children(
+    root: &Path,
+    file: &Path,
+    owns_directory: bool,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Vec<(ModDecl, PathBuf)> {
+    let Ok(source) = std::fs::read_to_string(root.join(file)) else {
+        return Vec::new();
+    };
+    if !source.contains("mod") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for decl in rust_mod_decls::mod_decls(&source) {
+        for alternative in alternatives(&decl) {
+            if let Some(target) = module_file(file, owns_directory, &alternative, exists) {
+                out.push((alternative, target));
             }
         }
-        out
     }
+    out
+}
+
+/// Every file on disk that the module tree of some crate root reaches, through
+/// any declaration, gated or not, `#[path]` included. A file reached this way is
+/// compiled by that target under some configuration, wherever it sits: `#[cfg(kani)]
+/// #[path = "../kani/proofs.rs"] mod proofs;` in `src/lib.rs` makes
+/// `kani/proofs.rs` part of the library, though no target lives in `kani/`.
+pub(super) fn reached_on_disk(root: &Path, crate_roots: &[CrateRoot]) -> BTreeSet<PathBuf> {
+    let entries: BTreeSet<&Path> = crate_roots.iter().map(|c| c.entry.as_path()).collect();
+    let exists = |p: &Path| root.join(p).is_file();
+    let mut reached = BTreeSet::new();
+    let mut pending: Vec<PathBuf> = entries
+        .iter()
+        .filter(|e| exists(e))
+        .map(|e| e.to_path_buf())
+        .collect();
+    while let Some(file) = pending.pop() {
+        if !reached.insert(file.clone()) {
+            continue;
+        }
+        let owns_directory = entries.contains(file.as_path()) || file.ends_with("mod.rs");
+        for (_, target) in declared_children(root, &file, owns_directory, &exists) {
+            pending.push(target);
+        }
+    }
+    reached
 }
 
 /// Records that `file` is reached with `features`; true when that pair is new.
@@ -235,20 +273,23 @@ fn gate(decl: &ModDecl, enabled: &BTreeSet<String>) -> Truth {
     }
 }
 
-/// Resolves `decl`, declared in `file`, to an indexed file: `#[path]` is
-/// relative to `file`'s directory; otherwise `<dir>/name.rs`, then
-/// `<dir>/name/mod.rs`, where `<dir>` is `file`'s directory for a crate root
-/// or a `mod.rs`, and `file`'s directory joined with its stem otherwise.
-/// source: The Rust Reference, "Modules" — module source filenames.
+/// Resolves `decl`, declared in `file`, to a file `exists` accepts: `#[path]`
+/// is relative to `file`'s directory, `..` included (`#[path =
+/// "../kani/proofs.rs"]` in `src/lib.rs` names `kani/proofs.rs`); otherwise
+/// `<dir>/name.rs`, then `<dir>/name/mod.rs`, where `<dir>` is `file`'s
+/// directory for a crate root or a `mod.rs`, and `file`'s directory joined with
+/// its stem otherwise. A path that climbs above the analyzed root names nothing.
+/// source: The Rust Reference, "Modules" — module source filenames and the
+/// `path` attribute.
 fn module_file(
     file: &Path,
     owns_directory: bool,
     decl: &ModDecl,
-    indexed: &BTreeSet<PathBuf>,
+    exists: &dyn Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     let parent = file.parent().unwrap_or(Path::new(""));
     if let Some(path) = &decl.path_attr {
-        return Some(parent.join(path)).filter(|p| indexed.contains(p));
+        return lexical(&parent.join(path)).filter(|p| exists(p));
     }
     let dir = if owns_directory {
         parent.to_path_buf()
@@ -260,7 +301,30 @@ fn module_file(
         dir.join(&decl.name).join("mod.rs"),
     ]
     .into_iter()
-    .find(|p| indexed.contains(p))
+    .find(|p| exists(p))
+}
+
+/// `path` with its `.` and `..` components folded away, `None` when it climbs
+/// above its first component or is absolute. The indexed set holds such
+/// root-relative paths, so `src/../kani/x.rs` must read `kani/x.rs` to be found.
+/// The bound is lexical, not canonical: symbolic links are not followed, so a
+/// link inside the root that points outside it is not detected here.
+fn lexical(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            Component::Normal(part) => out.push(part),
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(out)
 }
 
 fn gate_detail(decl: &ModDecl, file: &Path) -> String {

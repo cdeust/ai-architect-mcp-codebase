@@ -27,6 +27,7 @@ fn known(roots: &[(&str, &[&str])]) -> TargetMap {
             })
             .collect(),
         crate_names: BTreeSet::new(),
+        module_files: BTreeSet::new(),
     }
 }
 

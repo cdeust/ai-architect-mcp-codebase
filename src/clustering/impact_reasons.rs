@@ -28,6 +28,8 @@ pub(super) struct UnresolvedCallsiteAttribution {
     pub(super) outside_target_files: Vec<String>,
     /// Sites left open because the callee is a set of `#[cfg]` twins (issue #353).
     pub(super) cfg_twins: u64,
+    /// Every site of `total` by its recorded reason (issue #393).
+    pub(super) by_reason: std::collections::BTreeMap<String, u64>,
 }
 
 /// Counts unresolved `CallSite` nodes (`is_resolved = false`) whose
@@ -63,11 +65,18 @@ pub(super) fn unresolved_callsite_attribution(
         .node_column_exists(NODE_CALL_SITE, "unresolved_reason")
         .unwrap_or(false);
     if !has_reason_col {
+        let total = count_unresolved(store, &name_filter);
+        let not_recorded = crate::graph_store::callsite_reasons::REASON_NOT_RECORDED;
+        let by_reason = (total > 0)
+            .then(|| (not_recorded.to_string(), total))
+            .into_iter()
+            .collect();
         return UnresolvedCallsiteAttribution {
-            total: count_unresolved(store, &name_filter),
+            total,
             outside_targets: 0,
             outside_target_files: Vec::new(),
             cfg_twins: 0,
+            by_reason,
         };
     }
 
@@ -101,11 +110,16 @@ pub(super) fn unresolved_callsite_attribution(
             outside_target_files.insert(extract_file_prefix_or_self(id));
         }
     }
+    let by_reason = crate::graph_store::callsite_reasons::count_by_reason(
+        rows.iter()
+            .map(|row| row.get(1).cloned().unwrap_or_default()),
+    );
     UnresolvedCallsiteAttribution {
         total,
         outside_targets,
         outside_target_files: outside_target_files.into_iter().collect(),
         cfg_twins,
+        by_reason,
     }
 }
 

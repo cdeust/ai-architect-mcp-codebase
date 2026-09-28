@@ -118,6 +118,7 @@ mod tests {
                 .iter()
                 .map(|(f, es)| (f.to_string(), es.iter().map(|e| e.to_string()).collect()))
                 .collect::<BTreeMap<_, _>>(),
+            outside_targets: Default::default(),
         }
     }
 

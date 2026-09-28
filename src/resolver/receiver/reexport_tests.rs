@@ -22,6 +22,7 @@ fn two_crates() -> CrateEvidence {
             ("tests/it.rs".to_string(), None),
         ]),
         owners,
+        outside_targets: BTreeSet::new(),
     }
 }
 

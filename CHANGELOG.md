@@ -28,6 +28,42 @@ adheres to [Semantic Versioning](https://semver.org/).
   The output has no clock and a fixed row order, so two calls answer the same
   bytes. On dy-wcet, the README of v4.1.2 says "the 85 tests" while its 96
   test functions are all compiled by `cargo test`: `contradicted`.
+- Every call site the resolvers leave open now says why (#393). The reason is
+  one of a closed set, written on `CallSite.unresolved_reason`, with what it
+  needs to be checked in `CallSite.unresolved_detail`: `outside_compiled_targets`,
+  `macro_site`, `not_a_call` (a macro that calls nothing), `cfg_twins`,
+  `external_callee` (the path or receiver type is proven to be std, core,
+  alloc, a Rust prelude name or a crate the Cargo facts do not list as a
+  library of the repository; never given on absence alone), `declined_by_scope`
+  (the scope rule that refused: `crate_scope`, `written_path`,
+  `type_alias_return`, `variant_guard`, `unknown_cargo_facts`),
+  `ambiguous_candidates` (with their count), `no_receiver_type`, `not_found`
+  (the repository holds the name, not for this call) and `unknown_callee`. A
+  resolved site carries no reason, and a site the language server resolved
+  keeps none after a later static pass. A site the language server answers
+  with a definition outside the analyzed root becomes `external_callee`
+  (detail `lsp_definition`) when its static reason named a resolver gap. `index_status` reports
+  `unresolved_call_sites` (`total`, `by_reason`, `by_construction`,
+  `improvable`, `reasons_recorded`), `lsp_resolve` reports `failed_by_reason`
+  and `open_by_reason`, and `get_impact` reports
+  `unresolved_callsites_by_reason`. A graph resolved before this reads
+  `not_recorded` for its open sites, with no error and no forced reindex.
+
+### Fixed
+
+- A Rust path callee that lives outside the repository no longer resolves to a
+  repository item of the same last segment (#393). With one `Set::new` in the
+  repository, `Vec::new`, `String::new` and `io::BufWriter::new` each got a
+  `unique-match` edge to it; such a call is now open with the reason
+  `external_callee`.
+- A file a crate root reaches through a `#[path]` that climbs out of the
+  target's directory is part of that target (#393). dy-wcet's `src/lib.rs`
+  declares `#[cfg(kani)] #[path = "../kani/response_bounds.rs"] mod proofs;`,
+  so the harness file is in the library under the `cfg(kani)` gate; it was
+  reported in `outside_build_targets` because `src/../kani/response_bounds.rs`
+  was never folded to `kani/response_bounds.rs`, and no declaration was read
+  for files outside a target directory. The file now carries the gate `kani`,
+  its module path and its owning target.
 
 ## [0.14.0] - 2026-09-26
 
