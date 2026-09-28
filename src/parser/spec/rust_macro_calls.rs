@@ -235,7 +235,7 @@ fn scan_token_tree(ctx: &ScanCtx, token_tree: Node, out: &mut Vec<CallEntry>) {
 
         // `X.method(...)` / `X::method(...)`: the receiver is a plain name.
         if joined && named[i].kind() == IDENTIFIER_KIND {
-            push_reconstructed(ctx, named[i], named[i + 1], out);
+            push_reconstructed(ctx, &named, i, out);
             i += 2;
             continue;
         }
@@ -245,7 +245,7 @@ fn scan_token_tree(ctx: &ScanCtx, token_tree: Node, out: &mut Vec<CallEntry>) {
         // source: ADR-9836.
         if joined && named[i].kind() == ctx.token_tree_kind {
             scan_token_tree(ctx, named[i], out);
-            push_reconstructed(ctx, named[i], named[i + 1], out);
+            push_reconstructed(ctx, &named, i, out);
             i += 2;
             continue;
         }
@@ -308,26 +308,76 @@ fn push_bare_call(ctx: &ScanCtx, name: Node, out: &mut Vec<CallEntry>) {
     ));
 }
 
-/// Emits one reconstructed call spanning `receiver` through `method`.
+/// Leaf kinds that may open a receiver chain besides an `identifier`: the
+/// path keywords, which tree-sitter-rust lexes as their own named nodes.
+/// source: tree-sitter-rust 0.24.2 src/node-types.json (`self`, `super`,
+/// `crate`).
+const PATH_KEYWORD_KINDS: [&str; 3] = ["self", "super", "crate"];
+
+/// Tokens that may sit between a callee name and its argument group: none
+/// (`f(..)`) or the macro bang (`vec![..]`).
+const CALL_GLUE: [&str; 2] = ["", "!"];
+
+/// The index of the first named child of the receiver chain that ends at
+/// `named[receiver]`: walks back over `.`/`::` links and over the name of
+/// each call group (`build(..)`, `s.get(..)`, `vec![..]`), so the recorded
+/// callee reads as the same call written outside a macro (issue #389).
+/// A keyword never joins the chain (`if (x).m()`, `in (0..3).rev()`).
+fn chain_start(ctx: &ScanCtx, named: &[Node], receiver: usize) -> usize {
+    let mut j = receiver;
+    loop {
+        if named[j].kind() == ctx.token_tree_kind
+            && j > 0
+            && is_callee_name(ctx, named[j - 1], named[j])
+        {
+            j -= 1;
+        }
+        let links = j > 0
+            && (named[j - 1].kind() == IDENTIFIER_KIND
+                || named[j - 1].kind() == ctx.token_tree_kind
+                || PATH_KEYWORD_KINDS.contains(&named[j - 1].kind()))
+            && separated_by_dot_or_colon(ctx.source, named[j - 1], named[j]);
+        if !links {
+            return j;
+        }
+        j -= 1;
+    }
+}
+
+/// True when `name` is the callee of the argument group `group` right after it.
+fn is_callee_name(ctx: &ScanCtx, name: Node, group: Node) -> bool {
+    let text = &ctx.source[name.start_byte()..name.end_byte()];
+    name.kind() == IDENTIFIER_KIND
+        && !RUST_KEYWORDS.contains(&text)
+        && CALL_GLUE.contains(&ctx.source[name.end_byte()..group.start_byte()].trim())
+}
+
+/// Emits one reconstructed call whose receiver is `named[receiver]` and whose
+/// method is `named[receiver + 1]`.
 ///
-/// postcondition: the name is a CONTIGUOUS slice of `source` ending on the
-/// method identifier, which `lsp_resolver::sites::lsp_position` relies on to
-/// aim at the right column. source: ADR-9836.
+/// postcondition: the name is a CONTIGUOUS slice of `source` from the start
+/// of the receiver chain (`chain_start`) to the end of the method identifier,
+/// which `lsp_resolver::sites::lsp_position` relies on to aim at the right
+/// column. source: ADR-9836.
 ///
-/// `receiver` is ALREADY the isolated receiver `identifier` node (this
-/// scan's own match, not a `field_expression`-wrapped one), so it is exactly
-/// the node shape `rust_receiver::receiver_hint`'s `identifier` arm expects
-/// — issue #283 palier 3 (lot 6) reuses it directly rather than re-deriving
-/// it from the reconstructed call's (nonexistent) `call_expression`.
-fn push_reconstructed(ctx: &ScanCtx, receiver: Node, method: Node, out: &mut Vec<CallEntry>) {
-    let callee = ctx.source[receiver.start_byte()..method.end_byte()].to_string();
+/// A receiver hint is derived only when the chain is the receiver alone, a
+/// plain `identifier`: that is exactly the node shape
+/// `rust_receiver::receiver_hint`'s `identifier` arm expects (issue #283
+/// palier 3). A longer chain (`self.tasks.m()`, `a.b.m()`) gets no hint, the
+/// same as the `call_expression` path gives `x.y.m()`: reading the hint off
+/// its last segment would type a field as a same-named local.
+fn push_reconstructed(ctx: &ScanCtx, named: &[Node], receiver: usize, out: &mut Vec<CallEntry>) {
+    let (start, method) = (chain_start(ctx, named, receiver), named[receiver + 1]);
+    let callee = ctx.source[named[start].start_byte()..method.end_byte()].to_string();
     if callee.is_empty() {
         return;
     }
-    let derived = super::rust_receiver::receiver_hint_with_origin(ctx.source, receiver);
+    let derived = (start == receiver)
+        .then(|| super::rust_receiver::receiver_hint_with_origin(ctx.source, named[receiver]))
+        .flatten();
     out.push(RustConventions::with_hint_origin(
         &callee,
-        receiver,
+        named[start],
         ctx.caller_qn,
         super::rust_call_site::HintedSpan {
             end_byte: method.end_byte() as u64,
