@@ -40,13 +40,7 @@ pub(crate) fn do_check_doc_claims(arguments: &Value) -> Result<Value, String> {
         ));
     }
     let claims = parse_claims(args.get("claims"))?;
-    let full = match args.get("detail").and_then(Value::as_str) {
-        None | Some("compact") => false,
-        Some("full") => true,
-        Some(other) => return Err(format!("detail must be 'compact' or 'full', got '{other}'")),
-    };
-    let format = token_surface::parse_format(args);
-    let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0);
+    let page_args = PageArgs::parse(args)?;
 
     // Read-only tool: reuse cached handle. source: graph_cache module docs.
     let store = graph_cache::open_cached(&graph_path)?;
@@ -57,23 +51,68 @@ pub(crate) fn do_check_doc_claims(arguments: &Value) -> Result<Value, String> {
     let rows: Vec<Value> = report
         .rows
         .iter()
-        .filter(|row| full || row.outcome.verdict != Verdict::Supported)
+        .filter(|row| page_args.full || row.outcome.verdict != Verdict::Supported)
         .map(|row| row.to_json())
         .collect();
-    let page =
-        response_budget::bound_values_paged(rows, offset, response_budget::per_section_chars());
-    let view = token_surface::render_list(&page.items, ROW_COLUMNS, "id", &Detail::Full, &format);
+    let page = response_budget::bound_values_paged(
+        rows,
+        page_args.offset,
+        response_budget::per_section_chars(),
+    );
+    let view = token_surface::render_list(
+        &page.items,
+        ROW_COLUMNS,
+        "id",
+        &Detail::Full,
+        &page_args.format,
+    );
+    Ok(build_response(&report, page, view, &page_args))
+}
 
+/// How the caller asked to see the rows: every row or only the ones that are
+/// not supported, in which format, from which offset.
+struct PageArgs {
+    full: bool,
+    format: token_surface::Format,
+    offset: u64,
+}
+
+impl PageArgs {
+    fn parse(args: &Map<String, Value>) -> Result<Self, String> {
+        Ok(Self {
+            full: wants_full(args.get("detail").and_then(Value::as_str))?,
+            format: token_surface::parse_format(args),
+            offset: args.get("offset").and_then(Value::as_u64).unwrap_or(0),
+        })
+    }
+}
+
+/// `detail`: every row (`full`) or only the rows that are not supported.
+fn wants_full(detail: Option<&str>) -> Result<bool, String> {
+    match detail {
+        None | Some("compact") => Ok(false),
+        Some("full") => Ok(true),
+        Some(other) => Err(format!("detail must be 'compact' or 'full', got '{other}'")),
+    }
+}
+
+/// The tool's answer: counts over every claim, then one page of rows.
+fn build_response(
+    report: &doc_claims::Report,
+    page: response_budget::BoundedPage,
+    view: token_surface::ListView,
+    page_args: &PageArgs,
+) -> Value {
     let mut out = json!({
         "status": "ok",
         "tool": "check_doc_claims",
         "claim_count": report.rows.len(),
         "counts": report.counts(),
-        "detail": if full { "full" } else { "compact" },
+        "detail": if page_args.full { "full" } else { "compact" },
         "format": view.format,
         "row_count": page.items.len(),
         "total_rows": page.total_count,
-        "offset": offset,
+        "offset": page_args.offset,
         "truncated": page.truncated,
         "rows": view.value,
     });
@@ -83,7 +122,7 @@ pub(crate) fn do_check_doc_claims(arguments: &Value) -> Result<Value, String> {
     if let Some(next) = page.next_offset {
         out["next_offset"] = json!(next);
     }
-    Ok(out)
+    out
 }
 
 fn required_path(args: &Map<String, Value>, field: &str) -> Result<PathBuf, String> {

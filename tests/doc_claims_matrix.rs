@@ -366,6 +366,33 @@ fn existence_is_supported_or_not_found_never_contradicted() {
 }
 
 #[test]
+fn an_empty_subject_or_a_count_that_is_not_a_number_is_not_verifiable() {
+    let p = project();
+    let line = (13, "Files: src/lib.rs");
+    let r = run(
+        &p,
+        vec![
+            claim("sym", line, "symbol_exists", (" ", "")),
+            claim("file", line, "file_exists", ("", "")),
+            claim("pub", line, "is_public", ("", "")),
+            claim("enum", line, "enum_variant_count", ("", "2")),
+            claim("many", line, "test_count", ("", "many")),
+            claim("variants", line, "enum_variant_count", ("Refusal", "some")),
+        ],
+    );
+    for id in ["sym", "file", "pub", "enum"] {
+        assert_verdict(&r, id, Verdict::NotVerifiable, "subject_empty");
+    }
+    assert_verdict(&r, "many", Verdict::NotVerifiable, "expected_not_a_count");
+    assert_verdict(
+        &r,
+        "variants",
+        Verdict::NotVerifiable,
+        "expected_not_a_count",
+    );
+}
+
+#[test]
 fn an_anchor_that_does_not_hold_rejects_the_claim_before_any_rule() {
     let p = project();
     let mut outside = claim("outside", (1, "secret"), "file_exists", ("LICENSE", ""));

@@ -101,3 +101,29 @@ fn malformed_input_is_refused_with_the_field_named() {
     bad_detail["detail"] = json!("ids");
     assert_eq!(call(bad_detail)["status"], "error");
 }
+
+#[test]
+fn a_repo_root_that_is_a_file_or_arguments_that_are_not_an_object_are_refused() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let (graph, root) = fixture(tmp.path());
+    let readme = std::path::Path::new(&root).join("README.md");
+    let out = call(
+        json!({ "graph_path": graph, "repo_root": readme.to_string_lossy(),
+        "claims": [] }),
+    );
+    assert!(
+        out["message"]
+            .as_str()
+            .expect("msg")
+            .contains("repo_root is not a directory"),
+        "{out}"
+    );
+    let out = call(json!(["not", "an", "object"]));
+    assert!(
+        out["message"]
+            .as_str()
+            .expect("msg")
+            .contains("arguments must be an object"),
+        "{out}"
+    );
+}

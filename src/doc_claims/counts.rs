@@ -181,11 +181,9 @@ fn compiled_floor(
                 .map(|line| function_verdict(&gates, *line, harness))
                 .collect(),
         };
-        for verdict in verdicts {
-            match verdict {
-                None => floor += 1,
-                Some(why) => *excluded.entry(why).or_insert(0) += 1,
-            }
+        floor += verdicts.iter().filter(|v| v.is_none()).count() as u64;
+        for why in verdicts.into_iter().flatten() {
+            *excluded.entry(why).or_insert(0) += 1;
         }
     }
     (floor, excluded)
@@ -278,7 +276,8 @@ pub(super) fn variant_count(store: &GraphStore, files: &mut RepoFiles, claim: &C
                 &location,
                 json!({ "variants": declared, "with_their_own_cfg": gated }),
             ));
-            variant_verdict(expected, declared, gated, claim.expected.trim(), evidence)
+            let shape = VariantShape { declared, gated };
+            variant_verdict(expected, shape, claim.expected.trim(), evidence)
         }
         Err(why) => Outcome::not_verifiable(why, evidence),
     }
@@ -329,15 +328,22 @@ fn unread_language_verdict(
     }
 }
 
-/// A Rust enum with `gated` of its `declared` variants under their own `#[cfg]`:
-/// every build has between `declared - gated` and `declared` of them.
-fn variant_verdict(
-    expected: Expected,
+/// A Rust enum's variants: `declared` in source, `gated` of them under their
+/// own `#[cfg]`. Every build has between `declared - gated` and `declared`.
+#[derive(Debug, Clone, Copy)]
+struct VariantShape {
     declared: u64,
     gated: u64,
+}
+
+/// The verdict on a claimed variant count against the enum's `shape`.
+fn variant_verdict(
+    expected: Expected,
+    shape: VariantShape,
     claimed: &str,
     evidence: Vec<Value>,
 ) -> Outcome {
+    let VariantShape { declared, gated } = shape;
     let ungated = declared - gated;
     let range = format!("{ungated} ungated of {declared} declared");
     let (low, high, certain) = match expected {
@@ -389,79 +395,5 @@ fn rust_gated_variants(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn expected_counts_parse_exact_and_at_least_only() {
-        assert_eq!(parse_expected(" 26 "), Some(Expected::Exact(26)));
-        assert_eq!(parse_expected(">=8"), Some(Expected::AtLeast(8)));
-        assert_eq!(parse_expected(">= 8"), Some(Expected::AtLeast(8)));
-        assert_eq!(parse_expected("eight"), None);
-        assert_eq!(parse_expected("-1"), None);
-        assert_eq!(parse_expected(""), None);
-    }
-
-    #[test]
-    fn a_scope_is_everything_a_directory_or_one_file() {
-        assert_eq!(scope_prefix(""), None);
-        assert_eq!(scope_prefix("."), None);
-        assert_eq!(scope_prefix("tests/"), Some("tests/".into()));
-        assert_eq!(scope_prefix("./src/lib.rs"), Some("src/lib.rs::".into()));
-    }
-
-    fn gate(line: u64, gate: &str) -> FunctionGate {
-        FunctionGate {
-            line,
-            gate: gate.into(),
-            cfg_attr: false,
-            nested: false,
-        }
-    }
-
-    #[test]
-    fn only_the_harness_option_may_gate_a_floor_function() {
-        let gates = vec![
-            gate(1, ""),
-            gate(2, "test"),
-            gate(3, "unix"),
-            gate(4, "kani"),
-        ];
-        assert_eq!(function_verdict(&gates, 1, &TESTS), None);
-        assert_eq!(function_verdict(&gates, 2, &TESTS), None);
-        assert_eq!(
-            function_verdict(&gates, 3, &TESTS),
-            Some("gated(unix)".into())
-        );
-        assert_eq!(
-            function_verdict(&gates, 4, &TESTS),
-            Some("gated(kani)".into())
-        );
-        assert_eq!(function_verdict(&gates, 4, &PROOFS), None);
-        assert_eq!(
-            function_verdict(&gates, 9, &TESTS),
-            Some("not_at_graph_line".into())
-        );
-    }
-
-    #[test]
-    fn nested_and_cfg_attr_functions_leave_the_floor() {
-        let mut nested = gate(1, "");
-        nested.nested = true;
-        let mut attr = gate(2, "");
-        attr.cfg_attr = true;
-        let gates = vec![nested, attr];
-        assert_eq!(
-            function_verdict(&gates, 1, &TESTS),
-            Some("nested_function".into())
-        );
-        assert_eq!(function_verdict(&gates, 2, &TESTS), Some("cfg_attr".into()));
-    }
-
-    #[test]
-    fn a_bad_expected_value_is_not_verifiable_with_the_syntax() {
-        let o = bad_expected("many");
-        assert_eq!(o.verdict, Verdict::NotVerifiable);
-        assert!(o.reason.expect("reason").contains(">=N"));
-    }
-}
+#[path = "counts_tests.rs"]
+mod tests;

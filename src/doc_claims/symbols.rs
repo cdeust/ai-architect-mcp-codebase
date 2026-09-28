@@ -322,3 +322,7 @@ pub(super) fn is_public(store: &GraphStore, subject: &str) -> Outcome {
         Outcome::not_verifiable(reason, evidence)
     }
 }
+
+#[cfg(test)]
+#[path = "symbols_tests.rs"]
+mod tests;

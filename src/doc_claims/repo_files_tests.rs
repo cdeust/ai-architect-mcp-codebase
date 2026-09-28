@@ -84,3 +84,20 @@ fn the_anchor_must_be_verbatim_on_the_named_line() {
         .starts_with("line_out_of_range"));
     assert_eq!(anchor_holds(content, 3, "  "), Err("text_empty".into()));
 }
+
+#[test]
+fn a_file_that_is_not_utf8_or_too_large_is_refused_by_name() {
+    let tmp = repo();
+    let root = tmp.path().join("repo");
+    fs::write(root.join("bin.dat"), [0xff, 0xfe, 0x00]).expect("bin");
+    let big = vec![b'a'; MAX_PARSE_BYTES as usize + 1];
+    fs::write(root.join("big.md"), big).expect("big");
+    let mut files = RepoFiles::new(&root).expect("root");
+    assert_eq!(files.read("bin.dat").unwrap_err().0, "file_not_utf8");
+    assert!(files
+        .read("big.md")
+        .unwrap_err()
+        .0
+        .starts_with("file_too_large"));
+    assert_eq!(files.read("nope.md").unwrap_err().0, "file_not_found");
+}

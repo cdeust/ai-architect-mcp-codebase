@@ -57,9 +57,8 @@ def main() -> None:
         shutil.copy2(binary, destination)
         bundle = workspace / "ai-architect-mcp-codebase.mcpb"
         with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in stage.rglob("*"):
-                if path.is_file():
-                    archive.write(path, path.relative_to(stage))
+            for path in (p for p in stage.rglob("*") if p.is_file()):
+                archive.write(path, path.relative_to(stage))
         with zipfile.ZipFile(bundle) as archive:
             names = set(archive.namelist())
             require(
@@ -73,9 +72,9 @@ def main() -> None:
         require(run.returncode == 0, run.stderr)
         require(response(run.stdout, 1).get("error") is None, "MCPB initialize failed")
         tools = response(run.stdout, 2)["result"]["tools"]
-        require(len(tools) == 26, f"expected full 26-tool MCPB surface, got {len(tools)}")
+        require(len(tools) == 27, f"expected full 27-tool MCPB surface, got {len(tools)}")
         require(response(run.stdout, 3)["result"].get("isError") is not True, "MCPB health_check failed")
-    print("MCPB SMOKE OK: staged launcher initialized, listed 26 tools, and called health_check")
+    print("MCPB SMOKE OK: staged launcher initialized, listed 27 tools, and called health_check")
 
 
 if __name__ == "__main__":
