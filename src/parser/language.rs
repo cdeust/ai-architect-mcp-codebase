@@ -32,10 +32,10 @@ impl Language {
     /// non-zero — so a mis-detection is observable rather than silent. Callers
     /// that know better can override via `from_str_opt` (the tool's `language:`
     /// arg). The specific rulings:
-    ///   - `.h`  → C. Ambiguous across C / C++ / Objective-C headers; C is the
-    ///     majority case and C constructs also parse under the C++ grammar. A
-    ///     C++-only header (templates, namespaces) will show parse_errors; pass
-    ///     `language: "cpp"` for such trees.
+    ///   - `.h`  → C here, the answer when nothing else is known. The indexer
+    ///     does not stop at it: `parser::header_dialect::header_language` picks
+    ///     the grammar of each `.h` from the language filter or, without one,
+    ///     from C++ constructs in the header itself (#399).
     ///   - `.mm` → ObjC. This is Objective-C++; the Objective-C grammar covers
     ///     the ObjC constructs and embedded C, but NOT full C++ (templates,
     ///     namespaces) — those portions become parse_errors. Full fidelity would

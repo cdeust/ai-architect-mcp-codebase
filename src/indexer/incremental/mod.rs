@@ -57,7 +57,7 @@ use std::time::Instant;
 use super::coverage::FileCoverage;
 use super::manifest::{self, FileManifest, FileState};
 use super::persist::ParseOutcome;
-use super::walk::{DependencyScope, WalkOptions};
+use super::walk::{ParsePolicy, WalkOptions};
 use super::{light_link, IncrementalResult, IndexOptions};
 use std::collections::BTreeMap;
 
@@ -171,22 +171,20 @@ pub fn index_incremental(
     // the redundant CREATE TABLE IF NOT EXISTS pass is the single largest
     // incremental speedup on small change sets.
 
-    let dependency_scope = options.dependency_scope;
+    let policy = ParsePolicy {
+        dependency_scope: options.dependency_scope,
+        language_filter: options.language_filter,
+    };
     let walk_opts = WalkOptions {
         language_filter: options.language_filter,
-        dependency_scope,
+        dependency_scope: options.dependency_scope,
         exclude_dirs: options.exclude_dirs.clone(),
     };
     let (current, walk_gaps, walk_pruned) = discover(codebase, walk_opts)?;
     let plan = classify(prior, &current);
 
-    let (reparsed, reparsed_gaps) = apply_changes(
-        &store,
-        codebase,
-        &plan.change_set,
-        &current,
-        dependency_scope,
-    )?;
+    let (reparsed, reparsed_gaps) =
+        apply_changes(&store, codebase, &plan.change_set, &current, policy)?;
 
     // Persist the refreshed manifest (built by classify, hashes reused).
     manifest::save(manifest_path, &plan.next_manifest)?;
@@ -243,7 +241,7 @@ pub(super) fn apply_changes(
     codebase: &Path,
     changes: &ChangeSet,
     all_current: &[Discovered],
-    dependency_scope: DependencyScope,
+    policy: ParsePolicy,
 ) -> Result<(u64, BTreeMap<String, FileCoverage>), String> {
     // Coverage gaps for the reparsed files only (issue #57). The caller merges
     // this with the carried-forward coverage of unchanged files.
@@ -304,17 +302,11 @@ pub(super) fn apply_changes(
     // genuinely new directories are created, matching a full index.
     let mut dir_nodes_inserted: HashSet<PathBuf> = existing_directory_ids(store)?;
     for d in &changes.changed {
-        let outcome = reparse_modified_file(store, codebase, d, dependency_scope)?;
+        let outcome = reparse_modified_file(store, codebase, d, policy)?;
         record_reparse_outcome(&mut collector, &d.rel, outcome);
     }
     for d in &changes.added {
-        let outcome = reparse_new_file(
-            store,
-            codebase,
-            d,
-            dependency_scope,
-            &mut dir_nodes_inserted,
-        )?;
+        let outcome = reparse_new_file(store, codebase, d, policy, &mut dir_nodes_inserted)?;
         record_reparse_outcome(&mut collector, &d.rel, outcome);
     }
     for r in &changes.renamed {
@@ -322,7 +314,7 @@ pub(super) fn apply_changes(
             store,
             codebase,
             &r.new_file,
-            dependency_scope,
+            policy,
             &mut dir_nodes_inserted,
         )?;
         record_reparse_outcome(&mut collector, &r.new_file.rel, outcome);

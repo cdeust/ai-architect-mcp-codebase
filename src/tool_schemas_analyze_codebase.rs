@@ -28,7 +28,7 @@ pub(super) fn analyze_codebase_schema() -> Value {
                     "type": "string",
                     "enum": ["auto", "rust", "python", "typescript", "java", "kotlin", "swift", "objc", "c", "cpp", "go"],
                     "default": "auto",
-                    "description": "Language to parse. 'auto' detects per-file by extension (.rs, .py, .ts/.tsx, .java, .kt/.kts, .swift, .m/.mm, .c/.h, .cc/.cpp/.hpp, .go). Specific values restrict to that language only."
+                    "description": "Language to parse. 'auto' detects per-file by extension (.rs, .py, .ts/.tsx, .java, .kt/.kts, .swift, .m/.mm, .c/.h, .cc/.cpp/.hpp, .go); a .h is parsed as C++ when it contains a C++ construct (namespace, template, class, access specifier, a qualified name), as C otherwise. Specific values restrict to that language only; 'c', 'cpp' and 'objc' each keep .h files and parse them with that grammar."
                 },
                 "output_dir": {
                     "type": "string",

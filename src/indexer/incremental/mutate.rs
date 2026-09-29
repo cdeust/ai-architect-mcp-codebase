@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::graph_store::{cypher_str, GraphStore};
 
 use super::super::persist::{self, ParseOutcome};
-use super::super::walk::{is_dependency_path, DependencyScope};
+use super::super::walk::ParsePolicy;
 use super::super::{relative_path, SymbolBatch};
 use super::Discovered;
 
@@ -143,7 +143,7 @@ pub(super) fn reparse_modified_file(
     store: &GraphStore,
     codebase: &Path,
     d: &Discovered,
-    dependency_scope: DependencyScope,
+    policy: ParsePolicy,
 ) -> Result<ParseOutcome, String> {
     // Reset the kept File node's mutable state. index_single_file re-bumps
     // parse_errors only when >0, so we clear it first (a fixed parse must drop
@@ -162,8 +162,6 @@ pub(super) fn reparse_modified_file(
         .or_default()
         .insert("File".into());
     let mut seen_node_ids: HashSet<(String, String)> = HashSet::new();
-    let restrict =
-        dependency_scope == DependencyScope::PublicApi && is_dependency_path(codebase, &d.abs);
     let outcome = persist::index_single_file(
         store,
         &mut batch,
@@ -171,7 +169,7 @@ pub(super) fn reparse_modified_file(
         &d.rel,
         &mut label_by_qn,
         &mut seen_node_ids,
-        restrict,
+        persist::FileScope::of(policy, codebase, &d.abs),
     );
     batch.flush(store)?;
     Ok(outcome)
@@ -184,7 +182,7 @@ pub(super) fn reparse_new_file(
     store: &GraphStore,
     codebase: &Path,
     d: &Discovered,
-    dependency_scope: DependencyScope,
+    policy: ParsePolicy,
     dir_nodes_inserted: &mut HashSet<PathBuf>,
 ) -> Result<ParseOutcome, String> {
     let mut batch = SymbolBatch::default();
@@ -207,8 +205,6 @@ pub(super) fn reparse_new_file(
     let rel_path = relative_path(codebase, &d.abs);
     persist::insert_dir_file_edge(&mut batch, &rel_path);
 
-    let restrict =
-        dependency_scope == DependencyScope::PublicApi && is_dependency_path(codebase, &d.abs);
     let outcome = persist::index_single_file(
         store,
         &mut batch,
@@ -216,7 +212,7 @@ pub(super) fn reparse_new_file(
         &d.rel,
         &mut label_by_qn,
         &mut seen_node_ids,
-        restrict,
+        persist::FileScope::of(policy, codebase, &d.abs),
     );
     batch.flush(store)?;
     Ok(outcome)

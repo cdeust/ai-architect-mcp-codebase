@@ -1,6 +1,7 @@
+use super::walk::{is_dependency_path, DependencyScope, ParsePolicy};
 use super::SymbolBatch;
 use crate::graph_store::{cypher_str, GraphStore};
-use crate::parser::{self, Language};
+use crate::parser::{self, header_dialect, Language};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -136,6 +137,27 @@ pub(super) enum ParseOutcome {
     Quarantined(String),
 }
 
+/// Per-file parse options: whether a dependency file keeps only its public
+/// API (ADR-4253701 §Decision 1), and the index's language filter, which
+/// picks the grammar of a `.h` header (#399).
+#[derive(Debug, Clone, Copy)]
+pub(in crate::indexer) struct FileScope {
+    pub restrict_to_public_api: bool,
+    pub language_filter: Option<Language>,
+}
+
+impl FileScope {
+    /// The scope of `file` under `policy`: only a file under a dependency
+    /// directory is restricted, and only in the `PublicApi` tier.
+    pub(in crate::indexer) fn of(policy: ParsePolicy, codebase: &Path, file: &Path) -> Self {
+        FileScope {
+            restrict_to_public_api: policy.dependency_scope == DependencyScope::PublicApi
+                && is_dependency_path(codebase, file),
+            language_filter: policy.language_filter,
+        }
+    }
+}
+
 pub(super) fn index_single_file(
     store: &GraphStore,
     batch: &mut SymbolBatch,
@@ -143,7 +165,7 @@ pub(super) fn index_single_file(
     rel_path: &str,
     label_by_qn: &mut HashMap<String, std::collections::HashSet<String>>,
     seen_node_ids: &mut std::collections::HashSet<(String, String)>,
-    restrict_to_public_api: bool,
+    scope: FileScope,
 ) -> ParseOutcome {
     // Detect language FIRST (cheap, no I/O). Under all-file indexing the
     // walker yields every file, so most non-code files reach here: they are
@@ -161,6 +183,12 @@ pub(super) fn index_single_file(
     let source = match std::fs::read_to_string(abs_path) {
         Ok(s) => s,
         Err(e) => return ParseOutcome::Skipped(format!("read_error: {e}")),
+    };
+    // A `.h` is C, C++ or Objective-C: the filter or the header itself decides (#399).
+    let lang = if header_dialect::is_shared_header(ext) {
+        header_dialect::header_language(scope.language_filter, &source)
+    } else {
+        lang
     };
     // Defense-in-depth: even if the dir walker let a large file slip (e.g.
     // size changed between lstat and read), refuse to feed it to tree-sitter.
@@ -195,7 +223,7 @@ pub(super) fn index_single_file(
         label_by_qn,
         seen_node_ids,
         lang.as_str(),
-        restrict_to_public_api,
+        scope.restrict_to_public_api,
     );
     edges::accumulate_parsed_edges(batch, &parsed.refs, label_by_qn);
     // Full-AST persistence layer (additive, best-effort — see
