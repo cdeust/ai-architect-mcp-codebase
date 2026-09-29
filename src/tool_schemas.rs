@@ -38,6 +38,10 @@ use graph_analysis::{
     search_codebase_schema,
 };
 
+#[path = "tool_schemas_doc_claims.rs"]
+mod doc_claims;
+use doc_claims::check_doc_claims_schema;
+
 #[path = "tool_schemas_prd_security.rs"]
 mod prd_security;
 use prd_security::{
@@ -130,6 +134,7 @@ pub fn tools_list() -> Value {
         validate_prd_against_graph_schema(),
         check_security_gates_schema(),
         verify_semantic_diff_schema(),
+        check_doc_claims_schema(),
     ];
     for tool in &mut tools {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("");

@@ -50,9 +50,9 @@ def main() -> None:
     )
     require(run.returncode == 0, run.stderr)
     require(response(run.stdout, 1).get("error") is None, "Claude initialize failed")
-    require(len(response(run.stdout, 2)["result"]["tools"]) == 26, "Claude tool surface is not 26")
+    require(len(response(run.stdout, 2)["result"]["tools"]) == 27, "Claude tool surface is not 27")
     require(response(run.stdout, 3)["result"].get("isError") is not True, "Claude health_check failed")
-    print("CLAUDE PLUGIN SMOKE OK: shipped launcher initialized, listed 26 tools, and called health_check")
+    print("CLAUDE PLUGIN SMOKE OK: shipped launcher initialized, listed 27 tools, and called health_check")
 
 
 if __name__ == "__main__":

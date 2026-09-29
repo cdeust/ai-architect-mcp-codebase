@@ -102,6 +102,12 @@ fn probe_args(name: &str, p: &Paths) -> Option<Value> {
             json!({ "graph_path": graph, "prd_path": prd.to_string_lossy() })
         }
         "check_security_gates" => json!({ "graph_path": graph, "changed_symbols": [symbol] }),
+        "check_doc_claims" => {
+            std::fs::write(Path::new(&*code).join("README.md"), "Calls `f`.\n").expect("readme");
+            json!({ "graph_path": graph, "repo_root": code, "claims": [{
+                "text": "`f`", "file": "README.md", "line": 1, "kind": "symbol_exists",
+                "subject": symbol }] })
+        }
         "verify_semantic_diff" => json!({ "before_graph_path": graph,
             "after_graph_path": other.to_string_lossy() }),
         _ => return None,

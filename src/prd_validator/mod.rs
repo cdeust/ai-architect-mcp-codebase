@@ -27,6 +27,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use verdict::{classify_unresolved, ClaimVerdict};
+// Shared with `doc_claims`: a claim about an absent symbol is unverifiable, not
+// absent, when its file is outside the indexed graph (issue #13).
+pub(crate) use verdict::unverifiable_reason;
 
 // source: stages/stage-6.md §4.2 — structured affected-symbols contract filename.
 #[allow(dead_code)] // referenced by docs and tests; exported for downstream consumers.
