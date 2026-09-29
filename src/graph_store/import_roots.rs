@@ -204,7 +204,7 @@ impl GraphStore {
         }
     }
 
-    fn marker_value(&self, id: &str) -> Result<Option<String>, String> {
+    pub(super) fn marker_value(&self, id: &str) -> Result<Option<String>, String> {
         if !self.has_node_table(MARKER_TABLE)? {
             return Ok(None);
         }

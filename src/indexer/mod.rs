@@ -302,6 +302,7 @@ pub fn index_codebase_with_language(
     store.write_canonical_marker()?;
     store.write_code_context_marker()?;
     store.write_body_kind_marker()?;
+    store.write_callsite_rows_marker()?;
     store.write_crate_evidence_marker()?;
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;

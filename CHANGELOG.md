@@ -51,6 +51,18 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `index_status` no longer reports `reasons_recorded: true` over call-site rows
+  that predate the current parser form (#408). Every `resolve_graph` pass wrote
+  the marker, although a resolve pass re-evaluates rows and never re-parses a
+  file: after an `index_incremental` on an older graph, the files that did not
+  change kept rows written by the old parser (no `callee_shape`, no indirect
+  call), and a standalone `resolve_graph` then vouched for them. The marker is
+  now written only on a graph carrying `callsite_rows_form`, which a full index
+  writes last (like `body_kind_form`); on any other graph the pass withdraws it.
+  `callsite_reason_form` is now 3, so a form-2 marker written over old rows is
+  no longer believed: `reasons_recorded` reads false until the next full index
+  (`index_codebase` with `full: true`, or `analyze_codebase`).
+
 - A C++ member call is bound only through a receiver whose type the source
   states (#406). The parser reduced `p->empty()`, `ru.empty()` and `width(1U)`
   to a bare name, so each bound to any method of that name in the repository:

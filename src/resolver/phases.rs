@@ -73,7 +73,8 @@ pub(super) fn run_phases(
             },
         },
     )?;
-    // Issue #393: every open call site now carries its reason.
+    // Issue #393: every open call site now carries its reason; issue #408: said
+    // only of a graph whose rows are all of the current form.
     store.write_callsite_reason_marker()?;
 
     Ok(PhaseTallies {

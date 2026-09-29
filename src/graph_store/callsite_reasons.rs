@@ -17,6 +17,15 @@
 // sites; `callsite_reason_form` (a marker row written after the resolution
 // phases) says whether they were recorded. Reads never refuse: a blank on an
 // unmarked graph reads `not_recorded`.
+//
+// The reason marker vouches for EVERY `CallSite` row, but a resolve pass only
+// re-evaluates the rows, it never re-parses a file. So it is written only on a
+// graph whose rows were all produced under the current parser form: the
+// `callsite_rows_form` marker, written at the end of a full index like
+// `body_kind_form` (a full index clears every marker at its start). An
+// incremental refresh of an older graph leaves unchanged files with rows of the
+// old form, so the graph carries no rows marker and `reasons_recorded` stays
+// false until a full index (issue #408).
 
 use std::collections::BTreeMap;
 
@@ -26,9 +35,17 @@ use super::cfg_twins::MARKER_TABLE;
 use super::{cypher_str, GraphStore, BULK_BATCH_SIZE};
 
 /// The version of the reasons and of the rules that write them. Bump it when
-/// either changes what a graph stores.
-pub(crate) const CALLSITE_REASON_FORM: u32 = 2;
+/// either changes what a graph stores. 3: the marker is written only over rows of
+/// the current form (issue #408), so a form-2 marker written over old rows is no
+/// longer believed.
+pub(crate) const CALLSITE_REASON_FORM: u32 = 3;
 const MARKER_ID: &str = "callsite_reason_form";
+
+/// The version of the parser output a `CallSite` row records (`callee_shape`,
+/// the indirect sites). Bump it when a parser change alters what a row holds,
+/// so a graph written before stops vouching for its reasons.
+pub(crate) const CALLSITE_ROWS_FORM: u32 = 1;
+const ROWS_MARKER_ID: &str = "callsite_rows_form";
 
 pub const REASON_OUTSIDE_TARGETS: &str = super::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS;
 pub const REASON_MACRO_SITE: &str = "macro_site";
@@ -193,33 +210,52 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Records that every `CallSite` row of this graph was written under the
+    /// current parser form. Called at the END of a successful full index (the
+    /// start clears every marker row).
+    pub fn write_callsite_rows_marker(&self) -> Result<(), String> {
+        self.write_marker(ROWS_MARKER_ID, CALLSITE_ROWS_FORM)
+    }
+
     /// Records that every open site of this graph carries its reason. Called
-    /// after the resolution phases.
+    /// after the resolution phases. Only a graph whose rows are of the current
+    /// form is vouched for; on any other the marker is withdrawn, so a marker a
+    /// graph carries never covers rows an incremental refresh left behind
+    /// (issue #408).
     pub fn write_callsite_reason_marker(&self) -> Result<(), String> {
+        if !self.has_callsite_rows() {
+            self.execute_query(&format!(
+                "MATCH (m:{MARKER_TABLE} {{id: {}}}) DELETE m",
+                cypher_str(MARKER_ID)
+            ))?;
+            return Ok(());
+        }
+        self.write_marker(MARKER_ID, CALLSITE_REASON_FORM)
+    }
+
+    fn write_marker(&self, id: &str, form: u32) -> Result<(), String> {
         self.execute_query(&format!(
             "MERGE (m:{MARKER_TABLE} {{id: {}}}) SET m.value = {}",
-            cypher_str(MARKER_ID),
-            cypher_str(&CALLSITE_REASON_FORM.to_string())
+            cypher_str(id),
+            cypher_str(&form.to_string())
         ))?;
         Ok(())
     }
 
+    /// True when every row of the graph was written under the current parser
+    /// form. Read-only; a failed check counts as absent.
+    pub fn has_callsite_rows(&self) -> bool {
+        self.marker_form(ROWS_MARKER_ID) == Some(CALLSITE_ROWS_FORM)
+    }
+
     /// True when the graph carries the current reason marker. Read-only.
     pub fn has_callsite_reasons(&self) -> bool {
-        if !self.has_node_table(MARKER_TABLE).unwrap_or(false) {
-            return false;
-        }
-        let Ok(rows) = self.execute_query(&format!(
-            "MATCH (m:{MARKER_TABLE} {{id: {}}}) RETURN m.value",
-            cypher_str(MARKER_ID)
-        )) else {
-            return false;
-        };
-        rows.rows
-            .first()
-            .and_then(|r| r.first())
-            .and_then(|v| v.parse::<u32>().ok())
-            == Some(CALLSITE_REASON_FORM)
+        self.marker_form(MARKER_ID) == Some(CALLSITE_REASON_FORM)
+    }
+
+    /// A marker row read as a form number; a failed read counts as absent.
+    fn marker_form(&self, id: &str) -> Option<u32> {
+        self.marker_value(id).ok().flatten()?.parse().ok()
     }
 
     /// Every open call site counted by reason. Read-only: a graph without the
