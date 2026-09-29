@@ -207,12 +207,16 @@ fn a_bare_function_call_inside_a_macro_is_extracted() {
     );
 }
 
-/// Pins the receiver-chain output of the pre-#328 scan: the chain links are
-/// unchanged by the bare-call arm, which only adds the chain's head `build`.
+/// Pins the receiver-chain output of the scan: each link reads from the head
+/// of the chain, as the same call written outside a macro (issue #389), and
+/// the bare-call arm adds the chain's head `build`.
 #[test]
 fn a_chain_on_a_bare_call_keeps_its_links_and_gains_its_head() {
     let source = "fn probe() {\n    assert!(build(1).first().second());\n}\n";
-    assert_eq!(joined_call_sites(source), ["(1).first", "().second"]);
+    assert_eq!(
+        joined_call_sites(source),
+        ["build(1).first", "build(1).first().second"]
+    );
     let sites = call_sites(source);
     assert!(
         sites.iter().any(|s| s == "build"),
@@ -221,7 +225,8 @@ fn a_chain_on_a_bare_call_keeps_its_links_and_gains_its_head() {
 }
 
 /// Pins the exact sites of the #295 `.meets` shape: nothing is added, since
-/// the head `Response::Unbounded` is a path call the scan already emitted.
+/// the head `Response::Unbounded` is a path call the scan already emitted, and
+/// the method reads from that head (issue #389).
 #[test]
 fn the_method_on_a_path_call_result_shape_is_unchanged() {
     let sites = call_sites(
@@ -232,7 +237,7 @@ fn the_method_on_a_path_call_result_shape_is_unchanged() {
         [
             "assert!",
             "Response::Unbounded",
-            "(Unbounded::NonConvergent).meets"
+            "Response::Unbounded(Unbounded::NonConvergent).meets"
         ]
     );
 }

@@ -186,12 +186,17 @@ fn build_node_properties(node: &parser::ExtractedNode, language: &str) -> Vec<(S
         ));
         props.push(("cfg_active".to_string(), cypher_str("")));
     }
-    // Issue #354: 'test' / 'bench' / 'proof', '' for production code.
+    // Issue #354: 'test' / 'bench' / 'proof', '' for production code. Issue #400:
+    // what the callable stands for (`body` unless the parser said otherwise) and
+    // its linkage (`internal` for a C `static`, '' otherwise).
     if matches!(node.label.as_str(), "Function" | "Method") {
-        props.push((
-            "code_context".to_string(),
-            cypher_str(&find_property(node, "code_context")),
-        ));
+        for (column, absent) in [("code_context", ""), ("body_kind", "body"), ("linkage", "")] {
+            let value = Some(find_property(node, column)).filter(|v| !v.is_empty());
+            props.push((
+                column.to_string(),
+                cypher_str(value.as_deref().unwrap_or(absent)),
+            ));
+        }
     }
     if has_language_col(&node.label) {
         props.push(("language".to_string(), cypher_str(language)));

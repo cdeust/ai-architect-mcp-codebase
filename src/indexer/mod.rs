@@ -166,6 +166,7 @@ pub fn index_codebase_with_language(
     if existing {
         store.require_cfg_gate_metadata()?;
         store.require_code_context_metadata()?;
+        store.require_body_kind_metadata()?;
         store.require_crate_evidence_metadata()?;
     }
     // No current marker while this index runs: a failure leaves a graph that the
@@ -300,6 +301,7 @@ pub fn index_codebase_with_language(
 
     store.write_canonical_marker()?;
     store.write_code_context_marker()?;
+    store.write_body_kind_marker()?;
     store.write_crate_evidence_marker()?;
     let node_count = store.node_count()?;
     let edge_count = store.edge_count()?;

@@ -48,13 +48,16 @@ pub(in crate::resolver) struct PathFacts<'e> {
     pub(in crate::resolver) imports: &'e ModuleImports,
 }
 
-/// The owners a written path admits.
+/// The owners a written path admits, or with `item`, the items it names.
 pub(in crate::resolver) struct WrittenPath<'e> {
     evidence: &'e CrateEvidence,
     caller_file: String,
     /// The paths the written one leads to once `use` declarations are
     /// followed; an owner any of them names is admitted.
     anchors: Vec<Anchor>,
+    /// The anchors name the candidate itself (`a::dup`), not its owner
+    /// (issue #398).
+    item: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -70,6 +73,19 @@ pub(super) enum Anchor {
 }
 
 impl Anchor {
+    /// The path of the item `name` of this one.
+    fn child(&self, name: &str) -> Anchor {
+        let grown = |s: &[String]| [s, &[name.to_string()]].concat();
+        match self {
+            Anchor::CrateRoot(s) => Anchor::CrateRoot(grown(s)),
+            Anchor::Suffix(s) => Anchor::Suffix(grown(s)),
+            Anchor::Library { lib, segments } => Anchor::Library {
+                lib: lib.clone(),
+                segments: grown(segments),
+            },
+        }
+    }
+
     /// The module path and the name of an exact anchor; `None` for a suffix
     /// or an empty path.
     pub(super) fn exact_split(&self) -> Option<(&[String], &String)> {
@@ -90,7 +106,7 @@ impl Anchor {
         }
     }
 
-    fn written(&self) -> &[String] {
+    pub(super) fn written(&self) -> &[String] {
         match self {
             Anchor::CrateRoot(s) | Anchor::Suffix(s) => s,
             Anchor::Library { segments, .. } => segments,
@@ -146,10 +162,11 @@ impl<'e> WrittenPath<'e> {
             evidence: facts.evidence,
             caller_file: caller_file.to_string(),
             anchors: vec![anchor],
+            item: false,
         }
     }
 
-    fn following(
+    pub(super) fn following(
         facts: &PathFacts<'e>,
         caller_file: &str,
         anchor: Anchor,
@@ -162,13 +179,49 @@ impl<'e> WrittenPath<'e> {
             evidence: facts.evidence,
             caller_file: caller_file.to_string(),
             anchors,
+            item: false,
         })
     }
 
-    /// True when `candidate` (a method) belongs to an owner the path names.
+    /// The items named `name` of every owner this path admits, the `use`
+    /// declarations of each owner followed: `a::dup` names the `dup` of `a`,
+    /// or the one `pub use b::dup;` in `a` brings (issue #398).
+    pub(in crate::resolver) fn item(&self, facts: &PathFacts<'e>, name: &str) -> WrittenPath<'e> {
+        let anchors = self
+            .anchors
+            .iter()
+            .flat_map(|owner| reexport::follow(facts, &self.caller_file, owner.child(name)))
+            .collect();
+        WrittenPath {
+            evidence: self.evidence,
+            caller_file: self.caller_file.clone(),
+            anchors,
+            item: true,
+        }
+    }
+
+    /// True when every path this one leads to runs through a module the
+    /// repository does not hold (`use ext::Set;` read as `c::ext::Set`): the
+    /// owner is outside it. A suffix, or a path to the root, is not.
+    pub(in crate::resolver) fn leaves_repository(&self, imports: &ModuleImports) -> bool {
+        self.anchors
+            .iter()
+            .all(|anchor| match anchor.exact_split() {
+                Some((module, _)) => !module.is_empty() && imports.module_files(module).is_empty(),
+                None => false,
+            })
+    }
+
+    /// True when `candidate` (a method) belongs to an owner the path names, or
+    /// with `item`, is an item the path names.
     pub(in crate::resolver) fn admits(&self, candidate: &SymbolEntry) -> bool {
-        let Some((owner, _)) = candidate.qualified_name.rsplit_once("::") else {
-            return false;
+        let owner = if self.item {
+            candidate.qualified_name.as_str()
+        } else {
+            match candidate.qualified_name.rsplit_once("::") {
+                Some((owner, _)) => owner,
+                None => return false,
+            }
         };
         let owner_file = extract_file_prefix_or_self(owner);
         let path = module_path_of(self.evidence, owner);
@@ -181,6 +234,18 @@ impl<'e> WrittenPath<'e> {
                     && path.as_slice() == segments.as_slice()
             }
         })
+    }
+
+    /// True when `entry` is itself what this path names (a type the path
+    /// spells), whatever `item` says.
+    pub(in crate::resolver) fn names(&self, entry: &SymbolEntry) -> bool {
+        WrittenPath {
+            evidence: self.evidence,
+            caller_file: self.caller_file.clone(),
+            anchors: self.anchors.clone(),
+            item: true,
+        }
+        .admits(entry)
     }
 }
 
@@ -235,10 +300,16 @@ pub(super) fn path_segments(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// The module path a file's location gives: the root for a target entry file
-/// and for `lib.rs` or `main.rs`; otherwise the path below `src/` (or below
-/// `tests/`, `benches/`, `examples/`) without `.rs`, and without a final `mod`.
+/// The module path of a file: the one the index recorded where it placed the
+/// file under a gate (`#[cfg_attr(.., path = ..)]` puts `src/x.rs` at `imp`,
+/// issue #398); otherwise the one its location gives: the root for a target
+/// entry file and for `lib.rs` or `main.rs`, else the path below `src/` (or
+/// below `tests/`, `benches/`, `examples/`) without `.rs`, and without a final
+/// `mod`.
 pub(super) fn file_module_path(evidence: &CrateEvidence, file: &str) -> Vec<String> {
+    if let Some(logical) = evidence.logical_modules.get(file) {
+        return logical.clone();
+    }
     let name = file.rsplit('/').next().unwrap_or(file);
     if evidence.targets.contains_key(file) || name == "lib.rs" || name == "main.rs" {
         return Vec::new();

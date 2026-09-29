@@ -35,6 +35,89 @@ pub(super) fn public_visibility() -> String {
     "public".to_string()
 }
 
+/// The property naming what a callable node stands for (issue #400): `prototype`
+/// for a declaration with no body, `macro` for a function-like macro. Absent
+/// means a body; the indexer stores that as `body`.
+const BODY_KIND: &str = "body_kind";
+/// The property marking a callable with internal linkage (issue #400).
+const LINKAGE: &str = "linkage";
+const LINKAGE_INTERNAL: &str = "internal";
+
+/// `linkage=internal` for a function definition or prototype written with the
+/// `static` storage class, which only its own translation unit can name; no
+/// property otherwise.
+/// source: ISO/IEC 9899:2018 §6.2.2p3 ("If the declaration of a file scope
+/// identifier for an object or a function contains the storage-class specifier
+/// static, the identifier has internal linkage"); C++ [basic.link]/3.
+pub(super) fn linkage_props(source: &str, node: Node) -> Vec<(String, String)> {
+    let mut cursor = node.walk();
+    let is_static = node
+        .children(&mut cursor)
+        .any(|c| c.kind() == "storage_class_specifier" && node_text(source, c) == "static");
+    if is_static {
+        vec![(LINKAGE.to_string(), LINKAGE_INTERNAL.to_string())]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Gives `linkage=internal` to every function of a file that shares its name
+/// with one written `static` there.
+///
+/// Linkage belongs to the identifier within the translation unit, not to one
+/// declaration: once a file-scope function is declared `static`, a later
+/// declaration or definition without a storage class keeps internal linkage,
+/// so `static void f(void);` then `void f(void) { … }` defines a file-local
+/// `f`. `linkage_props` reads one node, so without this pass the definition
+/// looked external and another file's call bound to it. The reverse order
+/// (`static` only on a later declaration) is undefined behaviour and rejected
+/// by compilers; it is read as file-local too, the reading that can only
+/// withhold an edge. Macros have no linkage and are left alone.
+/// source: ISO/IEC 9899:2018 §6.2.2p4 (a later declaration takes the linkage
+/// of the prior one) and §6.2.2p7 (both linkages in one unit: undefined).
+pub(super) fn propagate_internal_linkage(nodes: &mut [crate::parser::ExtractedNode]) {
+    let is_function = |n: &crate::parser::ExtractedNode| {
+        n.label == crate::parser::LABEL_FUNCTION && !n.properties.iter().any(|(k, _)| k == "macro")
+    };
+    let internal = |n: &crate::parser::ExtractedNode| {
+        n.properties
+            .iter()
+            .any(|(k, v)| k == LINKAGE && v == LINKAGE_INTERNAL)
+    };
+    let names: std::collections::HashSet<String> = nodes
+        .iter()
+        .filter(|n| is_function(n) && internal(n))
+        .map(|n| n.name.clone())
+        .collect();
+    for node in nodes.iter_mut() {
+        if is_function(node) && !internal(node) && names.contains(&node.name) {
+            node.properties
+                .push((LINKAGE.to_string(), LINKAGE_INTERNAL.to_string()));
+        }
+    }
+}
+
+/// The properties of a C-family prototype: `is_prototype`, `body_kind=prototype`
+/// and its linkage.
+pub(super) fn prototype_props(source: &str, node: Node) -> Vec<(String, String)> {
+    let mut props = vec![
+        ("is_prototype".to_string(), "true".to_string()),
+        (BODY_KIND.to_string(), "prototype".to_string()),
+    ];
+    props.extend(linkage_props(source, node));
+    props
+}
+
+/// The properties of a `#define`: `macro=true`, and `body_kind=macro` when the
+/// macro takes arguments and is emitted as a `Function`.
+pub(super) fn macro_props(label: &str) -> Vec<(String, String)> {
+    let mut props = vec![("macro".to_string(), "true".to_string())];
+    if label == crate::parser::LABEL_FUNCTION {
+        props.push((BODY_KIND.to_string(), "macro".to_string()));
+    }
+    props
+}
+
 /// The C-family definition QN: `{scope}::{name}#{seq}`. The per-file `seq`
 /// counter makes every function/method/prototype QN unique, so the walker's
 /// collision dedup is never needed. Shared verbatim by C, C++, and Objective-C.

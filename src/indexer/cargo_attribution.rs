@@ -105,6 +105,7 @@ impl CargoFacts {
             targets: self.targets.clone(),
             owners: self.target_owners.clone(),
             outside_targets: self.outside_targets.clone(),
+            logical_modules: Default::default(),
         }
     }
 }

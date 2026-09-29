@@ -325,7 +325,8 @@ fn a_chained_field_or_indexed_receiver_still_gives_no_hint() {
 
 #[test]
 fn a_constructor_inside_a_macro_argument_stays_unresolved() {
-    // The macro scan rebuilds `(1).join` from the token tree: no receiver to type.
+    // The macro scan rebuilds `Tier(1).join` from the token tree (issue #389)
+    // but reads no hint off a receiver longer than one name.
     let src = tier("fn f() { assert_eq!(Tier(1).join(&Tier(2)), 3); }");
-    assert_eq!(hint_of(&src, "(1).join"), NONE);
+    assert_eq!(hint_of(&src, "Tier(1).join"), NONE);
 }

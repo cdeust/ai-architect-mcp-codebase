@@ -56,14 +56,18 @@ pub(super) fn follow(facts: &PathFacts, caller_file: &str, start: Anchor) -> Vec
             out.push(anchor);
             continue;
         }
-        for row in explicit {
-            work.extend(anchor_in(
-                facts.evidence,
-                lib,
-                module,
-                &path_segments(&row.path),
-            ));
+        let next: Vec<Anchor> = explicit
+            .into_iter()
+            .filter_map(|row| anchor_in(facts.evidence, lib, module, &path_segments(&row.path)))
+            .collect();
+        // A `use` that names the very path it is read at (`use crate::m;` in
+        // the root, where `m` is a module of the root) leads nowhere new: the
+        // path stays, instead of vanishing with the cycle (issue #398).
+        if !next.is_empty() && next.iter().all(|n| *n == anchor) {
+            out.push(anchor);
+            continue;
         }
+        work.extend(next);
     }
     out
 }

@@ -29,6 +29,7 @@ fn unknown() -> CrateEvidence {
         targets: BTreeMap::new(),
         owners: BTreeMap::new(),
         outside_targets: BTreeSet::new(),
+        logical_modules: BTreeMap::new(),
     }
 }
 
@@ -55,6 +56,7 @@ fn two_crates() -> CrateEvidence {
         ]),
         owners,
         outside_targets: BTreeSet::new(),
+        logical_modules: BTreeMap::new(),
     }
 }
 
@@ -384,4 +386,26 @@ fn super_climbs_out_of_a_file_module() {
         "src/a/mod.rs::Set::m"
     ));
     assert!(of(&idx, &ev, "src/a.rs::run", "super::super::Set").is_none());
+}
+
+/// Issue #398: a file the index placed under a gate (`#[cfg_attr(unix, path =
+/// "unix.rs")] mod imp;`) has the module path it is compiled at, not the one
+/// its location gives.
+#[test]
+fn a_placed_file_has_the_module_path_the_index_recorded() {
+    let mut ev = two_crates();
+    ev.logical_modules
+        .insert("src/unix.rs".to_string(), vec!["imp".to_string()]);
+    assert_eq!(file_module_path(&ev, "src/unix.rs"), ["imp"]);
+    assert_eq!(file_module_path(&ev, "src/b.rs"), ["b"]);
+    let idx = index(&[]);
+    assert!(admits(
+        &ev,
+        &idx,
+        Site {
+            caller: "src/lib.rs::run",
+            hint: "crate::imp::Set"
+        },
+        "src/unix.rs::Set::m"
+    ));
 }
