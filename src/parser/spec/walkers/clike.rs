@@ -47,7 +47,15 @@ pub(super) fn walk_c_defs(
     parent: Node,
     scope: &str,
 ) {
-    let w = CWalk { spec, cf };
+    walk_c_items(CWalk { spec, cf }, ctx, parent, scope);
+    // Linkage is per identifier in the file (issue #400): a function declared
+    // `static` once stays internal where a later declaration omits the keyword.
+    super::super::c_family::propagate_internal_linkage(&mut ctx.nodes);
+}
+
+/// The recursive body of `walk_c_defs`: one pass over `parent`'s children.
+fn walk_c_items(w: CWalk, ctx: &mut WalkCtx, parent: Node, scope: &str) {
+    let CWalk { spec, cf } = w;
     let mut cursor = parent.walk();
     for child in parent.children(&mut cursor) {
         let k = child.kind();
@@ -74,7 +82,7 @@ pub(super) fn walk_c_defs(
                 // declares a type inline (issue #107). The variable itself is
                 // not a graph node (C locals/globals are out of scope for the
                 // flat walker), the TYPE is.
-                emit_inline_type(w, ctx, child, scope, "");
+                emit_inline_type(w, ctx, child, Placement { scope, alias: None });
             }
         } else if child.named_child_count() > 0 {
             // Transparent recursion into an unmatched wrapper with named
@@ -86,17 +94,27 @@ pub(super) fn walk_c_defs(
             // entry), so no test can observe a difference. The guard is kept as a
             // faithful copy of the old walker's `named_child_count() > 0` and a
             // cheap skip of leaf recursion.
-            walk_c_defs(spec, cf, ctx, child, scope);
+            walk_c_items(w, ctx, child, scope);
         }
     }
 }
 
 /// The language spec and its C-family table, passed together to every emitter
-/// (CONTRIBUTING.md §4.2, at most four parameters).
+/// (coding-standards §4.4, at most four parameters; the checklist item in
+/// .github/PULL_REQUEST_TEMPLATE.md).
 #[derive(Clone, Copy)]
 struct CWalk<'s> {
     spec: &'s LangSpec,
     cf: &'s CFamilySpec,
+}
+
+/// Where a type is emitted, and the name an ANONYMOUS specifier takes there
+/// (the typedef alias of `typedef struct { … } T;`); `None` keeps the
+/// specifier's own name.
+#[derive(Clone, Copy)]
+struct Placement<'a> {
+    scope: &'a str,
+    alias: Option<&'a str>,
 }
 
 /// The first `field_identifier` leaf found in a right-to-left DFS of `node`,
@@ -142,7 +160,7 @@ fn is_c_function_prototype(cf: &CFamilySpec, node: Node) -> bool {
 /// `Field` + `HasField` per declared member (declarators unwrapped to their
 /// field name; a member with no field name — an anonymous member — is skipped).
 fn emit_struct(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
-    emit_struct_named(w, ctx, node, scope, None);
+    emit_struct_named(w, ctx, node, Placement { scope, alias: None });
 }
 
 /// `emit_struct` with an optional name override for an ANONYMOUS specifier.
@@ -152,15 +170,10 @@ fn emit_struct(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
 /// identifier fallback finds nothing (its members are `field_identifier`, not
 /// `identifier`), and the whole struct — fields included — is dropped, which is
 /// the second half of issue #107.
-fn emit_struct_named(
-    w: CWalk,
-    ctx: &mut WalkCtx,
-    node: Node,
-    scope: &str,
-    override_name: Option<&str>,
-) {
+fn emit_struct_named(w: CWalk, ctx: &mut WalkCtx, node: Node, at: Placement) {
     let CWalk { spec, cf } = w;
-    let name = match override_name {
+    let scope = at.scope;
+    let name = match at.alias {
         Some(n) => n.to_string(),
         None => named_or_first_identifier(cf.naming, spec, ctx.source, node),
     };
@@ -349,13 +362,7 @@ enum InlineType {
     Anonymous,
 }
 
-fn emit_inline_type(
-    w: CWalk,
-    ctx: &mut WalkCtx,
-    node: Node,
-    scope: &str,
-    alias: &str,
-) -> InlineType {
+fn emit_inline_type(w: CWalk, ctx: &mut WalkCtx, node: Node, at: Placement) -> InlineType {
     let CWalk { spec, cf } = w;
     let Some(inner) = node.child_by_field_name(spec.type_field) else {
         return InlineType::None;
@@ -378,19 +385,23 @@ fn emit_inline_type(
         return InlineType::None;
     }
     let is_anonymous = node_field_text(ctx.source, inner, spec.name_field).is_empty();
-    let override_name = if is_anonymous && !alias.is_empty() {
-        Some(alias)
-    } else {
-        None
-    };
+    let alias = at.alias.filter(|a| is_anonymous && !a.is_empty());
     if kind_in(cf.struct_like_kinds, inner.kind()) {
-        emit_struct_named(w, ctx, inner, scope, override_name);
+        emit_struct_named(
+            w,
+            ctx,
+            inner,
+            Placement {
+                scope: at.scope,
+                alias,
+            },
+        );
     } else if kind_in(cf.enum_like_kinds, inner.kind()) {
-        emit_enum(w, ctx, inner, scope);
+        emit_enum(w, ctx, inner, at.scope);
     } else {
         return InlineType::None;
     }
-    if override_name.is_some() {
+    if alias.is_some() {
         InlineType::Anonymous
     } else {
         InlineType::Named
@@ -417,7 +428,11 @@ fn emit_typedef(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
     //
     // A NAMED specifier (`typedef struct Tag { … } T;`) keeps both — `Tag` the
     // struct and `T` the alias are genuinely two names.
-    if emit_inline_type(w, ctx, node, scope, &name) == InlineType::Anonymous {
+    let at = Placement {
+        scope,
+        alias: Some(&name),
+    };
+    if emit_inline_type(w, ctx, node, at) == InlineType::Anonymous {
         return;
     }
     let qn = qual(scope, &name);

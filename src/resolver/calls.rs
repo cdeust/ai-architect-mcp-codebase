@@ -251,7 +251,7 @@ struct CallSite<'a> {
 /// Read-only lookup context shared by one `resolve_single_call` invocation
 /// — groups the graph index, the language provider, and the file-import
 /// map so the function takes one reference for "static" state instead of
-/// three loose parameters (CONTRIBUTING.md §4.2, ≤4 parameters).
+/// three loose parameters (coding-standards §4.4, ≤4 parameters).
 struct ResolveContext<'a> {
     idx: &'a SymbolIndex,
     provider: &'a dyn crate::language_provider::LanguageProvider,
@@ -267,7 +267,7 @@ struct ResolveContext<'a> {
 }
 
 /// The per-run, read-only graph state `resolve_one_call_site` needs —
-/// grouped (CONTRIBUTING.md §4.2, ≤4 parameters) so adding the receiver
+/// grouped (coding-standards §4.4, ≤4 parameters) so adding the receiver
 /// gate's Rust-language check to this call chain didn't push the function
 /// over the parameter cap it was already at before this lot.
 struct GraphContext<'a> {

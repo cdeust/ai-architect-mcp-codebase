@@ -207,3 +207,111 @@ fn a_graph_without_the_body_kind_marker_is_refused() {
         "{refused}"
     );
 }
+
+/// C11 §6.2.2p4: a function first declared `static` keeps internal linkage when
+/// its definition does not repeat the keyword. Only its own file can name it.
+const STATIC_FIRST: &str = "static void f(void);\nvoid f(void) { }\nvoid own(void) { f(); }\n";
+const OTHER_CALLER: &str = "void other(void) { f(); }\n";
+
+#[test]
+fn a_static_prototype_keeps_its_later_definition_file_local() {
+    let (store, _tmp) = index_and_resolve(&[
+        ("a.c", STATIC_FIRST),
+        ("c.c", OTHER_CALLER),
+        ("d.c", "void unrelated(void) { }\n"),
+    ]);
+    let own = sites_in(&store, "a.c");
+    assert!(
+        own[0].1.starts_with("a.c::f"),
+        "a.c calls its own definition: {own:?}"
+    );
+    let other = sites_in(&store, "c.c");
+    assert_eq!(
+        other[0].1, "",
+        "c.c cannot name a.c's internal f: {other:?}"
+    );
+    assert_eq!(other[0].2, "declined_by_scope/file_local", "{other:?}");
+    let linkage = store
+        .execute_query(
+            "MATCH (f:Function) WHERE f.id STARTS WITH 'a.c::f' RETURN f.body_kind, f.linkage ORDER BY f.id",
+        )
+        .expect("query a.c::f")
+        .rows;
+    assert_eq!(
+        linkage,
+        vec![
+            vec!["prototype".to_string(), "internal".to_string()],
+            vec!["body".to_string(), "internal".to_string()],
+        ],
+        "both declarations of f carry the internal linkage"
+    );
+}
+
+/// With a public `f` elsewhere, the other file's call reaches that one, never
+/// the internal definition in a.c.
+#[test]
+fn a_call_reaches_the_public_namesake_not_the_file_local_definition() {
+    let (store, _tmp) = index_and_resolve(&[
+        ("a.c", STATIC_FIRST),
+        ("c.c", OTHER_CALLER),
+        ("d.c", "void f(void) { }\n"),
+    ]);
+    let other = sites_in(&store, "c.c");
+    assert!(
+        other[0].1.starts_with("d.c::f"),
+        "c.c binds the external f of d.c: {other:?}"
+    );
+}
+
+/// The reverse order, `void f(void);` then `static void f(void) { }`, is
+/// undefined in C (§6.2.2p7) and rejected by compilers; the file-local reading
+/// is still the safe one, since it can only withhold an edge.
+#[test]
+fn a_static_definition_after_a_plain_prototype_is_file_local_too() {
+    let reverse = "void f(void);\nstatic void f(void) { }\nvoid own(void) { f(); }\n";
+    let (store, _tmp) = index_and_resolve(&[
+        ("a.c", reverse),
+        ("c.c", OTHER_CALLER),
+        ("d.c", "void unrelated(void) { }\n"),
+    ]);
+    let other = sites_in(&store, "c.c");
+    assert_eq!(other[0].1, "", "{other:?}");
+    assert_eq!(other[0].2, "declined_by_scope/file_local", "{other:?}");
+}
+
+/// One header prototype and three real bodies (FreeRTOS heap_1..heap_3 each
+/// define pvPortMalloc): dropping the prototype leaves three bodies, and the
+/// build decides between them, so the call stays open at three.
+#[test]
+fn a_prototype_and_three_bodies_stay_ambiguous_at_three() {
+    let header = "void *grab(int n);\n";
+    let body = "#include \"g.h\"\nvoid *grab(int n) { return 0; }\n";
+    let caller = "#include \"g.h\"\nvoid t(void) { grab(1); }\n";
+    let (store, _tmp) = index_and_resolve(&[
+        ("g.h", header),
+        ("heap_1.c", body),
+        ("heap_2.c", body),
+        ("heap_3.c", body),
+        ("t.c", caller),
+    ]);
+    let sites = sites_in(&store, "t.c");
+    assert_eq!(sites[0].1, "", "no body is chosen: {sites:?}");
+    assert_eq!(sites[0].2, "ambiguous_candidates/3", "{sites:?}");
+}
+
+/// A file that declares `f` `static` names its own `f` and nothing else
+/// (§6.2.2p3). When that definition is not in the graph (FreeRTOS
+/// CodeWarrior/ColdFire_V1/port.c: a toolchain construct the grammar cannot
+/// read hides it), the call stays open; it never falls back on the external
+/// `f` of another file (the MSP430 port's public `prvSetupTimerInterrupt`).
+#[test]
+fn a_file_that_declares_f_static_never_reaches_another_files_f() {
+    let own = "static void f(void);\nvoid start(void) { f(); }\n";
+    let (store, _tmp) = index_and_resolve(&[("own.c", own), ("port.c", "void f(void) { }\n")]);
+    let sites = sites_in(&store, "own.c");
+    assert_eq!(
+        sites[0].1, "",
+        "port.c's f is not the f own.c names: {sites:?}"
+    );
+    assert_eq!(sites[0].2, "not_found/declaration_only", "{sites:?}");
+}

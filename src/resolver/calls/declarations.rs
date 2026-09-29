@@ -66,7 +66,9 @@ pub(super) fn visible_candidates<'a>(
 /// the call is declined when none is left (issue #400).
 ///
 /// A `static` candidate of another file is dropped unless that file is a
-/// header. Then every prototype is dropped: a prototype names a function whose
+/// header. When the caller's own file declares the name `static`, only that
+/// file's candidates and the headers' `static` ones remain: the file names its
+/// own entity, never an external namesake. Then every prototype is dropped: a prototype names a function whose
 /// body or macro is elsewhere, never a target of its own. A name only declared
 /// is declined.
 ///
@@ -82,9 +84,22 @@ pub(super) fn keep_definitions<'a>(
     if !candidates.iter().any(touched) {
         return (candidates, None);
     }
+    let internal = |c: &SymbolEntry| facts.internal.contains(&c.id);
+    // A file that declares the name `static` names its own entity and no
+    // other (§6.2.2p3): an external namesake elsewhere is never the target,
+    // even when the file's own definition is missing from the graph.
+    let own_internal = candidates
+        .iter()
+        .any(|c| internal(c) && candidate_file(c) == caller_file);
     let reachable: Vec<SymbolEntry> = candidates
         .iter()
-        .filter(|c| !facts.internal.contains(&c.id) || nameable_from(c, caller_file))
+        .filter(|c| {
+            if own_internal {
+                candidate_file(c) == caller_file || (internal(c) && nameable_from(c, caller_file))
+            } else {
+                !internal(c) || nameable_from(c, caller_file)
+            }
+        })
         .cloned()
         .collect();
     if reachable.is_empty() {
@@ -104,6 +119,11 @@ pub(super) fn keep_definitions<'a>(
 /// True when the file holding `candidate` is the caller's, or a header the
 /// caller's file can include.
 fn nameable_from(candidate: &SymbolEntry, caller_file: &str) -> bool {
-    let file = extract_file_prefix_or_self(&candidate.qualified_name);
+    let file = candidate_file(candidate);
     file == caller_file || HEADER_EXTENSIONS.iter().any(|ext| file.ends_with(ext))
+}
+
+/// The file that holds `candidate`.
+fn candidate_file(candidate: &SymbolEntry) -> String {
+    extract_file_prefix_or_self(&candidate.qualified_name)
 }

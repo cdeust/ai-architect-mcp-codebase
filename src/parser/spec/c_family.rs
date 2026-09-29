@@ -61,6 +61,42 @@ pub(super) fn linkage_props(source: &str, node: Node) -> Vec<(String, String)> {
     }
 }
 
+/// Gives `linkage=internal` to every function of a file that shares its name
+/// with one written `static` there.
+///
+/// Linkage belongs to the identifier within the translation unit, not to one
+/// declaration: once a file-scope function is declared `static`, a later
+/// declaration or definition without a storage class keeps internal linkage,
+/// so `static void f(void);` then `void f(void) { … }` defines a file-local
+/// `f`. `linkage_props` reads one node, so without this pass the definition
+/// looked external and another file's call bound to it. The reverse order
+/// (`static` only on a later declaration) is undefined behaviour and rejected
+/// by compilers; it is read as file-local too, the reading that can only
+/// withhold an edge. Macros have no linkage and are left alone.
+/// source: ISO/IEC 9899:2018 §6.2.2p4 (a later declaration takes the linkage
+/// of the prior one) and §6.2.2p7 (both linkages in one unit: undefined).
+pub(super) fn propagate_internal_linkage(nodes: &mut [crate::parser::ExtractedNode]) {
+    let is_function = |n: &crate::parser::ExtractedNode| {
+        n.label == crate::parser::LABEL_FUNCTION && !n.properties.iter().any(|(k, _)| k == "macro")
+    };
+    let internal = |n: &crate::parser::ExtractedNode| {
+        n.properties
+            .iter()
+            .any(|(k, v)| k == LINKAGE && v == LINKAGE_INTERNAL)
+    };
+    let names: std::collections::HashSet<String> = nodes
+        .iter()
+        .filter(|n| is_function(n) && internal(n))
+        .map(|n| n.name.clone())
+        .collect();
+    for node in nodes.iter_mut() {
+        if is_function(node) && !internal(node) && names.contains(&node.name) {
+            node.properties
+                .push((LINKAGE.to_string(), LINKAGE_INTERNAL.to_string()));
+        }
+    }
+}
+
 /// The properties of a C-family prototype: `is_prototype`, `body_kind=prototype`
 /// and its linkage.
 pub(super) fn prototype_props(source: &str, node: Node) -> Vec<(String, String)> {

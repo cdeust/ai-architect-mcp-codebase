@@ -64,6 +64,29 @@ adheres to [Semantic Versioning](https://semver.org/).
   was never folded to `kani/response_bounds.rs`, and no declaration was read
   for files outside a target directory. The file now carries the gate `kani`,
   its module path and its owning target.
+- A C call to a function defined in another file resolves to that definition
+  (#400). The header prototype the call goes through was emitted as a
+  `Function` too, so the call saw two candidates and stayed open as
+  `ambiguous_candidates`; in FreeRTOS, `pvPortMalloc` resolved only from its
+  own file. `Function` and `Method` now carry `body_kind` (`body`, `prototype`,
+  or `macro` for a function-like `#define`) and `linkage` (`internal` for a
+  function its file declares `static`, including a later definition that does
+  not repeat the keyword, C11 §6.2.2p4). Before any evidence is weighed the
+  resolver drops every prototype and every `static` function of another `.c`
+  file; a `static` in a header stays visible to the files that include it, and
+  a file that declares the name `static` never reaches an external namesake,
+  even when its own definition is not in the graph. A
+  name the repository only declares stays open as
+  `not_found`/`declaration_only`, a `static` of another file as
+  `declined_by_scope`/`file_local`. A function-like macro and a body of one
+  name, like several bodies of one name (FreeRTOS `heap_1.c` to `heap_5.c`),
+  stay ambiguous: only the build decides which one exists. C only. On
+  FreeRTOS-Kernel dbf7055 (static index), resolved call sites go from 3440 to
+  3820 of 8574, and no call reaches a `static` of another `.c` file. **A graph written by an earlier build needs one full
+  reindex**: an incremental refresh, a bootstrap fill and an artifact import
+  over it are refused with "full reindex required" (a `body_kind_form` marker
+  row, written last by a full index, as for #354). Reads are unaffected: a
+  graph without the columns resolves as before.
 
 ## [0.14.0] - 2026-09-26
 
