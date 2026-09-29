@@ -183,7 +183,7 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "CallSite|call|app/main.cpp::freeFunction#17::call@75:5#21|75|75|public|[(\"callee_name\", \"call\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"member\")]",
         "CallSite|compute|app/main.cpp::geometry::Shape::getId#8::call@27:26#9|27|27|public|[(\"callee_name\", \"compute\"), (\"lsp_col\", \"25\"), (\"callee_shape\", \"direct\")]",
         "CallSite|helper|app/main.cpp::gated#25::call@86:12#26|86|86|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"11\"), (\"callee_shape\", \"direct\")]",
-        "CallSite|identity|app/main.cpp::freeFunction#17::call@76:5#20|76|76|public|[(\"callee_name\", \"identity\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\")]",
+        "CallSite|identity|app/main.cpp::freeFunction#17::call@76:5#20|76|76|public|[(\"callee_name\", \"identity\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\"), (\"receiver_hint\", \"geometry\"), (\"receiver_hint_via\", \"cpp-qualifier\")]",
         "CallSite|method|app/main.cpp::freeFunction#17::call@74:5#22|74|74|public|[(\"callee_name\", \"method\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"member\")]",
         "CallSite|printf|app/main.cpp::freeFunction#17::call@73:5#23|73|73|public|[(\"callee_name\", \"printf\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\")]",
         "Constant|BLUE|app/main.cpp::geometry::Color::BLUE|49|49|public|[(\"enum_entry\", \"true\")]",

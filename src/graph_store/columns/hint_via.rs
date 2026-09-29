@@ -31,3 +31,22 @@ pub(crate) const RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX: &str = "return-type-loca
 /// with generic arguments (issue #370).
 /// source: parser::spec::rust_call_site writes it, resolver::calls::gates reads it.
 pub(crate) const RECEIVER_HINT_VIA_ASSOC_PREFIX: &str = "assoc:";
+
+/// The `receiver_hint_via` of a C++ member call written through `this`
+/// (`this->f()`, `(*this).f()`): the receiver is the caller's own class, and
+/// the hint stays empty (issue #406).
+/// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
+pub(crate) const RECEIVER_HINT_VIA_CPP_THIS: &str = "cpp-this";
+
+/// The `receiver_hint_via` of a C++ member call whose receiver is a parameter
+/// or a local declared with an explicit type (`Bloom* p` then `p->f()`): the
+/// hint is that type as written, without qualifiers, pointer, reference or
+/// generic arguments.
+/// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
+pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED: &str = "cpp-declared";
+
+/// The `receiver_hint_via` of a C++ call written with a qualifier (`a::b::f()`):
+/// the hint is the qualifier. The callee name is always the last segment, so the
+/// hint is the only trace of the qualifier the resolver has.
+/// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
+pub(crate) const RECEIVER_HINT_VIA_CPP_QUALIFIER: &str = "cpp-qualifier";

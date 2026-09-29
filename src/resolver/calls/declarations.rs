@@ -37,12 +37,25 @@ pub(super) fn named_candidates<'a>(
     last: &str,
 ) -> Option<(Cow<'a, [SymbolEntry]>, Option<Decline>)> {
     let candidates = ctx.idx.by_name.get(last)?;
-    let candidates = visible_candidates(ctx, site, candidates, last != site.callee);
+    let (candidates, scoped) = match member_calls::scope(ctx, site, candidates) {
+        Some(s) => {
+            let refused = s.kept.is_empty() && !candidates.is_empty();
+            (
+                Cow::Owned(s.kept),
+                refused.then_some(Decline::Scope(s.rule)),
+            )
+        }
+        None => (
+            visible_candidates(ctx, site, candidates, last != site.callee),
+            None,
+        ),
+    };
     let (candidates, declined) = keep_definitions(ctx.callables, ctx.includes, candidates, file_id);
     let visible = candidates.len();
     let candidates = variant_guard::drop_struct_targets(ctx, site.callee, candidates);
     // The variant guard refused every candidate left (issue #393).
-    let guarded = declined
+    let guarded = scoped
+        .or(declined)
         .or((visible > 0 && candidates.is_empty()).then_some(Decline::Scope(SCOPE_VARIANT_GUARD)));
     Some((candidates, guarded))
 }

@@ -26,6 +26,7 @@ use tree_sitter::Node;
 
 use super::c_family;
 use super::conventions::{CallEntry, ImportEntry, LanguageConventions};
+use super::cpp_receiver;
 use super::lang_spec::{CppFamilySpec, DeclaratorNaming, LangSpec};
 use crate::parser::{node_text, qual, Language};
 
@@ -84,13 +85,19 @@ impl LanguageConventions for CppConventions {
         callee: &str,
         seq: u64,
     ) -> CallEntry {
-        c_family::shaped_call_entry(
+        let mut entry = c_family::shaped_call_entry(
             source,
             call_node,
             CPP_CALL_FUNCTION_FIELD,
             caller_qn,
             (callee, seq),
-        )
+        );
+        entry.properties.extend(cpp_receiver::receiver_props(
+            source,
+            call_node,
+            CPP_CALL_FUNCTION_FIELD,
+        ));
+        entry
     }
 
     fn imports_of(

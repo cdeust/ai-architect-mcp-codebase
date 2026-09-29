@@ -38,6 +38,9 @@ pub(super) enum Decline {
     /// A C or C++ call through a function pointer: the shape of its callee
     /// (issue #401).
     PointerCall(&'static str),
+    /// A C++ member call whose receiver type the parser did not read (issue
+    /// #406).
+    NoReceiverType,
 }
 
 pub(super) const SCOPE_UNKNOWN_CARGO_FACTS: &str = "unknown_cargo_facts";
@@ -47,6 +50,12 @@ pub(super) const SCOPE_WRITTEN_PATH: &str = "written_path";
 pub(super) const SCOPE_VARIANT_GUARD: &str = "variant_guard";
 /// A C `static` function of another file (issue #400).
 pub(super) const SCOPE_FILE_LOCAL: &str = "file_local";
+/// A C++ call through a receiver whose class holds no method of the name (#406).
+pub(super) const SCOPE_CPP_RECEIVER_CLASS: &str = "cpp_receiver_class";
+/// An unqualified C++ call that names no function and no method of its class.
+pub(super) const SCOPE_CPP_UNQUALIFIED_CALL: &str = "cpp_unqualified_call";
+/// A qualified C++ call `a::f()` whose qualifier designates no class holding `f`.
+pub(super) const SCOPE_CPP_QUALIFIER: &str = "cpp_qualifier";
 
 /// A resolution and, when the call was declined, why.
 pub(super) type Gated = (PolicyResolution<SymbolEntry>, Option<Decline>);
@@ -128,6 +137,9 @@ pub(super) fn classify(
     }
     if let Failure::NotFound(Some(Decline::PointerCall(shape))) = failure {
         return (reasons::REASON_INDIRECT_CALL, shape.to_string());
+    }
+    if let Failure::NotFound(Some(Decline::NoReceiverType)) = failure {
+        return (reasons::REASON_NO_RECEIVER_TYPE, String::new());
     }
     if let Failure::NoRelTable(label) = failure {
         // A constant or a module named where a function is passed by value:

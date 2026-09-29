@@ -12,12 +12,13 @@ mod crate_scope;
 mod declarations;
 mod gates;
 mod includes;
+mod member_calls;
 mod reason;
 mod variant_guard;
 use candidate_scope::qualified_path_gate;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
 use includes::IncludeGraph;
-use reason::{Decline, Failure, Gated};
+use reason::{Failure, Gated};
 
 // ---------------------------------------------------------------------------
 // Phase 2: Call resolution
@@ -62,6 +63,7 @@ pub(super) fn resolve_calls(
     // Issue #400: prototypes, macros and `static` functions.
     let callables = store.callable_facts();
     let includes = IncludeGraph::load(store, file_imports)?;
+    let cpp = member_calls::CppClasses::load(store);
 
     for row in &qr.rows {
         if row.len() < 6 {
@@ -93,6 +95,7 @@ pub(super) fn resolve_calls(
             imports: &imports,
             callables: &callables,
             includes: &includes,
+            cpp: &cpp,
         };
         let row_input = RowInput {
             cs_id: &row[0],
@@ -148,6 +151,7 @@ fn resolve_one_call_site(
         caller_label: &caller_label,
         receiver_hint: row.receiver_hint,
         receiver_hint_via: row.receiver_hint_via,
+        callee_shape: row.callee_shape,
     };
     let ctx = ResolveContext {
         idx: graph.idx,
@@ -158,10 +162,12 @@ fn resolve_one_call_site(
         imports: graph.imports,
         callables: graph.callables,
         includes: graph.includes,
+        cpp: graph.cpp,
     };
     let resolved_before = *tally.resolved;
     let (resolution, decline) =
-        pointer_call(row).unwrap_or_else(|| resolve_single_call(&ctx, &site, &file_id));
+        member_calls::open_call(row.language, row.callee_shape, row.receiver_hint_via)
+            .unwrap_or_else(|| resolve_single_call(&ctx, &site, &file_id));
     let failure = match resolution {
         PolicyResolution::Resolved {
             target,
@@ -224,23 +230,6 @@ fn resolve_one_call_site(
     *tally.resolved > resolved_before
 }
 
-/// A call through a function pointer (issue #401) names no function a static
-/// resolver can find: it stays open, with the shape of its callee.
-fn pointer_call(row: &RowInput) -> Option<Gated> {
-    use crate::graph_store::{calls_through_a_pointer, CALLEE_SHAPE_INDIRECT, CALLEE_SHAPE_MEMBER};
-    calls_through_a_pointer(row.language, row.callee_shape).then(|| {
-        let shape = if row.callee_shape == CALLEE_SHAPE_INDIRECT {
-            CALLEE_SHAPE_INDIRECT
-        } else {
-            CALLEE_SHAPE_MEMBER
-        };
-        (
-            PolicyResolution::NotFound,
-            Some(Decline::PointerCall(shape)),
-        )
-    })
-}
-
 /// Queues the reason `failure` gives the site (issue #393).
 fn record_reason(
     ctx: &ResolveContext,
@@ -274,6 +263,8 @@ struct CallSite<'a> {
     receiver_hint: &'a str,
     /// How the parser derived `receiver_hint`; see `RowInput`.
     receiver_hint_via: &'a str,
+    /// What the callee is (issue #401); "" for a graph written before the column.
+    callee_shape: &'a str,
 }
 
 /// Read-only lookup context shared by one `resolve_single_call` invocation
@@ -294,6 +285,8 @@ struct ResolveContext<'a> {
     callables: &'a crate::graph_store::body_kind::CallableFacts,
     /// The files each C-family file includes (issue #404).
     includes: &'a IncludeGraph,
+    /// The C++ classes and their bases (issue #406).
+    cpp: &'a member_calls::CppClasses,
 }
 
 /// The per-run, read-only graph state `resolve_one_call_site` needs —
@@ -310,6 +303,7 @@ struct GraphContext<'a> {
     imports: &'a super::receiver::ModuleImports,
     callables: &'a crate::graph_store::body_kind::CallableFacts,
     includes: &'a IncludeGraph,
+    cpp: &'a member_calls::CppClasses,
 }
 
 /// One `CallSite` scan row, grouped for the same reason as `GraphContext`.
