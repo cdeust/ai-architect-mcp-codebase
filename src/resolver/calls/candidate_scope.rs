@@ -60,15 +60,42 @@ pub(super) fn qualified_path_gate(
     if !kept.is_empty() {
         return Some(named(kept));
     }
-    let owner = receiver::strip_generics(qualifier.rsplit("::").next().unwrap_or(qualifier));
-    if admitted.is_empty() {
-        if let Some(outcome) = through_impls(ctx, &owners, candidates, owner) {
-            return outcome;
+    // Admitted but in no file a target reaches: the lookup by name keeps deciding.
+    if !admitted.is_empty() {
+        return None;
+    }
+    let path = OwnerPath::new(&owners, qualifier, fallback);
+    unadmitted(ctx, candidates, &path)
+}
+
+/// The owners a written path names, with the last segment of its qualifier.
+struct OwnerPath<'a> {
+    owners: &'a receiver::WrittenPath<'a>,
+    owner: &'a str,
+    fallback: bool,
+}
+
+impl<'a> OwnerPath<'a> {
+    fn new(owners: &'a receiver::WrittenPath<'a>, qualifier: &'a str, fallback: bool) -> Self {
+        let owner = receiver::strip_generics(qualifier.rsplit("::").next().unwrap_or(qualifier));
+        Self {
+            owners,
+            owner,
+            fallback,
         }
     }
-    let decline = admitted.is_empty()
-        && (lacks_the_item(ctx, candidates, owner)
-            || (!fallback && owners.leaves_repository(ctx.imports)));
+}
+
+/// A path that admits no candidate: the `impl` blocks of a type it names
+/// decide first (`through_impls`); otherwise the call declines when the path
+/// names nothing of the repository, and the lookup by name keeps deciding when
+/// it may only be placed elsewhere than written.
+fn unadmitted(ctx: &ResolveContext, candidates: &[SymbolEntry], path: &OwnerPath) -> Option<Gated> {
+    if let Some(outcome) = through_impls(ctx, path.owners, candidates, path.owner) {
+        return outcome;
+    }
+    let decline = lacks_the_item(ctx, candidates, path.owner)
+        || (!path.fallback && path.owners.leaves_repository(ctx.imports));
     decline.then(declined)
 }
 
@@ -148,6 +175,7 @@ fn impl_owner_is_named(
         return Some(false);
     }
     let scope = receiver::caller_scope(ctx.idx, &candidate.qualified_name);
+    // Unreachable today: `caller_scope` keeps a prefix of this same name's segments.
     let written = parent.strip_prefix(&scope)?.strip_prefix("::")?;
     let names = |path: &receiver::WrittenPath| named.types.iter().any(|t| path.names(t));
     if written.contains("::") {
