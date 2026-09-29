@@ -223,7 +223,21 @@ fn a_static_prototype_keeps_its_later_definition_file_local() {
     let own = sites_in(&store, "a.c");
     assert!(
         own[0].1.starts_with("a.c::f"),
-        "a.c calls its own definition: {own:?}"
+        "a.c calls its own f: {own:?}"
+    );
+    // Both the prototype and the body are `a.c::f#…`: the call must bind to the
+    // body, never to the prototype.
+    let target_kind = store
+        .execute_query(&format!(
+            "MATCH (f:Function) WHERE f.id = '{}' RETURN f.body_kind",
+            own[0].1
+        ))
+        .expect("query the call target")
+        .rows;
+    assert_eq!(
+        target_kind,
+        vec![vec!["body".to_string()]],
+        "a.c calls the definition, not the prototype: {own:?}"
     );
     let other = sites_in(&store, "c.c");
     assert_eq!(

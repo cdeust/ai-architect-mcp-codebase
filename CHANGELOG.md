@@ -80,7 +80,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   `not_found`/`declaration_only`, a `static` of another file as
   `declined_by_scope`/`file_local`. A function-like macro and a body of one
   name, like several bodies of one name (FreeRTOS `heap_1.c` to `heap_5.c`),
-  stay ambiguous: only the build decides which one exists. C only. On
+  stay ambiguous: only the build decides which one exists. C only: the
+  columns are written by the flat C walker, the one language row with a
+  C-family table; C++ and Objective-C files are parsed as before (a `.h`
+  parsed as C, see #399, is C here too). On
   FreeRTOS-Kernel dbf7055 (static index), resolved call sites go from 3440 to
   3820 of 8574, and no call reaches a `static` of another `.c` file. **A graph written by an earlier build needs one full
   reindex**: an incremental refresh, a bootstrap fill and an artifact import
