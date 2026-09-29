@@ -24,6 +24,9 @@ pub mod h;
 pub mod k;
 pub mod m1;
 pub mod m2;
+pub mod q;
+pub mod r;
+pub mod s;
 #[path = \"placed.rs\"]
 pub mod moved;
 #[cfg(unix)]
@@ -74,6 +77,7 @@ pub fn root_calls() -> u32 {
     crate::e::Cfg::load(); // cfg-other
     crate::g::Gc::load_g(); // impl-use
     crate::g::Gc::load_h(); // impl-path
+    crate::q::Cq::load_q(); // glob-impl
     imp::twin(); // twin-modules
     k::pick(); // glob-pair
     x + y + z + w + v + m + e
@@ -156,6 +160,20 @@ impl crate::g::Gc {
 const K: &str = "pub use crate::m1::*;
 pub use crate::m2::*;
 ";
+/// `q`'s `Cq` has no `load_q`. `s` implements `load_q` for the `Cq` its
+/// glob of `r` brings, `r`'s own type: a module of the repository whose glob
+/// does not reach `q`'s `Cq`, in a file that defines no `Cq` of its own.
+const Q: &str = "pub struct Cq;
+";
+const R: &str = "pub struct Cq;
+";
+const S: &str = "use crate::r::*;
+
+impl Cq {
+    pub fn load_q() {}
+}
+";
+
 const M1: &str = "pub fn pick() {}
 ";
 const M2: &str = "pub fn pick() {}
@@ -247,6 +265,9 @@ fn analyzed() -> (tempfile::TempDir, GraphStore) {
         ("k.rs", K),
         ("m1.rs", M1),
         ("m2.rs", M2),
+        ("q.rs", Q),
+        ("r.rs", R),
+        ("s.rs", S),
         ("imp_unix.rs", IMP_UNIX),
         ("imp_other.rs", IMP_OTHER),
         ("placed.rs", PLACED),
@@ -383,6 +404,13 @@ fn a_type_path_names_the_impl_of_that_type_wherever_it_is_placed() {
     assert_eq!(
         targets(&store, "lib.rs", "impl-path"),
         vec!["src/h.rs::crate::g::Gc::load_h"]
+    );
+    // `impl Cq` in `s`, reached only through `use crate::r::*`, is `r`'s `Cq`,
+    // not the `q::Cq` the path names.
+    assert_eq!(targets(&store, "lib.rs", "glob-impl"), Vec::<String>::new());
+    assert_eq!(
+        reason(&store, "lib.rs", lib_line("glob-impl")),
+        ("declined_by_scope".to_string(), "written_path".to_string())
     );
 }
 

@@ -67,8 +67,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   that type wherever they sit: `impl Gc` under `use crate::g::Gc;` or `impl
   crate::g::Gc` in another module is read in its own file; another module's
   own type of the same name is not that type, so `crate::e::Cfg::load()`
-  declines when only `f`'s `Cfg` has a `load` (it took that `load` before).
-  When the owner of a candidate cannot be read, the lookup by name still
+  declines when only `f`'s `Cfg` has a `load` (it took that `load` before),
+  and so does an `impl Cq` in a file that defines no `Cq` and sees one only
+  through the glob of another module. When the owner of a candidate cannot be
+  read (its parent is not under its own file), the lookup by name still
   decides. A file a `#[path]` places, gated or not (`#[cfg_attr(.., path =
   ..)]` included), is read at the module path it is compiled at: `moved::tick()`
   for `#[path = "placed.rs"] mod moved;` resolves to `placed.rs`, where it was

@@ -62,7 +62,7 @@ pub(super) fn qualified_path_gate(
     }
     let owner = receiver::strip_generics(qualifier.rsplit("::").next().unwrap_or(qualifier));
     if admitted.is_empty() {
-        if let Some(outcome) = through_impls(ctx, &facts, &owners, candidates, owner) {
+        if let Some(outcome) = through_impls(ctx, &owners, candidates, owner) {
             return outcome;
         }
     }
@@ -86,11 +86,15 @@ const TYPE_LABELS: [&str; 5] = ["Struct", "Enum", "Union", "TypeAlias", "Trait"]
 /// read (the lookup by name decides); `Some(Some(_))` is final.
 fn through_impls(
     ctx: &ResolveContext,
-    facts: &receiver::PathFacts,
     owners: &receiver::WrittenPath,
     candidates: &[SymbolEntry],
     owner: &str,
 ) -> Option<Option<Gated>> {
+    let facts = receiver::PathFacts {
+        idx: ctx.idx,
+        evidence: ctx.evidence,
+        imports: ctx.imports,
+    };
     let types: Vec<&SymbolEntry> = ctx
         .idx
         .by_name
@@ -104,7 +108,7 @@ fn through_impls(
     let path_types = NamedTypes { name: owner, types };
     let mut matched = Vec::new();
     for candidate in candidates {
-        match impl_owner_is_named(ctx, facts, candidate, &path_types) {
+        match impl_owner_is_named(ctx, &facts, candidate, &path_types) {
             Some(true) if reached(ctx, candidate) => matched.push(candidate.clone()),
             Some(_) => {}
             None => return Some(None),
@@ -124,7 +128,12 @@ struct NamedTypes<'a> {
 }
 
 /// Whether the owner of `candidate` (the type its `impl` block writes) is one
-/// of `named`, read in the candidate's own file; `None` when it cannot be read.
+/// of `named`, read in the candidate's own file.
+///
+/// postcondition: `None` only when the owner cannot be read, that is when the
+/// candidate's parent does not sit under its own file's scope (the two
+/// `strip_prefix` below). Every other answer is `Some`: an owner that resolves
+/// to another type, or to nothing the file defines or imports, is `Some(false)`.
 fn impl_owner_is_named(
     ctx: &ResolveContext,
     facts: &receiver::PathFacts,
@@ -155,21 +164,24 @@ fn impl_owner_is_named(
     ) {
         receiver::Binding::Path { path, .. } => Some(names(&path)),
         receiver::Binding::Decline => Some(false),
-        receiver::Binding::ByName => local_type_is_named(ctx, &scope, named),
+        receiver::Binding::ByName => Some(local_type_is_named(ctx, &scope, named)),
     }
 }
 
-/// The type of that name defined in `scope` itself: whether it is one of `named`;
-/// `None` when the scope defines no such type.
-fn local_type_is_named(ctx: &ResolveContext, scope: &str, named: &NamedTypes) -> Option<bool> {
+/// Whether `scope` itself defines a type of that name that is one of `named`.
+/// A scope that defines no such type answers false, a readable answer: the
+/// owner it writes is then some other module's type (reached by a glob that
+/// does not bring any of `named`), not the type the path names. Answering
+/// "unreadable" here would hand the call back to the lookup by name, which
+/// binds it to that other type's item.
+fn local_type_is_named(ctx: &ResolveContext, scope: &str, named: &NamedTypes) -> bool {
     let local = format!("{scope}::{}", named.name);
     let defined = ctx
         .idx
         .by_name
-        .get(named.name)?
-        .iter()
-        .any(|e| e.qualified_name == local);
-    defined.then(|| named.types.iter().any(|t| t.qualified_name == local))
+        .get(named.name)
+        .is_some_and(|entries| entries.iter().any(|e| e.qualified_name == local));
+    defined && named.types.iter().any(|t| t.qualified_name == local)
 }
 
 /// True when `owner` is a type of the repository and no candidate is an item
