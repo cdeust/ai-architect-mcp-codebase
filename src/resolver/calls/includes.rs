@@ -22,6 +22,8 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use crate::graph_store::GraphStore;
+
 /// Extensions of the files whose `#include` directives the graph records as
 /// `Import` nodes and that may be included in turn.
 const C_FAMILY_EXTENSIONS: [&str; 10] = [
@@ -36,12 +38,24 @@ pub(super) struct IncludeGraph {
 }
 
 impl IncludeGraph {
+    /// Reads every file id of the graph, then builds from `file_imports`
+    /// (issue #404: which files each C-family file includes).
+    pub(super) fn load(
+        store: &GraphStore,
+        file_imports: &HashMap<String, Vec<String>>,
+    ) -> Result<Self, String> {
+        let file_ids: HashSet<String> = store
+            .execute_query("MATCH (f:File) RETURN f.id")?
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next())
+            .collect();
+        Ok(Self::build(file_imports, &file_ids))
+    }
+
     /// `file_imports` maps a file id to the import paths written in it;
     /// `file_ids` is every file of the graph.
-    pub(super) fn build(
-        file_imports: &HashMap<String, Vec<String>>,
-        file_ids: &HashSet<String>,
-    ) -> Self {
+    fn build(file_imports: &HashMap<String, Vec<String>>, file_ids: &HashSet<String>) -> Self {
         let by_basename = by_basename(file_ids);
         let direct = file_imports
             .iter()

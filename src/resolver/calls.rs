@@ -61,14 +61,7 @@ pub(super) fn resolve_calls(
     let imports = super::receiver::ModuleImports::load(store, &evidence);
     // Issue #400: prototypes, macros and `static` functions.
     let callables = store.callable_facts();
-    // Issue #404: which files each C-family file includes.
-    let file_ids: HashSet<String> = store
-        .execute_query("MATCH (f:File) RETURN f.id")?
-        .rows
-        .into_iter()
-        .filter_map(|r| r.into_iter().next())
-        .collect();
-    let includes = IncludeGraph::build(file_imports, &file_ids);
+    let includes = IncludeGraph::load(store, file_imports)?;
 
     for row in &qr.rows {
         if row.len() < 6 {
