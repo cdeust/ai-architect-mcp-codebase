@@ -235,6 +235,18 @@ impl<'e> WrittenPath<'e> {
             }
         })
     }
+
+    /// True when `entry` is itself what this path names (a type the path
+    /// spells), whatever `item` says.
+    pub(in crate::resolver) fn names(&self, entry: &SymbolEntry) -> bool {
+        WrittenPath {
+            evidence: self.evidence,
+            caller_file: self.caller_file.clone(),
+            anchors: self.anchors.clone(),
+            item: true,
+        }
+        .admits(entry)
+    }
 }
 
 /// True when `file` belongs to the crate of `caller_file`, or when the Cargo

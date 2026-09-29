@@ -9,6 +9,10 @@
 // the conjunction of their `cfg` attributes, so the resolver can tell such twins
 // apart from two unrelated items that happen to share a name.
 //
+// A file a `#[path]` places (directly, or under a module so placed) records its
+// module path even with no gate: its location no longer spells it, and a call
+// written with a path reads it there (issue #398).
+//
 // A file reached in more than one way keeps no module path and no gate: its
 // items are not read as twins, and a call to them stays an ordinary ambiguity
 // with no edge. The
@@ -24,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 use super::cargo_targets::TargetMap;
 use super::feature_gated::{FileFeatures, ModuleTree};
+use super::rust_mod_decls::ModDecl;
 use crate::graph_store::{FileCfg, CFG_ACTIVE, CFG_INACTIVE, CFG_UNKNOWN};
 use crate::parser::cfg_expr::{CfgPredicate, Truth};
 
@@ -36,6 +41,8 @@ struct Reach {
     module_path: String,
     gate: String,
     truth: u8,
+    /// A `#[path]` or `cfg_attr(.., path = ..)` on the way in.
+    placed: bool,
 }
 
 /// The facts of every indexed file under a gate or compiled out, by
@@ -56,40 +63,63 @@ pub(crate) fn analyse(
             continue;
         }
         let enabled = &crate_root.default_features;
-        let start = (
-            crate_root.entry.clone(),
-            id_of(&crate_root.entry),
-            Some(Vec::new()),
-        );
+        let start = Way {
+            file: crate_root.entry.clone(),
+            module_path: id_of(&crate_root.entry),
+            gates: Some(Vec::new()),
+            placed: false,
+        };
         let mut pending = vec![start];
         let mut seen: BTreeSet<(PathBuf, String)> = BTreeSet::new();
-        while let Some((file, module_path, gates)) = pending.pop() {
-            if !seen.insert((file.clone(), module_path.clone())) {
+        while let Some(way) = pending.pop() {
+            if !seen.insert((way.file.clone(), way.module_path.clone())) {
                 continue;
             }
-            reaches.entry(file.clone()).or_default().insert(reach(
-                &module_path,
-                gates.as_deref(),
-                enabled,
-            ));
-            for (decl, target) in tree.children(&file) {
-                let child_gates = match (&gates, &decl.cfg) {
-                    (Some(outer), Some(own)) => Some(outer.iter().chain(own).cloned().collect()),
-                    _ => None,
-                };
-                pending.push((target, format!("{module_path}::{}", decl.name), child_gates));
-            }
+            let mut reached = reach(&way.module_path, way.gates.as_deref(), enabled);
+            reached.placed = way.placed;
+            reaches.entry(way.file.clone()).or_default().insert(reached);
+            pending.extend(
+                tree.children(&way.file)
+                    .into_iter()
+                    .map(|(decl, target)| way.child(&decl, target)),
+            );
         }
     }
     let mut out = BTreeMap::new();
     for (file, set) in reaches {
         let compiled_out = matches!(features.get(&file), Some(FileFeatures::CompiledOut));
+        let placed = set.len() == 1 && set.iter().all(|r| r.placed);
         let facts = scope(&set, compiled_out);
-        if !facts.gate.is_empty() || facts.active == CFG_INACTIVE {
+        if placed || !facts.gate.is_empty() || facts.active == CFG_INACTIVE {
             out.insert(id_of(&file), facts);
         }
     }
     out
+}
+
+/// One way in, while the walk descends.
+struct Way {
+    file: PathBuf,
+    module_path: String,
+    /// `None` once a gate on the way did not parse.
+    gates: Option<Vec<CfgPredicate>>,
+    placed: bool,
+}
+
+impl Way {
+    /// The way into the file `target` that `decl` declares.
+    fn child(&self, decl: &ModDecl, target: PathBuf) -> Way {
+        let gates = match (&self.gates, &decl.cfg) {
+            (Some(outer), Some(own)) => Some(outer.iter().chain(own).cloned().collect()),
+            _ => None,
+        };
+        Way {
+            file: target,
+            module_path: format!("{}::{}", self.module_path, decl.name),
+            gates,
+            placed: self.placed || decl.path_attr.is_some() || !decl.alt_paths.is_empty(),
+        }
+    }
 }
 
 fn reach(module_path: &str, gates: Option<&[CfgPredicate]>, enabled: &BTreeSet<String>) -> Reach {
@@ -111,6 +141,7 @@ fn reach(module_path: &str, gates: Option<&[CfgPredicate]>, enabled: &BTreeSet<S
         module_path: module_path.to_string(),
         gate,
         truth,
+        placed: false,
     }
 }
 
@@ -148,6 +179,7 @@ mod tests {
             module_path: module_path.to_string(),
             gate: gate.to_string(),
             truth,
+            placed: false,
         }
     }
 

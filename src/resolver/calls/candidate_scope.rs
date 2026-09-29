@@ -61,10 +61,115 @@ pub(super) fn qualified_path_gate(
         return Some(named(kept));
     }
     let owner = receiver::strip_generics(qualifier.rsplit("::").next().unwrap_or(qualifier));
+    if admitted.is_empty() {
+        if let Some(outcome) = through_impls(ctx, &facts, &owners, candidates, owner) {
+            return outcome;
+        }
+    }
     let decline = admitted.is_empty()
         && (lacks_the_item(ctx, candidates, owner)
             || (!fallback && owners.leaves_repository(ctx.imports)));
     decline.then(declined)
+}
+
+/// The labels of a type an `impl` block can be written for.
+const TYPE_LABELS: [&str; 5] = ["Struct", "Enum", "Union", "TypeAlias", "Trait"];
+
+/// The call of an item of a type the path names, through the `impl` blocks of
+/// that type placed in another module (`impl Gc` under `use crate::g::Gc;`,
+/// `impl crate::g::Gc`): the candidates whose owner reads, in its own file, as
+/// a type the path names. Another module's own type of the same name is not
+/// that type, so a path to a type without the item declines.
+///
+/// postcondition: `None` when the path names no type of the repository (the
+/// caller's rules apply); `Some(None)` when the owner of a candidate cannot be
+/// read (the lookup by name decides); `Some(Some(_))` is final.
+fn through_impls(
+    ctx: &ResolveContext,
+    facts: &receiver::PathFacts,
+    owners: &receiver::WrittenPath,
+    candidates: &[SymbolEntry],
+    owner: &str,
+) -> Option<Option<Gated>> {
+    let types: Vec<&SymbolEntry> = ctx
+        .idx
+        .by_name
+        .get(owner)?
+        .iter()
+        .filter(|e| TYPE_LABELS.contains(&e.label.as_str()) && owners.names(e))
+        .collect();
+    if types.is_empty() {
+        return None;
+    }
+    let path_types = NamedTypes { name: owner, types };
+    let mut matched = Vec::new();
+    for candidate in candidates {
+        match impl_owner_is_named(ctx, facts, candidate, &path_types) {
+            Some(true) if reached(ctx, candidate) => matched.push(candidate.clone()),
+            Some(_) => {}
+            None => return Some(None),
+        }
+    }
+    Some(Some(if matched.is_empty() {
+        declined()
+    } else {
+        named(matched)
+    }))
+}
+
+/// The types of one name a written path names.
+struct NamedTypes<'a> {
+    name: &'a str,
+    types: Vec<&'a SymbolEntry>,
+}
+
+/// Whether the owner of `candidate` (the type its `impl` block writes) is one
+/// of `named`, read in the candidate's own file; `None` when it cannot be read.
+fn impl_owner_is_named(
+    ctx: &ResolveContext,
+    facts: &receiver::PathFacts,
+    candidate: &SymbolEntry,
+    named: &NamedTypes,
+) -> Option<bool> {
+    let Some((parent, _)) = candidate.qualified_name.rsplit_once("::") else {
+        return Some(false);
+    };
+    let owner = receiver::strip_generics(parent.rsplit("::").next().unwrap_or(parent));
+    if owner != named.name {
+        return Some(false);
+    }
+    let scope = receiver::caller_scope(ctx.idx, &candidate.qualified_name);
+    let written = parent.strip_prefix(&scope)?.strip_prefix("::")?;
+    let names = |path: &receiver::WrittenPath| named.types.iter().any(|t| path.names(t));
+    if written.contains("::") {
+        let path = receiver::WrittenPath::of(facts, &candidate.qualified_name, written);
+        return Some(path.is_some_and(|p| names(&p)));
+    }
+    let admits = |_: &str, path: &receiver::WrittenPath| names(path);
+    match receiver::bind(
+        facts,
+        &candidate.qualified_name,
+        owner,
+        &admits,
+        receiver::Defines::Types,
+    ) {
+        receiver::Binding::Path { path, .. } => Some(names(&path)),
+        receiver::Binding::Decline => Some(false),
+        receiver::Binding::ByName => local_type_is_named(ctx, &scope, named),
+    }
+}
+
+/// The type of that name defined in `scope` itself: whether it is one of `named`;
+/// `None` when the scope defines no such type.
+fn local_type_is_named(ctx: &ResolveContext, scope: &str, named: &NamedTypes) -> Option<bool> {
+    let local = format!("{scope}::{}", named.name);
+    let defined = ctx
+        .idx
+        .by_name
+        .get(named.name)?
+        .iter()
+        .any(|e| e.qualified_name == local);
+    defined.then(|| named.types.iter().any(|t| t.qualified_name == local))
 }
 
 /// True when `owner` is a type of the repository and no candidate is an item
@@ -74,7 +179,6 @@ pub(super) fn qualified_path_gate(
 /// than written (an `impl` in another module, a `#[path]` file), and the lookup
 /// by name keeps deciding.
 fn lacks_the_item(ctx: &ResolveContext, candidates: &[SymbolEntry], owner: &str) -> bool {
-    const TYPE_LABELS: [&str; 5] = ["Struct", "Enum", "Union", "TypeAlias", "Trait"];
     let is_type = ctx.idx.by_name.get(owner).is_some_and(|entries| {
         entries
             .iter()

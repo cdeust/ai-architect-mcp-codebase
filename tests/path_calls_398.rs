@@ -17,8 +17,21 @@ pub mod a;
 pub mod b;
 pub mod c;
 pub mod d;
+pub mod e;
+pub mod f;
+pub mod g;
+pub mod h;
+pub mod k;
+pub mod m1;
+pub mod m2;
 #[path = \"placed.rs\"]
 pub mod moved;
+#[cfg(unix)]
+#[path = \"imp_unix.rs\"]
+mod imp;
+#[cfg(not(unix))]
+#[path = \"imp_other.rs\"]
+mod imp;
 mod inner {
     pub fn dup() -> u32 {
         2
@@ -58,6 +71,11 @@ pub fn root_calls() -> u32 {
     let m = moved::tick(); // moved
     let _o = Opts::default(); // derived
     let e = Set::extra(); // impl-elsewhere
+    crate::e::Cfg::load(); // cfg-other
+    crate::g::Gc::load_g(); // impl-use
+    crate::g::Gc::load_h(); // impl-path
+    imp::twin(); // twin-modules
+    k::pick(); // glob-pair
     x + y + z + w + v + m + e
 }
 ";
@@ -104,6 +122,49 @@ const D: &str = "use super::*;
 pub fn via_super() -> u32 {
     a::dup() // super-glob
 }
+";
+
+/// A `Cfg` with no `load`: the `load` of `f`'s own `Cfg` is not its item.
+const E: &str = "pub struct Cfg;
+";
+
+const F: &str = "pub struct Cfg;
+
+impl Cfg {
+    pub fn load() {}
+}
+";
+
+const G: &str = "pub struct Gc;
+";
+
+/// Two `impl` blocks of `g`'s `Gc`, placed in another module: one names the
+/// type through a `use`, the other writes its path.
+const H: &str = "use crate::g::Gc;
+
+impl Gc {
+    pub fn load_g() {}
+}
+
+impl crate::g::Gc {
+    pub fn load_h() {}
+}
+";
+
+/// A module that re-exports two modules each defining `pick`: `k::pick` is
+/// either, and rustc would reject the call as ambiguous.
+const K: &str = "pub use crate::m1::*;
+pub use crate::m2::*;
+";
+const M1: &str = "pub fn pick() {}
+";
+const M2: &str = "pub fn pick() {}
+";
+
+/// The two files one `mod imp` may be, under opposite `cfg` options.
+const IMP_UNIX: &str = "pub fn twin() {}
+";
+const IMP_OTHER: &str = "pub fn twin() {}
 ";
 
 const C: &str = "use ext::*;
@@ -179,6 +240,15 @@ fn analyzed() -> (tempfile::TempDir, GraphStore) {
         ("b.rs", B),
         ("c.rs", C),
         ("d.rs", D),
+        ("e.rs", E),
+        ("f.rs", F),
+        ("g.rs", G),
+        ("h.rs", H),
+        ("k.rs", K),
+        ("m1.rs", M1),
+        ("m2.rs", M2),
+        ("imp_unix.rs", IMP_UNIX),
+        ("imp_other.rs", IMP_OTHER),
         ("placed.rs", PLACED),
         ("moved.rs", STRAY),
     ] {
@@ -280,10 +350,59 @@ fn a_type_path_names_what_the_repository_gives_that_type() {
 #[test]
 fn a_path_never_names_a_file_no_target_compiles() {
     let (_tmp, store) = analyzed();
-    let found = targets(&store, "lib.rs", "moved");
-    assert!(
-        !found.iter().any(|t| t.starts_with("src/moved.rs")),
-        "{found:?}"
+    // The file `#[path]` names, never the stray one at the default place.
+    assert_eq!(
+        targets(&store, "lib.rs", "moved"),
+        vec!["src/placed.rs::tick"]
+    );
+}
+
+/// The line of `marker` in the root file.
+fn lib_line(marker: &str) -> usize {
+    LIB.lines()
+        .position(|l| l.contains(&format!("// {marker}")))
+        .unwrap()
+        + 1
+}
+
+#[test]
+fn a_type_path_names_the_impl_of_that_type_wherever_it_is_placed() {
+    let (_tmp, store) = analyzed();
+    // `e::Cfg` has no `load`; `f`'s own `Cfg` is another type.
+    assert_eq!(targets(&store, "lib.rs", "cfg-other"), Vec::<String>::new());
+    assert_eq!(
+        reason(&store, "lib.rs", lib_line("cfg-other")),
+        ("declined_by_scope".to_string(), "written_path".to_string())
+    );
+    // `impl Gc` in `h`, with `use crate::g::Gc;`, is an impl of `g`'s `Gc`.
+    assert_eq!(
+        targets(&store, "lib.rs", "impl-use"),
+        vec!["src/h.rs::Gc::load_g"]
+    );
+    // So is `impl crate::g::Gc` in `h`.
+    assert_eq!(
+        targets(&store, "lib.rs", "impl-path"),
+        vec!["src/h.rs::crate::g::Gc::load_h"]
+    );
+}
+
+#[test]
+fn a_path_naming_two_items_stays_ambiguous() {
+    let (_tmp, store) = analyzed();
+    // Two re-exported `pick`s: no edge, and the count of what the path names.
+    assert_eq!(targets(&store, "lib.rs", "glob-pair"), Vec::<String>::new());
+    assert_eq!(
+        reason(&store, "lib.rs", lib_line("glob-pair")),
+        ("ambiguous_candidates".to_string(), "2".to_string())
+    );
+    // Two files one `mod imp` picks between by `cfg` hold twins of one item.
+    assert_eq!(
+        targets(&store, "lib.rs", "twin-modules"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        reason(&store, "lib.rs", lib_line("twin-modules")),
+        ("cfg_twins".to_string(), String::new())
     );
 }
 

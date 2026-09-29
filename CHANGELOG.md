@@ -63,10 +63,17 @@ adheres to [Semantic Versioning](https://semver.org/).
   the repository: `Set::new()` in a module that sees `Set` only through
   `use ext::*`, or `Opts::default()` for a derived `Default`, which took a
   namesake (on this repository, 142 `X::default()` calls resolved to
-  `SearchOptions::default`). When the owner exists but the item sits
-  elsewhere than written (an `impl` in another module, a `#[path]` file), the
-  lookup by name still decides. A file the index placed under a gate
-  (`#[cfg_attr(.., path = ..)]`) is read at the module path it is compiled at,
+  `SearchOptions::default`). A path to a type reaches the `impl` blocks of
+  that type wherever they sit: `impl Gc` under `use crate::g::Gc;` or `impl
+  crate::g::Gc` in another module is read in its own file; another module's
+  own type of the same name is not that type, so `crate::e::Cfg::load()`
+  declines when only `f`'s `Cfg` has a `load` (it took that `load` before).
+  When the owner of a candidate cannot be read, the lookup by name still
+  decides. A file a `#[path]` places, gated or not (`#[cfg_attr(.., path =
+  ..)]` included), is read at the module path it is compiled at: `moved::tick()`
+  for `#[path = "placed.rs"] mod moved;` resolves to `placed.rs`, where it was
+  ambiguous with a stray `moved.rs`. Two items one path names (two globs that
+  each bring a `pick`) stay open as `ambiguous_candidates`,
   a file no module tree of a target reaches is never the target of a path, and
   a `use` that names the very path it is read at (`use crate::service;` in the
   root) keeps that path instead of naming nothing.
