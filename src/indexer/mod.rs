@@ -36,9 +36,10 @@ pub use incremental::{
     fill_after_bootstrap, index_incremental, write_full_manifest, FillMethod, FillResult,
 };
 use persist::{
-    index_single_file, insert_ancestor_dirs, insert_dir_file_edge, insert_file_node, ParseOutcome,
+    index_single_file, insert_ancestor_dirs, insert_dir_file_edge, insert_file_node, FileScope,
+    ParseOutcome,
 };
-use walk::{collect_source_files, is_dependency_path, WalkOptions};
+use walk::{collect_source_files, ParsePolicy, WalkOptions};
 pub use walk::{DependencyScope, ExcludeSet};
 
 // ---------------------------------------------------------------------------
@@ -196,7 +197,10 @@ pub fn index_codebase_with_language(
         collector.record_pruned(rel, reason);
     }
     let source_files = walk_outcome.files;
-    let dependency_scope = options.dependency_scope;
+    let policy = ParsePolicy {
+        dependency_scope: options.dependency_scope,
+        language_filter: options.language_filter,
+    };
     // label_by_qn: qualified_name/id -> label, populated as nodes are created.
     // Used to resolve edge tables without probing the database.
     // source: Fermi audit — probe_node_label was firing up to 9 MATCH queries
@@ -240,8 +244,6 @@ pub fn index_codebase_with_language(
         // PublicApi tier: filter to public-visibility symbols only for files
         // under dependency directories. Project files are never restricted.
         // source: ADR-4253701 §Decision 1.
-        let restrict_to_public_api = dependency_scope == DependencyScope::PublicApi
-            && is_dependency_path(codebase_path, file_path);
         let outcome = index_single_file(
             &store,
             &mut batch,
@@ -249,7 +251,7 @@ pub fn index_codebase_with_language(
             &rel_str,
             &mut label_by_qn,
             &mut seen_node_ids,
-            restrict_to_public_api,
+            FileScope::of(policy, codebase_path, file_path),
         );
         record_outcome(&mut collector, &rel_str, outcome);
         // Flush once the batch is large enough to amortize the per-call cost,

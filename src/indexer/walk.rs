@@ -1,4 +1,4 @@
-use crate::parser::Language;
+use crate::parser::{header_dialect, Language};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -120,6 +120,16 @@ impl ExcludeSet {
     fn matches(&self, name: &str, rel: &str) -> bool {
         self.names.contains(name) || self.paths.contains(rel)
     }
+}
+
+/// What a parse needs from `IndexOptions` beyond the walk itself: the
+/// dependency tier (restricts dependency files to their public API) and the
+/// language filter, which decides the grammar of a `.h` header (#399). One
+/// `Copy` value so the full and incremental index paths pass the same thing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParsePolicy {
+    pub dependency_scope: DependencyScope,
+    pub language_filter: Option<Language>,
 }
 
 // ---------------------------------------------------------------------------
@@ -390,16 +400,27 @@ fn visit_file_entry(
         );
         return;
     }
-    match ctx.opts.language_filter {
-        Some(filter) => {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if Language::from_extension(ext) == Some(filter) {
-                    collectors.files.push(path);
-                }
-            }
-        }
-        None => collectors.files.push(path),
+    let keep = match ctx.opts.language_filter {
+        Some(filter) => path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| filter_keeps(filter, ext)),
+        None => true,
+    };
+    if keep {
+        collectors.files.push(path);
     }
+}
+
+/// Whether a file with extension `ext` belongs to a walk filtered on
+/// `filter`. A `.h` belongs to the C, C++ and Objective-C walks alike (#399):
+/// matching only `from_extension`, which answers C, dropped every header of a
+/// C++ or Objective-C tree.
+fn filter_keeps(filter: Language, ext: &str) -> bool {
+    if header_dialect::is_shared_header(ext) {
+        return header_dialect::filter_keeps_headers(filter);
+    }
+    Language::from_extension(ext) == Some(filter)
 }
 
 /// The walk-root-relative, forward-slash path of `path` — shared by the
