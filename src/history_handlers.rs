@@ -286,6 +286,7 @@ pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> R
     store.require_entry_metadata()?;
     store.require_cfg_gate_metadata()?;
     store.require_code_context_metadata()?;
+    store.require_body_kind_metadata()?;
     store.require_crate_evidence_metadata()
 }
 

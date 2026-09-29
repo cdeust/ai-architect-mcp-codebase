@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
+pub mod body_kind;
 pub mod callsite_reasons;
 mod cfg_active;
 mod cfg_twins;

@@ -118,7 +118,7 @@ fn c_function_pointer_variable_is_not_a_prototype() {
     let (nodes, _refs) = parse("int (*signal_handler)(int) = 0;\nint add(int a);\nint g;\n");
     assert_eq!(
         records(&nodes),
-        vec!["Function|add|a.c::add#1|[(\"is_prototype\", \"true\")]".to_string()],
+        vec!["Function|add|a.c::add#1|[(\"is_prototype\", \"true\"), (\"body_kind\", \"prototype\")]".to_string()],
         "#135: only the real prototype `add` is emitted; the function-pointer \
          variable and the plain global are not graph nodes"
     );
@@ -132,7 +132,7 @@ fn c_pointer_return_prototype_stays_a_prototype() {
     let (nodes, _refs) = parse("int *make(int n);\n");
     assert_eq!(
         records(&nodes),
-        vec!["Function|make|a.c::make#1|[(\"is_prototype\", \"true\")]".to_string()],
+        vec!["Function|make|a.c::make#1|[(\"is_prototype\", \"true\"), (\"body_kind\", \"prototype\")]".to_string()],
         "#135: a pointer-return prototype is still a callable prototype"
     );
 }

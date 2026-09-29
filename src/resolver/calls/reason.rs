@@ -32,6 +32,9 @@ pub(super) enum Decline {
     ForeignReturnType,
     /// A scope rule refused every candidate: the rule.
     Scope(&'static str),
+    /// The repository only declares the name (a prototype), it defines no body
+    /// for it (issue #400).
+    DeclarationOnly,
 }
 
 pub(super) const SCOPE_UNKNOWN_CARGO_FACTS: &str = "unknown_cargo_facts";
@@ -39,6 +42,8 @@ pub(super) const SCOPE_TYPE_ALIAS_RETURN: &str = "type_alias_return";
 pub(super) const SCOPE_CRATE: &str = "crate_scope";
 pub(super) const SCOPE_WRITTEN_PATH: &str = "written_path";
 pub(super) const SCOPE_VARIANT_GUARD: &str = "variant_guard";
+/// A C `static` function of another file (issue #400).
+pub(super) const SCOPE_FILE_LOCAL: &str = "file_local";
 
 /// A resolution and, when the call was declined, why.
 pub(super) type Gated = (PolicyResolution<SymbolEntry>, Option<Decline>);
@@ -141,6 +146,9 @@ pub(super) fn classify(
     }
     if let Some(Decline::Scope(rule)) = decline {
         return (reasons::REASON_DECLINED_BY_SCOPE, rule.to_string());
+    }
+    if decline == Some(Decline::DeclarationOnly) {
+        return (reasons::REASON_NOT_FOUND, "declaration_only".to_string());
     }
     if let Failure::Ambiguous { count, .. } = failure {
         return (reasons::REASON_AMBIGUOUS, count.to_string());

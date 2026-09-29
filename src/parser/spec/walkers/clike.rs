@@ -47,35 +47,34 @@ pub(super) fn walk_c_defs(
     parent: Node,
     scope: &str,
 ) {
+    let w = CWalk { spec, cf };
     let mut cursor = parent.walk();
     for child in parent.children(&mut cursor) {
         let k = child.kind();
         if kind_in(cf.struct_like_kinds, k) {
-            emit_struct(spec, cf, ctx, child, scope);
+            emit_struct(w, ctx, child, scope);
         } else if kind_in(cf.enum_like_kinds, k) {
-            emit_enum(spec, cf, ctx, child, scope);
+            emit_enum(w, ctx, child, scope);
         } else if kind_in(cf.typedef_kinds, k) {
-            emit_typedef(spec, cf, ctx, child, scope);
+            emit_typedef(w, ctx, child, scope);
         } else if kind_in(cf.func_def_kinds, k) {
-            emit_function(spec, cf, ctx, child, scope);
+            emit_function(w, ctx, child, scope);
         } else if kind_in(spec.import_node_kinds, k) {
             imports::walk_imports(spec, ctx, child, scope);
-        } else if kind_in(cf.macro_object_kinds, k) {
-            emit_macro(spec, cf, ctx, child, scope, LABEL_CONSTANT);
-        } else if kind_in(cf.macro_function_kinds, k) {
-            emit_macro(spec, cf, ctx, child, scope, LABEL_FUNCTION);
+        } else if kind_in(cf.macro_object_kinds, k) || kind_in(cf.macro_function_kinds, k) {
+            emit_macro(w, ctx, child, scope);
         } else if kind_in(cf.func_decl_kinds, k) {
             // `declaration` is shared by prototypes (`int f(void);`) and plain
             // variable declarations (`int x;`); only the former — carrying a
             // function declarator — is emitted, matching the hand-written walker.
             if is_c_function_prototype(cf, child) {
-                emit_prototype(spec, cf, ctx, child, scope);
+                emit_prototype(w, ctx, child, scope);
             } else {
                 // Not a prototype, but `struct Foo { int x; } var;` still
                 // declares a type inline (issue #107). The variable itself is
                 // not a graph node (C locals/globals are out of scope for the
                 // flat walker), the TYPE is.
-                emit_inline_type(spec, cf, ctx, child, scope, "");
+                emit_inline_type(w, ctx, child, scope, "");
             }
         } else if child.named_child_count() > 0 {
             // Transparent recursion into an unmatched wrapper with named
@@ -90,6 +89,14 @@ pub(super) fn walk_c_defs(
             walk_c_defs(spec, cf, ctx, child, scope);
         }
     }
+}
+
+/// The language spec and its C-family table, passed together to every emitter
+/// (CONTRIBUTING.md §4.2, at most four parameters).
+#[derive(Clone, Copy)]
+struct CWalk<'s> {
+    spec: &'s LangSpec,
+    cf: &'s CFamilySpec,
 }
 
 /// The first `field_identifier` leaf found in a right-to-left DFS of `node`,
@@ -134,8 +141,8 @@ fn is_c_function_prototype(cf: &CFamilySpec, node: Node) -> bool {
 /// Emits a struct/union (`Struct` + `Defines`) and, from its `body_field`, one
 /// `Field` + `HasField` per declared member (declarators unwrapped to their
 /// field name; a member with no field name — an anonymous member — is skipped).
-fn emit_struct(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
-    emit_struct_named(spec, cf, ctx, node, scope, None);
+fn emit_struct(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    emit_struct_named(w, ctx, node, scope, None);
 }
 
 /// `emit_struct` with an optional name override for an ANONYMOUS specifier.
@@ -146,13 +153,13 @@ fn emit_struct(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node,
 /// `identifier`), and the whole struct — fields included — is dropped, which is
 /// the second half of issue #107.
 fn emit_struct_named(
-    spec: &LangSpec,
-    cf: &CFamilySpec,
+    w: CWalk,
     ctx: &mut WalkCtx,
     node: Node,
     scope: &str,
     override_name: Option<&str>,
 ) {
+    let CWalk { spec, cf } = w;
     let name = match override_name {
         Some(n) => n.to_string(),
         None => named_or_first_identifier(cf.naming, spec, ctx.source, node),
@@ -179,7 +186,7 @@ fn emit_struct_named(
         to_qualified_name: qn.clone(),
     });
     if let Some(body) = spec.body_field.and_then(|f| node.child_by_field_name(f)) {
-        emit_struct_fields(spec, cf, ctx, body, &qn);
+        emit_struct_fields(w, ctx, body, &qn);
     }
 }
 
@@ -188,13 +195,8 @@ fn emit_struct_named(
 /// (`int a, b, c;`), so every `declarator_field` child is emitted; each is
 /// unwrapped (pointer/array/function) to its `field_identifier`. The type
 /// annotation is the shared `type_field` text.
-fn emit_struct_fields(
-    spec: &LangSpec,
-    cf: &CFamilySpec,
-    ctx: &mut WalkCtx,
-    body: Node,
-    owner_qn: &str,
-) {
+fn emit_struct_fields(w: CWalk, ctx: &mut WalkCtx, body: Node, owner_qn: &str) {
+    let CWalk { spec, cf } = w;
     let mut bc = body.walk();
     for fd in body.children(&mut bc) {
         if !kind_in(cf.field_decl_kinds, fd.kind()) {
@@ -233,7 +235,8 @@ fn emit_struct_fields(
 /// (`enum_entry=true`) + `Defines` per `enum_member_kinds` entry, scoped under
 /// the enum. An entry with a value (`GREEN = 5`) still resolves to its name — the
 /// value literal is not an identifier leaf.
-fn emit_enum(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+fn emit_enum(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    let CWalk { spec, cf } = w;
     let name = named_or_first_identifier(cf.naming, spec, ctx.source, node);
     if name.is_empty() {
         return;
@@ -297,14 +300,14 @@ fn emit_enum(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, s
 /// tokens, not an expression the graph can attribute call sites to. Emitting
 /// speculative `Calls` edges from a macro body would be inventing edges the
 /// grammar does not support.
-fn emit_macro(
-    spec: &LangSpec,
-    _cf: &CFamilySpec,
-    ctx: &mut WalkCtx,
-    node: Node,
-    scope: &str,
-    label: &str,
-) {
+fn emit_macro(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    let CWalk { spec, cf } = w;
+    // A macro taking arguments is called like a function; any other names a value.
+    let label = if kind_in(cf.macro_function_kinds, node.kind()) {
+        LABEL_FUNCTION
+    } else {
+        LABEL_CONSTANT
+    };
     let name = node_field_text(ctx.source, node, spec.name_field);
     if name.is_empty() {
         return;
@@ -317,7 +320,7 @@ fn emit_macro(
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: spec.conventions.visibility_of(&name),
-        properties: vec![("macro".to_string(), "true".to_string())],
+        properties: super::super::c_family::macro_props(label),
     });
     ctx.refs.push(ExtractedRef {
         kind: "Defines".to_string(),
@@ -347,13 +350,13 @@ enum InlineType {
 }
 
 fn emit_inline_type(
-    spec: &LangSpec,
-    cf: &CFamilySpec,
+    w: CWalk,
     ctx: &mut WalkCtx,
     node: Node,
     scope: &str,
     alias: &str,
 ) -> InlineType {
+    let CWalk { spec, cf } = w;
     let Some(inner) = node.child_by_field_name(spec.type_field) else {
         return InlineType::None;
     };
@@ -381,9 +384,9 @@ fn emit_inline_type(
         None
     };
     if kind_in(cf.struct_like_kinds, inner.kind()) {
-        emit_struct_named(spec, cf, ctx, inner, scope, override_name);
+        emit_struct_named(w, ctx, inner, scope, override_name);
     } else if kind_in(cf.enum_like_kinds, inner.kind()) {
-        emit_enum(spec, cf, ctx, inner, scope);
+        emit_enum(w, ctx, inner, scope);
     } else {
         return InlineType::None;
     }
@@ -397,7 +400,8 @@ fn emit_inline_type(
 /// Emits a typedef as a `Constant` (`typedef=true`) + `Defines`. The name is the
 /// first identifier leaf of the whole `type_definition` (LIFO DFS lands on the
 /// declared alias, which follows the aliased type in child order).
-fn emit_typedef(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+fn emit_typedef(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    let CWalk { spec, cf } = w;
     let name = first_identifier(cf.naming, ctx.source, node);
     if name.is_empty() {
         return;
@@ -413,7 +417,7 @@ fn emit_typedef(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node
     //
     // A NAMED specifier (`typedef struct Tag { … } T;`) keeps both — `Tag` the
     // struct and `T` the alias are genuinely two names.
-    if emit_inline_type(spec, cf, ctx, node, scope, &name) == InlineType::Anonymous {
+    if emit_inline_type(w, ctx, node, scope, &name) == InlineType::Anonymous {
         return;
     }
     let qn = qual(scope, &name);
@@ -437,7 +441,8 @@ fn emit_typedef(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node
 /// and scans its `body_field` for calls via the shared generic call walker. The
 /// name is the identifier the `declarator_field` chain binds — NOT a parameter
 /// name (issue #106).
-fn emit_function(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+fn emit_function(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    let CWalk { spec, cf } = w;
     let name = node
         .child_by_field_name(cf.naming.declarator_field)
         .map(|d| declarator_name(cf.naming, ctx.source, d))
@@ -454,7 +459,7 @@ fn emit_function(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Nod
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: spec.conventions.visibility_of(&name),
-        properties: Vec::new(),
+        properties: super::super::c_family::linkage_props(ctx.source, node),
     });
     ctx.refs.push(ExtractedRef {
         kind: "Defines".to_string(),
@@ -470,7 +475,8 @@ fn emit_function(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Nod
 /// `{scope}::{name}#{seq}`). No body ⇒ no calls. The name is resolved through
 /// the declarator chain, skipping the parameter list, exactly as for a
 /// definition — so `int add(int a, int b);` is `add`, not `b` (issue #106).
-fn emit_prototype(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: Node, scope: &str) {
+fn emit_prototype(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
+    let CWalk { spec, cf } = w;
     let name = node
         .child_by_field_name(cf.naming.declarator_field)
         .map(|d| declarator_name(cf.naming, ctx.source, d))
@@ -487,7 +493,7 @@ fn emit_prototype(spec: &LangSpec, cf: &CFamilySpec, ctx: &mut WalkCtx, node: No
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: spec.conventions.visibility_of(&name),
-        properties: vec![("is_prototype".to_string(), "true".to_string())],
+        properties: super::super::c_family::prototype_props(ctx.source, node),
     });
     ctx.refs.push(ExtractedRef {
         kind: "Defines".to_string(),

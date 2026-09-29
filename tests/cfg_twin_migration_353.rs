@@ -197,6 +197,10 @@ fn refused_then_rebuilt(spoil: &str) {
         store.has_code_context(),
         "the rebuild writes the code-context marker too"
     );
+    assert!(
+        store.has_body_kind(),
+        "the rebuild writes the body-kind marker too (#400)"
+    );
     drop(store);
     incremental(&source, &output).expect("a rebuilt graph takes refreshes");
 }

@@ -8,6 +8,7 @@ use super::*;
 use crate::graph_store::{call_rel_table, call_site_rel_table};
 
 mod crate_scope;
+mod declarations;
 mod gates;
 mod reason;
 mod variant_guard;
@@ -52,6 +53,8 @@ pub(super) fn resolve_calls(
     let assoc = super::receiver::AssocFacts::load(store);
     // Issues #373 and #380: the `use` declarations of every Rust module.
     let imports = super::receiver::ModuleImports::load(store, &evidence);
+    // Issue #400: prototypes, macros and `static` functions.
+    let callables = store.callable_facts();
 
     for row in &qr.rows {
         if row.len() < 5 {
@@ -81,6 +84,7 @@ pub(super) fn resolve_calls(
             evidence: &evidence,
             assoc: &assoc,
             imports: &imports,
+            callables: &callables,
         };
         let row_input = RowInput {
             cs_id: &row[0],
@@ -143,6 +147,7 @@ fn resolve_one_call_site(
         evidence: graph.evidence,
         assoc: graph.assoc,
         imports: graph.imports,
+        callables: graph.callables,
     };
     let resolved_before = *tally.resolved;
     let (resolution, decline) = resolve_single_call(&ctx, &site, &file_id);
@@ -257,6 +262,8 @@ struct ResolveContext<'a> {
     assoc: &'a super::receiver::AssocFacts,
     /// The `use` declarations of each Rust module (issues #373, #380).
     imports: &'a super::receiver::ModuleImports,
+    /// Prototypes, macros and `static` functions (issue #400).
+    callables: &'a crate::graph_store::body_kind::CallableFacts,
 }
 
 /// The per-run, read-only graph state `resolve_one_call_site` needs —
@@ -271,6 +278,7 @@ struct GraphContext<'a> {
     evidence: &'a crate::graph_store::import_roots::CrateEvidence,
     assoc: &'a super::receiver::AssocFacts,
     imports: &'a super::receiver::ModuleImports,
+    callables: &'a crate::graph_store::body_kind::CallableFacts,
 }
 
 /// One `CallSite` scan row, grouped for the same reason as `GraphContext`.
@@ -440,12 +448,14 @@ fn resolve_single_call(ctx: &ResolveContext, site: &CallSite, file_id: &str) -> 
     let Some(candidates) = ctx.idx.by_name.get(last) else {
         return (PolicyResolution::NotFound, None);
     };
-    let candidates = visible_candidates(ctx, site, candidates, last != callee);
+    let candidates = declarations::visible_candidates(ctx, site, candidates, last != callee);
+    // A C `static` of another file, a prototype or a macro beside a body (#400).
+    let (candidates, declined) = declarations::keep_definitions(ctx.callables, candidates, file_id);
     let visible = candidates.len();
     let candidates = variant_guard::drop_struct_targets(ctx, callee, candidates);
     // The variant guard refused every candidate left (issue #393).
-    let guarded = (visible > 0 && candidates.is_empty())
-        .then_some(Decline::Scope(reason::SCOPE_VARIANT_GUARD));
+    let guarded = declined.or((visible > 0 && candidates.is_empty())
+        .then_some(Decline::Scope(reason::SCOPE_VARIANT_GUARD)));
     let ev = crate::call_evidence::CallEvidence {
         imports_hint: &imports_hint,
         caller_file: file_id,
@@ -458,40 +468,4 @@ fn resolve_single_call(ctx: &ResolveContext, site: &CallSite, file_id: &str) -> 
         &ev,
     );
     (resolution, guarded)
-}
-
-/// The candidates a call at `site` can actually name under the caller
-/// language's scoping rules, before any evidence is weighed.
-///
-/// Rust block-scoped fn items (issue #327): a nested fn shadows every other
-/// candidate inside its enclosing callable and is invisible outside. Python
-/// (`bare_call_binds_methods == false`): an unqualified call never names a
-/// method, so a same-named method is not a rival of the module function it
-/// really calls (pg_store.py `_now_iso()`, which the #30 policy used to drop
-/// as ambiguous, #335) and is never a target on its own.
-fn visible_candidates<'a>(
-    ctx: &ResolveContext,
-    site: &CallSite,
-    candidates: &'a [SymbolEntry],
-    qualified: bool,
-) -> std::borrow::Cow<'a, [SymbolEntry]> {
-    use std::borrow::Cow;
-    if ctx.provider.language() == "rust" {
-        return Cow::Owned(nested_scope::visible_candidates(
-            ctx.idx,
-            candidates,
-            site.caller_qn,
-            qualified,
-        ));
-    }
-    if qualified || ctx.provider.bare_call_binds_methods() {
-        return Cow::Borrowed(candidates);
-    }
-    Cow::Owned(
-        candidates
-            .iter()
-            .filter(|c| c.label != "Method")
-            .cloned()
-            .collect(),
-    )
 }

@@ -84,6 +84,9 @@ pub(crate) const COLS_FUNCTION: ColTypes = &[
     ("cfg_active", LogicalType::String),
     // source: issue #354: must mirror the DDL's `code_context` column.
     ("code_context", LogicalType::String),
+    // source: issue #400: must mirror the DDL's `body_kind` and `linkage` columns.
+    ("body_kind", LogicalType::String),
+    ("linkage", LogicalType::String),
 ];
 pub(crate) const COLS_METHOD: ColTypes = &[
     ("id", LogicalType::String),
@@ -104,6 +107,9 @@ pub(crate) const COLS_METHOD: ColTypes = &[
     ("cfg_active", LogicalType::String),
     // source: issue #354: must mirror the DDL's `code_context` column.
     ("code_context", LogicalType::String),
+    // source: issue #400: must mirror the DDL's `body_kind` and `linkage` columns.
+    ("body_kind", LogicalType::String),
+    ("linkage", LogicalType::String),
 ];
 pub(crate) const COLS_TYPEDECL: ColTypes = &[
     ("id", LogicalType::String),

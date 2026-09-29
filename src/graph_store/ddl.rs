@@ -44,11 +44,12 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // method the source proves is not production code (a test attribute, an
         // enclosing `#[cfg(test)]`); '' for every other one and for a graph
         // written before the column existed (see `require_code_context_metadata`).
+        // body_kind, linkage: issue #400 (see `graph_store::body_kind`).
         (NODE_FUNCTION,
             "id STRING, name STRING, qualified_name STRING, \
              start_line INT64, end_line INT64, visibility STRING, is_async BOOLEAN, \
              return_type STRING, constructed_types STRING, language STRING, entry_kind STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT '', \
-             code_context STRING DEFAULT ''"),
+             code_context STRING DEFAULT '', body_kind STRING DEFAULT '', linkage STRING DEFAULT ''"),
         // source: implements fix — `trait_name` carries the trait a method
         // belongs to in an `impl Trait for Type` block (already extracted by
         // the parser at parser/rust.rs but previously dropped for lack of a
@@ -59,7 +60,7 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
              start_line INT64, end_line INT64, visibility STRING, is_async BOOLEAN, \
              receiver_type STRING, trait_name STRING, return_type STRING, \
              constructed_types STRING, language STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT '', \
-             code_context STRING DEFAULT ''"),
+             code_context STRING DEFAULT '', body_kind STRING DEFAULT '', linkage STRING DEFAULT ''"),
         // source: Spike B' BUG #9 fix — `bases STRING` column carries a CSV
         // of unresolved base-class names emitted by the parser. The resolver
         // reads this in resolve_extends, looks each name up in the symbol
