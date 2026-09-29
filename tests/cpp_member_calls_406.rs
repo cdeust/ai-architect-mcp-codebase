@@ -260,3 +260,108 @@ int top() { return helper(2); }
         );
     }
 }
+
+/// A receiver declared with a `using` alias or a `typedef` has the type the
+/// alias names, at any depth of aliases and through the bases of that class:
+/// the graph holds a class the alias hides behind a template argument.
+#[test]
+fn a_receiver_declared_with_an_alias_reaches_the_class_the_alias_names() {
+    let header = "\
+namespace etl {
+class ibasic_string { public: const char* c_str() const { return \"\"; } };
+template <typename T> class basic_string_ext : public ibasic_string {};
+typedef basic_string_ext<char> string_ext;
+class other { public: const char* c_str() const { return \"\"; } };
+}
+";
+    let user = "\
+using Text = etl::string_ext;
+using Chain = Text;
+int a(Text& t) { return t.c_str() != nullptr; }
+int b(Chain& t) { return t.c_str() != nullptr; }
+";
+    let (store, _tmp) = index_and_resolve(&[("s.h", header), ("u.cpp", user)]);
+    for caller in ["u.cpp::a", "u.cpp::b"] {
+        let sites = sites_of(&store, caller);
+        let c_str = only(&sites, "c_str");
+        assert!(
+            c_str.target.contains("ibasic_string::c_str#"),
+            "{caller}: {c_str:?}"
+        );
+    }
+}
+
+/// Two files that each define `Text` as another class: a receiver reads the
+/// alias of its own file.
+#[test]
+fn an_alias_of_the_callers_own_file_wins_over_a_namesake_elsewhere() {
+    let one = "\
+class first { public: int size() { return 1; } };
+using Text = first;
+int f1(Text& t) { return t.size(); }
+";
+    let two = "\
+class second { public: int size() { return 2; } };
+using Text = second;
+int f2(Text& t) { return t.size(); }
+";
+    let (store, _tmp) = index_and_resolve(&[("one.cpp", one), ("two.cpp", two)]);
+    let s1 = sites_of(&store, "f1");
+    assert!(only(&s1, "size").target.contains("first::size#"), "{s1:?}");
+    let s2 = sites_of(&store, "f2");
+    assert!(only(&s2, "size").target.contains("second::size#"), "{s2:?}");
+}
+
+/// A base whose name begins like an access specifier or `virtual` is that
+/// class, not the specifier followed by the rest of the name.
+#[test]
+fn a_base_named_like_an_access_specifier_is_read_whole() {
+    let source = "\
+class public_base { public: int post() { return 1; } };
+class virtual_base : public public_base {};
+int use(virtual_base& v) { return v.post(); }
+";
+    let (store, _tmp) = index_and_resolve(&[("pub.cpp", source)]);
+    let sites = sites_of(&store, "use");
+    assert!(
+        only(&sites, "post").target.contains("public_base::post#"),
+        "{sites:?}"
+    );
+}
+
+/// `q::f(x)` names a free function of the namespace `q`, not the only function
+/// called `f` of another namespace: the member candidates that #406 removes
+/// must not leave a namesake in a foreign namespace as the sole survivor.
+#[test]
+fn a_qualified_call_binds_only_a_free_function_of_the_named_namespace() {
+    let source = "\
+namespace etl { namespace ranges { int next(int x) { return x; } } }
+namespace other { int step(int x) { return x; } }
+class walker { public: int next(int x) { return x; } };
+int use() {
+    int a = std::next(1);
+    int b = etl::ranges::next(2);
+    int c = ranges::next(3);
+    int d = etl::step(4);
+    int e = other::step(5);
+    return a + b + c + d + e;
+}
+";
+    let (store, _tmp) = index_and_resolve(&[("ns.cpp", source)]);
+    let sites = sites_of(&store, "use");
+    let bound: Vec<(String, bool)> = sites
+        .iter()
+        .map(|s| (s.callee.clone(), !s.target.is_empty()))
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            ("next".into(), false),
+            ("next".into(), true),
+            ("next".into(), true),
+            ("step".into(), false),
+            ("step".into(), true),
+        ],
+        "{sites:?}"
+    );
+}

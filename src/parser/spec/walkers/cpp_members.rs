@@ -27,8 +27,8 @@ use super::declarator::{
 };
 use super::{end_line_of, kind_in, line_of, WalkCtx};
 use crate::parser::{
-    node_field_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM, LABEL_FIELD,
-    LABEL_METHOD, LABEL_TYPE_ALIAS,
+    node_field_text, node_text, qual, ExtractedNode, ExtractedRef, LABEL_CONSTANT, LABEL_ENUM,
+    LABEL_FIELD, LABEL_METHOD, LABEL_TYPE_ALIAS,
 };
 
 /// Emits an enum (`Enum` + `Defines`) and, from its `body_field`, one `Constant`
@@ -138,7 +138,7 @@ pub(super) fn emit_member(
             continue;
         }
         if binds_function_prototype(cf.naming, cf.func_declarator_kind, declarator) {
-            emit_member_proto(spec, ctx, node, scope, &name);
+            emit_member_proto(spec, ctx, node, MemberName { scope, name: &name });
         } else {
             emit_member_field(spec, cf, ctx, node, scope, &name, &type_text);
         }
@@ -219,6 +219,12 @@ fn emit_member_field(
     });
 }
 
+/// The enclosing type's QN and the name a member declarator binds.
+struct MemberName<'a> {
+    scope: &'a str,
+    name: &'a str,
+}
+
 /// Emits a member function prototype (`Method`, `is_prototype=true`, receiver =
 /// the enclosing type) + `HasMethod`, keyed `{scope}::{name}#{seq}`. No body ⇒ no
 /// calls.
@@ -236,7 +242,8 @@ fn emit_member_field(
 ///   - `~Point();`                     → `~Point`    (a `destructor_name`, taken
 ///     as its own text — its inner `identifier` is `Point`, which would collide
 ///     with the constructor and with the class itself)
-fn emit_member_proto(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, scope: &str, name: &str) {
+fn emit_member_proto(spec: &LangSpec, ctx: &mut WalkCtx, node: Node, member: MemberName) {
+    let MemberName { scope, name } = member;
     let seq = ctx.next_seq();
     let qn = spec.conventions.def_qn(scope, name, seq);
     ctx.nodes.push(ExtractedNode {
@@ -288,7 +295,7 @@ pub(super) fn emit_typedef(
         start_line: line_of(node),
         end_line: end_line_of(node),
         visibility: spec.conventions.visibility_of(&name),
-        properties: vec![("typedef".to_string(), "true".to_string())],
+        properties: typedef_properties(spec, ctx.source, node),
     });
     ctx.refs.push(ExtractedRef {
         kind: "Defines".to_string(),
@@ -297,10 +304,28 @@ pub(super) fn emit_typedef(
     });
 }
 
+/// `typedef=true`, and the aliased type as a `type_annotation` (`ibasic_string<char>` of
+/// `typedef ibasic_string<char> istring;`), so that a receiver declared with the alias
+/// can be followed to the class it names (issue #406). Only a type written as a name
+/// is kept: an inline `struct { ... }` body is not an annotation.
+fn typedef_properties(spec: &LangSpec, source: &str, node: Node) -> Vec<(String, String)> {
+    let mut props = vec![("typedef".to_string(), "true".to_string())];
+    let named = node.child_by_field_name(spec.type_field).filter(|t| {
+        matches!(
+            t.kind(),
+            "type_identifier" | "qualified_identifier" | "template_type"
+        )
+    });
+    if let Some(ty) = named {
+        props.push(("type_annotation".to_string(), node_text(source, ty)));
+    }
+    props
+}
+
 /// Emits an alias declaration (`using Distance = double;`) as a `TypeAlias` +
-/// `Defines`, carrying the aliased type as a `type_annotation` property (issue
-/// #124 item 3; the pre-#124 walker matched only `using_declaration` and dropped
-/// `alias_declaration` entirely).
+/// `Defines`, carrying the aliased type as a `target_type` property, the column
+/// the graph keeps it in (issue #124 item 3; the pre-#124 walker matched only
+/// `using_declaration` and dropped `alias_declaration` entirely).
 ///
 /// Preconditions: `node`'s kind is in `cf.alias_kinds`. Postconditions: one
 /// `TypeAlias` + one `Defines`, or nothing when the `name_field` is absent.
@@ -325,7 +350,7 @@ pub(super) fn emit_alias(
     let aliased = node_field_text(ctx.source, node, spec.type_field);
     let mut props = Vec::new();
     if !aliased.is_empty() {
-        props.push(("type_annotation".to_string(), aliased));
+        props.push(("target_type".to_string(), aliased));
     }
     ctx.nodes.push(ExtractedNode {
         label: LABEL_TYPE_ALIAS.to_string(),

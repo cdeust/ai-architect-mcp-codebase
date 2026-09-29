@@ -68,7 +68,21 @@ adheres to [Semantic Versioning](https://semver.org/).
   receiver of unknown type stays open as `no_receiver_type`, a call the scope
   refuses as `declined_by_scope` (`cpp_receiver_class`, `cpp_unqualified_call`,
   `cpp_qualifier`). The graph holds no arity, so overloads of one class stay
-  `ambiguous_candidates`.
+  `ambiguous_candidates`. A receiver declared with a `using` alias or a
+  `typedef` reaches the class the alias names, through chains of aliases, an
+  alias of the caller's own file winning over a namesake elsewhere. To make
+  that possible the C++ parser now records what an alias names: `using X = T;`
+  wrote it under `type_annotation`, a column `TypeAlias` does not have, so it
+  was dropped (it is `target_type`); `typedef T X;` gains `type_annotation`
+  when `T` is a written class name. A base written `public_base` or
+  `virtual_base` is no longer read as an access specifier. A qualified free
+  function (`std::next(...)`, `ranges::next(...)`) binds only to a function of
+  the namespace the qualifier names, where it used to bind to the only function
+  of that name in any namespace. Measured on ETLCPP (oracle 61045 call edges):
+  52390 after; the removed edges are calls the graph no longer guesses (fields,
+  chains, `auto`, and the classes of headers that tree-sitter recovers badly
+  around macros, which lose their namespace and class scope); FreeRTOS is
+  unchanged at 3829.
 - A C or C++ `static` function is named by the files that include the file it
   is defined in, not by the extension of that file (#404). The rule made every
   `static` in a header visible to every file, so two headers each defining a

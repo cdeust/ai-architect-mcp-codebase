@@ -52,7 +52,7 @@
 //     `add(T item)` / `get(int i)` -> `add` / `get`.
 //   - `enum Color { ... }` and `enum class Status { ... }` -> an `Enum` plus one
 //     `Constant` (`enum_entry=true`) per member (#124.1).
-//   - `typedef int Length;` -> `Constant` (`typedef=true`). `using Distance =
+//   - `typedef int Length;` -> `Constant` (`typedef=true`; `type_annotation` only when the type is a written class name, which `int` is not). `using Distance =
 //     double;` is an `alias_declaration` -> `TypeAlias` carrying the aliased type
 //     (#124.3).
 //   - `#include <iostream>` / `#include "myheader.h"` / `#include <sys/types.h>`
@@ -230,7 +230,7 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Struct|Shape|app/main.cpp::geometry::Shape|21|30|public|[(\"is_class\", \"true\")]",
         "Struct|Value|app/main.cpp::geometry::Value|44|47|public|[]",
         "Struct|geometry|app/main.cpp::geometry|8|65|public|[(\"is_namespace\", \"true\")]",
-        "TypeAlias|Distance|app/main.cpp::geometry::Distance|11|11|public|[(\"type_annotation\", \"double\")]",
+        "TypeAlias|Distance|app/main.cpp::geometry::Distance|11|11|public|[(\"target_type\", \"double\")]",
     ]
 }
 

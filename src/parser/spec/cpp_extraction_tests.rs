@@ -234,7 +234,7 @@ fn cpp_alias_declaration_is_a_type_alias() {
     assert_eq!(
         records_named(&nodes, "Distance"),
         vec!["TypeAlias|Distance|a.cpp::geometry::Distance|2|2|public|\
-             [(\"type_annotation\", \"double\")]"
+             [(\"target_type\", \"double\")]"
             .to_string()],
         "#124.3: `using X = Y;` (alias_declaration) must surface as a TypeAlias"
     );

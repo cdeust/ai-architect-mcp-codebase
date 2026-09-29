@@ -44,6 +44,16 @@ pub(super) struct CppClasses {
     bases: HashMap<String, Vec<String>>,
     /// The paths of the classes ending in a given last segment.
     by_last: HashMap<String, Vec<String>>,
+    /// The `using` aliases and `typedef`s by last segment: what each names.
+    aliases: HashMap<String, Vec<Alias>>,
+}
+
+/// A `using X = T;` or `typedef T X;`: the path of `X`, the file that writes
+/// it and the class path `T` names.
+struct Alias {
+    path: String,
+    file: String,
+    target: String,
 }
 
 impl CppClasses {
@@ -65,19 +75,50 @@ impl CppClasses {
             };
             let bases: Vec<String> = bases
                 .split(',')
-                .map(base_name)
+                .map(class_path)
                 .filter(|b| !b.is_empty())
                 .collect();
             let last = path.rsplit("::").next().unwrap_or(&path).to_string();
             classes.by_last.entry(last).or_default().push(path.clone());
             classes.bases.entry(path).or_default().extend(bases);
         }
+        classes.load_aliases(store);
         classes
     }
 
-    /// The class named `name` (a path, possibly relative to a namespace) and
-    /// every base of it, through any depth.
-    fn family(&self, name: &str) -> Family {
+    /// Reads what each C++ `using` alias (`TypeAlias.target_type`) and `typedef`
+    /// (`Constant.type_annotation`) names. A constant that is no typedef is read
+    /// as one too: a receiver is declared with a type name, which no constant of
+    /// the same scope can bear.
+    fn load_aliases(&mut self, store: &GraphStore) {
+        for query in [
+            "MATCH (a:TypeAlias) RETURN a.qualified_name, a.target_type, a.language",
+            "MATCH (a:Constant) RETURN a.qualified_name, a.type_annotation, a.language",
+        ] {
+            let Ok(qr) = store.execute_query(query) else {
+                continue;
+            };
+            for row in qr.rows.iter().filter(|r| r.len() >= 3 && r[2] == "cpp") {
+                let target = class_path(&row[1]);
+                if row[1] == "Null(String)" || target.is_empty() {
+                    continue;
+                }
+                let path = path_without_file(&row[0]).to_string();
+                let file = extract_file_prefix(&row[0]).unwrap_or_default();
+                let last = path.rsplit("::").next().unwrap_or(&path).to_string();
+                self.aliases
+                    .entry(last)
+                    .or_default()
+                    .push(Alias { path, file, target });
+            }
+        }
+    }
+
+    /// The class named `name` (a path, possibly relative to a namespace), the
+    /// classes an alias of that name stands for, and every base of them, through
+    /// any depth. Of several aliases of one name, those the file `from` writes
+    /// are the ones in scope; without any, every one is possible.
+    fn family(&self, name: &str, from: &str) -> Family {
         let mut names: HashSet<String> = HashSet::new();
         let mut pending = vec![name.to_string()];
         while let Some(current) = pending.pop() {
@@ -90,8 +131,22 @@ impl CppClasses {
                     pending.extend(self.bases.get(path).into_iter().flatten().cloned());
                 }
             }
+            pending.extend(self.alias_targets(last, &current, from));
         }
         Family(names)
+    }
+
+    fn alias_targets(&self, last: &str, name: &str, from: &str) -> Vec<String> {
+        let named: Vec<&Alias> = self
+            .aliases
+            .get(last)
+            .into_iter()
+            .flatten()
+            .filter(|a| names_class(&a.path, name))
+            .collect();
+        let local: Vec<&Alias> = named.iter().copied().filter(|a| a.file == from).collect();
+        let chosen = if local.is_empty() { named } else { local };
+        chosen.into_iter().map(|a| a.target.clone()).collect()
     }
 }
 
@@ -111,26 +166,28 @@ fn names_class(path: &str, name: &str) -> bool {
     path == name || path.strip_suffix(name).is_some_and(|p| p.ends_with("::"))
 }
 
-/// `Base` of `public Base<T>`, `::ns::Base` or `ns::Base`: the base as a path.
-fn base_name(raw: &str) -> String {
+/// `Base` of `public Base<T>`, `::ns::Base` or `ns::Base`: a class as a path,
+/// without access specifier, `virtual`, generic arguments or leading `::`.
+fn class_path(raw: &str) -> String {
     let mut depth = 0usize;
-    let mut out = String::new();
-    for c in raw.trim().chars() {
+    let mut plain = String::new();
+    for c in raw.chars() {
         match c {
             '<' => depth += 1,
             '>' => depth = depth.saturating_sub(1),
-            c if depth == 0 && !c.is_whitespace() => out.push(c),
+            c if depth == 0 => plain.push(c),
             _ => {}
         }
     }
-    let name = out.trim_start_matches("::");
-    let name = name
-        .strip_prefix("public")
-        .or_else(|| name.strip_prefix("protected"))
-        .or_else(|| name.strip_prefix("private"))
-        .or_else(|| name.strip_prefix("virtual"))
-        .filter(|rest| !rest.is_empty())
-        .unwrap_or(name);
+    let name: String = plain
+        .split_whitespace()
+        .skip_while(|t| {
+            matches!(
+                *t,
+                "public" | "protected" | "private" | "virtual" | "typename"
+            )
+        })
+        .collect();
     name.trim_start_matches("::").to_string()
 }
 
@@ -215,7 +272,7 @@ pub(super) fn scope(
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
         RECEIVER_HINT_VIA_CPP_DECLARED => {
-            let family = ctx.cpp.family(site.receiver_hint);
+            let family = ctx.cpp.family(site.receiver_hint, &caller_file(site));
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
         RECEIVER_HINT_VIA_CPP_QUALIFIER => (qualified(ctx, site, candidates), SCOPE_CPP_QUALIFIER),
@@ -234,9 +291,13 @@ fn caller_family(ctx: &ResolveContext, site: &CallSite) -> Family {
         .then(|| owner_of(site.caller_qn))
         .flatten();
     match owner {
-        Some(class) => ctx.cpp.family(&class),
+        Some(class) => ctx.cpp.family(&class, &caller_file(site)),
         None => Family(HashSet::new()),
     }
+}
+
+fn caller_file(site: &CallSite) -> String {
+    extract_file_prefix(site.caller_qn).unwrap_or_default()
 }
 
 /// `f(x)`: a method of the caller's class or of a base hides every namesake
@@ -258,18 +319,27 @@ fn unqualified(
         .collect()
 }
 
-/// `a::b::f(x)`: the methods of a class the qualifier does not designate are
-/// not named. What is no method is left to the general rules.
+/// `a::b::f(x)`: a method must belong to the class `a::b` (or a base of it), a
+/// free function to the namespace `a::b`; `::f(x)` names a global function. A
+/// namespace alias is not tracked, so a call through one stays open.
 fn qualified(
     ctx: &ResolveContext,
     site: &CallSite,
     candidates: &[SymbolEntry],
 ) -> Vec<SymbolEntry> {
-    let family = ctx.cpp.family(site.receiver_hint);
+    let family = ctx.cpp.family(site.receiver_hint, &caller_file(site));
+    let written = site.receiver_hint.trim_start_matches("::");
+    let global = site.receiver_hint.is_empty();
     candidates
         .iter()
         .filter(|c| {
-            !is_method(c) || owner_of(&c.qualified_name).is_some_and(|owner| family.holds(&owner))
+            let owner = owner_of(&c.qualified_name);
+            match (is_method(c), owner) {
+                (true, Some(owner)) => family.holds(&owner),
+                (false, Some(ns)) => !global && names_class(&ns, written),
+                (false, None) => global,
+                (true, None) => false,
+            }
         })
         .cloned()
         .collect()
@@ -298,10 +368,11 @@ mod tests {
 
     #[test]
     fn a_base_is_read_without_access_specifier_generics_or_root() {
-        assert_eq!(base_name(" public Base<T> "), "Base");
-        assert_eq!(base_name("::ns::Base"), "ns::Base");
-        assert_eq!(base_name("virtual ns::Base<A, B>"), "ns::Base");
-        assert_eq!(base_name("private"), "private");
+        assert_eq!(class_path(" public Base<T> "), "Base");
+        assert_eq!(class_path("::ns::Base"), "ns::Base");
+        assert_eq!(class_path("virtual ns::Base<A, B>"), "ns::Base");
+        assert_eq!(class_path("public_base"), "public_base");
+        assert_eq!(class_path("virtual_base<T>"), "virtual_base");
     }
 
     #[test]
@@ -318,7 +389,7 @@ mod tests {
                 .bases
                 .insert(path.to_string(), vec![bases.to_string()]);
         }
-        let family = classes.family("a");
+        let family = classes.family("a", "");
         assert!(family.holds("ns::a") && family.holds("ns::b") && family.holds("ns::c"));
         assert!(!family.holds("ns::d"));
     }
