@@ -51,6 +51,18 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A C or C++ `static` function is named by the files that include the file it
+  is defined in, not by the extension of that file (#404). The rule made every
+  `static` in a header visible to every file, so two headers each defining a
+  `static inline` of one name left every caller `ambiguous_candidates` even
+  when it included only one of them; and it made no `static` in a `.c` file
+  visible to anyone, so a unity build (`#include "impl.c"`) was declined as
+  `file_local`. Visibility now follows the caller's `#include` directives,
+  directly or through other includes, for `.c` and headers alike. An include
+  path is read against the includer's directory first, then as a trailing part
+  of the repository's file ids (the include directories are not in the graph);
+  every file such a path matches counts as included. FreeRTOS-Kernel dbf7055
+  keeps its 3829 edges, none gained, none lost.
 - A C or C++ call through a function pointer is a call site again, left open
   as `indirect_call` (#401). The parsers dropped every callee that was not a
   name, so `(*fp)()` and `table[i]()` left no trace in the graph; and in C,

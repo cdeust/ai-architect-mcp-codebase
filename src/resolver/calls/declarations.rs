@@ -4,8 +4,9 @@
 // Two scoping steps run on the candidates of a name: first the language's
 // own rules (`candidate_scope::visible_candidates`, issues #327 and #335),
 // then what each C-family candidate is (`keep_definitions`, issue #400): a
-// `static` function is named only by its own file or through the header it
-// lives in; a header prototype is never a call target, since a body or a macro
+// `static` function is named only by its own file or by a file that includes
+// the file it lives in, directly or through other includes (issue #404); a
+// header prototype is never a call target, since a body or a macro
 // of the name is what the call reaches. A function-like macro and a body of one
 // name are left to the evidence tiers: they are usually alternatives under
 // exclusive `#if` configurations (FreeRTOS `vQueueAddToRegistry`), and only
@@ -19,13 +20,10 @@
 use std::borrow::Cow;
 
 use super::candidate_scope::visible_candidates;
+use super::includes::IncludeGraph;
 use super::reason::{Decline, SCOPE_FILE_LOCAL, SCOPE_VARIANT_GUARD};
 use super::*;
 use crate::graph_store::body_kind::{CallableFacts, BODY_KIND_PROTOTYPE};
-
-/// Extensions of the files an `#include` copies into its includer, so a
-/// `static` function defined there is local to every file that includes it.
-const HEADER_EXTENSIONS: [&str; 4] = [".h", ".hh", ".hpp", ".hxx"];
 
 /// The candidates a call can name once every scoping step has run, and why
 /// the call is declined when none is left: the language's rules
@@ -40,7 +38,7 @@ pub(super) fn named_candidates<'a>(
 ) -> Option<(Cow<'a, [SymbolEntry]>, Option<Decline>)> {
     let candidates = ctx.idx.by_name.get(last)?;
     let candidates = visible_candidates(ctx, site, candidates, last != site.callee);
-    let (candidates, declined) = keep_definitions(ctx.callables, candidates, file_id);
+    let (candidates, declined) = keep_definitions(ctx.callables, ctx.includes, candidates, file_id);
     let visible = candidates.len();
     let candidates = variant_guard::drop_struct_targets(ctx, site.callee, candidates);
     // The variant guard refused every candidate left (issue #393).
@@ -52,10 +50,12 @@ pub(super) fn named_candidates<'a>(
 /// The candidates left once the ones the call cannot name are dropped, and why
 /// the call is declined when none is left (issue #400).
 ///
-/// A `static` candidate of another file is dropped unless that file is a
-/// header. When the caller's own file declares the name `static`, only that
-/// file's candidates and the headers' `static` ones remain: the file names its
-/// own entity, never an external namesake. Then every prototype is dropped: a prototype names a function whose
+/// A `static` candidate of another file is dropped unless the caller's file
+/// includes that file, directly or through other includes, whatever its
+/// extension (issue #404). When the caller's own file declares the name
+/// `static`, only that file's candidates and the `static` ones of the files it
+/// includes remain: the file names its own entity, never an external namesake.
+/// Then every prototype is dropped: a prototype names a function whose
 /// body or macro is elsewhere, never a target of its own. A name only declared
 /// is declined.
 ///
@@ -63,6 +63,7 @@ pub(super) fn named_candidates<'a>(
 /// graph holds no facts or no candidate carries one.
 pub(super) fn keep_definitions<'a>(
     facts: &CallableFacts,
+    includes: &IncludeGraph,
     candidates: Cow<'a, [SymbolEntry]>,
     caller_file: &str,
 ) -> (Cow<'a, [SymbolEntry]>, Option<Decline>) {
@@ -82,9 +83,10 @@ pub(super) fn keep_definitions<'a>(
         .iter()
         .filter(|c| {
             if own_internal {
-                candidate_file(c) == caller_file || (internal(c) && nameable_from(c, caller_file))
+                candidate_file(c) == caller_file
+                    || (internal(c) && nameable_from(includes, c, caller_file))
             } else {
-                !internal(c) || nameable_from(c, caller_file)
+                !internal(c) || nameable_from(includes, c, caller_file)
             }
         })
         .cloned()
@@ -103,11 +105,10 @@ pub(super) fn keep_definitions<'a>(
     (Cow::Owned(kept), decline)
 }
 
-/// True when the file holding `candidate` is the caller's, or a header the
-/// caller's file can include.
-fn nameable_from(candidate: &SymbolEntry, caller_file: &str) -> bool {
-    let file = candidate_file(candidate);
-    file == caller_file || HEADER_EXTENSIONS.iter().any(|ext| file.ends_with(ext))
+/// True when the file holding `candidate` is the caller's, or one its
+/// `#include` directives reach.
+fn nameable_from(includes: &IncludeGraph, candidate: &SymbolEntry, caller_file: &str) -> bool {
+    includes.reaches(caller_file, &candidate_file(candidate))
 }
 
 /// The file that holds `candidate`.

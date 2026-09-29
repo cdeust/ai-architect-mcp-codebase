@@ -11,10 +11,12 @@ mod candidate_scope;
 mod crate_scope;
 mod declarations;
 mod gates;
+mod includes;
 mod reason;
 mod variant_guard;
 use candidate_scope::qualified_path_gate;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
+use includes::IncludeGraph;
 use reason::{Decline, Failure, Gated};
 
 // ---------------------------------------------------------------------------
@@ -59,6 +61,14 @@ pub(super) fn resolve_calls(
     let imports = super::receiver::ModuleImports::load(store, &evidence);
     // Issue #400: prototypes, macros and `static` functions.
     let callables = store.callable_facts();
+    // Issue #404: which files each C-family file includes.
+    let file_ids: HashSet<String> = store
+        .execute_query("MATCH (f:File) RETURN f.id")?
+        .rows
+        .into_iter()
+        .filter_map(|r| r.into_iter().next())
+        .collect();
+    let includes = IncludeGraph::build(file_imports, &file_ids);
 
     for row in &qr.rows {
         if row.len() < 6 {
@@ -89,6 +99,7 @@ pub(super) fn resolve_calls(
             assoc: &assoc,
             imports: &imports,
             callables: &callables,
+            includes: &includes,
         };
         let row_input = RowInput {
             cs_id: &row[0],
@@ -153,6 +164,7 @@ fn resolve_one_call_site(
         assoc: graph.assoc,
         imports: graph.imports,
         callables: graph.callables,
+        includes: graph.includes,
     };
     let resolved_before = *tally.resolved;
     let (resolution, decline) =
@@ -287,6 +299,8 @@ struct ResolveContext<'a> {
     imports: &'a super::receiver::ModuleImports,
     /// Prototypes, macros and `static` functions (issue #400).
     callables: &'a crate::graph_store::body_kind::CallableFacts,
+    /// The files each C-family file includes (issue #404).
+    includes: &'a IncludeGraph,
 }
 
 /// The per-run, read-only graph state `resolve_one_call_site` needs —
@@ -302,6 +316,7 @@ struct GraphContext<'a> {
     assoc: &'a super::receiver::AssocFacts,
     imports: &'a super::receiver::ModuleImports,
     callables: &'a crate::graph_store::body_kind::CallableFacts,
+    includes: &'a IncludeGraph,
 }
 
 /// One `CallSite` scan row, grouped for the same reason as `GraphContext`.
