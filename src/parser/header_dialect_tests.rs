@@ -84,6 +84,55 @@ fn gcc_asm_operand_colons_stay_c() {
     }
 }
 
+/// An asm goto label after an empty clobber list is `:: out` in C, and the
+/// `__asm__ __volatile__` spelling opens the same operand lists.
+#[test]
+fn asm_goto_labels_and_underscore_spellings_stay_c() {
+    for src in [
+        "static void k(int y) { __asm goto ( \"jz %l1\" : : \"r\" ( y ) :: out ); out: ; }\n",
+        "static void m(void) { __asm__ __volatile__ ( \"nop\" ::: \"memory\" ); }\n",
+        "static void n(void) { asm ( \"nop\" :::: done ); done: ; }\n",
+    ] {
+        assert_eq!(auto(src), Language::C, "{src}");
+    }
+}
+
+/// A `::` after a single `:` outside asm has no C reading.
+#[test]
+fn a_scope_after_a_single_colon_outside_asm_is_cpp() {
+    for src in [
+        "struct D : ::Base { int x; };\n",
+        "void f(int x) { switch (x) { case 1: ::g(); break; } }\n",
+        "int h(int a) { return a ? 1 : ::k(); }\n",
+    ] {
+        assert_eq!(auto(src), Language::Cpp, "{src}");
+    }
+}
+
+#[test]
+fn a_cplusplus_elif_branch_is_hidden() {
+    for directive in ["#elif defined(__cplusplus)", "#elifdef __cplusplus"] {
+        let src = format!(
+            "#if defined(HAVE_X)\nint a(void);\n{directive}\n\
+             namespace wrap {{ class W {{ }}; }}\n#endif\nint b(void);\n"
+        );
+        assert_eq!(auto(&src), Language::C, "{src}");
+    }
+}
+
+/// `#elif` continues the group `#if` opened: one `#endif` closes both, so a
+/// construct after it counts whichever branch named `__cplusplus`.
+#[test]
+fn a_construct_after_a_cplusplus_elif_group_closes_still_counts() {
+    for head in [
+        "#if defined(HAVE_X)\nint a(void);\n#elif defined(__cplusplus)\n",
+        "#if defined(__cplusplus)\nint a(void);\n#elif defined(HAVE_X)\n",
+    ] {
+        let src = format!("{head}int b(void);\n#endif\nnamespace n {{ int c; }}\n");
+        assert_eq!(auto(&src), Language::Cpp, "{src}");
+    }
+}
+
 #[test]
 fn cpp_only_sections_under_a_cplusplus_test_do_not_move_a_c_header() {
     let src = "int c_api(void);\n\

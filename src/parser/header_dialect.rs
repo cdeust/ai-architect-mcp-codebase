@@ -9,8 +9,8 @@
 //   - no language given: decided per file. C++ when the header itself holds a
 //     construct the C grammar has no production for (`namespace`, `template <`,
 //     a `class` definition, an access specifier, `::`), read outside comments,
-//     literals, `[[...]]` attributes and any `#if` group that tests
-//     `__cplusplus`. C otherwise.
+//     literals, `[[...]]` attributes, GCC asm operand lists and any `#if`
+//     group that tests `__cplusplus`. C otherwise.
 //
 // Why per file rather than per project: a C++ project commonly vendors C
 // libraries whose headers must keep the C walker (prototypes, linkage), and a
@@ -48,7 +48,59 @@ pub fn filter_keeps_headers(filter: Language) -> bool {
 /// module doc excludes.
 fn declares_cpp(source: &str) -> bool {
     let tokens = strip_attributes(tokenize(source));
-    (0..tokens.len()).any(|i| cpp_construct_at(&tokens, i))
+    let in_asm = asm_operands(&tokens);
+    (0..tokens.len()).any(|i| !in_asm[i] && cpp_construct_at(&tokens, i))
+}
+
+/// Marks the tokens inside the parentheses of a GCC extended asm statement
+/// (`asm`, `__asm` or `__asm__`, optional `volatile` / `goto` / `inline`
+/// qualifiers, then `( ... )`). Its operand lists are separated by `:`, so
+/// `"dsb" ::: "memory"`, `: "r"(v) :: out` or `:::: out` spell `::` in plain
+/// C, even before a name (an `asm goto` label). Outside those parentheses a
+/// `::` before a name has no C reading: `struct D : ::Base`, `case X: ::f();`.
+fn asm_operands(tokens: &[Tok]) -> Vec<bool> {
+    let mut inside = vec![false; tokens.len()];
+    let mut i = 0;
+    while i < tokens.len() {
+        if !matches!(tokens[i], Tok::Ident("asm" | "__asm" | "__asm__")) {
+            i += 1;
+            continue;
+        }
+        let mut open = i + 1;
+        while matches!(tokens.get(open), Some(Tok::Ident(q)) if ASM_QUALIFIERS.contains(q)) {
+            open += 1;
+        }
+        i = match tokens.get(open) {
+            Some(Tok::Punct('(')) => mark_parenthesised(tokens, open, &mut inside),
+            _ => open,
+        };
+    }
+    inside
+}
+
+/// Qualifiers GCC accepts between `asm` and its `(`.
+/// source: https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html ("asm
+/// asm-qualifiers ( AssemblerTemplate ..."), plus the `__volatile__` spelling.
+const ASM_QUALIFIERS: &[&str] = &["volatile", "__volatile__", "__volatile", "goto", "inline"];
+
+/// Marks every token from the `(` at `open` to its matching `)` and returns
+/// the index after it (the end of the tokens when it never closes).
+fn mark_parenthesised(tokens: &[Tok], open: usize, inside: &mut [bool]) -> usize {
+    let mut depth = 0usize;
+    for (k, tok) in tokens.iter().enumerate().skip(open) {
+        inside[k] = true;
+        match tok {
+            Tok::Punct('(') => depth += 1,
+            Tok::Punct(')') => {
+                depth -= 1;
+                if depth == 0 {
+                    return k + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    tokens.len()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,14 +125,11 @@ fn cpp_construct_at(tokens: &[Tok], i: usize) -> bool {
     }
 }
 
-/// `::` qualifies a name only when an identifier follows it and it does not
-/// continue a run of colons. GCC extended asm separates its operand lists with
-/// `:`, so `__asm volatile ( "dsb" ::: "memory" )` and
-/// `( x )::"memory"` spell `::` in plain C (FreeRTOS `portmacro.h`); once the
-/// string literals are dropped, no identifier follows those.
+/// `::` qualifies a name when an identifier follows it. The colons of GCC asm
+/// operand lists never reach here: `declares_cpp` skips the tokens inside an
+/// asm statement (`asm_operands`).
 fn names_a_scope(tokens: &[Tok], i: usize) -> bool {
-    let after_colon = i > 0 && matches!(tokens[i - 1], Tok::Scope | Tok::Punct(':'));
-    !after_colon && matches!(tokens.get(i + 1), Some(Tok::Ident(_)))
+    matches!(tokens.get(i + 1), Some(Tok::Ident(_)))
 }
 
 /// `X {`, `X :`, `X final {` or `X final :` after `class`.
