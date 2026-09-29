@@ -51,6 +51,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A C++ library whose headers are `.h` is indexed as C++ (#399). Every `.h`
+  was parsed with the C grammar by default, and `language: "cpp"` dropped
+  `.h` files from the walk entirely, although the docs recommended it for
+  such trees. Now `language: "c"`, `"cpp"` or `"objc"` keeps `.h` files and
+  parses them with that grammar; without a language, a `.h` is C++ when it
+  contains a C++ construct (`namespace`, `template <`, a `class` definition,
+  an access specifier, a qualified name) outside comments, literals, `[[...]]`
+  attributes and `#if` groups that test `__cplusplus`, and C otherwise, so a
+  C header guarded with `extern "C"` and the GCC asm operands of FreeRTOS
+  stay C. On ETL 20.49.0 (`include/etl` and 6 test files, default mode):
+  Method nodes 6 to 10,030, `.h` files with parse errors 355 to 230 (84,103
+  errors to 8,939), resolved call sites 3,700 to 5,599. FreeRTOS-Kernel
+  dbf7055 is unchanged, nodes and call edges identical byte for byte in both
+  modes. A `.h` that changes dialect between two indexes is fully replaced by
+  an incremental index.
 - A Rust call written with a path names what the path names (#398). The
   qualifier is read with the rules receiver types already follow: `crate::`,
   `self::`, `super::` and a library of the repository name an exact module;

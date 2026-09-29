@@ -58,19 +58,29 @@ enum Tok<'a> {
     Punct(char),
 }
 
-/// The C++-only constructs: `::`, `namespace x` / `namespace {`,
+/// The C++-only constructs: `::` before a name, `namespace x` / `namespace {`,
 /// `template <`, `class X {` / `class X :` (with an optional `final`), and
 /// `public:` / `private:` / `protected:`.
 fn cpp_construct_at(tokens: &[Tok], i: usize) -> bool {
     let at = |k: usize| tokens.get(i + k);
     match tokens[i] {
-        Tok::Scope => true,
+        Tok::Scope => names_a_scope(tokens, i),
         Tok::Ident("namespace") => matches!(at(1), Some(Tok::Ident(_) | Tok::Punct('{'))),
         Tok::Ident("template") => at(1) == Some(&Tok::Punct('<')),
         Tok::Ident("class") => class_definition_follows(&tokens[i + 1..]),
         Tok::Ident("public" | "private" | "protected") => at(1) == Some(&Tok::Punct(':')),
         _ => false,
     }
+}
+
+/// `::` qualifies a name only when an identifier follows it and it does not
+/// continue a run of colons. GCC extended asm separates its operand lists with
+/// `:`, so `__asm volatile ( "dsb" ::: "memory" )` and
+/// `( x )::"memory"` spell `::` in plain C (FreeRTOS `portmacro.h`); once the
+/// string literals are dropped, no identifier follows those.
+fn names_a_scope(tokens: &[Tok], i: usize) -> bool {
+    let after_colon = i > 0 && matches!(tokens[i - 1], Tok::Scope | Tok::Punct(':'));
+    !after_colon && matches!(tokens.get(i + 1), Some(Tok::Ident(_)))
 }
 
 /// `X {`, `X :`, `X final {` or `X final :` after `class`.

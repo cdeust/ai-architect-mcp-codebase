@@ -66,6 +66,24 @@ fn cpp_words_in_comments_literals_and_attributes_stay_c() {
     assert_eq!(auto(src), Language::C);
 }
 
+/// FreeRTOS `portable/GCC/ARM_CM4F/portmacro.h` shapes: GCC extended asm
+/// writes its operand separators as `::` and `:::` in plain C.
+#[test]
+fn gcc_asm_operand_colons_stay_c() {
+    for src in [
+        "#define portMEMORY_BARRIER() __asm volatile ( \"\" ::: \"memory\" )\n",
+        "static inline int f(void) { int x;\n\
+         __asm volatile ( \"mrs %0, ipsr\" : \"=r\" ( x )::\"memory\" ); return x; }\n",
+        "static inline void g(unsigned v) {\n\
+         __asm volatile ( \"msr basepri, %0\" ::\"r\" ( v ) : \"memory\" ); }\n",
+        "static inline unsigned h(void) { unsigned rv;\n\
+         __asm volatile ( \"mfc0 %0\" : \"=r\" ( rv ) :: ); return rv; }\n",
+        "static void k(void) { __asm goto ( \"jmp %l0\" :::: out ); out: ; }\n",
+    ] {
+        assert_eq!(auto(src), Language::C, "{src}");
+    }
+}
+
 #[test]
 fn cpp_only_sections_under_a_cplusplus_test_do_not_move_a_c_header() {
     let src = "int c_api(void);\n\
