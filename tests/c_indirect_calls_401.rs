@@ -163,3 +163,87 @@ fn a_cpp_call_through_a_pointer_is_a_site_left_open() {
     assert_eq!(fp[2], "", "{fp:?}");
     assert_eq!(fp[3], "indirect_call/indirect", "{fp:?}");
 }
+
+/// tree-sitter reads `(T)(x)` with `T` not a known typedef, a literal operand
+/// and a parenthesized condition followed by parentheses as calls. None is a
+/// call, so none becomes a site; the calls written in the same function
+/// through a pointer keep theirs, and so does `(fp)(4)`, since the file
+/// declares `fp` as a parameter. `T` is deliberately not declared: with a
+/// typedef in the file the grammar reads a cast.
+const NOT_CALLS: &str = "\
+struct ops { int (*cb)(int); };
+int handle(struct ops *s, int (*fp)(int), unsigned n) {
+    unsigned a = (UBaseType_t)(n);
+    unsigned b = (StackType_t)(n + 1U);
+    int c = (n == 0U)(1);
+    \"i\"(n);
+    int d = (fp)();
+    int e = (*fp)(1);
+    int f = (s->cb)(2);
+    int g = ((*fp))(3);
+    int h = (fp)(4);
+    return a + b + c + d + e + f + g + h;
+}
+";
+
+const REAL_INDIRECT_CALLS: [&str; 5] = ["(fp)", "(*fp)", "(s->cb)", "((*fp))", "(fp)"];
+
+fn assert_only_pointer_calls_are_sites(file: &str) {
+    let (store, _tmp) = index_and_resolve(&[(file, NOT_CALLS)]);
+    let sites = sites_in(&store, file, "Calls_CallSite_Function");
+    let names: Vec<&str> = sites.iter().map(|s| s[0].as_str()).collect();
+    assert_eq!(names, REAL_INDIRECT_CALLS, "{sites:?}");
+    for s in &sites {
+        assert_eq!(s[1], "indirect", "{s:?}");
+        assert_eq!(s[3], "indirect_call/indirect", "{s:?}");
+    }
+}
+
+#[test]
+fn a_c_cast_or_literal_in_call_position_is_not_a_site() {
+    assert_only_pointer_calls_are_sites("h.c");
+}
+
+#[test]
+fn a_cpp_cast_or_literal_in_call_position_is_not_a_site() {
+    assert_only_pointer_calls_are_sites("h.cpp");
+}
+
+/// A call through a pointer to member (`(o.*Pm)(e)`) and through a
+/// template parameter naming a function (`(Fn)(e)`) are calls.
+#[test]
+fn a_cpp_call_through_a_member_pointer_is_a_site_left_open() {
+    let source = "\
+struct Obj { int m(int); };
+template <int (*Fn)(int)>
+int through_template(int e) { return (Fn)(e); }
+int through_value(Obj *p, Obj &o, int (Obj::*Pm)(int), int e) {
+    return (o.*Pm)(e);
+}
+";
+    let (store, _tmp) = index_and_resolve(&[("m.cpp", source)]);
+    let sites = sites_in(&store, "m.cpp", "Calls_CallSite_Function");
+    let names: Vec<&str> = sites.iter().map(|s| s[0].as_str()).collect();
+    assert_eq!(names, ["(Fn)", "(o.*Pm)"], "{sites:?}");
+    for s in &sites {
+        assert_eq!(s[3], "indirect_call/indirect", "{s:?}");
+    }
+}
+
+/// A storage macro before a declaration (FreeRTOS `PRIVILEGED_DATA`) makes
+/// the grammar read the typedef name as the declared variable; a cast of that
+/// typedef is still not a call.
+#[test]
+fn a_cast_is_not_a_site_when_a_storage_macro_confuses_the_typedef_declaration() {
+    let source = "\
+PRIVILEGED_DATA static volatile UBaseType_t uxCount = ( UBaseType_t ) 0U;
+void bump( void ) {
+    uxCount = ( UBaseType_t ) ( uxCount + 1U );
+}
+void caller( void ) { bump(); }
+";
+    let (store, _tmp) = index_and_resolve(&[("m.c", source)]);
+    let sites = sites_in(&store, "m.c", "Calls_CallSite_Function");
+    let names: Vec<&str> = sites.iter().map(|s| s[0].as_str()).collect();
+    assert_eq!(names, ["bump"], "{sites:?}");
+}

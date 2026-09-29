@@ -172,22 +172,109 @@ const MEMBER_CALLEE_KIND: &str = "field_expression";
 /// source: structural, keeps one-line labels for `(*handlers[i].fn)` shapes.
 const INDIRECT_CALLEE_MAX_CHARS: usize = 80;
 
+/// Callee kinds that are a pointer-valued expression: what a call through a
+/// function pointer, a table of them or a call's result looks like once the
+/// parentheses are stripped. `field_expression` only reaches this list
+/// parenthesized (`(s->cb)(x)`); bare it is a member call.
+/// source: tree-sitter-c 0.24.2 and tree-sitter-cpp 0.23.4 node-types.json,
+/// the `function` field of `call_expression` (an `_expression`, so a callee can
+/// also be a cast operand, a condition, a string operand of `asm`, ...).
+const INDIRECT_CALLEE_KINDS: [&str; 8] = [
+    "pointer_expression",
+    "subscript_expression",
+    "call_expression",
+    "conditional_expression",
+    "cast_expression",
+    "generic_expression",
+    "lambda_expression",
+    "field_expression",
+];
+
 /// The shape of a call's callee (issue #401), read from the kind of its
-/// `function` node.
-pub(super) fn callee_shape(call_node: Node, function_field: &str) -> &'static str {
-    match call_node.child_by_field_name(function_field) {
-        Some(f) if DIRECT_CALLEE_KINDS.contains(&f.kind()) => CALLEE_SHAPE_DIRECT,
-        Some(f) if f.kind() == MEMBER_CALLEE_KIND => CALLEE_SHAPE_MEMBER,
-        _ => CALLEE_SHAPE_INDIRECT,
+/// `function` node; `None` when the node is not a call at all.
+///
+/// tree-sitter-c reads `(T)(x)` with `T` not known as a typedef in the file as
+/// a call whose callee is `(T)`, and reads asm operands (`: "i" (x)`) and
+/// mis-parsed macro conditions the same way; none of those is a call, so a
+/// callee that is a literal, an operator expression or a lone parenthesized
+/// name yields `None`, unless the name cannot be a cast: `(fp)()` and
+/// `(fp)(a, b)` have no single operand, and `(fp)(x)` is a call when the file
+/// declares `fp` as a variable, parameter or function. Only `(name)(x)` with
+/// `name` declared elsewhere (a header) stays indistinguishable from a cast
+/// without type information; it is dropped, as it was before #401.
+/// source: ISO/IEC 9899:2018 §6.5.4 (a cast has exactly one operand),
+/// §6.5.2.2 (a call through an expression of pointer-to-function type).
+pub(super) fn callee_shape(
+    source: &str,
+    call_node: Node,
+    function_field: &str,
+) -> Option<&'static str> {
+    let callee = call_node.child_by_field_name(function_field)?;
+    if DIRECT_CALLEE_KINDS.contains(&callee.kind()) {
+        return Some(CALLEE_SHAPE_DIRECT);
+    }
+    if callee.kind() == MEMBER_CALLEE_KIND {
+        return Some(CALLEE_SHAPE_MEMBER);
+    }
+    let mut inner = callee;
+    while inner.kind() == "parenthesized_expression" {
+        inner = inner.named_child(0)?;
+    }
+    if inner.kind() == "identifier" && inner.id() != callee.id() {
+        let one_operand = call_node
+            .child_by_field_name("arguments")
+            .is_some_and(|args| args.named_child_count() == 1);
+        let is_call = !one_operand || is_declared_in_file(source, inner);
+        return is_call.then_some(CALLEE_SHAPE_INDIRECT);
+    }
+    INDIRECT_CALLEE_KINDS
+        .contains(&inner.kind())
+        .then_some(CALLEE_SHAPE_INDIRECT)
+}
+
+/// Whether the file declares the name `name_node` spells: an `identifier` that
+/// is the `declarator` of a declaration, a parameter or a function (a typedef
+/// name is a `type_identifier`, so a type never matches). A declaration the
+/// grammar could not parse cleanly is ignored: a storage macro before it makes
+/// the grammar read a typedef name as the declared variable.
+fn is_declared_in_file(source: &str, name_node: Node) -> bool {
+    let name = node_text(source, name_node);
+    let mut root = name_node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    loop {
+        let n = cursor.node();
+        if n.kind() == "identifier"
+            && n.id() != name_node.id()
+            && n.parent().is_some_and(|p| {
+                !p.has_error()
+                    && p.child_by_field_name("declarator")
+                        .is_some_and(|d| d.id() == n.id())
+            })
+            && node_text(source, n) == name
+        {
+            return true;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return false;
+            }
+        }
     }
 }
 
 /// The callee of a C or C++ call. A name or a member access yields its last
 /// identifier, as `member_access_callee` always did; an indirect callee
 /// yields its own text, whitespace collapsed, so the call keeps a site
-/// instead of being dropped (issue #401).
+/// instead of being dropped (issue #401); a callee that is not a call yields
+/// `None`.
 pub(super) fn shaped_callee(source: &str, call_node: Node, function_field: &str) -> Option<String> {
-    if callee_shape(call_node, function_field) != CALLEE_SHAPE_INDIRECT {
+    if callee_shape(source, call_node, function_field)? != CALLEE_SHAPE_INDIRECT {
         return member_access_callee(source, call_node, function_field);
     }
     let text = node_field_text(source, call_node, function_field);
@@ -205,6 +292,7 @@ pub(super) fn shaped_callee(source: &str, call_node: Node, function_field: &str)
 /// pointer calls open (issue #401). Used by C and C++; Objective-C keeps
 /// `call_entry`.
 pub(super) fn shaped_call_entry(
+    source: &str,
     call_node: Node,
     function_field: &str,
     caller_qn: &str,
@@ -212,10 +300,11 @@ pub(super) fn shaped_call_entry(
 ) -> CallEntry {
     let (callee, seq) = call;
     let mut entry = call_entry(call_node, caller_qn, callee, seq);
-    let shape = callee_shape(call_node, function_field);
-    entry
-        .properties
-        .push(("callee_shape".to_string(), shape.to_string()));
+    if let Some(shape) = callee_shape(source, call_node, function_field) {
+        entry
+            .properties
+            .push(("callee_shape".to_string(), shape.to_string()));
+    }
     entry
 }
 

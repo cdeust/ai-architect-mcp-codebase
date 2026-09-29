@@ -63,7 +63,12 @@ adheres to [Semantic Versioning](https://semver.org/).
   is #406). The reason set changed, so `callsite_reason_form` is now 2: a graph
   resolved before reads its reasons as not recorded until the next full index.
   The site of an indirect callee takes a per-file sequence number, so the ids
-  of later definitions in the same file move by one on reindex.
+  of later definitions in the same file move by one on reindex. A cast, a
+  literal or an assembler operand in call position is not a call site: the
+  grammar reads `(T)(x)` with an undeclared `T` as a call, so a parenthesized
+  name followed by one operand is a call only if the file declares that name
+  (`(name)(x)` with `name` declared only in a header stays unrecorded, as
+  before).
 
 - A C++ library whose headers are `.h` is indexed as C++ (#399). Every `.h`
   was parsed with the C grammar by default, and `language: "cpp"` dropped

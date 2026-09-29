@@ -78,13 +78,19 @@ impl LanguageConventions for CppConventions {
 
     fn call_entry(
         &self,
-        _source: &str,
+        source: &str,
         call_node: Node,
         caller_qn: &str,
         callee: &str,
         seq: u64,
     ) -> CallEntry {
-        c_family::shaped_call_entry(call_node, CPP_CALL_FUNCTION_FIELD, caller_qn, (callee, seq))
+        c_family::shaped_call_entry(
+            source,
+            call_node,
+            CPP_CALL_FUNCTION_FIELD,
+            caller_qn,
+            (callee, seq),
+        )
     }
 
     fn imports_of(
