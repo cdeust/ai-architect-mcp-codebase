@@ -6,7 +6,8 @@
 // `public` (no access keyword the hand-written walkers honored), a definition
 // QN is `{scope}::{name}#{seq}` (the per-file `seq` makes it unique, so no
 // dedup is needed), a call site is keyed `{caller}::call@{line}:{col}#{seq}`
-// with a single `callee_name` property, and a `#include`/`#import` directive is
+// with a `callee_name` property (C and C++ add `callee_shape`, issue #401), and
+// a `#include`/`#import` directive is
 // shaped into one `Import` by stripping the directive and the `<>`/`""`
 // delimiters. These were duplicated VERBATIM in `CConventions` (c.rs) and
 // `CppConventions` (cpp.rs); Objective-C is the third use, which crosses §3.3
@@ -25,6 +26,7 @@
 use tree_sitter::Node;
 
 use super::conventions::{CallEntry, ImportEntry};
+use crate::graph_store::{CALLEE_SHAPE_DIRECT, CALLEE_SHAPE_INDIRECT, CALLEE_SHAPE_MEMBER};
 use crate::parser::{node_field_text, node_text, qual};
 
 /// The uniform C-family visibility: `public` for every declared name. C has no
@@ -128,8 +130,9 @@ pub(super) fn def_qn(scope: &str, name: &str, seq: u64) -> String {
 /// The last identifier segment of a call expression's callee, after member and
 /// scope access: `printf` → `printf`, `obj.method` → `method`,
 /// `ptr->call` → `call`, `geometry::identity` → `identity`. A non-identifier
-/// callee (`(fp)()`) yields `None` (the call is dropped). Splits on
-/// `['.', '>', ':']`, matching the hand-written C / C++ `extract_calls`.
+/// tail yields `None`; C and C++ reach this only for a name or a member access
+/// (`shaped_callee` keeps indirect callees). Splits on `['.', '>', ':']`,
+/// matching the hand-written C / C++ `extract_calls`.
 ///
 /// `function_field` is the grammar field naming the callee (`function` in both
 /// grammars). Objective-C does NOT use this helper for `call_expression` (it
@@ -149,6 +152,71 @@ pub(super) fn member_access_callee(
         .trim()
         .to_string();
     identifier_callee(tail)
+}
+
+/// Callee kinds that name a function directly. `primitive_type` is a C++
+/// functional cast (`int(x)`), kept as a name as before.
+/// source: tree-sitter-c 0.24.2 and tree-sitter-cpp 0.23.4 node-types.json,
+/// the `function` field of `call_expression`.
+const DIRECT_CALLEE_KINDS: [&str; 5] = [
+    "identifier",
+    "qualified_identifier",
+    "template_function",
+    "primitive_type",
+    "destructor_name",
+];
+/// source: same node-types.json; `field_expression` is `s.f` and `p->f`.
+const MEMBER_CALLEE_KIND: &str = "field_expression";
+/// The longest indirect callee text kept as the site's name; the text only
+/// labels the site, nothing resolves it.
+/// source: structural, keeps one-line labels for `(*handlers[i].fn)` shapes.
+const INDIRECT_CALLEE_MAX_CHARS: usize = 80;
+
+/// The shape of a call's callee (issue #401), read from the kind of its
+/// `function` node.
+pub(super) fn callee_shape(call_node: Node, function_field: &str) -> &'static str {
+    match call_node.child_by_field_name(function_field) {
+        Some(f) if DIRECT_CALLEE_KINDS.contains(&f.kind()) => CALLEE_SHAPE_DIRECT,
+        Some(f) if f.kind() == MEMBER_CALLEE_KIND => CALLEE_SHAPE_MEMBER,
+        _ => CALLEE_SHAPE_INDIRECT,
+    }
+}
+
+/// The callee of a C or C++ call. A name or a member access yields its last
+/// identifier, as `member_access_callee` always did; an indirect callee
+/// yields its own text, whitespace collapsed, so the call keeps a site
+/// instead of being dropped (issue #401).
+pub(super) fn shaped_callee(source: &str, call_node: Node, function_field: &str) -> Option<String> {
+    if callee_shape(call_node, function_field) != CALLEE_SHAPE_INDIRECT {
+        return member_access_callee(source, call_node, function_field);
+    }
+    let text = node_field_text(source, call_node, function_field);
+    let label: String = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(INDIRECT_CALLEE_MAX_CHARS)
+        .collect();
+    (!label.is_empty()).then_some(label)
+}
+
+/// `call_entry` plus the `callee_shape` property the resolver reads to leave
+/// pointer calls open (issue #401). Used by C and C++; Objective-C keeps
+/// `call_entry`.
+pub(super) fn shaped_call_entry(
+    call_node: Node,
+    function_field: &str,
+    caller_qn: &str,
+    call: (&str, u64),
+) -> CallEntry {
+    let (callee, seq) = call;
+    let mut entry = call_entry(call_node, caller_qn, callee, seq);
+    let shape = callee_shape(call_node, function_field);
+    entry
+        .properties
+        .push(("callee_shape".to_string(), shape.to_string()));
+    entry
 }
 
 /// Accepts a callee string iff it is non-empty and begins with an identifier

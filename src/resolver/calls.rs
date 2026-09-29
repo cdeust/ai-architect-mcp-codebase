@@ -15,7 +15,7 @@ mod reason;
 mod variant_guard;
 use candidate_scope::qualified_path_gate;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
-use reason::{Failure, Gated};
+use reason::{Decline, Failure, Gated};
 
 // ---------------------------------------------------------------------------
 // Phase 2: Call resolution
@@ -36,9 +36,11 @@ pub(super) fn resolve_calls(
     store.ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
     // Issues #348 and #349: same precedent; '' reads as "written at the binding".
     store.ensure_node_column("CallSite", "receiver_hint_via", "STRING DEFAULT ''")?;
+    // Issue #401: same precedent; '' reads as a name.
+    store.ensure_node_column("CallSite", "callee_shape", "STRING DEFAULT ''")?;
     let qr = store.execute_query(
         "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.language, cs.receiver_hint, \
-         cs.receiver_hint_via",
+         cs.receiver_hint_via, cs.callee_shape",
     )?;
     let mut resolved = 0u64;
     let mut total = 0u64;
@@ -59,7 +61,7 @@ pub(super) fn resolve_calls(
     let callables = store.callable_facts();
 
     for row in &qr.rows {
-        if row.len() < 5 {
+        if row.len() < 6 {
             continue;
         }
         let callee = &row[1];
@@ -94,6 +96,7 @@ pub(super) fn resolve_calls(
             language: &row[2],
             receiver_hint: &row[3],
             receiver_hint_via: &row[4],
+            callee_shape: &row[5],
         };
         if resolve_one_call_site(&graph, buf, &row_input, &mut tally) {
             resolved_ids.push(row[0].clone());
@@ -152,7 +155,8 @@ fn resolve_one_call_site(
         callables: graph.callables,
     };
     let resolved_before = *tally.resolved;
-    let (resolution, decline) = resolve_single_call(&ctx, &site, &file_id);
+    let (resolution, decline) =
+        pointer_call(row).unwrap_or_else(|| resolve_single_call(&ctx, &site, &file_id));
     let failure = match resolution {
         PolicyResolution::Resolved {
             target,
@@ -213,6 +217,23 @@ fn resolve_one_call_site(
     // is_resolved (§10.4). Applies to both Calls and Uses edges (both mean
     // "target found").
     *tally.resolved > resolved_before
+}
+
+/// A call through a function pointer (issue #401) names no function a static
+/// resolver can find: it stays open, with the shape of its callee.
+fn pointer_call(row: &RowInput) -> Option<Gated> {
+    use crate::graph_store::{calls_through_a_pointer, CALLEE_SHAPE_INDIRECT, CALLEE_SHAPE_MEMBER};
+    calls_through_a_pointer(row.language, row.callee_shape).then(|| {
+        let shape = if row.callee_shape == CALLEE_SHAPE_INDIRECT {
+            CALLEE_SHAPE_INDIRECT
+        } else {
+            CALLEE_SHAPE_MEMBER
+        };
+        (
+            PolicyResolution::NotFound,
+            Some(Decline::PointerCall(shape)),
+        )
+    })
 }
 
 /// Queues the reason `failure` gives the site (issue #393).
@@ -294,6 +315,8 @@ struct RowInput<'a> {
     /// function's return type (issues #348 and #349), "" when it was written
     /// at the binding, and for a graph indexed before the column existed.
     receiver_hint_via: &'a str,
+    /// What the C or C++ callee is (issue #401); "" for other languages.
+    callee_shape: &'a str,
 }
 
 /// A resolved callee plus the evidence/confidence the policy attached to it.

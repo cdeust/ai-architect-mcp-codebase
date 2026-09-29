@@ -28,9 +28,14 @@
 //   - `char *name;` / `char buf[8];` / `int (*handler)(int, void *)` — pointer,
 //     array, and function-pointer declarators all unwrap to the bare field name.
 //   - `struct Point *next;` — the field's type_annotation is `struct Point`.
-//   - `(fp)()` — a parenthesized (non-identifier) callee, DROPPED (no CallSite;
-//     negative assertion). `obj.method` / `ptr->call` — member-access callees
-//     resolve to the tail (`method` / `call`). `_internal()` — underscore callee kept.
+//   - `(fp)()` — a parenthesized (non-identifier) callee. The hand-written
+//     walker dropped it; since issue #401 it is a CallSite named `(fp)` with
+//     `callee_shape=indirect`, a DELIBERATE divergence. It takes seq #4, so every
+//     later seq in the file moves up by one (`dbg#11`, `empty#10`, `gated#12`
+//     and the call QNs of `add#3`). `obj.method` / `ptr->call` — member-access
+//     callees resolve to the tail (`method` / `call`), `callee_shape=member`.
+//     `_internal()` — underscore callee kept. Every CallSite now carries its
+//     `callee_shape` (issue #401).
 //   - `#ifdef DEBUG … #endif` and `#if defined(FEATURE) … #endif` — the flat
 //     walker recurses transparently through preprocessor wrappers, so `dbg`
 //     (prototype), `Gated` (struct), and `gated` (function + call) inside them
@@ -149,12 +154,14 @@ struct Tagged {
 
 pub(super) fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|_internal|app/main.c::add#3::call@46:5#4|46|46|public|[(\"callee_name\", \"_internal\"), (\"lsp_col\", \"4\")]",
-        "CallSite|call|app/main.c::add#3::call@45:5#5|45|45|public|[(\"callee_name\", \"call\"), (\"lsp_col\", \"4\")]",
-        "CallSite|dbg|app/main.c::gated#11::call@62:5#12|62|62|public|[(\"callee_name\", \"dbg\"), (\"lsp_col\", \"4\")]",
-        "CallSite|helper|app/main.c::add#3::call@42:13#8|42|42|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"12\")]",
-        "CallSite|method|app/main.c::add#3::call@44:5#6|44|44|public|[(\"callee_name\", \"method\"), (\"lsp_col\", \"4\")]",
-        "CallSite|printf|app/main.c::add#3::call@43:5#7|43|43|public|[(\"callee_name\", \"printf\"), (\"lsp_col\", \"4\")]",
+        "CallSite|_internal|app/main.c::add#3::call@46:5#5|46|46|public|[(\"callee_name\", \"_internal\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\")]",
+        // issue #401: a parenthesized callee is kept as an indirect call site
+        "CallSite|(fp)|app/main.c::add#3::call@47:5#4|47|47|public|[(\"callee_name\", \"(fp)\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"indirect\")]",
+        "CallSite|call|app/main.c::add#3::call@45:5#6|45|45|public|[(\"callee_name\", \"call\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"member\")]",
+        "CallSite|dbg|app/main.c::gated#12::call@62:5#13|62|62|public|[(\"callee_name\", \"dbg\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\")]",
+        "CallSite|helper|app/main.c::add#3::call@42:13#9|42|42|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"12\"), (\"callee_shape\", \"direct\")]",
+        "CallSite|method|app/main.c::add#3::call@44:5#7|44|44|public|[(\"callee_name\", \"method\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"member\")]",
+        "CallSite|printf|app/main.c::add#3::call@43:5#8|43|43|public|[(\"callee_name\", \"printf\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\")]",
         "Constant|BLUE|app/main.c::Color::BLUE|26|26|public|[(\"enum_entry\", \"true\")]",
         // issue #107 — object-like macro
         "Constant|MAX|app/main.c::MAX|5|6|public|[(\"macro\", \"true\")]",
@@ -186,9 +193,9 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Function|SQUARE|app/main.c::SQUARE|6|7|public|[(\"macro\", \"true\"), (\"body_kind\", \"macro\")]",
         "Function|add|app/main.c::add#1|35|35|public|[(\"is_prototype\", \"true\"), (\"body_kind\", \"prototype\")]",
         "Function|add|app/main.c::add#3|41|49|public|[]",
-        "Function|dbg|app/main.c::dbg#10|54|54|public|[(\"is_prototype\", \"true\"), (\"body_kind\", \"prototype\")]",
-        "Function|empty|app/main.c::empty#9|51|51|public|[]",
-        "Function|gated|app/main.c::gated#11|61|63|public|[]",
+        "Function|dbg|app/main.c::dbg#11|54|54|public|[(\"is_prototype\", \"true\"), (\"body_kind\", \"prototype\")]",
+        "Function|empty|app/main.c::empty#10|51|51|public|[]",
+        "Function|gated|app/main.c::gated#12|61|63|public|[]",
         "Function|helper|app/main.c::helper#2|37|39|public|[(\"linkage\", \"internal\")]",
         "Import|config.h|app/main.c::include:config.h|2|3|public|[(\"path\", \"config.h\")]",
         "Import|stdio.h|app/main.c::include:stdio.h|1|2|public|[(\"path\", \"stdio.h\")]",
@@ -202,11 +209,13 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
 pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
         ("Calls", "app/main.c::add#3", "_internal"),
+        // issue #401
+        ("Calls", "app/main.c::add#3", "(fp)"),
         ("Calls", "app/main.c::add#3", "call"),
         ("Calls", "app/main.c::add#3", "helper"),
         ("Calls", "app/main.c::add#3", "method"),
         ("Calls", "app/main.c::add#3", "printf"),
-        ("Calls", "app/main.c::gated#11", "dbg"),
+        ("Calls", "app/main.c::gated#12", "dbg"),
         ("Defines", "app/main.c::Color", "app/main.c::Color::BLUE"),
         ("Defines", "app/main.c::Color", "app/main.c::Color::GREEN"),
         ("Defines", "app/main.c::Color", "app/main.c::Color::RED"),
@@ -218,9 +227,9 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
         ("Defines", "app/main.c", "app/main.c::Value"),
         ("Defines", "app/main.c", "app/main.c::add#1"),
         ("Defines", "app/main.c", "app/main.c::add#3"),
-        ("Defines", "app/main.c", "app/main.c::dbg#10"),
-        ("Defines", "app/main.c", "app/main.c::empty#9"),
-        ("Defines", "app/main.c", "app/main.c::gated#11"),
+        ("Defines", "app/main.c", "app/main.c::dbg#11"),
+        ("Defines", "app/main.c", "app/main.c::empty#10"),
+        ("Defines", "app/main.c", "app/main.c::gated#12"),
         ("Defines", "app/main.c", "app/main.c::helper#2"),
         ("Defines", "app/main.c", "app/main.c::ulong_t"),
         // issue #107 — macros and inline types

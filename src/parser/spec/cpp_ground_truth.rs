@@ -62,10 +62,13 @@
 //   - Free function `freeFunction(int a, int b)` -> `Function` named
 //     `freeFunction` (#123), `freeFunction#17`; its body's calls resolve by
 //     member-access tail (`printf`, `obj.method`->`method`, `ptr->call`->`call`,
-//     `geometry::identity`->`identity`, `_internal`), and `(fp)()` - a
-//     parenthesized non-identifier callee - is DROPPED (negative assertion). The
-//     call `seq`s are assigned in REVERSE source order (stack DFS), keying the
-//     `call@line:col#seq` QNs.
+//     `geometry::identity`->`identity`, `_internal`). `(fp)()` - a
+//     parenthesized non-identifier callee - was dropped by the old walker; since
+//     issue #401 it is a CallSite named `(fp)` with `callee_shape=indirect`, a
+//     DELIBERATE divergence that takes seq #18 and moves every later seq up by
+//     one (`empty#24`, `gated#25`). Every CallSite carries its `callee_shape`.
+//     The call `seq`s are assigned in REVERSE source order (stack DFS), keying
+//     the `call@line:col#seq` QNs.
 //   - The out-of-body definition `double geometry::Circle::area() const { ... }`
 //     at file scope -> a `Method` re-attached to `geometry::Circle`
 //     (`geometry::Circle::area#16`), NOT a file-scoped `Function` (#124.5).
@@ -74,7 +77,7 @@
 //     not an explicit dispatch kind, so the walker only reaches its inner
 //     `function_definition` by recursing the wrapper (which HAS named children).
 //     Its presence kills the `named_child_count() > 0` -> `== 0` / `< 0` mutants
-//     (both would drop `gated` (`gated#24`) and its `helper` call); only
+//     (both would drop `gated` (`gated#25`) and its `helper` call); only
 //     `> 0` -> `>= 0` survives, a documented EQUIVALENT (recursing a childless
 //     node emits nothing).
 // source: tree-sitter-cpp 0.23.4 src/node-types.json (every node kind and field
@@ -174,13 +177,15 @@ pub(super) const PATH: &str = "app/main.cpp";
 
 pub(super) fn expected_node_records() -> Vec<&'static str> {
     vec![
-        "CallSite|_internal|app/main.cpp::freeFunction#17::call@77:5#18|77|77|public|[(\"callee_name\", \"_internal\"), (\"lsp_col\", \"4\")]",
-        "CallSite|call|app/main.cpp::freeFunction#17::call@75:5#20|75|75|public|[(\"callee_name\", \"call\"), (\"lsp_col\", \"4\")]",
-        "CallSite|compute|app/main.cpp::geometry::Shape::getId#8::call@27:26#9|27|27|public|[(\"callee_name\", \"compute\"), (\"lsp_col\", \"25\")]",
-        "CallSite|helper|app/main.cpp::gated#24::call@86:12#25|86|86|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"11\")]",
-        "CallSite|identity|app/main.cpp::freeFunction#17::call@76:5#19|76|76|public|[(\"callee_name\", \"identity\"), (\"lsp_col\", \"4\")]",
-        "CallSite|method|app/main.cpp::freeFunction#17::call@74:5#21|74|74|public|[(\"callee_name\", \"method\"), (\"lsp_col\", \"4\")]",
-        "CallSite|printf|app/main.cpp::freeFunction#17::call@73:5#22|73|73|public|[(\"callee_name\", \"printf\"), (\"lsp_col\", \"4\")]",
+        "CallSite|_internal|app/main.cpp::freeFunction#17::call@77:5#19|77|77|public|[(\"callee_name\", \"_internal\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\")]",
+        // issue #401: a parenthesized callee is kept as an indirect call site
+        "CallSite|(fp)|app/main.cpp::freeFunction#17::call@78:5#18|78|78|public|[(\"callee_name\", \"(fp)\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"indirect\")]",
+        "CallSite|call|app/main.cpp::freeFunction#17::call@75:5#21|75|75|public|[(\"callee_name\", \"call\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"member\")]",
+        "CallSite|compute|app/main.cpp::geometry::Shape::getId#8::call@27:26#9|27|27|public|[(\"callee_name\", \"compute\"), (\"lsp_col\", \"25\"), (\"callee_shape\", \"direct\")]",
+        "CallSite|helper|app/main.cpp::gated#25::call@86:12#26|86|86|public|[(\"callee_name\", \"helper\"), (\"lsp_col\", \"11\"), (\"callee_shape\", \"direct\")]",
+        "CallSite|identity|app/main.cpp::freeFunction#17::call@76:5#20|76|76|public|[(\"callee_name\", \"identity\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\")]",
+        "CallSite|method|app/main.cpp::freeFunction#17::call@74:5#22|74|74|public|[(\"callee_name\", \"method\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"member\")]",
+        "CallSite|printf|app/main.cpp::freeFunction#17::call@73:5#23|73|73|public|[(\"callee_name\", \"printf\"), (\"lsp_col\", \"4\"), (\"callee_shape\", \"direct\")]",
         "Constant|BLUE|app/main.cpp::geometry::Color::BLUE|49|49|public|[(\"enum_entry\", \"true\")]",
         "Constant|FAIL|app/main.cpp::geometry::Status::FAIL|51|51|public|[(\"enum_entry\", \"true\")]",
         "Constant|GREEN|app/main.cpp::geometry::Color::GREEN|49|49|public|[(\"enum_entry\", \"true\")]",
@@ -195,9 +200,9 @@ pub(super) fn expected_node_records() -> Vec<&'static str> {
         "Field|radius|app/main.cpp::geometry::Circle::radius|37|37|public|[(\"type_annotation\", \"double\")]",
         "Field|x|app/main.cpp::geometry::Point::x|14|14|public|[(\"type_annotation\", \"int\")]",
         "Field|y|app/main.cpp::geometry::Point::y|15|15|public|[(\"type_annotation\", \"int\")]",
-        "Function|empty|app/main.cpp::empty#23|82|82|public|[]",
+        "Function|empty|app/main.cpp::empty#24|82|82|public|[]",
         "Function|freeFunction|app/main.cpp::freeFunction#17|71|80|public|[]",
-        "Function|gated|app/main.cpp::gated#24|85|87|public|[]",
+        "Function|gated|app/main.cpp::gated#25|85|87|public|[]",
         "Function|identity|app/main.cpp::geometry::identity#15|61|63|public|[]",
         "Import|iostream|app/main.cpp::include:iostream|1|2|public|[(\"path\", \"iostream\")]",
         "Import|myheader.h|app/main.cpp::include:myheader.h|2|3|public|[(\"path\", \"myheader.h\")]",
@@ -243,16 +248,18 @@ pub(super) fn expected_refs() -> Vec<(&'static str, &'static str, &'static str)>
 
 fn expected_refs_part0() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
+        // issue #401
+        ("Calls", "app/main.cpp::freeFunction#17", "(fp)"),
         ("Calls", "app/main.cpp::freeFunction#17", "_internal"),
         ("Calls", "app/main.cpp::freeFunction#17", "call"),
         ("Calls", "app/main.cpp::freeFunction#17", "identity"),
         ("Calls", "app/main.cpp::freeFunction#17", "method"),
         ("Calls", "app/main.cpp::freeFunction#17", "printf"),
-        ("Calls", "app/main.cpp::gated#24", "helper"),
+        ("Calls", "app/main.cpp::gated#25", "helper"),
         ("Calls", "app/main.cpp::geometry::Shape::getId#8", "compute"),
-        ("Defines", "app/main.cpp", "app/main.cpp::empty#23"),
+        ("Defines", "app/main.cpp", "app/main.cpp::empty#24"),
         ("Defines", "app/main.cpp", "app/main.cpp::freeFunction#17"),
-        ("Defines", "app/main.cpp", "app/main.cpp::gated#24"),
+        ("Defines", "app/main.cpp", "app/main.cpp::gated#25"),
         ("Defines", "app/main.cpp", "app/main.cpp::geometry"),
         (
             "Defines",

@@ -347,24 +347,20 @@ fn append_callsite_properties(props: &mut Vec<(String, String)>, node: &parser::
     // rows with it too). The resolution passes write the reason of every site
     // they leave open (issue #393, `graph_store::callsite_reasons`).
     props.push(("unresolved_reason".to_string(), cypher_str("")));
-    // Issue #283 (lot 6, palier 3): empty when the Rust spec found no
-    // single-typed local receiver, and for any non-Rust CallSite, which never
-    // sets the property; the palier-3 gate treats "" as "no hint".
-    props.push((
-        "receiver_hint".to_string(),
-        cypher_str(&find_property(node, "receiver_hint")),
-    ));
-    // Issue #339: the `vec!` argument shape, '' for every other site.
-    props.push((
-        "macro_arg_shape".to_string(),
-        cypher_str(&find_property(node, "macro_arg_shape")),
-    ));
-    // Issues #348 and #349: how the receiver hint was derived, '' when it was
-    // written at the binding.
-    props.push((
-        "receiver_hint_via".to_string(),
-        cypher_str(&find_property(node, "receiver_hint_via")),
-    ));
+    // Parser-set strings, '' when the spec never sets them:
+    // - receiver_hint (issue #283, lot 6, palier 3): the single-typed local
+    //   receiver the Rust spec found; the palier-3 gate treats "" as no hint;
+    // - macro_arg_shape (issue #339): the `vec!` argument shape;
+    // - receiver_hint_via (issues #348 and #349): how the hint was derived;
+    // - callee_shape (issue #401): `direct`/`member`/`indirect`, C and C++.
+    for key in [
+        "receiver_hint",
+        "macro_arg_shape",
+        "receiver_hint_via",
+        "callee_shape",
+    ] {
+        props.push((key.to_string(), cypher_str(&find_property(node, key))));
+    }
 }
 
 // Schema awareness — source: graph_store.rs node_table_ddl().

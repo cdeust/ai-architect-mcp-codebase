@@ -119,11 +119,13 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // receiver_hint_via: issues #348 and #349 — `return-type` when the
         // hint was read off a free function's declared return type, '' when
         // it was written at the binding; read by the palier-3 gate.
+        // callee_shape: issue #401, `direct`/`member`/`indirect` for a C or
+        // C++ call, '' otherwise; pointer calls stay open as `indirect_call`.
         (NODE_CALL_SITE,
             "id STRING, callee_name STRING, line INT64, col INT64, \
              is_resolved BOOLEAN, language STRING, unresolved_reason STRING, \
              receiver_hint STRING, macro_arg_shape STRING, \
-             receiver_hint_via STRING"),
+             receiver_hint_via STRING, callee_shape STRING"),
         // 3c Community + Process — source: stages/stage-3c.md §4.1
         (NODE_COMMUNITY,
             "id STRING, name STRING, algorithm STRING, \

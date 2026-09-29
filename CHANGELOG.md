@@ -51,6 +51,20 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A C or C++ call through a function pointer is a call site again, left open
+  as `indirect_call` (#401). The parsers dropped every callee that was not a
+  name, so `(*fp)()` and `table[i]()` left no trace in the graph; and in C,
+  which has no methods, `s->cb()` was cut down to `cb` and could bind by bare
+  name to an unrelated repository function `cb`. Every C and C++ call site now
+  records `CallSite.callee_shape` (`direct`, `member` or `indirect`); an
+  indirect call, and in C a member call, stays open with the reason
+  `indirect_call` (detail: the shape), counted among the reasons no static
+  resolver should resolve. C++ member calls resolve as before (their precision
+  is #406). The reason set changed, so `callsite_reason_form` is now 2: a graph
+  resolved before reads its reasons as not recorded until the next full index.
+  The site of an indirect callee takes a per-file sequence number, so the ids
+  of later definitions in the same file move by one on reindex.
+
 - A Rust call written with a path names what the path names (#398). The
   qualifier is read with the rules receiver types already follow: `crate::`,
   `self::`, `super::` and a library of the repository name an exact module;

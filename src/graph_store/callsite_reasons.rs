@@ -5,10 +5,11 @@
 // needs to be checked (the scope rule that declined, the number of candidates,
 // the crate the callee comes from). A resolved site carries neither.
 //
-// The reasons split in two. Five name a site no static resolver of this graph
+// The reasons split in two. Six name a site no static resolver of this graph
 // should resolve: a file no Cargo target compiles, a macro, a macro that calls
 // nothing, twins the build does not decide between, a callee proven to live
-// outside the repository. The other five name a gap of the resolver, the ones
+// outside the repository, a C or C++ call through a function pointer (form 2,
+// issue #401). The other five name a gap of the resolver, the ones
 // worth improving. `unknown_callee` is the only reason that says nothing is
 // known; `external_callee` is never given on absence alone.
 //
@@ -26,7 +27,7 @@ use super::{cypher_str, GraphStore, BULK_BATCH_SIZE};
 
 /// The version of the reasons and of the rules that write them. Bump it when
 /// either changes what a graph stores.
-pub(crate) const CALLSITE_REASON_FORM: u32 = 1;
+pub(crate) const CALLSITE_REASON_FORM: u32 = 2;
 const MARKER_ID: &str = "callsite_reason_form";
 
 pub const REASON_OUTSIDE_TARGETS: &str = super::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS;
@@ -34,6 +35,8 @@ pub const REASON_MACRO_SITE: &str = "macro_site";
 pub const REASON_NOT_A_CALL: &str = "not_a_call";
 pub const REASON_CFG_TWINS: &str = super::CALLSITE_UNRESOLVED_REASON_CFG_TWINS;
 pub const REASON_EXTERNAL_CALLEE: &str = "external_callee";
+/// A C or C++ call through a function pointer (issue #401).
+pub const REASON_INDIRECT_CALL: &str = "indirect_call";
 pub const REASON_DECLINED_BY_SCOPE: &str = "declined_by_scope";
 pub const REASON_AMBIGUOUS: &str = "ambiguous_candidates";
 pub const REASON_NO_RECEIVER_TYPE: &str = "no_receiver_type";
@@ -43,12 +46,13 @@ pub const REASON_UNKNOWN_CALLEE: &str = "unknown_callee";
 pub const REASON_NOT_RECORDED: &str = "not_recorded";
 
 /// Reasons no static resolver of this graph should turn into an edge.
-pub const BY_CONSTRUCTION: [&str; 5] = [
+pub const BY_CONSTRUCTION: [&str; 6] = [
     REASON_OUTSIDE_TARGETS,
     REASON_MACRO_SITE,
     REASON_NOT_A_CALL,
     REASON_CFG_TWINS,
     REASON_EXTERNAL_CALLEE,
+    REASON_INDIRECT_CALL,
 ];
 
 /// Reasons that name a gap of the resolver.

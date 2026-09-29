@@ -5,6 +5,7 @@
 // under the §4.1 cap. Pure move; `use super::*` provides the shared store
 // vocabulary exactly as when this lived in one module.
 
+pub(crate) mod callee_shape;
 pub(crate) mod hint_via;
 
 use super::*;
@@ -181,11 +182,13 @@ pub(crate) const COLS_CALL_SITE: ColTypes = &[
     ("col", LogicalType::Int64),
     ("is_resolved", LogicalType::Bool),
     ("language", LogicalType::String),
-    // These four must mirror the NODE_CALL_SITE DDL (ddl.rs), in its order.
+    // These five must mirror the NODE_CALL_SITE DDL (ddl.rs), in its order.
     ("unresolved_reason", LogicalType::String),
     ("receiver_hint", LogicalType::String),
     ("macro_arg_shape", LogicalType::String),
     ("receiver_hint_via", LogicalType::String),
+    // Issue #401: `direct`/`member`/`indirect` for C and C++, '' otherwise.
+    ("callee_shape", LogicalType::String),
 ];
 
 /// The `CallSite.receiver_hint_via` value of a hint the parser read off the

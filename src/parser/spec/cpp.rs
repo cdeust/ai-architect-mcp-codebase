@@ -69,12 +69,11 @@ impl LanguageConventions for CppConventions {
     }
 
     fn call_callee(&self, source: &str, call_node: Node) -> Option<String> {
-        // The callee text's last segment after a member/scope access: `printf` →
-        // `printf`, `obj.method` → `method`, `ptr->call` → `call`,
-        // `geometry::identity` → `identity`. A non-identifier callee (`(fp)()`)
-        // is dropped. Reproduces the hand-written `extract_calls` split on
-        // `['.', '>', ':']`.
-        c_family::member_access_callee(source, call_node, CPP_CALL_FUNCTION_FIELD)
+        // A name or a member access yields its last segment: `obj.method` →
+        // `method`, `geometry::identity` → `identity` (split on
+        // `['.', '>', ':']`). An indirect callee (`(*fp)()`) keeps a site
+        // named by its own text instead of being dropped (issue #401).
+        c_family::shaped_callee(source, call_node, CPP_CALL_FUNCTION_FIELD)
     }
 
     fn call_entry(
@@ -85,7 +84,7 @@ impl LanguageConventions for CppConventions {
         callee: &str,
         seq: u64,
     ) -> CallEntry {
-        c_family::call_entry(call_node, caller_qn, callee, seq)
+        c_family::shaped_call_entry(call_node, CPP_CALL_FUNCTION_FIELD, caller_qn, (callee, seq))
     }
 
     fn imports_of(

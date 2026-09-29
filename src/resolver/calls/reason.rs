@@ -35,6 +35,9 @@ pub(super) enum Decline {
     /// The repository only declares the name (a prototype), it defines no body
     /// for it (issue #400).
     DeclarationOnly,
+    /// A C or C++ call through a function pointer: the shape of its callee
+    /// (issue #401).
+    PointerCall(&'static str),
 }
 
 pub(super) const SCOPE_UNKNOWN_CARGO_FACTS: &str = "unknown_cargo_facts";
@@ -122,6 +125,9 @@ pub(super) fn classify(
 ) -> (&'static str, String) {
     if ctx.evidence.outside_targets.contains(file_id) {
         return (reasons::REASON_OUTSIDE_TARGETS, String::new());
+    }
+    if let Failure::NotFound(Some(Decline::PointerCall(shape))) = failure {
+        return (reasons::REASON_INDIRECT_CALL, shape.to_string());
     }
     if let Failure::NoRelTable(label) = failure {
         // A constant or a module named where a function is passed by value:
