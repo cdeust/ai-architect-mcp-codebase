@@ -164,29 +164,36 @@ pub(super) fn emit_enum(w: CWalk, ctx: &mut WalkCtx, node: Node, scope: &str) {
     };
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
-        if !kind_in(cf.enum_member_kinds, child.kind()) {
-            continue;
+        if kind_in(cf.enum_member_kinds, child.kind()) {
+            emit_enum_entry(w, ctx, child, &qn);
         }
-        let en = first_identifier(cf.naming, ctx.source, child);
-        if en.is_empty() {
-            continue;
-        }
-        let eqn = qual(&qn, &en);
-        ctx.nodes.push(ExtractedNode {
-            label: LABEL_CONSTANT.to_string(),
-            name: en.clone(),
-            qualified_name: eqn.clone(),
-            start_line: line_of(child),
-            end_line: end_line_of(child),
-            visibility: spec.conventions.visibility_of(&en),
-            properties: vec![("enum_entry".to_string(), "true".to_string())],
-        });
-        ctx.refs.push(ExtractedRef {
-            kind: "Defines".to_string(),
-            from_qualified_name: qn.clone(),
-            to_qualified_name: eqn,
-        });
     }
+}
+
+/// Emits one enum member of `emit_enum` as a `Constant` (`enum_entry=true`) and
+/// its `Defines` edge from the enum `enum_qn`. A member with no identifier is
+/// skipped.
+fn emit_enum_entry(w: CWalk, ctx: &mut WalkCtx, child: Node, enum_qn: &str) {
+    let CWalk { spec, cf } = w;
+    let en = first_identifier(cf.naming, ctx.source, child);
+    if en.is_empty() {
+        return;
+    }
+    let eqn = qual(enum_qn, &en);
+    ctx.nodes.push(ExtractedNode {
+        label: LABEL_CONSTANT.to_string(),
+        name: en.clone(),
+        qualified_name: eqn.clone(),
+        start_line: line_of(child),
+        end_line: end_line_of(child),
+        visibility: spec.conventions.visibility_of(&en),
+        properties: vec![("enum_entry".to_string(), "true".to_string())],
+    });
+    ctx.refs.push(ExtractedRef {
+        kind: "Defines".to_string(),
+        from_qualified_name: enum_qn.to_string(),
+        to_qualified_name: eqn,
+    });
 }
 
 /// Emits a struct/union/enum body declared INLINE inside another declaration
