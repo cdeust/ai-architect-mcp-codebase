@@ -102,7 +102,11 @@ pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<Deri
         });
     }
     if let Some(receiver) = receiver_identifier(node) {
-        if let Some(found) = super::rust_return_type::return_type_hint(source, node, receiver) {
+        let found =
+            super::rust_return_type::return_type_hint(source, node, receiver).or_else(|| {
+                super::rust_closure_receiver::closure_parameter_hint(source, node, receiver)
+            });
+        if let Some(found) = found {
             return Some(DerivedHint {
                 ty: found.ty,
                 via_return_type: true,
@@ -113,15 +117,28 @@ pub(super) fn receiver_hint_with_origin(source: &str, node: Node) -> Option<Deri
             });
         }
     }
-    let found = super::rust_constructed_receiver::constructed_hint(source, node)?;
-    Some(DerivedHint {
-        ty: found.ty,
-        via_return_type: found.via_return_type,
-        import_root: None,
-        local_import: None,
-        constructed: true,
-        assoc: None,
-    })
+    constructed_or_derived_hint(source, node)
+}
+
+/// The sources that read the receiver's own expression or a copy of a binding,
+/// tried after every declared or return-type source (issues #355, #390).
+fn constructed_or_derived_hint(source: &str, node: Node) -> Option<DerivedHint> {
+    if let Some(found) = super::rust_constructed_receiver::constructed_hint(source, node) {
+        return Some(DerivedHint {
+            ty: found.ty,
+            via_return_type: found.via_return_type,
+            import_root: None,
+            local_import: None,
+            constructed: true,
+            assoc: None,
+        });
+    }
+    if node.kind() == "call_expression" {
+        if let Some(found) = super::rust_closure_receiver::closure_result_hint(source, node) {
+            return Some(found);
+        }
+    }
+    super::rust_clone_receiver::cloned_hint(source, node)
 }
 
 /// `receiver_hint` with the type as written, path included (`fmt::Formatter`).
@@ -144,7 +161,7 @@ pub(super) fn receiver_type_path(source: &str, node: Node) -> Option<String> {
 ///     `value` is itself a plain `identifier` — a chain (`x.trim().len()`),
 ///     an index (`sets[0].response_of()`), or another field access
 ///     (`self.tasks.get()`) all fail this last check and return `None`.
-fn receiver_identifier(node: Node) -> Option<Node> {
+pub(super) fn receiver_identifier(node: Node) -> Option<Node> {
     if node.kind() == "identifier" {
         return Some(node);
     }

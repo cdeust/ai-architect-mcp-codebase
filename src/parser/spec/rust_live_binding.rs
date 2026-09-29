@@ -67,6 +67,13 @@ pub(super) fn live_bindings<'t>(
         .collect()
 }
 
+/// True when the binding `declaration` is in scope at `call`: a form this
+/// module covers, whose scope holds the call after its binding point. Read for
+/// a name bound once, where no other binding competes (issue #390).
+pub(super) fn reaches(declaration: Node, call: Node) -> bool {
+    scope_of(declaration, call).is_some_and(|(reaches, _)| reaches)
+}
+
 /// The binding among `sites` that reaches `call` with the latest binding
 /// point; `None` when one of them has a form not covered or none reaches.
 fn live_of<'t>(call: Node<'t>, sites: &[(Node<'t>, Node<'t>)]) -> Option<(Node<'t>, Node<'t>)> {

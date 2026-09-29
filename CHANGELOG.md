@@ -51,6 +51,24 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Rust receivers typed through four more forms, each declining when the file does
+  not prove the type (issue #390). `let t = self.clone();` and `let c = s.clone();`
+  give the receiver the type of `self` or of `s`, only when the file proves the
+  type is the std `Clone` (a plain `#[derive(Clone)]` or an ungated
+  `impl Clone for T`, no other `clone` method, no `cfg_attr`). `if let Some(x) =
+  f(..)`, `if let Ok(x) = f(..)` and `while let` type `x` from the declared return
+  type of the free function `f`, like `let Some(x) = f(..) else`. The one untyped
+  parameter of a closure that is the sole argument of `is_some_and`, `is_none_or`,
+  `map`, `and_then` (`Option`) or `is_ok_and`, `map`, `and_then` (`Result`) takes
+  the payload type of `f(..)`'s declared return type. `mk(..).m()` types a call on
+  the result of a local untyped closure `mk` from its written return type or its
+  tail (a constructor, or a binding whose type is known), also inside
+  `assert!` and other macros. On dy-wcet 4.1.6 (`8bb83ad`) the seven calls of
+  `TaskSet::is_schedulable` that rust-analyzer resolves (`lib.rs:953,1482,1485`,
+  `exhaustive.rs:120,196`, `properties.rs:241,246`) now resolve to
+  `TaskSet::is_schedulable`; no edge of the previous graph is lost or changed and
+  no other edge is added.
+
 - `index_status` no longer reports `reasons_recorded: true` over call-site rows
   that predate the current parser form (#408). Every `resolve_graph` pass wrote
   the marker, although a resolve pass re-evaluates rows and never re-parses a

@@ -31,6 +31,8 @@ mod ruby;
 mod rust;
 mod rust_call_site;
 pub(crate) mod rust_cfg_gate;
+mod rust_clone_receiver;
+mod rust_closure_receiver;
 pub(crate) mod rust_code_context;
 mod rust_constructed_receiver;
 mod rust_item_binds;
@@ -123,6 +125,8 @@ mod rust_nested_fn_tests;
 mod rust_parity_corpus;
 #[cfg(test)]
 mod rust_parity_tests;
+#[cfg(test)]
+mod rust_receiver_forms_390_tests;
 #[cfg(test)]
 mod rust_receiver_tests;
 #[cfg(test)]

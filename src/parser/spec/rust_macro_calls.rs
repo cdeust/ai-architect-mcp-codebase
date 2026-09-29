@@ -372,9 +372,11 @@ fn push_reconstructed(ctx: &ScanCtx, named: &[Node], receiver: usize, out: &mut 
     if callee.is_empty() {
         return;
     }
-    let derived = (start == receiver)
-        .then(|| super::rust_receiver::receiver_hint_with_origin(ctx.source, named[receiver]))
-        .flatten();
+    let derived = if start == receiver {
+        super::rust_receiver::receiver_hint_with_origin(ctx.source, named[receiver])
+    } else {
+        closure_result(ctx, named, start, receiver)
+    };
     out.push(RustConventions::with_hint_origin(
         &callee,
         named[start],
@@ -384,4 +386,27 @@ fn push_reconstructed(ctx: &ScanCtx, named: &[Node], receiver: usize, out: &mut 
             derived,
         },
     ));
+}
+
+/// The hint of a receiver written `f(..)` in macro tokens, when `f` is a local
+/// closure whose result is typed (issue #390). The chain must be exactly the name
+/// and its parenthesised group: no path or method before the name, no `!`.
+fn closure_result(
+    ctx: &ScanCtx,
+    named: &[Node],
+    start: usize,
+    receiver: usize,
+) -> Option<super::rust_receiver::DerivedHint> {
+    let (name, group) = (named[start], named[receiver]);
+    let plain_call = receiver == start + 1
+        && name.kind() == IDENTIFIER_KIND
+        && group.kind() == ctx.token_tree_kind
+        && ctx.source[name.end_byte()..group.start_byte()]
+            .trim()
+            .is_empty()
+        && ctx.source[group.start_byte()..].starts_with('(');
+    if !plain_call {
+        return None;
+    }
+    super::rust_closure_receiver::closure_result_of(ctx.source, name)
 }

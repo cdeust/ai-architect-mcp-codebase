@@ -154,6 +154,15 @@ pub(in crate::resolver) fn in_place_method(callee: &str) -> Option<String> {
     is_plain_ident(m).then(|| m.to_string())
 }
 
+/// True when the receiver expression before the last `.` of the callee text
+/// ends in a call's closing parenthesis (`make(1).join`), not in a name that
+/// merely spans lines (`s\n.join`).
+pub(in crate::resolver) fn ends_in_call(callee: &str) -> bool {
+    callee
+        .rsplit_once('.')
+        .is_some_and(|(receiver, _)| receiver.trim_end().ends_with(')'))
+}
+
 /// True when any symbol of the graph named like the last segment of `hint`
 /// is a `TypeAlias`: the hint then names another type.
 pub(in crate::resolver) fn names_a_type_alias(idx: &SymbolIndex, hint: &str) -> bool {
@@ -303,6 +312,15 @@ mod tests {
         let idx = index_with(vec![], vec![]);
         let res = resolve_local_receiver_bound(&idx, "TaskSet", "missing", "src/lib.rs");
         assert_eq!(res, PolicyResolution::NotFound);
+    }
+
+    #[test]
+    fn a_receiver_ends_in_a_call_only_when_its_last_token_closes_one() {
+        assert!(ends_in_call("make(1).join"));
+        assert!(ends_in_call("make(1)\n    .join"));
+        assert!(!ends_in_call("s\n    .join"));
+        assert!(!ends_in_call("s.join"));
+        assert!(!ends_in_call("join"));
     }
 
     #[test]

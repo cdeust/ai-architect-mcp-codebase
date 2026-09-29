@@ -79,8 +79,13 @@ pub(super) fn constructed_hint(source: &str, node: Node) -> Option<ConstructedHi
     if value.kind() == "identifier" {
         return bound_receiver(source, node, value);
     }
-    let built = built_by(source, value)?;
-    hint_for(source, node, built)
+    hint_of_expression(source, node, value)
+}
+
+/// The hint the constructor-shaped expression `expr` gives for the call at `at`;
+/// `None` when `expr` is no constructor or the checks of the module header fail.
+pub(super) fn hint_of_expression(source: &str, at: Node, expr: Node) -> Option<ConstructedHint> {
+    hint_for(source, at, built_by(source, expr)?)
 }
 
 /// A receiver `identifier` bound once by an untyped `let` of a tuple
@@ -168,7 +173,7 @@ fn hint_for(source: &str, at: Node, built: Built) -> Option<ConstructedHint> {
 
 /// The one type item named `name` in this file, when the call at `at` sees it
 /// and nothing else could be what the name denotes.
-fn visible_type<'t>(source: &str, at: Node<'t>, name: &str) -> Option<Node<'t>> {
+pub(super) fn visible_type<'t>(source: &str, at: Node<'t>, name: &str) -> Option<Node<'t>> {
     if name == "Self" || name == "self" || name.is_empty() {
         return None;
     }
@@ -270,7 +275,7 @@ fn has_super_glob(source: &str, scope: Node) -> bool {
 
 /// True when the type `ty` has exactly one function `assoc`, in one inherent
 /// impl of this file, that is not `async` and returns `Self` or `ty` plainly.
-fn returns_self(source: &str, at: Node, ty: &str, assoc: &str) -> bool {
+pub(super) fn returns_self(source: &str, at: Node, ty: &str, assoc: &str) -> bool {
     let mut functions: Vec<(Node, bool)> = Vec::new();
     let mut stack = vec![root_of(at)];
     while let Some(node) = stack.pop() {
@@ -317,12 +322,12 @@ fn is_async(source: &str, function: Node) -> bool {
     found
 }
 
-fn declares(source: &str, node: Node, name: &str) -> bool {
+pub(super) fn declares(source: &str, node: Node, name: &str) -> bool {
     node.child_by_field_name(NAME_FIELD)
         .is_some_and(|n| node_text(source, n) == name)
 }
 
-fn root_of(node: Node) -> Node {
+pub(super) fn root_of(node: Node) -> Node {
     let mut current = node;
     while let Some(parent) = current.parent() {
         current = parent;
@@ -331,7 +336,7 @@ fn root_of(node: Node) -> Node {
 }
 
 /// True when `text` holds `word` as a whole identifier.
-fn mentions_word(text: &str, word: &str) -> bool {
+pub(super) fn mentions_word(text: &str, word: &str) -> bool {
     text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .any(|w| w == word)
 }

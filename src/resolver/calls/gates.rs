@@ -68,15 +68,7 @@ pub(super) fn rust_local_receiver_gate(
     }
     let constructed = site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED
         || site.receiver_hint_via == crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE;
-    let form = receiver::classify(site.callee, &receiver::ReceiverSpelling::of(ctx.provider));
-    let m = match form {
-        receiver::ReceiverForm::Local { m, .. } => m,
-        // `Tier(1).join`: the receiver is an expression, so the spelling
-        // analysis finds no plain identifier before the dot. Only a hint of the
-        // constructed kind can come from such a receiver (issue #355).
-        receiver::ReceiverForm::None if constructed => receiver::in_place_method(site.callee)?,
-        _ => return None,
-    };
+    let m = hinted_method(ctx, site, constructed)?;
     if let Some(gated) = written_path_gate(ctx, site, &m) {
         return Some(gated);
     }
@@ -98,18 +90,56 @@ pub(super) fn rust_local_receiver_gate(
     let imported_from = site
         .receiver_hint_via
         .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_IMPORT_PREFIX);
-    if imported_from.is_some_and(|root| !ctx.evidence.crate_names.contains(root)) {
-        // A return type named only by a `use` of a crate the latest index pass
-        // did not record as a library of this repository (issues #348, #349,
-        // #358): a foreign crate's type of that name would match a namesake.
-        // Without recorded facts no crate is known to be foreign.
-        let decline = if ctx.evidence.known {
-            Decline::ForeignReturnType
-        } else {
-            Decline::Scope(reason::SCOPE_UNKNOWN_CARGO_FACTS)
-        };
-        return Some((PolicyResolution::NotFound, Some(decline)));
+    if let Some(declined) = foreign_import_decline(ctx, imported_from) {
+        return Some(declined);
     }
+    resolve_by_hint(ctx, site, &m, file_id, imported_from, constructed)
+}
+
+/// A return type named only by a `use` of a crate the latest index pass did not
+/// record as a library of this repository declines (issues #348, #349, #358): a
+/// foreign crate's type of that name would match a namesake. Without recorded
+/// facts no crate is known to be foreign.
+fn foreign_import_decline(ctx: &ResolveContext, imported_from: Option<&str>) -> Option<Gated> {
+    if imported_from.is_none_or(|root| ctx.evidence.crate_names.contains(root)) {
+        return None;
+    }
+    let decline = if ctx.evidence.known {
+        Decline::ForeignReturnType
+    } else {
+        Decline::Scope(reason::SCOPE_UNKNOWN_CARGO_FACTS)
+    };
+    Some((PolicyResolution::NotFound, Some(decline)))
+}
+
+/// The method a hinted Rust receiver call names, when the receiver is one the
+/// hint can speak for. `Tier(1).join`, `make(1).join`: the receiver is an
+/// expression, so the spelling analysis finds no plain identifier before the
+/// dot. A constructor (issue #355) or a call of a local closure whose result the
+/// parser types (issue #390) carries a hint; a receiver that only spans lines
+/// (`s\n.push`) is no call and is not admitted here.
+fn hinted_method(ctx: &ResolveContext, site: &CallSite, constructed: bool) -> Option<String> {
+    let form = receiver::classify(site.callee, &receiver::ReceiverSpelling::of(ctx.provider));
+    match form {
+        receiver::ReceiverForm::Local { m, .. } => Some(m),
+        receiver::ReceiverForm::None if constructed || receiver::ends_in_call(site.callee) => {
+            receiver::in_place_method(site.callee)
+        }
+        _ => None,
+    }
+}
+
+/// The lookup of a hinted receiver's type once no path, `assoc:` or foreign
+/// import rule has answered: alias decline, crate scope, same-file preference for
+/// a constructed receiver, and the return-type relabel.
+fn resolve_by_hint(
+    ctx: &ResolveContext,
+    site: &CallSite,
+    m: &str,
+    file_id: &str,
+    imported_from: Option<&str>,
+    constructed: bool,
+) -> Option<Gated> {
     let local_path = site
         .receiver_hint_via
         .strip_prefix(crate::graph_store::RECEIVER_HINT_VIA_LOCAL_IMPORT_PREFIX);
@@ -123,32 +153,7 @@ pub(super) fn rust_local_receiver_gate(
         let decline = Decline::Scope(reason::SCOPE_TYPE_ALIAS_RETURN);
         return Some((PolicyResolution::NotFound, Some(decline)));
     }
-    let scope = local_path.map(|path| {
-        super::crate_scope::CrateScope::of(ctx.evidence, ctx.file_imports, file_id, path)
-    });
-    let restricted = scope
-        .as_ref()
-        .is_some_and(super::crate_scope::CrateScope::restricts);
-    let resolution = match scope.filter(super::crate_scope::CrateScope::restricts) {
-        _ if constructed => {
-            receiver::resolve_local_receiver_in_file(ctx.idx, site.receiver_hint, &m, file_id)
-        }
-        // `use crate::X` in a test, bench, example or bin target: only the
-        // candidates of the target `crate` names there (issue #357).
-        Some(scope) => receiver::resolve_local_receiver_where(
-            ctx.idx,
-            site.receiver_hint,
-            &m,
-            file_id,
-            |candidate| {
-                scope.admits(
-                    ctx.evidence,
-                    &extract_file_prefix_or_self(&candidate.qualified_name),
-                )
-            },
-        ),
-        None => receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, &m, file_id),
-    };
+    let (resolution, restricted) = scoped_lookup(ctx, site, m, file_id, local_path, constructed);
     let declined = restricted && !constructed && resolution == PolicyResolution::NotFound;
     let decline = declined.then_some(Decline::Scope(reason::SCOPE_CRATE));
     let resolution = if via_return_type {
@@ -157,6 +162,46 @@ pub(super) fn rust_local_receiver_gate(
         resolution
     };
     Some((resolution, decline))
+}
+
+/// The candidates of the hinted type: this file's for a constructed receiver, the
+/// target crate's when a `use crate::X` restricts them (issue #357), else the
+/// bound lookup. The flag tells whether a crate restriction applied.
+fn scoped_lookup(
+    ctx: &ResolveContext,
+    site: &CallSite,
+    m: &str,
+    file_id: &str,
+    local_path: Option<&str>,
+    constructed: bool,
+) -> (PolicyResolution<SymbolEntry>, bool) {
+    let scope = local_path.map(|path| {
+        super::crate_scope::CrateScope::of(ctx.evidence, ctx.file_imports, file_id, path)
+    });
+    let restricted = scope
+        .as_ref()
+        .is_some_and(super::crate_scope::CrateScope::restricts);
+    let resolution = match scope.filter(super::crate_scope::CrateScope::restricts) {
+        _ if constructed => {
+            receiver::resolve_local_receiver_in_file(ctx.idx, site.receiver_hint, m, file_id)
+        }
+        // `use crate::X` in a test, bench, example or bin target: only the
+        // candidates of the target `crate` names there (issue #357).
+        Some(scope) => receiver::resolve_local_receiver_where(
+            ctx.idx,
+            site.receiver_hint,
+            m,
+            file_id,
+            |candidate| {
+                scope.admits(
+                    ctx.evidence,
+                    &extract_file_prefix_or_self(&candidate.qualified_name),
+                )
+            },
+        ),
+        None => receiver::resolve_local_receiver_bound(ctx.idx, site.receiver_hint, m, file_id),
+    };
+    (resolution, restricted)
 }
 
 /// How a hint that names its owner by a path is read (issues #368, #373, #380).

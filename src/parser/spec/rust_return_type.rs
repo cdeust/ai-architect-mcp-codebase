@@ -16,7 +16,12 @@
 // generic parameters. An `Option` or `Result` is unwrapped only through a form
 // the source spells out: `let Some(s) = .. else`, `let Ok(s) = .. else`,
 // `.expect(..)`, `.unwrap()` and `?`. A callee in another file is out of
-// reach for this single-file pass and stays for the language server.
+// reach for this single-file pass and stays for the language server. The same
+// forms open through `if let Some(s) = ..` and `while let Some(s) = ..` (issue
+// #390), where the binding lives in the consequence or the loop body only; and
+// the parameter of a closure that is the sole argument of `is_some_and`,
+// `is_none_or`, `map`, `and_then` (`Option`) or `is_ok_and`, `map`, `and_then`
+// (`Result`) called on such a function's result takes its payload type.
 
 use tree_sitter::Node;
 
@@ -70,8 +75,9 @@ pub(super) struct ReturnTypeHint {
 enum Shape {
     /// `let s = <init>;`
     Plain,
-    /// `let Some(s) = <init> else { .. };` or `let Ok(s) = <init> else { .. };`
-    LetElse(Wrapper),
+    /// `let Some(s) = <init> else { .. };`, `let Ok(s) = <init> else { .. };`, or
+    /// `if let` / `while let` with the same patterns (issue #390).
+    Unwrapping(Wrapper),
 }
 
 /// A function's declared return type.
@@ -83,9 +89,9 @@ enum Returned<'t> {
 /// precondition: `call_node` is a node inside a parsed Rust function and
 /// `receiver` the plain `identifier` that names the receiver of the call.
 /// postcondition: `Some(T)` iff the receiver is bound exactly once, by a
-/// `let` with no written type whose initialiser is a call of a free function
-/// of this file whose return type gives `T` as described in the module
-/// header; `None` on every other shape. `T` is the type's last `::` segment
+/// `let` with no written type, or by `if let` / `while let`, whose initialiser
+/// is a call of a free function of this file whose return type gives `T` as
+/// described in the module header; `None` on every other shape. `T` is the type's last `::` segment
 /// with generics stripped, like `receiver_hint`.
 pub(super) fn return_type_hint(
     source: &str,
@@ -97,17 +103,61 @@ pub(super) fn return_type_hint(
         .into_iter()
         .find(|b| b.name == name)?;
     let declaration = binding.declaration;
-    if declaration.kind() != "let_declaration"
-        || declaration.child_by_field_name(TYPE_FIELD).is_some()
-    {
-        return None;
-    }
-    if !super::rust_item_binds::declaration_reaches(declaration, call_node) {
+    let reaches = match declaration.kind() {
+        "let_declaration" => {
+            declaration.child_by_field_name(TYPE_FIELD).is_none()
+                && super::rust_item_binds::declaration_reaches(declaration, call_node)
+        }
+        "let_condition" => super::rust_live_binding::reaches(declaration, call_node),
+        _ => false,
+    };
+    if !reaches {
         return None;
     }
     let shape = binding_shape(source, &binding)?;
     let value = declaration.child_by_field_name(VALUE_FIELD)?;
     let (call, unwrapped) = constructor_call(source, value, true)?;
+    let function = callee_function(source, call_node, call)?;
+    let ty = pick_type(source, shape, unwrapped, returned_type(source, function)?)?;
+    hint_of_type(source, function, call, ty)
+}
+
+/// precondition: `call` is a call expression inside the function that holds
+/// `call_node`, whose result is an `Option` or a `Result`.
+/// postcondition: `Some(T)` iff `call` names a free function of this file, as
+/// `return_type_hint` requires, declared to return `wrapper<T, ..>` for the
+/// `wrapper` `method` opens as a closure argument (the module header lists the
+/// methods); `T` is then the type the closure's parameter has.
+pub(super) fn payload_hint(
+    source: &str,
+    call_node: Node,
+    call: Node,
+    method: &str,
+) -> Option<ReturnTypeHint> {
+    let function = callee_function(source, call_node, call)?;
+    let Returned::Wrapped(wrapper, inner) = returned_type(source, function)? else {
+        return None;
+    };
+    if !opened_by(wrapper, method) {
+        return None;
+    }
+    let ty = plain_type(source, inner)?;
+    hint_of_type(source, function, call, ty)
+}
+
+/// source: std docs, `Option::{is_some_and, is_none_or, map, and_then}` and
+/// `Result::{is_ok_and, map, and_then}` each take a closure whose one argument
+/// is the `Ok` or `Some` payload by value (https://doc.rust-lang.org/std/).
+fn opened_by(wrapper: Wrapper, method: &str) -> bool {
+    match wrapper {
+        Wrapper::Option => ["is_some_and", "is_none_or", "map", "and_then"].contains(&method),
+        Wrapper::Result => ["is_ok_and", "map", "and_then"].contains(&method),
+    }
+}
+
+/// The free function `call` names, when the callee is a plain identifier of
+/// exactly one free function of this file that no local of the caller hides.
+fn callee_function<'t>(source: &str, call_node: Node, call: Node<'t>) -> Option<Node<'t>> {
     let callee = call.child_by_field_name(FUNCTION_FIELD)?;
     if callee.kind() != "identifier" {
         return None;
@@ -116,8 +166,12 @@ pub(super) fn return_type_hint(
     if bound_names_in_scope(source, call_node).contains(&callee_name) {
         return None;
     }
-    let function = unique_visible_function(source, call, &callee_name)?;
-    let ty = pick_type(source, shape, unwrapped, returned_type(source, function)?)?;
+    unique_visible_function(source, call, &callee_name)
+}
+
+/// The hint for the return type `ty` of `function`, called at `call`, or `None`
+/// when `ty` is one of the function's generics, an alias, or not shown.
+fn hint_of_type(source: &str, function: Node, call: Node, ty: String) -> Option<ReturnTypeHint> {
     if is_own_generic(source, function, &ty) || file_declares_alias(source, call, &ty) {
         return None;
     }
@@ -161,15 +215,16 @@ fn file_declares_alias(source: &str, node: Node, ty: &str) -> bool {
 /// declaration. `None` for every pattern this pass does not cover.
 fn binding_shape(source: &str, binding: &OnceBound) -> Option<Shape> {
     let pattern = binding.pattern;
-    if names_only(source, pattern, &binding.name) {
+    let refutable = binding.declaration.kind() == "let_condition";
+    if !refutable && names_only(source, pattern, &binding.name) {
         return Some(Shape::Plain);
     }
-    if pattern.kind() != "tuple_struct_pattern"
-        || binding
-            .declaration
-            .child_by_field_name(ALTERNATIVE_FIELD)
-            .is_none()
-    {
+    // `let Some(s) = .. else` needs its `else`; `if let` / `while let` have none.
+    let has_else = binding
+        .declaration
+        .child_by_field_name(ALTERNATIVE_FIELD)
+        .is_some();
+    if pattern.kind() != "tuple_struct_pattern" || !(refutable || has_else) {
         return None;
     }
     let head = pattern.child_by_field_name(TYPE_FIELD)?;
@@ -184,7 +239,7 @@ fn binding_shape(source: &str, binding: &OnceBound) -> Option<Shape> {
         .filter(|c| c.id() != head.id())
         .collect();
     (inner.len() == 1 && names_only(source, inner[0], &binding.name))
-        .then_some(Shape::LetElse(wrapper))
+        .then_some(Shape::Unwrapping(wrapper))
 }
 
 /// True when `pattern` is exactly the identifier `name`, optionally `mut`.
@@ -209,7 +264,7 @@ fn pick_type(source: &str, shape: Shape, unwrapped: bool, returned: Returned) ->
     match (shape, unwrapped, returned) {
         (Shape::Plain, false, Returned::Plain(ty)) => plain_type(source, ty),
         (Shape::Plain, true, Returned::Wrapped(_, inner)) => plain_type(source, inner),
-        (Shape::LetElse(open), false, Returned::Wrapped(wrapper, inner)) if open == wrapper => {
+        (Shape::Unwrapping(open), false, Returned::Wrapped(wrapper, inner)) if open == wrapper => {
             plain_type(source, inner)
         }
         _ => None,
@@ -258,7 +313,7 @@ fn wrapper_of(source: &str, ty: Node) -> Option<Wrapper> {
 /// A named type with its reference and generics stripped, reduced to its last
 /// `::` segment. `None` for `impl Trait`, `dyn Trait`, tuples, arrays and the
 /// like: those are not a type a method can be looked up on by name.
-fn plain_type(source: &str, node: Node) -> Option<String> {
+pub(super) fn plain_type(source: &str, node: Node) -> Option<String> {
     match node.kind() {
         "reference_type" | "generic_type" => {
             plain_type(source, node.child_by_field_name(TYPE_FIELD)?)
