@@ -115,6 +115,8 @@ mod rust_identity_tests;
 #[cfg(test)]
 mod rust_live_binding_tests;
 #[cfg(test)]
+mod rust_macro_chain_tests;
+#[cfg(test)]
 mod rust_nested_fn_tests;
 #[cfg(test)]
 mod rust_parity_corpus;

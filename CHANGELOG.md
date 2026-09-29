@@ -51,6 +51,41 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A Rust call written with a path names what the path names (#398). The
+  qualifier is read with the rules receiver types already follow: `crate::`,
+  `self::`, `super::` and a library of the repository name an exact module;
+  one other segment is what the caller's module binds (a type, a child module,
+  a `use`, a glob), else a child module or type; several are a path from the
+  caller's module; and the item of each owner follows that owner's `use`s
+  (`pub use b::dup;` in `a`). `a::dup()` and `crate::a::dup()` next to a
+  crate-root `dup` were ambiguous and now resolve to `a`'s. A call declines
+  (`declined_by_scope` / `written_path`) only when the path names nothing of
+  the repository: `Set::new()` in a module that sees `Set` only through
+  `use ext::*`, or `Opts::default()` for a derived `Default`, which took a
+  namesake (on this repository, 142 `X::default()` calls resolved to
+  `SearchOptions::default`). A path to a type reaches the `impl` blocks of
+  that type wherever they sit: `impl Gc` under `use crate::g::Gc;` or `impl
+  crate::g::Gc` in another module is read in its own file; another module's
+  own type of the same name is not that type, so `crate::e::Cfg::load()`
+  declines when only `f`'s `Cfg` has a `load` (it took that `load` before),
+  and so does an `impl Cq` in a file that defines no `Cq` and sees one only
+  through the glob of another module. When the owner of a candidate cannot be
+  read (its parent is not under its own file), the lookup by name still
+  decides. A file a `#[path]` places, gated or not (`#[cfg_attr(.., path =
+  ..)]` included), is read at the module path it is compiled at: `moved::tick()`
+  for `#[path = "placed.rs"] mod moved;` resolves to `placed.rs`, where it was
+  ambiguous with a stray `moved.rs`. Two items one path names (two globs that
+  each bring a `pick`) stay open as `ambiguous_candidates`,
+  a file no module tree of a target reaches is never the target of a path, and
+  a `use` that names the very path it is read at (`use crate::service;` in the
+  root) keeps that path instead of naming nothing.
+- A method call on the result of a call, written inside a macro argument,
+  keeps its whole receiver chain (#389): `assert!(build(x).is_schedulable())`
+  was recorded as `(x).is_schedulable`, `s.get(i).is_some()` as
+  `(i).is_some`, and `self.tasks.is_empty()` as `tasks.is_empty`, a form that
+  reads the field `tasks` as a local of that name. The text now reads as the same
+  call written outside a macro, and only a receiver that is one plain name
+  gets a receiver type.
 - A Rust path callee that lives outside the repository no longer resolves to a
   repository item of the same last segment (#393). With one `Set::new` in the
   repository, `Vec::new`, `String::new` and `io::BufWriter::new` each got a

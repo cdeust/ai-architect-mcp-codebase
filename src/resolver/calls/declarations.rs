@@ -1,25 +1,25 @@
 // resolver::calls::declarations: which candidates a call can actually name,
 // before any evidence is weighed.
 //
-// Two scoping steps run on the candidates of a name:
-//   - the language's own rules (`visible_candidates`): Rust block-scoped fn
-//     items (issue #327), Python bare calls that never name a method (#335);
-//   - what each C-family candidate is (`keep_definitions`, issue #400): a
-//     `static` function is named only by its own file or through the header it
-//     lives in; a header prototype is never a call target, since a body or a
-//     macro of the name is what the call reaches. A function-like macro and a
-//     body of one name are left to the evidence tiers: they are usually
-//     alternatives under exclusive `#if` configurations (FreeRTOS
-//     `vQueueAddToRegistry`), and only the build decides which one exists. The facts come from the graph's
-//     `body_kind` and `linkage` columns (`graph_store::body_kind`); a graph
-//     written before them yields none and nothing changes.
+// Two scoping steps run on the candidates of a name: first the language's
+// own rules (`candidate_scope::visible_candidates`, issues #327 and #335),
+// then what each C-family candidate is (`keep_definitions`, issue #400): a
+// `static` function is named only by its own file or through the header it
+// lives in; a header prototype is never a call target, since a body or a macro
+// of the name is what the call reaches. A function-like macro and a body of one
+// name are left to the evidence tiers: they are usually alternatives under
+// exclusive `#if` configurations (FreeRTOS `vQueueAddToRegistry`), and only
+// the build decides which one exists. The facts come from the graph's
+// `body_kind` and `linkage` columns (`graph_store::body_kind`); a graph written
+// before them yields none and nothing changes.
 //
 // source: ISO/IEC 9899:2018 §6.2.2 (linkage), §6.9.1 (function definitions),
 // §6.10.3 (macro replacement).
 
 use std::borrow::Cow;
 
-use super::reason::{Decline, SCOPE_FILE_LOCAL};
+use super::candidate_scope::visible_candidates;
+use super::reason::{Decline, SCOPE_FILE_LOCAL, SCOPE_VARIANT_GUARD};
 use super::*;
 use crate::graph_store::body_kind::{CallableFacts, BODY_KIND_PROTOTYPE};
 
@@ -27,39 +27,26 @@ use crate::graph_store::body_kind::{CallableFacts, BODY_KIND_PROTOTYPE};
 /// `static` function defined there is local to every file that includes it.
 const HEADER_EXTENSIONS: [&str; 4] = [".h", ".hh", ".hpp", ".hxx"];
 
-/// The candidates a call at `site` can actually name under the caller
-/// language's scoping rules, before any evidence is weighed.
-///
-/// Rust block-scoped fn items (issue #327): a nested fn shadows every other
-/// candidate inside its enclosing callable and is invisible outside. Python
-/// (`bare_call_binds_methods == false`): an unqualified call never names a
-/// method, so a same-named method is not a rival of the module function it
-/// really calls (pg_store.py `_now_iso()`, which the #30 policy used to drop
-/// as ambiguous, #335) and is never a target on its own.
-pub(super) fn visible_candidates<'a>(
-    ctx: &ResolveContext,
+/// The candidates a call can name once every scoping step has run, and why
+/// the call is declined when none is left: the language's rules
+/// (`visible_candidates`), what each C candidate is (`keep_definitions`,
+/// #400), then the variant guard (#393). `None` when the repository holds
+/// nothing of the name `last`.
+pub(super) fn named_candidates<'a>(
+    ctx: &ResolveContext<'a>,
     site: &CallSite,
-    candidates: &'a [SymbolEntry],
-    qualified: bool,
-) -> Cow<'a, [SymbolEntry]> {
-    if ctx.provider.language() == "rust" {
-        return Cow::Owned(nested_scope::visible_candidates(
-            ctx.idx,
-            candidates,
-            site.caller_qn,
-            qualified,
-        ));
-    }
-    if qualified || ctx.provider.bare_call_binds_methods() {
-        return Cow::Borrowed(candidates);
-    }
-    Cow::Owned(
-        candidates
-            .iter()
-            .filter(|c| c.label != "Method")
-            .cloned()
-            .collect(),
-    )
+    file_id: &str,
+    last: &str,
+) -> Option<(Cow<'a, [SymbolEntry]>, Option<Decline>)> {
+    let candidates = ctx.idx.by_name.get(last)?;
+    let candidates = visible_candidates(ctx, site, candidates, last != site.callee);
+    let (candidates, declined) = keep_definitions(ctx.callables, candidates, file_id);
+    let visible = candidates.len();
+    let candidates = variant_guard::drop_struct_targets(ctx, site.callee, candidates);
+    // The variant guard refused every candidate left (issue #393).
+    let guarded = declined
+        .or((visible > 0 && candidates.is_empty()).then_some(Decline::Scope(SCOPE_VARIANT_GUARD)));
+    Some((candidates, guarded))
 }
 
 /// The candidates left once the ones the call cannot name are dropped, and why

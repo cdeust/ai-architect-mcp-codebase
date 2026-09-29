@@ -60,6 +60,12 @@ pub struct CrateEvidence {
     /// from the facts of an older pass, which read as none.
     #[serde(default)]
     pub outside_targets: BTreeSet<String>,
+    /// The module path, from the root of its crate, of each file the index
+    /// placed under a gate (`File.module_path`, `#[cfg_attr(.., path = ..)]`
+    /// included): where it is compiled, not where it lies (issue #398). Not in
+    /// the marker row.
+    #[serde(skip)]
+    pub logical_modules: BTreeMap<String, Vec<String>>,
 }
 
 const OWNERS_COLUMN_TYPE: &str = "STRING DEFAULT ''";
@@ -116,7 +122,37 @@ impl GraphStore {
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default();
         evidence.owners = self.target_owners().into_iter().collect();
+        evidence.logical_modules = self.logical_modules();
         evidence
+    }
+
+    /// `File.module_path` of every file that has one, as segments after the
+    /// crate entry file (`src/lib.rs::imp` is `imp`). Read-only: a graph
+    /// without the column has none.
+    fn logical_modules(&self) -> BTreeMap<String, Vec<String>> {
+        if !self
+            .node_column_exists("File", "module_path")
+            .unwrap_or(false)
+        {
+            return BTreeMap::new();
+        }
+        let Ok(rows) = self
+            .execute_query("MATCH (f:File) WHERE f.module_path <> '' RETURN f.id, f.module_path")
+        else {
+            return BTreeMap::new();
+        };
+        rows.rows
+            .into_iter()
+            .filter_map(|r| {
+                let entry = crate::language_provider::extract_file_prefix(&r[1])?;
+                let segments = r[1][entry.len()..]
+                    .split("::")
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                Some((r[0].clone(), segments))
+            })
+            .collect()
     }
 
     /// `File.target_owners` of every file that has one. Read-only: a graph

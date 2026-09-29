@@ -7,13 +7,15 @@
 use super::*;
 use crate::graph_store::{call_rel_table, call_site_rel_table};
 
+mod candidate_scope;
 mod crate_scope;
 mod declarations;
 mod gates;
 mod reason;
 mod variant_guard;
+use candidate_scope::qualified_path_gate;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
-use reason::{Decline, Failure, Gated};
+use reason::{Failure, Gated};
 
 // ---------------------------------------------------------------------------
 // Phase 2: Call resolution
@@ -445,17 +447,13 @@ fn resolve_single_call(ctx: &ResolveContext, site: &CallSite, file_id: &str) -> 
                 ctx.file_imports.get(file_id).cloned().unwrap_or_default(),
             )
         };
-    let Some(candidates) = ctx.idx.by_name.get(last) else {
+    let Some((candidates, guarded)) = declarations::named_candidates(ctx, site, file_id, last)
+    else {
         return (PolicyResolution::NotFound, None);
     };
-    let candidates = declarations::visible_candidates(ctx, site, candidates, last != callee);
-    // A C `static` of another file, a prototype or a macro beside a body (#400).
-    let (candidates, declined) = declarations::keep_definitions(ctx.callables, candidates, file_id);
-    let visible = candidates.len();
-    let candidates = variant_guard::drop_struct_targets(ctx, callee, candidates);
-    // The variant guard refused every candidate left (issue #393).
-    let guarded = declined.or((visible > 0 && candidates.is_empty())
-        .then_some(Decline::Scope(reason::SCOPE_VARIANT_GUARD)));
+    if let Some(gated) = qualified_path_gate(ctx, site, &candidates) {
+        return gated;
+    }
     let ev = crate::call_evidence::CallEvidence {
         imports_hint: &imports_hint,
         caller_file: file_id,

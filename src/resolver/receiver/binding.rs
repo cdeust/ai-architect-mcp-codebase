@@ -3,7 +3,8 @@
 // names of a module, from the caller's module (its file, then the inline
 // modules around it) outwards:
 //
-// 1. a type (struct, enum, union, alias) of that name defined in the module:
+// 1. a type (struct, enum, union, alias) of that name defined in the module
+//    (for the head of a path, `a` in `a::dup()`, a child module too, #398):
 //    the name is that type; in the caller's own module the lookup by name
 //    already prefers it, so it keeps that lookup (`Binding::ByName`);
 // 2. exactly one explicit `use` binding the name: the path it writes;
@@ -51,6 +52,15 @@ struct Level {
     scopes: Vec<String>,
 }
 
+/// What a name of a module may be defined as, for rules 1 and 4.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::resolver) enum Defines {
+    /// A type (the receiver types).
+    Types,
+    /// A type or a module (the head of a path, `a` in `a::dup()`, issue #398).
+    TypesAndModules,
+}
+
 /// The binding of `name` for a call in `caller_qn`. `admits_any(hint, path)`
 /// says whether the call has a candidate `path` admits (rule 5).
 pub(in crate::resolver) fn bind<'e>(
@@ -58,27 +68,24 @@ pub(in crate::resolver) fn bind<'e>(
     caller_qn: &str,
     name: &str,
     admits_any: &dyn Fn(&str, &WrittenPath<'e>) -> bool,
+    defines: Defines,
 ) -> Binding<'e> {
     let caller_file = extract_file_prefix_or_self(caller_qn);
     let scope = caller_scope(facts.idx, caller_qn);
-    if defined_in_scope(facts.idx, &scope, name) {
-        return Binding::ByName;
-    }
+    let modules = defines == Defines::TypesAndModules;
+    let a_module = |module: &[String]| modules && defines_module(facts, &caller_file, module, name);
     let mut level = Level {
         module: scope_module_path(facts.evidence, &scope),
-        scopes: vec![scope],
+        scopes: vec![scope.clone()],
     };
+    if defined_in_scope(facts.idx, &scope, name) || a_module(&level.module) {
+        return Binding::ByName;
+    }
     let mut top = true;
     loop {
-        if !top && defined_at(facts, &caller_file, &level.module, name) {
-            let mut written = level.module.clone();
-            written.push(name.to_string());
-            let path = WrittenPath::exact(facts, &caller_file, Anchor::CrateRoot(written));
-            return Binding::Path {
-                hint: name.to_string(),
-                path,
-                fallback: false,
-            };
+        if !top && (defined_at(facts, &caller_file, &level.module, name) || a_module(&level.module))
+        {
+            return defined_here(facts, &caller_file, &level.module, name);
         }
         let rows: Vec<&ImportRow> = level
             .scopes
@@ -104,6 +111,21 @@ pub(in crate::resolver) fn bind<'e>(
             continue;
         }
         return through_globs(facts, &caller_file, &level.module, name, &globs, admits_any);
+    }
+}
+
+/// Rule 1 one module up: `name` is the item `module` defines.
+fn defined_here<'e>(
+    facts: &PathFacts<'e>,
+    caller_file: &str,
+    module: &[String],
+    name: &str,
+) -> Binding<'e> {
+    let written = [module, &[name.to_string()]].concat();
+    Binding::Path {
+        hint: name.to_string(),
+        path: WrittenPath::exact(facts, caller_file, Anchor::CrateRoot(written)),
+        fallback: false,
     }
 }
 
@@ -241,6 +263,17 @@ fn defined_at(facts: &PathFacts, caller_file: &str, module: &[String], name: &st
                 && same_crate(facts.evidence, caller_file, &file)
         })
     })
+}
+
+/// True when the module `module` of the caller's crate has a child module
+/// `name` (a file or an inline `mod`).
+fn defines_module(facts: &PathFacts, caller_file: &str, module: &[String], name: &str) -> bool {
+    let child = [module, &[name.to_string()]].concat();
+    facts
+        .imports
+        .module_files(&child)
+        .iter()
+        .any(|f| same_crate(facts.evidence, caller_file, f))
 }
 
 /// The distinct paths of `rows`, sorted.
