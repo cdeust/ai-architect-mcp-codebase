@@ -6,7 +6,8 @@
 // `cargo metadata` reports for the package that compiles its file, and the
 // verdict is stored in the `cfg_active` column: `active` when the predicate is
 // true, `inactive` when it is false, `unknown` when it is not decided (a bare
-// option such as `unix` or `kani`, a gate that did not parse, a file two
+// option the build invocation decides such as `unix` or `test`, a gate that did
+// not parse, a file two
 // packages compile with different features, a file no crate root reaches, or no
 // Cargo map at all). A file reached only through `mod` declarations the default
 // features compile out is `inactive`.
@@ -15,11 +16,16 @@
 // features can change without a file changing (a `Cargo.toml` edit), and a twin
 // reparsed by an incremental pass comes back with an empty column.
 //
+// The default profile fixes the options no plain `cargo build` sets (`kani`,
+// `miri`, `doc`, `doctest`) to false (issue #391): the `cfg(not(kani))` twin is
+// `active` and the `cfg(kani)` one `inactive`. Without a Cargo map nothing says a
+// Cargo build compiles the file, so those stay `unknown` too.
+//
 // Extension point: a second build profile (a Kani build that sets `kani`) is a
-// `BuildProfile` with `options` filled in. `decide` takes the profile, the
-// resolver reads only the persisted value, so adding a profile changes this
+// `BuildProfile` whose `options` map has `kani` true. `decide` takes the profile,
+// the resolver reads only the persisted value, so adding a profile changes this
 // module and the column set, not the resolver. Only the default profile is
-// written today, and nothing here reads `kani`.
+// written today.
 
 use std::collections::BTreeMap;
 
@@ -101,14 +107,53 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_option_is_never_decided_under_the_default_profile() {
+    fn an_option_no_plain_build_sets_is_false_under_the_default_profile() {
         let off = enabled(&[]);
-        assert_eq!(decide("src/lib.rs::f#cfg(kani)", Some(&off)), CFG_UNKNOWN);
+        assert_eq!(decide("src/lib.rs::f#cfg(kani)", Some(&off)), CFG_INACTIVE);
         assert_eq!(
             decide("src/lib.rs::f#cfg(not(kani))", Some(&off)),
+            CFG_ACTIVE
+        );
+        assert_eq!(decide("src/lib.rs::f#cfg(miri)", Some(&off)), CFG_INACTIVE);
+        assert_eq!(decide("src/lib.rs::f#cfg(doc)", Some(&off)), CFG_INACTIVE);
+        assert_eq!(
+            decide("src/lib.rs::f#cfg(not(doctest))", Some(&off)),
+            CFG_ACTIVE
+        );
+    }
+
+    #[test]
+    fn an_option_the_build_invocation_decides_stays_unknown() {
+        let off = enabled(&[]);
+        for gate in ["unix", "not(unix)", "test", "target_os=linux", "windows"] {
+            let id = format!("src/lib.rs::f#cfg({gate})");
+            assert_eq!(decide(&id, Some(&off)), CFG_UNKNOWN, "{gate}");
+        }
+        assert_eq!(
+            decide("src/lib.rs::f#cfg(all(not(kani),unix))", Some(&off)),
             CFG_UNKNOWN
         );
-        assert_eq!(decide("src/lib.rs::f#cfg(unix)", Some(&off)), CFG_UNKNOWN);
+    }
+
+    #[test]
+    fn a_kani_profile_inverts_the_twins_of_kani() {
+        let mut kani = BuildProfile::with_features(BTreeSet::new());
+        kani.options.insert("kani".to_string(), true);
+        assert_eq!(evaluate("src/lib.rs::f#cfg(kani)", &kani), CFG_ACTIVE);
+        assert_eq!(
+            evaluate("src/lib.rs::f#cfg(not(kani))", &kani),
+            CFG_INACTIVE
+        );
+        assert_eq!(evaluate("src/lib.rs::f#cfg(unix)", &kani), CFG_UNKNOWN);
+    }
+
+    #[test]
+    fn a_file_without_a_cargo_map_leaves_kani_unknown() {
+        assert_eq!(decide("src/lib.rs::f#cfg(kani)", None), CFG_UNKNOWN);
+        assert_eq!(
+            decide("src/lib.rs::f#cfg(kani)", Some(&FileFeatures::Disagree)),
+            CFG_UNKNOWN
+        );
     }
 
     #[test]
@@ -129,7 +174,7 @@ mod tests {
         );
         assert_eq!(
             decide(
-                "src/lib.rs::m#cfg(not(feature=fast))::f#cfg(kani)",
+                "src/lib.rs::m#cfg(not(feature=fast))::f#cfg(unix)",
                 Some(&off)
             ),
             CFG_UNKNOWN

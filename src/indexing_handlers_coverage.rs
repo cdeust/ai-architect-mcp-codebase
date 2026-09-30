@@ -158,7 +158,7 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
 /// Issue #353: what `index_status` says about the `#[cfg]` twins of a graph.
 ///
 /// `cfg_twins` counts the twins and their state under the DEFAULT build profile
-/// (default features; `cfg(kani)`, `test` and target options stay `unknown`) and
+/// (default features; `kani`, `miri`, `doc` and `doctest` are false, `test` and target options stay `unknown`) and
 /// the call sites left open because a twin set is not decided. `feature_gated`
 /// covers modules through its `files` and, through `items`, the twin ITEMS the
 /// default build compiles out: the same word, one level down, so an item under
@@ -178,7 +178,7 @@ pub(crate) fn cfg_twin_status(store: &crate::graph_store::GraphStore) -> Option<
         "inactive": s.inactive,
         "unknown": s.unknown,
         "unresolved_sites": s.unresolved_sites,
-        "profile": "default features; options such as kani, test and unix are unknown",
+        "profile": "default features; kani, miri, doc and doctest are false; options such as test and unix are unknown",
     });
     let items = json!({ "count": s.inactive, "examples": examples });
     Some((twins, items))

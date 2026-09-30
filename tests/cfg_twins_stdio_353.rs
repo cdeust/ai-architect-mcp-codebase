@@ -218,8 +218,8 @@ fn get_impact_on_the_dropped_twin_says_it_is_inactive() {
 /// sites that were left open.
 #[test]
 fn undecided_twins_are_listed_and_their_open_call_sites_counted() {
-    let lib = "#[cfg(kani)]\npub fn pick() -> u32 {\n    1\n}\n\n\
-#[cfg(not(kani))]\npub fn pick() -> u32 {\n    2\n}\n\n\
+    let lib = "#[cfg(unix)]\npub fn pick() -> u32 {\n    1\n}\n\n\
+#[cfg(not(unix))]\npub fn pick() -> u32 {\n    2\n}\n\n\
 pub fn caller() -> u32 {\n    pick()\n}\n";
     let mut a = Analyzed::new("", lib);
     let bare = a.call("get_impact", json!({"qualified_name": "src/lib.rs::pick"}));
@@ -228,7 +228,7 @@ pub fn caller() -> u32 {\n    pick()\n}\n";
     assert_eq!(bare["did_you_mean"].as_array().unwrap().len(), 2, "{bare}");
     let twin = a.call(
         "get_impact",
-        json!({"qualified_name": "src/lib.rs::pick#cfg(kani)"}),
+        json!({"qualified_name": "src/lib.rs::pick#cfg(unix)"}),
     );
     assert_eq!(twin["cfg_active"], "unknown", "{twin}");
     assert_eq!(twin["unresolved_callsites_cfg_twins"], 1, "{twin}");

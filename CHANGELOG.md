@@ -51,6 +51,22 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `#[cfg]` twins under `kani`, `miri`, `doc` or `doctest` are decided by the
+  default build profile (issue #391). A plain `cargo build` never sets those four
+  options (`cargo kani`, `cargo miri` and rustdoc do), so the profile now fixes
+  them to false: the `cfg(not(kani))` twin is `active`, the `cfg(kani)` twin
+  `inactive`, and a call to the pair resolves to the compiled twin as
+  `cfg-selected`. On dy-wcet v4.1.6 the three twin sets (`BUSY_PERIOD_CAP`,
+  `ITERATION_CAP`, `MAX_TASKS`) had 6 members, all `unknown`. The rule is on the
+  predicate, three-valued: `all` with a false option is false, `any` with a false
+  option is decided by its other branches, `not` inverts, and a conjunction with
+  an unknown option stays `unknown`. `test`, `unix`, `windows`, `target_os` and
+  every other option stay `unknown` (`cargo test` sets `test`, `cargo build` does
+  not, so the source does not say which the reader means), as do twins of a file
+  no Cargo manifest describes. A Kani profile is the `BuildProfile` with `kani`
+  true. Module reachability (`feature_gated`) still reads features only, so a
+  `#[cfg(kani)] mod proofs;` is not reported compiled out by this change.
+
 - Rust receivers typed through four more forms, each declining when the file does
   not prove the type (issue #390). `let t = self.clone();` and `let c = s.clone();`
   give the receiver the type of `self` or of `s`, only when the file proves the

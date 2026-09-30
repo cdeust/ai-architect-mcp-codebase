@@ -12,6 +12,10 @@
 // source: The Rust Reference, "Conditional compilation" (configuration
 // predicates `all`, `any`, `not`, key-value options).
 //
+// Issue #391: `eval_in` reads a `BuildProfile`. The default profile also fixes
+// the options no plain build sets (`kani`, `miri`, `doc`, `doctest`) to false;
+// `test`, `unix`, `target_os = "..."` and every other option stay `Unknown`.
+//
 // Issue #353: the predicate also has a CANONICAL form and a COMPACT text, so
 // two items of one name under mutually exclusive `#[cfg]` predicates can be told
 // apart. Every option is kept (`kani`, `test`, `unix`, `target_os = "..."`):
@@ -46,11 +50,31 @@ pub(crate) enum Truth {
     Unknown,
 }
 
+/// The bare options no plain `cargo build` sets, whatever the target or the
+/// features: `kani` (only `cargo kani` sets it), `miri` (only `cargo miri`),
+/// `doc` (only rustdoc, when it documents) and `doctest` (only rustdoc, when it
+/// compiles doctests). Under the default profile each is certainly false.
+///
+/// `test` is deliberately NOT here: `cargo test` sets it and `cargo build` does
+/// not, so the source alone does not say which one the reader means, and the
+/// test/production split is a separate mechanism (`requires_option("test")`,
+/// issue #354). `unix`, `windows`, `target_os`, `debug_assertions`, `panic` and
+/// the other options depend on the target or the profile and stay `Unknown`.
+/// source (read 2026-09-30): Kani book, "Usage" (`cargo kani` sets `cfg(kani)`;
+/// docs/src/usage.md, raw.githubusercontent.com/model-checking/kani/main);
+/// Miri README ("When compiling code via `cargo miri`, the `cfg(miri)` config
+/// flag is set", line 127); rustdoc book, "Advanced features" (rustdoc sets
+/// `cfg(doc)` when it builds documentation) and "Documentation tests" (rustdoc
+/// sets `cfg(doctest)` when compiling with `--test`).
+const NEVER_SET_BY_A_PLAIN_BUILD: [&str; 4] = ["kani", "miri", "doc", "doctest"];
+
 /// One build the graph can be read under: the Cargo features it enables and the
 /// bare options (`kani`, `test`, `miri`) it decides. The default profile decides
-/// no option, so every option stays `Unknown` under it. A second profile, such as
-/// a Kani build, is a value of this type: nothing else in the evaluation changes.
-/// source: issue #353 (the Kani extension point).
+/// the options a plain build never sets (`NEVER_SET_BY_A_PLAIN_BUILD`, false) and
+/// leaves every other option `Unknown`. A second profile, such as a Kani build,
+/// is a value of this type with `options["kani"] = true`: nothing else in the
+/// evaluation changes.
+/// source: issue #353 (the Kani extension point), issue #391.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BuildProfile {
     pub features: BTreeSet<String>,
@@ -60,18 +84,25 @@ pub(crate) struct BuildProfile {
 }
 
 impl BuildProfile {
-    /// The profile `cargo metadata` describes: default features, no option decided.
+    /// The default profile `cargo metadata` describes: its default features, and
+    /// every option a plain build never sets fixed to false.
     pub(crate) fn with_features(features: BTreeSet<String>) -> Self {
         BuildProfile {
             features,
-            options: BTreeMap::new(),
+            options: NEVER_SET_BY_A_PLAIN_BUILD
+                .iter()
+                .map(|name| (name.to_string(), false))
+                .collect(),
         }
     }
 }
 
 impl CfgPredicate {
     /// Evaluates against the features the build enables; every option is
-    /// `Unknown`.
+    /// `Unknown`. This is the module-reachability reading (`file_scope`,
+    /// `feature_gated`): a module is flagged compiled out only when features
+    /// alone force its gate false, so a `#[cfg(kani)] mod proofs;` is never
+    /// flagged by it. Twin items are read through `eval_in` instead.
     pub(crate) fn eval(&self, enabled: &BTreeSet<String>) -> Truth {
         self.eval_with(enabled, &BTreeMap::new())
     }
@@ -439,3 +470,7 @@ mod tests {
         assert!(parse_cfg_arguments("(feature = \"a\\qb\")").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "cfg_expr_profile_tests.rs"]
+mod profile_tests;

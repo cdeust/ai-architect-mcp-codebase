@@ -10,10 +10,12 @@
 // written before the column existed. Every reader treats a missing column and
 // `''` as `unknown`, never as `active`.
 //
-// The value belongs to the DEFAULT build profile only (default features, the
-// features `cargo metadata` reports). It says nothing about `cfg(kani)`, `test`
-// or a target; those stay `unknown` because the source alone does not decide
-// them. `indexer::cfg_active` documents where a second profile would plug in.
+// The value belongs to the DEFAULT build profile only: the features `cargo
+// metadata` reports, and the options no plain build sets (`kani`, `miri`, `doc`,
+// `doctest` are false, issue #391). It says nothing about `test` or a target
+// (`unix`, `target_os`); those stay `unknown` because the source alone does not
+// decide them. `indexer::cfg_active` documents where a second profile would plug
+// in.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
