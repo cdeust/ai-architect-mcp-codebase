@@ -16,6 +16,13 @@
 // A node that is not a twin has no gate and no `cfg_active`, so its verdict is
 // `Undecided` and neither pass treats it differently.
 //
+// A caller that sits under a `#[cfg]` but has no twin keeps a plain id (issue
+// #419): its gate is on the node (`cfg_gate`), not in the id, so the syntactic
+// check cannot use it. Such a caller is not known to be compiled by the default
+// build, so the profile (2) must not pick a twin for it: `#[cfg(kani)] fn proof`
+// calling `pick` reaches the `kani` twin, whatever the default build compiles.
+// Its calls to a twin set stay undecided.
+//
 // Part B of #366 adds the file: the gate a file inherits from the `mod`
 // declarations that lead to it joins the item's own gates in the syntactic
 // check (a caller in the `cfg(unix)` file reaches the `cfg(unix)` twin file), and
@@ -23,7 +30,7 @@
 // never folded into the item's `cfg_active`: an undecided file gate says nothing
 // about the same-file twins inside it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::graph_store::{cfg_gates_in, FileCfg, GraphStore, CFG_ACTIVE, CFG_INACTIVE};
 use crate::parser::cfg_compact::parse_compact;
@@ -35,6 +42,8 @@ use crate::parser::cfg_expr::CfgPredicate;
 pub(crate) struct TwinView {
     active: HashMap<String, String>,
     files: HashMap<String, FileCfg>,
+    /// Ids of the callables under a `#[cfg]` whose id does not spell it (#419).
+    gated_callers: HashSet<String>,
 }
 
 impl TwinView {
@@ -42,6 +51,7 @@ impl TwinView {
         TwinView {
             active: store.cfg_active_by_id(),
             files: store.file_cfg_by_id(),
+            gated_callers: store.gated_callable_ids(),
         }
     }
 
@@ -53,7 +63,15 @@ impl TwinView {
                 .map(|(id, v)| (id.to_string(), v.to_string()))
                 .collect(),
             files: HashMap::new(),
+            gated_callers: HashSet::new(),
         }
+    }
+
+    /// Marks `id` as a callable under a gate its id does not spell.
+    #[cfg(test)]
+    pub(crate) fn with_gated_caller(mut self, id: &str) -> Self {
+        self.gated_callers.insert(id.to_string());
+        self
     }
 
     /// Adds the facts of `file` (`(module_path, gate, active)`).
@@ -146,23 +164,40 @@ fn conjuncts_in_file(view: &TwinView, qn: &str) -> Option<Vec<CfgPredicate>> {
     Some(out)
 }
 
+/// What is known of the gates a caller holds.
+pub(crate) struct CallerGates {
+    /// The conjuncts read from its id and from the gate its file inherits.
+    held: Vec<CfgPredicate>,
+    /// It sits under a `#[cfg]` of its own that neither of those spell (#419):
+    /// the profile says nothing about it. Sound with `held` alone: a twin whose
+    /// gate `held` implies is compiled whenever the caller is.
+    unspelled: bool,
+}
+
 /// The gates a caller holds, read from its qualified name or from the id of a
 /// call site inside it (the site id starts with the caller's id), and from the
 /// gate its file inherits. An unparsable gate holds nothing.
-pub(crate) fn caller_gates(view: &TwinView, caller: &str) -> Vec<CfgPredicate> {
-    conjuncts_in_file(view, caller).unwrap_or_default()
+pub(crate) fn caller_gates(view: &TwinView, caller: &str) -> CallerGates {
+    let held = conjuncts_in_file(view, caller).unwrap_or_default();
+    let id = super::extract_caller_from_callsite_id(caller);
+    let unspelled = view.gated_callers.contains(&id);
+    CallerGates { held, unspelled }
 }
 
 /// Whether the build compiles the node `id` (qualified name `qn`, which carries
 /// its gates) for a caller holding `caller`.
-pub(crate) fn verdict(view: &TwinView, caller: &[CfgPredicate], id: &str, qn: &str) -> Verdict {
+pub(crate) fn verdict(view: &TwinView, caller: &CallerGates, id: &str, qn: &str) -> Verdict {
+    let held = &caller.held;
     if let Some(gate) = conjuncts_in_file(view, qn) {
-        if !gate.is_empty() && gate.iter().all(|c| caller.contains(c)) {
+        if !gate.is_empty() && gate.iter().all(|c| held.contains(c)) {
             return Verdict::Compiled;
         }
-        if gate.iter().any(|c| caller.contains(&negation(c))) {
+        if gate.iter().any(|c| held.contains(&negation(c))) {
             return Verdict::NotCompiled;
         }
+    }
+    if caller.unspelled {
+        return Verdict::Undecided;
     }
     let file_active = view.file(id).map(|f| f.active.as_str());
     if file_active == Some(CFG_INACTIVE) {
@@ -237,6 +272,21 @@ mod tests {
         assert_eq!(of(&view, site, "src/lib.rs::plain"), Verdict::Undecided);
         assert!(!is_compiled_out(&view, site, FAST));
         assert!(!is_compiled_out(&view, site, "src/lib.rs::plain"));
+    }
+
+    /// Issue #419: `#[cfg(kani)] fn proof` has no twin, so its id spells no gate;
+    /// the profile must not send its call to the twin the default build compiles.
+    #[test]
+    fn a_caller_under_a_gate_its_id_does_not_spell_leaves_the_profile_undecided() {
+        let view = TwinView::with(&[(FAST, "inactive"), (SLOW, "active")])
+            .with_gated_caller("src/lib.rs::proof");
+        let site = "src/lib.rs::proof::call@3:4";
+        assert_eq!(of(&view, site, FAST), Verdict::Undecided);
+        assert_eq!(of(&view, site, SLOW), Verdict::Undecided);
+        assert!(!is_compiled_out(&view, site, FAST));
+        // A caller the graph does not know as gated is still read by the profile.
+        let plain = "src/lib.rs::caller::call@3:4";
+        assert_eq!(of(&view, plain, SLOW), Verdict::Compiled);
     }
 
     /// The trap of part B: same-file twins inside a `cfg(unix)` file are still

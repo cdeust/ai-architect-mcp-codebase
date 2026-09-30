@@ -32,6 +32,10 @@ struct Project {
 
 impl Project {
     fn new(source: &str) -> Self {
+        Self::with_files(&[("src/lib.rs", source)])
+    }
+
+    fn with_files(files: &[(&str, &str)]) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("crate");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -40,7 +44,9 @@ impl Project {
             "[package]\nname = \"fx\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )
         .unwrap();
-        fs::write(root.join("src/lib.rs"), source).unwrap();
+        for (name, text) in files {
+            fs::write(root.join(name), text).unwrap();
+        }
         let graph = tmp.path().join("graph");
         indexer::index_codebase(&root, &graph).expect("index");
         let project = Project { _tmp: tmp, graph };
@@ -108,4 +114,44 @@ fn a_call_reaches_the_not_kani_twin_and_unix_twins_stay_unknown() {
     );
     assert_eq!(open[0][0].to_lowercase(), "false", "{open:?}");
     assert_eq!(open[0][1], "cfg_twins", "{open:?}");
+}
+
+/// Issue #420: the module gate is read under the same profile as the item gates.
+/// `#[cfg(kani)] mod proofs;` is compiled out of a default build, so no twin in
+/// it is compiled: the `cfg(not(kani))` one is not `active` merely because its
+/// own gate holds.
+#[test]
+fn twins_in_a_kani_gated_module_are_inactive_under_the_default_profile() {
+    let twins = "#[cfg(kani)]\npub fn g() -> u32 {\n    1\n}\n\n\
+#[cfg(not(kani))]\npub fn g() -> u32 {\n    2\n}\n";
+    let p = Project::with_files(&[
+        (
+            "src/lib.rs",
+            "#[cfg(kani)]\nmod proofs;\n\npub fn root() {}\n",
+        ),
+        ("src/proofs.rs", twins),
+    ]);
+    assert_eq!(
+        p.activity("Function", "g"),
+        [pair("kani", "inactive"), pair("not(kani)", "inactive")]
+    );
+}
+
+/// The mirror: under `#[cfg(not(kani))] mod plain;` the module is compiled, so
+/// the item gates decide.
+#[test]
+fn twins_in_a_not_kani_module_follow_their_own_gates() {
+    let twins = "#[cfg(kani)]\npub fn g() -> u32 {\n    1\n}\n\n\
+#[cfg(not(kani))]\npub fn g() -> u32 {\n    2\n}\n";
+    let p = Project::with_files(&[
+        (
+            "src/lib.rs",
+            "#[cfg(not(kani))]\nmod plain;\n\npub fn root() {}\n",
+        ),
+        ("src/plain.rs", twins),
+    ]);
+    assert_eq!(
+        p.activity("Function", "g"),
+        [pair("kani", "inactive"), pair("not(kani)", "active")]
+    );
 }

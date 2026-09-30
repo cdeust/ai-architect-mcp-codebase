@@ -26,7 +26,8 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         (NODE_FILE, "id STRING, path STRING, name STRING, extension STRING, size_bytes INT64, parse_errors INT64, target_context STRING DEFAULT '', cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT '', module_path STRING DEFAULT ''"),
         // cfg_gate: issue #353: on every label a Rust item can twin under, the
         // compact `#[cfg]` gate of an item whose qualified name carries a
-        // `#cfg(..)` suffix; '' for every other item and for a graph written
+        // `#cfg(..)` suffix, and (issue #419) of a gated Function or Method
+        // without a twin; '' for every other item and for a graph written
         // before the column existed (see `require_cfg_gate_metadata`).
         // cfg_active: issue #353 (B): 'active' / 'inactive' / 'unknown' for the
         // items that carry a gate: whether the default build compiles them. ''

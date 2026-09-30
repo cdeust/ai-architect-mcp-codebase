@@ -159,31 +159,42 @@ pub fn caller() -> u32 {\n    pick()\n}\n";
 }
 
 /// Callers that are themselves twins under `kani` and its negation each reach
-/// the twin of their own gate, whatever the profile decides: the gate in the
-/// caller's id is the evidence and outranks the default profile.
+/// the twin of their own gate, without the default profile deciding anything:
+/// the gate in the caller's id is the evidence. A caller whose id carries no gate
+/// (an item under `#[cfg(kani)]` that has no twin) decides nothing and stays open.
 #[test]
 fn callers_that_are_twins_reach_the_twin_of_their_own_gate() {
     let source = "#[cfg(kani)]\npub fn pick() -> u32 {\n    1\n}\n\n\
 #[cfg(not(kani))]\npub fn pick() -> u32 {\n    2\n}\n\n\
 #[cfg(kani)]\npub fn run() -> u32 {\n    pick()\n}\n\n\
-#[cfg(not(kani))]\npub fn run() -> u32 {\n    pick()\n}\n";
+#[cfg(not(kani))]\npub fn run() -> u32 {\n    pick()\n}\n\n\
+#[cfg(kani)]\npub fn proof() -> u32 {\n    pick()\n}\n";
     let p = Project::new("", &[("src/lib.rs", source)]);
     let edges = p.calls_into("pick");
     assert_eq!(edges.len(), 2, "{edges:?}");
-    for (caller, twin) in [
-        ("run#cfg(kani)", "pick#cfg(kani)"),
-        ("run#cfg(not(kani))", "pick#cfg(not(kani))"),
-    ] {
-        assert!(
-            edges.iter().any(|e| e[1].ends_with(twin)),
-            "{caller} did not reach {twin}: {edges:?}"
-        );
-    }
+    let pairs: Vec<(&str, &str)> = edges
+        .iter()
+        .map(|e| (e[0].as_str(), e[1].as_str()))
+        .collect();
+    assert!(
+        pairs.iter().any(|(_, t)| t.ends_with("pick#cfg(kani)")),
+        "{edges:?}"
+    );
+    assert!(
+        pairs
+            .iter()
+            .any(|(_, t)| t.ends_with("pick#cfg(not(kani))")),
+        "{edges:?}"
+    );
     let open = p.rows(
         "MATCH (c:CallSite) WHERE c.callee_name = 'pick' AND c.is_resolved = false \
          RETURN c.unresolved_reason",
     );
-    assert!(open.is_empty(), "every call is decided: {open:?}");
+    assert_eq!(
+        open,
+        [["cfg_twins"]],
+        "the `proof` call decides nothing: {open:?}"
+    );
 }
 
 /// Twins in a module the default features compile out are all inactive.

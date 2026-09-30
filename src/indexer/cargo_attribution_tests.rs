@@ -132,7 +132,12 @@ fn a_file_a_crate_root_reaches_through_a_climbing_path_is_inside_the_target() {
     let proofs = &out.file_cfg["kani/response_bounds.rs"];
     assert_eq!(proofs.gate, "kani");
     assert_eq!(proofs.module_path, "src/lib.rs::proofs");
-    assert_eq!(proofs.active, crate::graph_store::CFG_UNKNOWN);
+    // `kani` is false under the default profile, so the module is compiled out (#420).
+    assert_eq!(proofs.active, crate::graph_store::CFG_INACTIVE);
+    assert_eq!(
+        out.file_cfg["kani/deeper/helpers.rs"].active,
+        crate::graph_store::CFG_INACTIVE
+    );
     assert_eq!(out.file_cfg["kani/deeper/helpers.rs"].gate, "kani");
     assert_eq!(
         out.target_owners["kani/response_bounds.rs"],

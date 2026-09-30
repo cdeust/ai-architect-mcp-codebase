@@ -92,6 +92,14 @@ pub(super) fn push_def(ctx: &mut WalkCtx, node: Node, mut d: Def) {
     if let Some(gate) = gate_of_qualified_name(d.qn) {
         d.properties
             .push(("cfg_gate".to_string(), gate.to_string()));
+    } else if d.label == LABEL_FUNCTION || d.label == LABEL_METHOD {
+        // Issue #419: a callable under a `#[cfg]` that has no twin keeps its id, so
+        // the gate is recorded on the node: the resolver must not read a call
+        // from `#[cfg(kani)] fn proof` as a call from a default build.
+        let gate = effective_gate(ctx.source, node);
+        if !gate.is_empty() {
+            d.properties.push(("cfg_gate".to_string(), gate));
+        }
     }
     // Issue #354: test, bench and proof code says so, from the source alone.
     // Production code gets no property, so its parse output is unchanged.

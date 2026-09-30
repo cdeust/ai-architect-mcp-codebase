@@ -307,6 +307,27 @@ impl GraphStore {
         Ok(out)
     }
 
+    /// The ids of the functions and methods under a `#[cfg]` whose id carries no
+    /// twin suffix (issue #419): the parser records their gate in `cfg_gate`
+    /// though the id does not spell it. Read-only: a label without the column
+    /// contributes none.
+    pub fn gated_callable_ids(&self) -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        for label in ["Function", "Method"] {
+            if !self.node_column_exists(label, "cfg_gate").unwrap_or(false) {
+                continue;
+            }
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE n.cfg_gate <> '' AND NOT n.id CONTAINS {} RETURN n.id",
+                cypher_str(TWIN_MARK)
+            );
+            if let Ok(rows) = self.execute_query(&cypher) {
+                out.extend(rows.rows.into_iter().map(|r| r[0].clone()));
+            }
+        }
+        out
+    }
+
     /// `id -> cfg_active` of every twin node, normalized. Read-only: a label
     /// without the column contributes `unknown` for its twins.
     pub fn cfg_active_by_id(&self) -> HashMap<String, String> {

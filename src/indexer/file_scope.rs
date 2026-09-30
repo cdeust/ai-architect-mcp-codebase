@@ -19,7 +19,9 @@
 // file's verdict under the default build is `inactive` when every path to it is
 // compiled out (`FileFeatures::CompiledOut`), `active` when one path holds under
 // the package's default features, `unknown` otherwise (a bare `unix`, a gate
-// that did not parse). The gate is never folded into an item's own gate: an
+// that did not parse). The declarations are read under the same default profile
+// as the item gates (issue #420): `#[cfg(kani)] mod proofs;` is compiled out of a
+// default build, so its file is `inactive` and so is every item in it. The gate is never folded into an item's own gate: an
 // `unknown` file gate says nothing about the twins inside the file.
 // source: The Rust Reference, "Modules" and "Conditional compilation".
 
@@ -30,7 +32,7 @@ use super::cargo_targets::TargetMap;
 use super::feature_gated::{FileFeatures, ModuleTree};
 use super::rust_mod_decls::ModDecl;
 use crate::graph_store::{FileCfg, CFG_ACTIVE, CFG_INACTIVE, CFG_UNKNOWN};
-use crate::parser::cfg_expr::{CfgPredicate, Truth};
+use crate::parser::cfg_expr::{BuildProfile, CfgPredicate, Truth};
 
 /// Gate text for a conjunction one member of which did not parse.
 const UNPARSED_GATE: &str = "?";
@@ -128,7 +130,7 @@ fn reach(module_path: &str, gates: Option<&[CfgPredicate]>, enabled: &BTreeSet<S
         Some([]) => (String::new(), Truth::True),
         Some(all) => {
             let predicate = CfgPredicate::All(all.to_vec());
-            let truth = predicate.eval(enabled);
+            let truth = predicate.eval_in(&BuildProfile::with_features(enabled.clone()));
             (predicate.canonical().compact(), truth)
         }
     };

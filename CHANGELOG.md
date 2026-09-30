@@ -64,8 +64,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   every other option stay `unknown` (`cargo test` sets `test`, `cargo build` does
   not, so the source does not say which the reader means), as do twins of a file
   no Cargo manifest describes. A Kani profile is the `BuildProfile` with `kani`
-  true. Module reachability (`feature_gated`) still reads features only, so a
-  `#[cfg(kani)] mod proofs;` is not reported compiled out by this change.
+  true. Two consequences of the profile are decided the same way. A module under
+  `#[cfg(kani)]` is compiled out under the default profile, so its twins are
+  `inactive`, not `active` (issue #420; `feature_gated`, the coverage reading,
+  still reads features only). A lone `#[cfg(kani)]` caller has no gate in its id,
+  so the graph now records `cfg_gate` on every gated Function and Method, and a
+  call from one to a twin pair stays open (`cfg_twins`) instead of resolving to
+  the twin the profile compiled (issue #419). Graphs written before this change
+  lack that property until reindexed.
 
 - Rust receivers typed through four more forms, each declining when the file does
   not prove the type (issue #390). `let t = self.clone();` and `let c = s.clone();`

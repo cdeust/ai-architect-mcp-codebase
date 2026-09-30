@@ -124,6 +124,15 @@ mod tests {
     }
 
     #[test]
+    fn a_caller_under_an_unspelled_gate_is_not_given_the_profiles_twin() {
+        let twins = [twin(FAST), twin(SLOW)];
+        let view = TwinView::with(&[(FAST, "inactive"), (SLOW, "active")])
+            .with_gated_caller("src/lib.rs::proof");
+        assert_eq!(chosen(&view, "src/lib.rs::proof", &twins), None);
+        assert_eq!(chosen(&view, CALLER, &twins), Some(SLOW));
+    }
+
+    #[test]
     fn a_caller_in_a_twin_module_carries_the_gate_of_the_module() {
         let helpers = [
             twin("src/lib.rs::helper#cfg(kani)"),

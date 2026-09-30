@@ -99,10 +99,10 @@ impl BuildProfile {
 
 impl CfgPredicate {
     /// Evaluates against the features the build enables; every option is
-    /// `Unknown`. This is the module-reachability reading (`file_scope`,
-    /// `feature_gated`): a module is flagged compiled out only when features
-    /// alone force its gate false, so a `#[cfg(kani)] mod proofs;` is never
-    /// flagged by it. Twin items are read through `eval_in` instead.
+    /// `Unknown`. This is the reading of `feature_gated` (a module reported as
+    /// compiled out by a disabled FEATURE): a `#[cfg(kani)] mod proofs;` is never
+    /// flagged by it. The file and item verdicts (`file_scope`, `cfg_active`)
+    /// read through `eval_in`, so both use one profile (issue #420).
     pub(crate) fn eval(&self, enabled: &BTreeSet<String>) -> Truth {
         self.eval_with(enabled, &BTreeMap::new())
     }

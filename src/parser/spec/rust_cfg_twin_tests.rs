@@ -358,7 +358,8 @@ fn an_impl_for_twin_types_names_its_owner_only_when_its_gate_selects_one_twin() 
 }
 
 /// Two nested fns under exclusive gates keep the old behaviour: `ctx.dedup` tells
-/// them apart by line, they carry no `cfg_gate`, and both stay nodes.
+/// them apart by line, they carry no `#cfg(..)` id suffix, and both stay nodes.
+/// Each records its own gate in `cfg_gate` (issue #419), as any gated callable.
 #[test]
 fn nested_fns_under_exclusive_gates_keep_the_line_suffix_behaviour() {
     let result = parse(
@@ -366,7 +367,9 @@ fn nested_fns_under_exclusive_gates_keep_the_line_suffix_behaviour() {
     );
     let gs = nodes(&result, "Function", "g");
     assert_eq!(gs.len(), 2);
-    assert!(gs.iter().all(|n| prop(n, "cfg_gate").is_none()));
+    let mut gates: Vec<_> = gs.iter().filter_map(|n| prop(n, "cfg_gate")).collect();
+    gates.sort_unstable();
+    assert_eq!(gates, ["not(unix)", "unix"]);
     assert!(gs.iter().all(|n| !n.qualified_name.contains("#cfg(")));
     assert_ne!(gs[0].qualified_name, gs[1].qualified_name);
 }

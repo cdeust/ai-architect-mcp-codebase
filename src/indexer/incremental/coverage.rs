@@ -153,7 +153,7 @@ pub(in crate::indexer) fn apply_cargo_facts(
     if let Err(e) = store.write_crate_evidence(&facts.crate_evidence()) {
         eprintln!("[ap] crate evidence not recorded: {e}");
     }
-    if let Err(e) = super::super::cfg_active::write(store, &facts.file_features) {
+    if let Err(e) = super::super::cfg_active::write(store, &facts.file_features, &facts.file_cfg) {
         eprintln!("[ap] cfg_active pass skipped: {e}");
     }
     if let Err(e) = store.write_target_contexts(&facts.target_contexts) {

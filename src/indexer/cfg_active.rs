@@ -30,7 +30,9 @@
 use std::collections::BTreeMap;
 
 use super::feature_gated::FileFeatures;
-use crate::graph_store::{cfg_gates_in, GraphStore, CFG_ACTIVE, CFG_INACTIVE, CFG_UNKNOWN};
+use crate::graph_store::{
+    cfg_gates_in, FileCfg, GraphStore, CFG_ACTIVE, CFG_INACTIVE, CFG_UNKNOWN,
+};
 use crate::parser::cfg_compact::parse_compact;
 use crate::parser::cfg_expr::{BuildProfile, CfgPredicate, Truth};
 
@@ -61,9 +63,14 @@ fn evaluate(id: &str, profile: &BuildProfile) -> &'static str {
 }
 
 /// Writes `cfg_active` on every twin of `store`; the count of twins written.
+///
+/// A twin in a file the default profile compiles out (`file_cfg`, issue #420) is
+/// `inactive`, whatever its own gate says: `not(kani)` holds in a default build,
+/// but the `#[cfg(kani)] mod` that declares the file does not.
 pub(super) fn write(
     store: &GraphStore,
     file_features: &BTreeMap<String, FileFeatures>,
+    file_cfg: &BTreeMap<String, FileCfg>,
 ) -> Result<usize, String> {
     let assignments: Vec<(String, String, &'static str)> = store
         .cfg_twin_ids()
@@ -71,7 +78,15 @@ pub(super) fn write(
         .map(|(label, id)| {
             let file = crate::language_provider::extract_file_prefix(&id);
             let features = file.as_deref().and_then(|f| file_features.get(f));
-            let verdict = decide(&id, features);
+            let compiled_out = file
+                .as_deref()
+                .and_then(|f| file_cfg.get(f))
+                .is_some_and(|cfg| cfg.active == CFG_INACTIVE);
+            let verdict = if compiled_out {
+                CFG_INACTIVE
+            } else {
+                decide(&id, features)
+            };
             (label, id, verdict)
         })
         .collect();
