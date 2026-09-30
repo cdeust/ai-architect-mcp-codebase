@@ -13,14 +13,24 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::pinned::{self, PinnedTree};
 
 /// Parsed corpus.toml manifest.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CorpusManifest {
     pub name: String,
     pub language: String,
-    /// Path relative to the corpus directory OR absolute.
+    /// Path relative to the corpus directory OR absolute. When `git_rev` is
+    /// set it is instead a directory relative to the repository root, read
+    /// from that revision.
     pub path: String,
+    /// Optional git revision the corpus source is read from (issue #397).
+    /// Set it for a corpus that lives in this repository's own history, so
+    /// its hand labels describe an immutable tree instead of a moving one.
+    #[serde(default)]
+    pub git_rev: Option<String>,
     /// Optional friendly description. Read from disk but not surfaced by the
     /// runner; kept on the struct so `toml::from_str` accepts the field.
     #[serde(default)]
@@ -65,6 +75,9 @@ pub struct CorpusConfig {
     pub labels: Vec<GroundTruthLabel>,
     /// True iff labels is empty (a stub corpus).
     pub is_stub: bool,
+    /// Keeps a `git_rev`-pinned tree on disk for as long as this config lives
+    /// (`source_path` points inside it); `None` for a plain directory corpus.
+    pub _pinned_tree: Option<Arc<PinnedTree>>,
 }
 
 /// Label `input` keys that name a fixture file on disk. A relative value is
@@ -98,7 +111,7 @@ pub fn load_one(corpora_root: &Path, name: &str) -> Result<CorpusConfig, String>
         ));
     }
 
-    let source_path = resolve_source_path(&dir, &manifest.path)?;
+    let (source_path, pinned_tree) = resolve_source(&dir, &manifest)?;
     let corpus_dir = dir
         .canonicalize()
         .map_err(|e| format!("canonicalize {:?}: {e}", dir))?;
@@ -110,7 +123,23 @@ pub fn load_one(corpora_root: &Path, name: &str) -> Result<CorpusConfig, String>
         corpus_dir,
         labels: truth.labels,
         is_stub,
+        _pinned_tree: pinned_tree,
     })
+}
+
+/// Where the corpus source lives: the pinned revision's extracted tree when the
+/// manifest has `git_rev`, otherwise the directory `path` names.
+fn resolve_source(
+    corpus_dir: &Path,
+    manifest: &CorpusManifest,
+) -> Result<(PathBuf, Option<Arc<PinnedTree>>), String> {
+    match &manifest.git_rev {
+        Some(rev) => {
+            let tree = pinned::materialize(corpus_dir, rev, &manifest.path)?;
+            Ok((tree.source_dir().to_path_buf(), Some(Arc::new(tree))))
+        }
+        None => Ok((resolve_source_path(corpus_dir, &manifest.path)?, None)),
+    }
 }
 
 /// Discover and load every corpus under corpora_root that has a non-empty
@@ -422,5 +451,23 @@ mod tests {
             json!({ "qualified_name": "a.rs::A" }),
         )];
         assert!(stale_ground_truth(root, &labels).is_empty());
+    }
+
+    /// Issue #397: `rust-self` must read its pinned commit, never the live
+    /// `src/`, or its exhaustive labels rot with every merged PR.
+    #[test]
+    fn the_rust_self_corpus_is_read_from_its_pinned_revision() {
+        let corpora_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpora");
+        let corpus = load_one(&corpora_root, "rust-self").expect("load rust-self");
+        assert!(
+            corpus._pinned_tree.is_some(),
+            "rust-self lost its git_rev pin"
+        );
+        let live_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+        assert_ne!(
+            corpus.source_path.canonicalize().unwrap(),
+            live_src.canonicalize().unwrap(),
+            "the corpus points at the moving working tree"
+        );
     }
 }

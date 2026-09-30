@@ -2,7 +2,7 @@
   "corpus": "rust-self",
   "language": "rust",
   "version": "2",
-  "_comment": "Hand labels against the ai-architect-mcp src/ tree. Each label was cross-checked against the actual source code — qualified names follow the `<rel_path>::<name>` convention used by parser/mod.rs qual(). If the pipeline disagrees with a label, the pipeline is wrong. Version 2 adds Q8, Q9, Q11, Q12, Q13, Q14 — the previously-unmeasured 32.5% of the harness weight.",
+  "_comment": "Hand labels against the ai-architect-mcp src/ tree, PINNED to the commit named in corpus.toml (git_rev): the corpus is that immutable tree, not the live working tree, so a label can only go stale if it was wrong (issue #397). Each label was cross-checked against the source (grep plus enclosing-function scan) and against an independent regex analyzer. Qualified names follow the `<rel_path>::<name>` convention of parser/mod.rs qual(). Label policy: q4/q7 callers are ALL callers, test functions included, whether or not the tool can see them (calls inside macro token trees such as assert!/assert_eq! and via `use super::*` are a known tool gap, so those labels score below 1.0 on purpose). Re-pin procedure: see benches/README.md. Version 2 adds Q8, Q9, Q11, Q12, Q13, Q14.",
   "labels": [
     {
       "query_id": "q1",
@@ -101,7 +101,7 @@
         "label_filter": "Enum"
       },
       "expected": {
-        "qualified_name": "search/mod.rs::GetContextError"
+        "qualified_name": "search/context.rs::GetContextError"
       }
     },
     {
@@ -191,7 +191,7 @@
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "search/mod.rs::get_context"
+        "qualified_name": "search/context.rs::get_context"
       }
     },
     {
@@ -221,7 +221,7 @@
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "query_handlers.rs::validate_graph_path_safe"
+        "qualified_name": "query_handlers/graph_paths.rs::validate_graph_path_safe"
       }
     },
     {
@@ -231,7 +231,7 @@
         "label_filter": "Function"
       },
       "expected": {
-        "qualified_name": "query_handlers.rs::forbidden_cypher_keyword"
+        "qualified_name": "query_handlers/read_only_gate.rs::forbidden_cypher_keyword"
       }
     },
     {
@@ -241,7 +241,12 @@
       },
       "expected": {
         "callers": [
-          "indexing_handlers.rs::run_index_codebase"
+          "coverage_tools_tests.rs::index_codebase_reports_coverage_then_index_status_and_missed_surface_it",
+          "graph_freshness_tests.rs::a_full_index_leaves_its_two_sidecars_paired",
+          "graph_freshness_tests.rs::analyze_codebase_leaves_a_manifest_that_sees_later_files",
+          "indexing_handlers.rs::run_index_codebase",
+          "temporal_runtime_tests.rs::fixture",
+          "token_surface_tools_tests.rs::indexed_graph"
         ]
       }
     },
@@ -252,7 +257,13 @@
       },
       "expected": {
         "callers": [
-          "query_handlers.rs::run_query_graph"
+          "analyze_handlers/lsp_durability.rs::tests::query",
+          "pagination_tests.rs::query_graph_pages_through_ordered_query",
+          "query_handlers.rs::run_query_graph",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_blocks_filesystem_writing_statements",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_fails_closed_on_unterminated_literal",
+          "query_handlers/row_limit_tests.rs::query_page",
+          "query_handlers_tests.rs::test_query_graph_rejects_delete"
         ]
       }
     },
@@ -263,7 +274,8 @@
       },
       "expected": {
         "callers": [
-          "search_context_handlers.rs::run_get_context"
+          "search_context_handlers.rs::run_get_context",
+          "search_context_handlers_tests.rs::get_context_validates_its_arguments"
         ]
       }
     },
@@ -274,41 +286,65 @@
       },
       "expected": {
         "callers": [
-          "search_context_handlers.rs::run_search_codebase"
+          "pagination_tests.rs::search_codebase_pages_through_everything",
+          "search_context_handlers.rs::run_search_codebase",
+          "search_context_handlers_tests.rs::search_names_the_missing_required_field",
+          "search_context_handlers_tests.rs::search_rejects_non_object_arguments",
+          "search_context_handlers_tests.rs::search_reports_an_absent_graph"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "query_handlers.rs::forbidden_cypher_keyword"
+        "qualified_name": "query_handlers/read_only_gate.rs::forbidden_cypher_keyword"
       },
       "expected": {
         "callers": [
-          "query_handlers.rs::do_query_graph"
+          "query_handlers.rs::gated_cypher_request",
+          "query_handlers/read_only_gate_differential_tests.rs::gate_and_engine_agree_on_comment_grammar",
+          "query_handlers/read_only_gate_differential_tests.rs::gate_and_engine_agree_on_the_escape_grammar",
+          "query_handlers/read_only_gate_masking_tests.rs::a_backticked_alias_does_not_shield_the_following_keyword",
+          "query_handlers/read_only_gate_masking_tests.rs::a_masked_token_at_the_lookback_edge_stops_the_walk",
+          "query_handlers/read_only_gate_masking_tests.rs::the_gate_never_exempts_a_keyword_after_as",
+          "query_handlers/read_only_gate_tests.rs::detach_and_use_narrowing_spares_identifier_positions",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_admits_allowlisted_introspection_procedures",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_allows_call_shaped_identifiers",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_block_comment_boundaries",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_blocks_detach_and_use_database",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_blocks_filesystem_writing_statements",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_fails_closed_on_unterminated_literal",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_handles_non_executable_regions_at_index_zero",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_ignores_keywords_inside_literals_and_properties",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_refuses_queries_over_the_import_node_table",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_refuses_unlisted_procedures_and_config_calls",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_still_rejects_real_mutations_around_literals",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_treats_a_lone_slash_as_arithmetic_not_a_comment",
+          "query_handlers_tests.rs::test_query_graph_rejects_delete"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "query_handlers.rs::validate_graph_path_safe"
+        "qualified_name": "query_handlers/graph_paths.rs::validate_graph_path_safe"
       },
       "expected": {
         "callers": [
-          "analyze_handlers.rs::do_analyze_codebase",
-          "indexing_handlers.rs::do_index_codebase"
+          "analyze_handlers.rs::AnalyzeRequest::prepare",
+          "indexing_handlers.rs::IndexRequest::prepare",
+          "query_handlers/graph_paths.rs::tests::test_graph_path_must_end_in_graph"
         ]
       }
     },
     {
       "query_id": "q4",
       "input": {
-        "qualified_name": "query_handlers.rs::contains_keyword_token"
+        "qualified_name": "query_handlers/read_only_gate.rs::contains_keyword_token"
       },
       "expected": {
         "callers": [
-          "query_handlers.rs::forbidden_cypher_keyword"
+          "query_handlers/read_only_gate.rs::forbidden_cypher_keyword"
         ]
       }
     },
@@ -330,7 +366,8 @@
       },
       "expected": {
         "callees": [
-          "query_handlers.rs::do_query_graph"
+          "query_handlers.rs::do_query_graph",
+          "query_handlers.rs::query_failure_reason"
         ]
       }
     },
@@ -352,6 +389,7 @@
       },
       "expected": {
         "callees": [
+          "graph_freshness.rs::attach_from_arguments",
           "search_context_handlers.rs::do_search_codebase"
         ]
       }
@@ -359,11 +397,12 @@
     {
       "query_id": "q5",
       "input": {
-        "qualified_name": "process_impact_handlers.rs::run_get_impact"
+        "qualified_name": "process_impact_handlers/impact.rs::run_get_impact"
       },
       "expected": {
         "callees": [
-          "process_impact_handlers.rs::do_get_impact"
+          "graph_freshness.rs::attach_from_arguments",
+          "process_impact_handlers/impact.rs::do_get_impact"
         ]
       }
     },
@@ -374,6 +413,7 @@
       },
       "expected": {
         "callees": [
+          "graph_freshness.rs::attach_from_arguments",
           "symbol_handlers.rs::do_get_symbol"
         ]
       }
@@ -398,22 +438,46 @@
     },
     {
       "query_id": "q7",
-      "_note": "issue #214: extract_actual_set previously read a non-existent payload.affected field, so this label's empty expectation was never really exercised. Corrected via independent source read (grep for call sites, excluding test files) plus a live get_impact probe: run_index_codebase has exactly one caller, main.rs::main's dispatch in handle_tool_call (main.rs:236).",
+      "_note": "issue #214/#397: run_index_codebase has exactly one caller, main.rs::dispatch_tool (the dispatcher was renamed from handle_tool_call). The corpus is pinned to a commit (issue #397), so this set is immutable.",
       "input": {
         "qualified_name": "indexing_handlers.rs::run_index_codebase"
       },
       "expected": {
-        "affected": ["main.rs::handle_tool_call"]
+        "affected": [
+          "main.rs::dispatch_tool"
+        ]
       }
     },
     {
       "query_id": "q7",
-      "_note": "issue #214: see the run_index_codebase q7 note above for the extract_actual_set bug this corrects. Verified via grep for call sites (excluding query_handlers_tests.rs): forbidden_cypher_keyword has exactly one production caller, query_handlers.rs::do_query_graph at line 321.",
+      "_note": "issue #214/#397: impact of forbidden_cypher_keyword = its 20 callers (production: gated_cypher_request; 19 test fns, most calling it inside assert!/assert_eq! token trees) plus the importing file query_handlers.rs. Derived by grep + enclosing-fn scan of the pinned tree.",
       "input": {
-        "qualified_name": "query_handlers.rs::forbidden_cypher_keyword"
+        "qualified_name": "query_handlers/read_only_gate.rs::forbidden_cypher_keyword"
       },
       "expected": {
-        "affected": ["query_handlers.rs::do_query_graph"]
+        "affected": [
+          "query_handlers.rs",
+          "query_handlers.rs::gated_cypher_request",
+          "query_handlers/read_only_gate_differential_tests.rs::gate_and_engine_agree_on_comment_grammar",
+          "query_handlers/read_only_gate_differential_tests.rs::gate_and_engine_agree_on_the_escape_grammar",
+          "query_handlers/read_only_gate_masking_tests.rs::a_backticked_alias_does_not_shield_the_following_keyword",
+          "query_handlers/read_only_gate_masking_tests.rs::a_masked_token_at_the_lookback_edge_stops_the_walk",
+          "query_handlers/read_only_gate_masking_tests.rs::the_gate_never_exempts_a_keyword_after_as",
+          "query_handlers/read_only_gate_tests.rs::detach_and_use_narrowing_spares_identifier_positions",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_admits_allowlisted_introspection_procedures",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_allows_call_shaped_identifiers",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_block_comment_boundaries",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_blocks_detach_and_use_database",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_blocks_filesystem_writing_statements",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_fails_closed_on_unterminated_literal",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_handles_non_executable_regions_at_index_zero",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_ignores_keywords_inside_literals_and_properties",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_refuses_queries_over_the_import_node_table",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_refuses_unlisted_procedures_and_config_calls",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_still_rejects_real_mutations_around_literals",
+          "query_handlers/read_only_gate_tests.rs::readonly_gate_treats_a_lone_slash_as_arithmetic_not_a_comment",
+          "query_handlers_tests.rs::test_query_graph_rejects_delete"
+        ]
       }
     },
     {
@@ -429,11 +493,11 @@
           "resolver/mod.rs::check_known_rel_table",
           "resolver/mod.rs::determine_caller_label",
           "resolver/mod.rs::extract_caller_from_callsite_id",
-          "resolver/mod.rs::extract_file_from_import_id",
-          "resolver/mod.rs::extract_file_from_qn",
           "resolver/mod.rs::is_resolution_edge",
+          "resolver/mod.rs::is_type_defined_in_file",
           "resolver/mod.rs::load_existing_edges",
-          "resolver/mod.rs::resolve_graph"
+          "resolver/mod.rs::resolve_graph",
+          "resolver/mod.rs::unresolved_base_reason"
         ]
       }
     },
@@ -445,7 +509,9 @@
       },
       "expected": {
         "symbols": [
+          "resolver/calls.rs::record_ambiguous",
           "resolver/calls.rs::record_call_unresolved",
+          "resolver/calls.rs::record_reason",
           "resolver/calls.rs::resolve_calls",
           "resolver/calls.rs::resolve_one_call_site",
           "resolver/calls.rs::resolve_single_call",
@@ -520,7 +586,9 @@
         "query": "MATCH (f:File)-[:Defines_File_Function]->(n:Function) WHERE f.path = 'clustering/community.rs' RETURN n.qualified_name"
       },
       "expected": {
-        "symbols": ["clustering/community.rs::cluster_graph"]
+        "symbols": [
+          "clustering/community.rs::cluster_graph"
+        ]
       }
     },
     {
@@ -531,11 +599,11 @@
       },
       "expected": {
         "symbols": [
-          "clustering/community_adjacency.rs::extract_adjacency",
           "clustering/community_adjacency.rs::collect_symbol_nodes",
           "clustering/community_adjacency.rs::collect_weighted_edges",
           "clustering/community_adjacency.rs::edge_rel_tables",
-          "clustering/community_adjacency.rs::edge_weight"
+          "clustering/community_adjacency.rs::edge_weight",
+          "clustering/community_adjacency.rs::extract_adjacency"
         ]
       }
     },
@@ -547,11 +615,11 @@
       },
       "expected": {
         "symbols": [
+          "clustering/community_louvain.rs::aggregate_graph",
+          "clustering/community_louvain.rs::compute_modularity",
           "clustering/community_louvain.rs::louvain",
           "clustering/community_louvain.rs::one_level",
-          "clustering/community_louvain.rs::aggregate_graph",
-          "clustering/community_louvain.rs::renumber_communities",
-          "clustering/community_louvain.rs::compute_modularity"
+          "clustering/community_louvain.rs::renumber_communities"
         ]
       }
     },
@@ -563,8 +631,8 @@
       },
       "expected": {
         "symbols": [
-          "clustering/community_repair.rs::repair_c2",
-          "clustering/community_repair.rs::connected_components_within"
+          "clustering/community_repair.rs::connected_components_within",
+          "clustering/community_repair.rs::repair_c2"
         ]
       }
     },
@@ -576,8 +644,8 @@
       },
       "expected": {
         "symbols": [
-          "clustering/community_persist.rs::purge_prior_clustering",
-          "clustering/community_persist.rs::persist_communities"
+          "clustering/community_persist.rs::persist_communities",
+          "clustering/community_persist.rs::purge_prior_clustering"
         ]
       }
     },
@@ -589,9 +657,9 @@
       },
       "expected": {
         "symbols": [
+          "clustering/community_membership.rs::cluster_id_from_community_id",
           "clustering/community_membership.rs::collect_cluster_memberships",
-          "clustering/community_membership.rs::sort_and_cap_memberships",
-          "clustering/community_membership.rs::cluster_id_from_community_id"
+          "clustering/community_membership.rs::sort_and_cap_memberships"
         ]
       }
     },
@@ -622,8 +690,14 @@
       "expected": {
         "symbols": [
           "indexer/persist/nodes.rs::accumulate_parsed_nodes",
+          "indexer/persist/nodes.rs::append_bases_and_implements",
+          "indexer/persist/nodes.rs::append_callsite_properties",
+          "indexer/persist/nodes.rs::append_function_properties",
+          "indexer/persist/nodes.rs::append_import_properties",
           "indexer/persist/nodes.rs::append_label_properties",
+          "indexer/persist/nodes.rs::append_method_properties",
           "indexer/persist/nodes.rs::build_node_properties",
+          "indexer/persist/nodes.rs::find_property",
           "indexer/persist/nodes.rs::has_language_col",
           "indexer/persist/nodes.rs::has_line_cols",
           "indexer/persist/nodes.rs::has_name_col",
@@ -663,30 +737,10 @@
       "expected": {
         "symbols": [
           "search/mod.rs::build_search_index",
+          "search/mod.rs::reject_unservable_file_filter",
+          "search/mod.rs::resolve_search_index_dir",
           "search/mod.rs::search_graph",
-          "search/mod.rs::search_hybrid",
-          "search/mod.rs::enrich_from_graph",
-          "search/mod.rs::search_substring",
-          "search/mod.rs::get_context",
-          "search/mod.rs::resolve_qualified_name",
-          "search/mod.rs::strip_leading_path_component",
-          "search/mod.rs::exact_match_qn",
-          "search/mod.rs::find_name_candidates",
-          "search/mod.rs::find_search_index_dir",
-          "search/mod.rs::fetch_candidates",
-          "search/mod.rs::parse_opt_u64",
-          "search/mod.rs::extract_file_path",
-          "search/mod.rs::score_candidate",
-          "search/mod.rs::term_score",
-          "search/mod.rs::load_community_sizes",
-          "search/mod.rs::load_process_counts",
-          "search/mod.rs::lookup_community",
-          "search/mod.rs::lookup_processes",
-          "search/mod.rs::find_node_details",
-          "search/mod.rs::find_related_out",
-          "search/mod.rs::find_related_in",
-          "search/mod.rs::find_community",
-          "search/mod.rs::find_processes"
+          "search/mod.rs::sort_and_truncate"
         ]
       }
     },
@@ -698,9 +752,14 @@
       },
       "expected": {
         "symbols": [
-          "parser/mod.rs::parse_file",
-          "parser/mod.rs::node_text",
+          "parser/mod.rs::collect_error_ranges",
+          "parser/mod.rs::count_parse_errors",
           "parser/mod.rs::node_field_text",
+          "parser/mod.rs::node_text",
+          "parser/mod.rs::parse_file",
+          "parser/mod.rs::parse_tree_too_deep",
+          "parser/mod.rs::parse_with_deadline",
+          "parser/mod.rs::parse_with_timeout",
           "parser/mod.rs::qual"
         ]
       }
@@ -719,6 +778,9 @@
           "crate::graph_store::GraphStore",
           "crate::graph_store::PropEdgeList",
           "crate::graph_store::is_known_rel_table",
+          "crate::language_provider::extract_file_prefix_or_self",
+          "extends::ExtendsCandidate",
+          "extends::ExtendsContext",
           "extends::resolve_one_extends_base",
           "imports::resolve_glob_import",
           "std::collections::HashMap",
@@ -744,6 +806,8 @@
           "community_persist",
           "community_repair",
           "crate::graph_store::GraphStore",
+          "crate::graph_store::PropEdgeList",
+          "crate::graph_store::cypher_str",
           "std::collections::HashMap",
           "std::collections::HashSet",
           "std::collections::VecDeque",
@@ -759,19 +823,34 @@
       },
       "expected": {
         "imports": [
+          "batch::SYMBOL_FLUSH_THRESHOLD",
+          "batch::SymbolBatch",
+          "coverage::CoverageCollector",
+          "coverage::CoverageReport",
           "crate::graph_store::GraphStore",
           "crate::parser::Language",
+          "crate::parser::MAX_PARSE_BYTES",
+          "incremental::FillMethod",
+          "incremental::FillResult",
+          "incremental::fill_after_bootstrap",
+          "incremental::index_incremental",
+          "incremental::write_full_manifest",
+          "persist::FileScope",
+          "persist::ParseOutcome",
+          "persist::index_single_file",
+          "persist::insert_ancestor_dirs",
+          "persist::insert_dir_file_edge",
+          "persist::insert_file_node",
+          "std::collections::BTreeSet",
           "std::collections::HashMap",
           "std::path::Path",
           "std::path::PathBuf",
           "std::time::Instant",
-          "walk::collect_source_files",
-          "walk::is_dependency_path",
+          "walk::DependencyScope",
+          "walk::ExcludeSet",
+          "walk::ParsePolicy",
           "walk::WalkOptions",
-          "persist::insert_ancestor_dirs",
-          "persist::insert_dir_file_edge",
-          "persist::insert_file_node",
-          "persist::index_single_file"
+          "walk::collect_source_files"
         ]
       }
     },
@@ -782,9 +861,21 @@
       },
       "expected": {
         "imports": [
+          "context::GetContextError",
+          "context::RelatedSymbol",
+          "context::SymbolContext",
+          "context::get_context",
           "crate::graph_store::GraphStore",
-          "std::collections::HashMap",
+          "crate::graph_store::NODE_FILE",
+          "grouping::group_hits_by_process",
+          "hybrid::HybridIndexes",
+          "impact_target::ImpactTarget",
+          "impact_target::resolve_impact_target",
+          "name_lookup::SymbolNotFound",
+          "name_lookup::resolve_qualified_name",
+          "name_lookup::strip_leading_path_component",
           "std::path::Path",
+          "std::path::PathBuf",
           "std::time::Instant"
         ]
       }
@@ -796,15 +887,42 @@
       },
       "expected": {
         "imports": [
+          "cfg_active::CFG_ACTIVE",
+          "cfg_active::CFG_INACTIVE",
+          "cfg_active::CFG_UNKNOWN",
+          "cfg_active::FileCfg",
+          "cfg_active::RESOLUTION_CFG_SELECTED",
+          "cfg_active::TwinRow",
+          "cfg_active::cfg_gates_in",
+          "cfg_twins::CALLSITE_UNRESOLVED_REASON_CFG_TWINS",
+          "cfg_twins::CANONICAL_FORM_VERSION",
+          "cfg_twins::CFG_GATE_LABELS",
+          "cfg_twins::has_cfg_gate",
+          "cfg_twins::strip_cfg_gates",
           "columns",
+          "columns::RECEIVER_HINT_VIA_IMPORT_PREFIX",
+          "columns::RECEIVER_HINT_VIA_RETURN_TYPE",
+          "columns::callee_shape",
+          "columns::hint_via",
+          "columns::label_declares_column",
           "config",
+          "counts::GraphCounts",
           "ddl",
+          "handles::register_release_hook",
+          "handles::release_open_handles",
           "lbug::Connection",
           "lbug::Database",
           "lbug::LogicalType",
           "lbug::PreparedStatement",
           "lbug::SystemConfig",
           "lbug::Value",
+          "macro_reset::is_rust_macro_site",
+          "macro_reset::rust_macro_site_predicate",
+          "membership::CommunityRow",
+          "membership::SymbolMatch",
+          "membership::community_ids",
+          "membership::community_of",
+          "membership::process_names",
           "recovery",
           "schema",
           "serialize",
@@ -822,8 +940,8 @@
       "expected": {
         "imports": [
           "crate::clustering",
-          "crate::graph_store::cypher_str",
           "crate::graph_store::GraphStore",
+          "crate::graph_store::cypher_str",
           "serde::Serialize",
           "std::collections::HashSet",
           "std::path::Path",
@@ -838,20 +956,41 @@
       },
       "expected": {
         "imports": [
-          "serde_json::json",
+          "commands::LSP_COMMAND_ALLOWLIST",
+          "commands::detect_lsp_command",
+          "commands::is_command_available",
+          "commands::validate_lsp_command",
+          "diagnostics::CargoAttribution",
+          "diagnostics::UnlinkedFileCheck",
+          "diagnostics::UnlinkedFileFinding",
+          "diagnostics::unlinked_file_message",
+          "frames::drain_pending",
+          "frames::next_frame",
+          "frames::spawn_frame_reader",
+          "health::ServerHealth",
+          "health::ServerHealthLevel",
+          "protocol::FrameError",
+          "protocol::LSP_TIMEOUT_PREFIX",
+          "protocol::build_initialize_request",
+          "protocol::classify_probe_err",
+          "protocol::is_lsp_timeout",
+          "protocol::parse_definition_response",
+          "protocol::validate_probe_response",
+          "protocol::write_lsp_message",
+          "readiness::ReadinessOutcome",
           "serde_json::Value",
-          "std::io::BufRead",
-          "std::io::BufReader",
-          "std::io::Read",
-          "std::io::Write",
+          "serde_json::json",
           "std::path::Path",
           "std::process::Child",
           "std::process::Command",
           "std::process::Stdio",
           "std::sync::atomic::AtomicI64",
           "std::sync::atomic::Ordering",
+          "std::sync::mpsc::Receiver",
           "std::time::Duration",
-          "std::time::Instant"
+          "std::time::Instant",
+          "uri::file_uri_to_path",
+          "uri::path_to_file_uri"
         ]
       }
     },
@@ -897,7 +1036,8 @@
           "std::path::Path",
           "std::path::PathBuf",
           "verdict::ClaimVerdict",
-          "verdict::classify_unresolved"
+          "verdict::classify_unresolved",
+          "verdict::unverifiable_reason"
         ]
       }
     },
@@ -1019,7 +1159,9 @@
       "expected": {
         "fields": [
           "nodes",
-          "refs"
+          "refs",
+          "parse_errors",
+          "error_ranges"
         ]
       }
     },
@@ -1068,7 +1210,8 @@
           "node_count",
           "edge_count",
           "files_indexed",
-          "elapsed_ms"
+          "elapsed_ms",
+          "coverage"
         ]
       }
     },
@@ -1114,8 +1257,17 @@
           "importers",
           "users",
           "implementors",
+          "references",
           "epistemic",
-          "epistemic_reasons"
+          "epistemic_reasons",
+          "unresolved_callsites_naming_target",
+          "unresolved_callsites_outside_targets",
+          "unresolved_callsite_outside_target_files",
+          "unresolved_callsites_cfg_twins",
+          "unresolved_callsites_by_reason",
+          "unresolved_callsites_excluded_other_owner",
+          "cfg_twins",
+          "code_context_basis"
         ]
       }
     },
@@ -1154,7 +1306,7 @@
     {
       "query_id": "q11",
       "input": {
-        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'search/mod.rs::SymbolContext' RETURN f.name"
+        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'search/context.rs::SymbolContext' RETURN f.name"
       },
       "expected": {
         "fields": [
@@ -1181,7 +1333,7 @@
     {
       "query_id": "q11",
       "input": {
-        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'search/mod.rs::RelatedSymbol' RETURN f.name"
+        "query": "MATCH (s:Struct)-[:HasField_Struct_Field]->(f:Field) WHERE s.qualified_name = 'search/context.rs::RelatedSymbol' RETURN f.name"
       },
       "expected": {
         "fields": [
@@ -1202,10 +1354,10 @@
           "name",
           "label",
           "file_path",
-          "start_line",
-          "end_line",
-          "change_ratio",
-          "risk_score"
+          "change_type",
+          "lines_changed",
+          "community_id",
+          "processes"
         ]
       }
     },
@@ -1267,7 +1419,7 @@
             "cluster": 2
           },
           {
-            "qn": "search/mod.rs::get_context",
+            "qn": "search/context.rs::get_context",
             "cluster": 2
           },
           {
@@ -1283,7 +1435,7 @@
             "cluster": 2
           },
           {
-            "qn": "search/mod.rs::resolve_qualified_name",
+            "qn": "search/name_lookup.rs::resolve_qualified_name",
             "cluster": 2
           },
           {
@@ -1335,7 +1487,7 @@
             "cluster": 4
           },
           {
-            "qn": "clustering/community.rs::louvain",
+            "qn": "clustering/community_louvain.rs::louvain",
             "cluster": 4
           },
           {
@@ -1387,11 +1539,11 @@
             "cluster": 8
           },
           {
-            "qn": "query_handlers.rs::forbidden_cypher_keyword",
+            "qn": "query_handlers/read_only_gate.rs::forbidden_cypher_keyword",
             "cluster": 8
           },
           {
-            "qn": "query_handlers.rs::validate_graph_path_safe",
+            "qn": "query_handlers/graph_paths.rs::validate_graph_path_safe",
             "cluster": 8
           }
         ]
@@ -1436,9 +1588,9 @@
     },
     {
       "query_id": "q14",
-      "_note": "external (non-crate) imports in resolver/mod.rs (issue #210: resolver.rs split; re-derived 2026-08-08) — should be flagged unresolved by the cross-crate resolver",
+      "_note": "external (non-crate) imports in resolver/mod.rs: std/lbug/serde roots only. The query filters to those roots, so the label no longer expects the file's crate-internal imports to be 'unresolved' (issue #397: the previous label queried every import but expected only the external subset, capping F1).",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'resolver/mod.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'resolver/mod.rs' AND (n.path STARTS WITH 'std::') RETURN n.path"
       },
       "expected": {
         "unresolved": [
@@ -1453,7 +1605,7 @@
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'clustering/community.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'clustering/community.rs' AND (n.path STARTS WITH 'std::') RETURN n.path"
       },
       "expected": {
         "unresolved": [
@@ -1462,39 +1614,43 @@
           "std::collections::VecDeque",
           "std::time::Instant"
         ]
-      }
+      },
+      "_note": "external (non-crate) imports in clustering/community.rs: std/lbug/serde roots only. The query filters to those roots, so the label no longer expects the file's crate-internal imports to be 'unresolved' (issue #397: the previous label queried every import but expected only the external subset, capping F1)."
     },
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'indexer/mod.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'indexer/mod.rs' AND (n.path STARTS WITH 'std::') RETURN n.path"
       },
       "expected": {
         "unresolved": [
+          "std::collections::BTreeSet",
           "std::collections::HashMap",
           "std::path::Path",
           "std::path::PathBuf",
           "std::time::Instant"
         ]
-      }
+      },
+      "_note": "external (non-crate) imports in indexer/mod.rs: std/lbug/serde roots only. The query filters to those roots, so the label no longer expects the file's crate-internal imports to be 'unresolved' (issue #397: the previous label queried every import but expected only the external subset, capping F1)."
     },
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'search/mod.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'search/mod.rs' AND (n.path STARTS WITH 'std::') RETURN n.path"
       },
       "expected": {
         "unresolved": [
-          "std::collections::HashMap",
           "std::path::Path",
+          "std::path::PathBuf",
           "std::time::Instant"
         ]
-      }
+      },
+      "_note": "external (non-crate) imports in search/mod.rs: std/lbug/serde roots only. The query filters to those roots, so the label no longer expects the file's crate-internal imports to be 'unresolved' (issue #397: the previous label queried every import but expected only the external subset, capping F1)."
     },
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'graph_store/mod.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'graph_store/mod.rs' AND (n.path STARTS WITH 'lbug::' OR n.path STARTS WITH 'std::') RETURN n.path"
       },
       "expected": {
         "unresolved": [
@@ -1508,12 +1664,13 @@
           "std::collections::HashMap",
           "std::path::Path"
         ]
-      }
+      },
+      "_note": "external (non-crate) imports in graph_store/mod.rs: std/lbug/serde roots only. The query filters to those roots, so the label no longer expects the file's crate-internal imports to be 'unresolved' (issue #397: the previous label queried every import but expected only the external subset, capping F1)."
     },
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'git_diff.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'git_diff.rs' AND (n.path STARTS WITH 'serde::' OR n.path STARTS WITH 'std::') RETURN n.path"
       },
       "expected": {
         "unresolved": [
@@ -1522,47 +1679,47 @@
           "std::path::Path",
           "std::process::Command"
         ]
-      }
+      },
+      "_note": "external (non-crate) imports in git_diff.rs: std/lbug/serde roots only. The query filters to those roots, so the label no longer expects the file's crate-internal imports to be 'unresolved' (issue #397: the previous label queried every import but expected only the external subset, capping F1)."
     },
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'lsp_client.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'lsp_client.rs' AND (n.path STARTS WITH 'serde_json::' OR n.path STARTS WITH 'std::') RETURN n.path"
       },
       "expected": {
         "unresolved": [
-          "serde_json::json",
           "serde_json::Value",
-          "std::io::BufRead",
-          "std::io::BufReader",
-          "std::io::Read",
-          "std::io::Write",
+          "serde_json::json",
           "std::path::Path",
           "std::process::Child",
           "std::process::Command",
           "std::process::Stdio",
           "std::sync::atomic::AtomicI64",
           "std::sync::atomic::Ordering",
+          "std::sync::mpsc::Receiver",
           "std::time::Duration",
           "std::time::Instant"
         ]
-      }
+      },
+      "_note": "external (non-crate) imports in lsp_client.rs: std/lbug/serde roots only. The query filters to those roots, so the label no longer expects the file's crate-internal imports to be 'unresolved' (issue #397: the previous label queried every import but expected only the external subset, capping F1)."
     },
     {
       "query_id": "q14",
       "input": {
-        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'prd_validator/mod.rs' RETURN n.path"
+        "query": "MATCH (f:File)-[:Defines_File_Import]->(n:Import) WHERE f.path = 'prd_validator/mod.rs' AND (n.path STARTS WITH 'serde_json::' OR n.path STARTS WITH 'std::') RETURN n.path"
       },
       "expected": {
         "unresolved": [
-          "serde_json::json",
           "serde_json::Value",
+          "serde_json::json",
           "std::collections::BTreeSet",
           "std::fs",
           "std::path::Path",
           "std::path::PathBuf"
         ]
-      }
+      },
+      "_note": "external (non-crate) imports in prd_validator/mod.rs: std/lbug/serde roots only. The query filters to those roots, so the label no longer expects the file's crate-internal imports to be 'unresolved' (issue #397: the previous label queried every import but expected only the external subset, capping F1)."
     }
   ]
 }
