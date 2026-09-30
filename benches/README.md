@@ -8,10 +8,16 @@ Full spec: `stages/stage-3b-v2.md` §2.
 ## Run
 
 ```bash
-cargo build --release
-cargo run --release --bin bench_end_result -- --corpus rust-self
-cargo run --release --bin bench_end_result -- --all
+cargo run --release -p bench-end-result --bin bench_end_result -- --corpus rust-self
+cargo run --release -p bench-end-result --bin bench_end_result -- --all   # note the -p
 ```
+
+The runner rebuilds the server (`cargo build --release -p ai-architect-mcp-codebase`)
+before measuring, and refuses to measure if that build fails: `cargo run -p
+bench-end-result` compiles only the bench crate, so without this a stale
+`target/release` binary would be scored silently (issue #397). `--binary <path>`
+skips the build and measures exactly that file. A full `--all` run takes about
+3 minutes and about 0.9 GB of RSS on top of the release build.
 
 Output:
 
@@ -53,6 +59,7 @@ benches/
    language = "<rust|typescript|python|kotlin|go|swift|java|javascript>"
    path = "./src"             # relative to the corpus dir, or absolute
    description = "..."
+   # git_rev = "<sha>"        # optional: read `path` (repo-root-relative) from this commit
    ```
 3. Write `benches/corpora/<name>/ground_truth.json` (see next section).
    An empty `labels: []` array is fine as a stub — the harness will skip
@@ -131,3 +138,27 @@ label set.
 - **Q13 PRD validation labels**: need PRD fixtures paired with the graph.
   Deferred.
 - **Swift / JavaScript sentinel corpora**: stubs not yet created.
+
+## Pinned corpora and label policy
+
+The `rust-self` corpus is this repository's own `src/`. Its labels are
+exhaustive (every top-level fn of a file, every caller of a function), so
+indexing the live tree makes every merged PR a silent label regression: the
+score fell from 0.906 to 0.752 without any regression in the tools (issue
+#397). `corpus.toml` therefore sets `git_rev`: the harness extracts
+`<git_rev>:<path>` with `git archive` into a temporary directory and indexes
+that immutable tree. It needs the commit in the local object database, so a
+shallow clone must `git fetch --unshallow` first (the error says so).
+
+- q4/q7 callers are ALL callers, test functions included, including calls
+  inside `assert!` token trees and via `use super::*`. The labels follow the
+  source, not what the tool happens to see: measured on the pinned tree the
+  tool resolves all of them (q4 = q7 = 1.000 on rust-self), so the policy keeps
+  the labels honest if that ever regresses.
+- q14 queries only the external crate roots the label lists.
+
+Move the pin only deliberately: set `git_rev` to a commit on main, re-derive
+every path-, caller-, import- and field-set label against that tree (source
+scan first, then the tool; a disagreement is a finding, not a label), run the
+bench, and record the new baseline in the PR. The stale-path guard (#132)
+still fails the run (exit 3) if a label names a file absent from the pinned tree.

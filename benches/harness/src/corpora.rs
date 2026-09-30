@@ -13,14 +13,24 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::pinned::{self, PinnedTree};
 
 /// Parsed corpus.toml manifest.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CorpusManifest {
     pub name: String,
     pub language: String,
-    /// Path relative to the corpus directory OR absolute.
+    /// Path relative to the corpus directory OR absolute. When `git_rev` is
+    /// set it is instead a directory relative to the repository root, read
+    /// from that revision.
     pub path: String,
+    /// Optional git revision the corpus source is read from (issue #397).
+    /// Set it for a corpus that lives in this repository's own history, so
+    /// its hand labels describe an immutable tree instead of a moving one.
+    #[serde(default)]
+    pub git_rev: Option<String>,
     /// Optional friendly description. Read from disk but not surfaced by the
     /// runner; kept on the struct so `toml::from_str` accepts the field.
     #[serde(default)]
@@ -65,6 +75,9 @@ pub struct CorpusConfig {
     pub labels: Vec<GroundTruthLabel>,
     /// True iff labels is empty (a stub corpus).
     pub is_stub: bool,
+    /// Keeps a `git_rev`-pinned tree on disk for as long as this config lives
+    /// (`source_path` points inside it); `None` for a plain directory corpus.
+    pub _pinned_tree: Option<Arc<PinnedTree>>,
 }
 
 /// Label `input` keys that name a fixture file on disk. A relative value is
@@ -98,7 +111,7 @@ pub fn load_one(corpora_root: &Path, name: &str) -> Result<CorpusConfig, String>
         ));
     }
 
-    let source_path = resolve_source_path(&dir, &manifest.path)?;
+    let (source_path, pinned_tree) = resolve_source(&dir, &manifest)?;
     let corpus_dir = dir
         .canonicalize()
         .map_err(|e| format!("canonicalize {:?}: {e}", dir))?;
@@ -110,13 +123,43 @@ pub fn load_one(corpora_root: &Path, name: &str) -> Result<CorpusConfig, String>
         corpus_dir,
         labels: truth.labels,
         is_stub,
+        _pinned_tree: pinned_tree,
     })
+}
+
+/// Where the corpus source lives: the pinned revision's extracted tree when the
+/// manifest has `git_rev`, otherwise the directory `path` names.
+fn resolve_source(
+    corpus_dir: &Path,
+    manifest: &CorpusManifest,
+) -> Result<(PathBuf, Option<Arc<PinnedTree>>), String> {
+    match &manifest.git_rev {
+        Some(rev) => {
+            let tree = pinned::materialize(corpus_dir, rev, &manifest.path)?;
+            Ok((tree.source_dir().to_path_buf(), Some(Arc::new(tree))))
+        }
+        None => Ok((resolve_source_path(corpus_dir, &manifest.path)?, None)),
+    }
 }
 
 /// Discover and load every corpus under corpora_root that has a non-empty
 /// labels array.  Stubs (is_stub=true) are skipped but logged to stderr so
 /// the operator knows they exist.
 pub fn discover_all(corpora_root: &Path) -> Result<Vec<CorpusConfig>, String> {
+    discover_except(corpora_root, |_| false)
+}
+
+/// `discover_all`, minus every corpus directory whose name `skip` accepts.
+///
+/// precondition:  `skip` is a pure predicate on a corpus directory name.
+/// postcondition: the same result `discover_all` would give over the corpus
+///                directories `skip` rejects; a skipped directory is never
+///                loaded, so its errors cannot surface (issue #428: a pinned
+///                corpus whose rev a shallow checkout dropped).
+fn discover_except(
+    corpora_root: &Path,
+    skip: impl Fn(&str) -> bool,
+) -> Result<Vec<CorpusConfig>, String> {
     let mut out = Vec::new();
     let entries = fs::read_dir(corpora_root)
         .map_err(|e| format!("read corpora root {:?}: {e}", corpora_root))?;
@@ -127,7 +170,7 @@ pub fn discover_all(corpora_root: &Path) -> Result<Vec<CorpusConfig>, String> {
         }
         let name = entry.file_name().to_string_lossy().to_string();
         let dir = entry.path();
-        if !dir.join("corpus.toml").exists() {
+        if !dir.join("corpus.toml").exists() || skip(&name) {
             continue;
         }
         match load_one(corpora_root, &name) {
@@ -260,167 +303,5 @@ fn resolve_source_path(corpus_dir: &Path, raw: &str) -> Result<PathBuf, String> 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn label(input: Value, expected: Value) -> GroundTruthLabel {
-        GroundTruthLabel {
-            query_id: "q".into(),
-            input,
-            expected,
-        }
-    }
-
-    #[test]
-    fn stale_guard_flags_a_deleted_qualified_name_path() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let root = tmp.path();
-        std::fs::create_dir_all(root.join("parser/mod.rs").parent().unwrap()).unwrap();
-        std::fs::write(root.join("parser/mod.rs"), "").unwrap();
-
-        let labels = vec![
-            // present: parser/mod.rs exists
-            label(
-                json!({}),
-                json!({ "qualified_name": "parser/mod.rs::parse_file" }),
-            ),
-            // stale: parser/rust/mod.rs was deleted in the migration
-            label(
-                json!({}),
-                json!({ "qualified_name": "parser/rust/mod.rs::parse_rust_file" }),
-            ),
-        ];
-        let stale = stale_ground_truth(root, &labels);
-        assert_eq!(stale, vec!["parser/rust/mod.rs".to_string()]);
-    }
-
-    #[test]
-    fn stale_guard_reads_partition_qn_and_query_literals() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let root = tmp.path();
-        std::fs::write(root.join("live.rs"), "").unwrap();
-
-        let labels = vec![
-            // q12 partition rows use `qn`
-            label(
-                json!({}),
-                json!({ "partition": [ { "qn": "gone.rs::Foo", "cluster": 1 } ] }),
-            ),
-            // q9 embeds the file path in a Cypher `f.path = '...'` literal
-            label(
-                json!({ "query": "MATCH (f:File) WHERE f.path = 'also_gone.rs' RETURN n.path" }),
-                json!({ "imports": [] }),
-            ),
-            // q11 embeds it in `s.qualified_name = '<path>::<name>'`
-            label(
-                json!({ "query": "MATCH (s:Struct) WHERE s.qualified_name = 'live.rs::Bar' RETURN f.name" }),
-                json!({ "fields": [] }),
-            ),
-        ];
-        let stale = stale_ground_truth(root, &labels);
-        // Both deleted paths flagged; the live one is not.
-        assert_eq!(
-            stale,
-            vec!["also_gone.rs".to_string(), "gone.rs".to_string()]
-        );
-    }
-
-    #[test]
-    fn stale_guard_query_extraction_is_position_and_type_accurate() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let root = tmp.path();
-        std::fs::write(root.join("live.rs"), "").unwrap();
-
-        let labels = vec![
-            // A `.rs` literal BEFORE the marker (`decoy.rs`) must NOT be read —
-            // only tokens that FOLLOW a marker count. Two `f.path` markers, one
-            // deleted (`gone_a.rs`) and one live (`live.rs`).
-            label(
-                json!({ "query": "WHERE x.name = 'decoy.rs' AND f.path = 'gone_a.rs' AND f.path = 'live.rs' RETURN n" }),
-                json!({ "imports": [] }),
-            ),
-            // `s.qualified_name` literal: the path is the part before `::`.
-            label(
-                json!({ "query": "WHERE s.qualified_name = 'gone_b.rs::Foo' RETURN f" }),
-                json!({ "fields": [] }),
-            ),
-        ];
-        let stale = stale_ground_truth(root, &labels);
-        // decoy.rs excluded (pre-marker); live.rs excluded (exists); the two
-        // deleted paths flagged, `::Foo` stripped from the qualified name.
-        assert_eq!(
-            stale,
-            vec!["gone_a.rs".to_string(), "gone_b.rs".to_string()]
-        );
-    }
-
-    /// Issue #359: the guard above only warned when the whole benchmark ran,
-    /// and three module splits (#132, #210, #359) left dead labels behind. This
-    /// test reads the real corpora, so a split that deletes a labelled path
-    /// fails `cargo test` instead of silently scoring zero.
-    #[test]
-    fn every_label_of_every_corpus_references_existing_paths() {
-        let corpora_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpora");
-        let corpora = discover_all(&corpora_root).expect("load benches/corpora");
-        assert!(!corpora.is_empty(), "no labelled corpus found");
-        let mut dead = Vec::new();
-        for corpus in &corpora {
-            for rel in stale_ground_truth(&corpus.source_path, &corpus.labels) {
-                dead.push(format!("{}: source path {rel}", corpus.name));
-            }
-            for label in &corpus.labels {
-                for key in FIXTURE_PATH_KEYS {
-                    let Some(rel) = label.input.get(*key).and_then(Value::as_str) else {
-                        continue;
-                    };
-                    if Path::new(rel).is_absolute() || !corpus.corpus_dir.join(rel).exists() {
-                        dead.push(format!("{}: {key} {rel}", corpus.name));
-                    }
-                }
-            }
-        }
-        assert!(dead.is_empty(), "labels reference deleted paths: {dead:?}");
-    }
-
-    #[test]
-    fn stale_guard_flags_an_absolute_path_even_when_it_exists() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let root = tmp.path();
-        let abs = root.join("here.rs");
-        std::fs::write(&abs, "").unwrap();
-        let abs = abs.to_str().expect("utf-8 path").to_string();
-        let labels = vec![label(
-            json!({ "query": format!("WHERE f.path = '{abs}' RETURN n.path") }),
-            json!({ "imports": [] }),
-        )];
-        assert_eq!(stale_ground_truth(root, &labels), vec![abs]);
-    }
-
-    #[test]
-    fn stale_guard_reads_non_rust_source_paths_in_queries() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let root = tmp.path();
-        std::fs::write(root.join("app.ts"), "").unwrap();
-        let labels = vec![label(
-            json!({ "query": "WHERE f.path = 'app.ts' OR f.path = 'gone.ts' RETURN n.path" }),
-            json!({ "imports": [] }),
-        )];
-        assert_eq!(
-            stale_ground_truth(root, &labels),
-            vec!["gone.ts".to_string()]
-        );
-    }
-
-    #[test]
-    fn stale_guard_is_empty_when_every_path_exists() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let root = tmp.path();
-        std::fs::write(root.join("a.rs"), "").unwrap();
-        let labels = vec![label(
-            json!({ "qualified_name": "a.rs::A" }),
-            json!({ "qualified_name": "a.rs::A" }),
-        )];
-        assert!(stale_ground_truth(root, &labels).is_empty());
-    }
-}
+#[path = "corpora_tests.rs"]
+mod tests;

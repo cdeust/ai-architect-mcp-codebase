@@ -24,7 +24,7 @@ cargo run --release -p bench-end-result --bin bench_end_result -- --all   # note
 ```
 
 The bench archives to `benches/runs/<ts>.md` (gitignored; force-add only a release manifest).
-Exit 0 requires aggregate ≥0.85 and every language ≥0.75.
+Exit 0 requires aggregate ≥0.85 and every language ≥0.75. The runner rebuilds the server binary first and the `rust-self` corpus is pinned to a commit (`git_rev`), see `benches/README.md`.
 
 ## Gates that fail CI but not local runs
 
