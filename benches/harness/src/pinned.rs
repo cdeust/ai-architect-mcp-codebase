@@ -167,21 +167,26 @@ pub fn is_shallow_clone_missing_rev(repo_hint: &Path, rev: &str) -> Result<bool,
     Ok(!cat_out.status.success())
 }
 
-/// First `(corpus dir, name, rev)` in `pins` whose rev is absent only
-/// because of a shallow checkout — see `is_shallow_clone_missing_rev` for
-/// the shallow-vs-full-clone distinction that keeps a full clone genuinely
-/// missing the rev a hard failure downstream, in `materialize` (issue #428).
+/// Every `(corpus dir, name, rev)` in `pins` whose rev is absent only
+/// because of a shallow checkout, paired with the skip reason to print —
+/// see `is_shallow_clone_missing_rev` for the shallow-vs-full-clone
+/// distinction that keeps a full clone genuinely missing the rev a hard
+/// failure downstream, in `materialize` (issue #428).
+///
+/// postcondition: one entry per such pin, in `pins` order; pins whose rev
+///                is present, or absent from a full clone, are left out.
 #[cfg(test)]
-pub fn shallow_skip_reason(pins: &[(PathBuf, String, String)]) -> Option<String> {
-    for (dir, name, rev) in pins {
-        if is_shallow_clone_missing_rev(dir, rev).unwrap_or(false) {
-            return Some(format!(
+pub fn shallow_skips(pins: &[(PathBuf, String, String)]) -> Vec<(PathBuf, String)> {
+    pins.iter()
+        .filter(|(dir, _, rev)| is_shallow_clone_missing_rev(dir, rev).unwrap_or(false))
+        .map(|(dir, name, rev)| {
+            let reason = format!(
                 "corpus {name}: pinned rev {rev} is absent from this shallow checkout \
                  (fetch-depth drops history); not a corpus defect"
-            ));
-        }
-    }
-    None
+            );
+            (dir.clone(), reason)
+        })
+        .collect()
 }
 
 /// Writes straight to fd 2, bypassing libtest's output capture (which
