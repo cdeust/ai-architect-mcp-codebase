@@ -114,6 +114,36 @@ t_push_reuses_commit_proof() {
   assert_eq "other tree: unit rerun" 1 "$(calls | grep -c 'test --lib')"
 }
 
+# A docs-only commit proof was granted on one diff; it must not stand in for fmt/clippy/unit.
+t_push_does_not_reuse_docs_only_proof() {
+  mkfix
+  commit_files "$FIX_WT" src/lib.rs
+  stage "$FIX_WT" CHANGELOG.md
+  run_gate commit
+  assert_eq "docs-only commit proof" docs-only "$(proof_field "$PROOFS/commit-$(wt_tree).json" cmd)"
+  g -C "$FIX_WT" commit -q -m docs
+  run_gate push
+  assert_eq "push green" 0 "$RC"
+  assert_eq "push reran fmt (docs-only proof not reused)" 1 "$(calls | grep -c 'cargo fmt')"
+  assert_eq "push reran unit" 1 "$(calls | grep -c 'test --lib')"
+  assert_eq "push proof is not a commit-proof reuse" 0 "$(proof_field "$PROOFS/push-$(head_tree).json" cmd | grep -c 'commit-proof')"
+}
+
+# Every secret shape the ledger excerpt must mask, leaked through a failing gate's output.
+t_failure_excerpt_redacts_secrets() {
+  mkfix
+  stage "$FIX_WT" src/lib.rs
+  printf '%s\n' 'k1 sk-abcdefgh12345678' 'k2 ghp_abcdefgh12345678' 'k3 github_pat_abcdefgh12345678' \
+    'k4 AKIAABCDEFGHIJKLMNOP' 'k5 Bearer abcdefgh12345678' 'k6 MY_API_KEY=hunter2hunter2' >"$CTL/leak"
+  : >"$CTL/fail_fmt"
+  run_gate commit
+  local s
+  for s in sk-abcdefgh ghp_abcdefgh github_pat_abcdefgh AKIAABCDEFGH 'Bearer abcdefgh' hunter2; do
+    assert_eq "ledger excerpt does not contain $s" 0 "$(grep -c -- "$s" "$PROOFS/failures.jsonl")"
+  done
+  assert_grep "excerpt keeps the masked marker" 'REDACTED' "$PROOFS/failures.jsonl"
+}
+
 t_waive() {
   mkfix
   run_gate waive clippy

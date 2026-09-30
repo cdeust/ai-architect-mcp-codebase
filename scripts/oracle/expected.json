@@ -5,7 +5,7 @@
     "repository": "DYResearch/dy-wcet",
     "tag": "v4.1.6",
     "commit": "8bb83ad7699e95a092bb6ed86f3b094ffab40cee",
-    "oracle_sha256": "e2b974451887fa5d7b9cb03bca3a51729ad76f99d9f2b9295b3a51deb878a8c5"
+    "oracle_sha256": "92c21a8c90dc9488e74c5e7917eb64628dc6897714813b6cd1ca3e76ddaa066b"
   },
   "definitions": {"found": 171, "of": 171, "false": 0},
   "callers": {"found": 66, "of": 66, "false": 0},

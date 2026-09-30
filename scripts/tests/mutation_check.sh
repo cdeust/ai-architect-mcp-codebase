@@ -73,6 +73,20 @@ mutant "8 a dead owner never makes the lock stale" gate.d/guard.sh \
 mutant "9 verify accepts a proof with rc != 0" gate.d/common.sh \
   'if isinstance(rc, bool) or rc != 0 or data.get("tree") != sys.argv[2]:' \
   'if data.get("tree") != sys.argv[2]:' 't_verify'
+mutant "10 shortcut for clones under .claude/worktrees removed" gate.d/guard.sh \
+  '  case "$1" in */.claude/worktrees/*) return 1 ;; esac
+' '' 't_clone_under_worktrees'
+mutant "11 push dirty check compares the index, not HEAD" gate.d/guard.sh \
+  'git -C "$GATE_TOP" diff --quiet HEAD' 'git -C "$GATE_TOP" diff --quiet' 't_push_refuses_staged'
+mutant "12 push reuses a docs-only commit proof" gate.d/commands.sh \
+  'if cmd=$(gate_proof_valid commit "$2") && [ "$cmd" != docs-only ]; then' \
+  'if cmd=$(gate_proof_valid commit "$2"); then' 't_push_does_not_reuse'
+mutant "13 --no-renames dropped from the commit diff" gate.d/guard.sh \
+  'git -C "$GATE_TOP" diff --cached --name-only -z --no-renames' \
+  'git -C "$GATE_TOP" diff --cached --name-only -z' 't_rename_to_docs'
+mutant "14 sk- tokens not redacted" gate.d/common.sh \
+  "'s/(gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{8,}/[REDACTED]/g'" \
+  "'s/(gh[pousr]_|github_pat_)[A-Za-z0-9_-]{8,}/[REDACTED]/g'" 't_failure_excerpt_redacts'
 
 echo "mutants killed: $KILLED / $N   survived or invalid: $SURVIVED"
 [ "$SURVIVED" -eq 0 ]

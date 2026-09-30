@@ -23,7 +23,7 @@ docs_case() {
 
 t_docs_only_positive() {
   local f
-  for f in README.md CHANGELOG.md docs/new/deep/guide.md docs/diagram.png LICENSE LICENSE-MIT \
+  for f in CHANGELOG.md docs/new/deep/guide.md docs/diagram.png LICENSE LICENSE-MIT \
     .github/ISSUE_TEMPLATE/bug.yml; do
     docs_case "$f" docs
   done
@@ -32,7 +32,8 @@ t_docs_only_positive() {
 t_docs_only_negative() {
   local f
   for f in src/new.rs src/deep/mod.rs build.rs docs/snippet.rs Cargo.toml Cargo.lock .github/workflows/ci.yml \
-    scripts/x.sh scripts/notes.md tests/notes.md examples/readme.md sub/LICENSE .github/CODEOWNERS; do
+    scripts/x.sh scripts/notes.md tests/notes.md examples/readme.md sub/LICENSE .github/CODEOWNERS \
+    README.md skills/understand-codebase/SKILL.md plugins/p/skills/s/SKILL.md docs/ASSURANCE-CASE.md; do
     docs_case "$f" code
   done
 }
@@ -40,7 +41,7 @@ t_docs_only_negative() {
 t_docs_only_mixed() {
   mkfix
   : >"$CTL/fail_fmt"
-  stage "$FIX_WT" README.md
+  stage "$FIX_WT" CHANGELOG.md
   stage "$FIX_WT" src/lib.rs
   run_gate commit
   assert_eq "docs + .rs is not docs-only" 1 "$RC"
@@ -49,7 +50,7 @@ t_docs_only_mixed() {
 t_docs_only_push() {
   mkfix
   : >"$CTL/fail_fmt"
-  commit_files "$FIX_WT" README.md docs/guide.md
+  commit_files "$FIX_WT" CHANGELOG.md docs/guide.md
   run_gate push
   assert_eq "push of docs only: exit 0" 0 "$RC"
   assert_eq "push docs-only cmd" docs-only "$(proof_field "$PROOFS/push-$(head_tree).json" cmd)"
@@ -58,7 +59,7 @@ t_docs_only_push() {
   run_gate push
   assert_eq "push with a .rs in the range: not docs-only" 1 "$RC"
   rm -f "$CTL/fail_fmt"
-  stage "$FIX_WT" README.md
+  stage "$FIX_WT" CHANGELOG.md
   g -C "$FIX_WT" commit -q -m docs2
   run_gate push
   assert_eq "a later docs-only commit does not hide the earlier .rs" 0 "$RC"
@@ -113,7 +114,7 @@ t_main_clone_refused() {
 
 t_main_clone_docs_exception() {
   mkfix
-  stage "$FIX_MAIN" README.md
+  stage "$FIX_MAIN" CHANGELOG.md
   run_gate_in "$FIX_MAIN" commit
   assert_eq "main clone, docs-only: exit 0" 0 "$RC"
   assert_eq "main clone, docs-only: no cargo" 0 "$(calls | grep -c '^cargo ')"
@@ -138,4 +139,38 @@ t_plain_clone_refused() {
   stage "$FIX/clone" src/lib.rs
   run_gate_in "$FIX/clone" commit
   assert_eq "plain clone (git-dir == common-dir): refused by design" 2 "$RC"
+}
+
+# A full clone placed under .claude/worktrees has git-dir == common-dir but is accepted: the path
+# shortcut is the documented rule (guard.sh gate_is_main_clone), not an accident.
+t_clone_under_worktrees_accepted() {
+  mkfix
+  mkdir -p "$FIX_MAIN/.claude/worktrees"
+  g clone -q "$FIX_MAIN" "$FIX_MAIN/.claude/worktrees/clone"
+  g -C "$FIX_MAIN/.claude/worktrees/clone" update-ref refs/remotes/origin/main HEAD
+  stage "$FIX_MAIN/.claude/worktrees/clone" src/lib.rs
+  run_gate_in "$FIX_MAIN/.claude/worktrees/clone" commit
+  assert_eq "clone under .claude/worktrees: accepted" 0 "$RC"
+}
+
+# Staged but uncommitted tracked change: HEAD differs, the index-vs-worktree diff is empty.
+t_push_refuses_staged_change() {
+  mkfix
+  commit_files "$FIX_WT" src/lib.rs
+  stage "$FIX_WT" src/lib.rs "staged, not committed"
+  run_gate push
+  assert_eq "push with a staged uncommitted change: exit 2" 2 "$RC"
+  assert_eq "push refused: no cargo" 0 "$(calls | grep -c '^cargo ')"
+}
+
+# A rename src -> docs lists only the docs path unless renames are disabled.
+t_rename_to_docs_not_docs_only() {
+  mkfix
+  : >"$CTL/fail_fmt"
+  g -C "$FIX_WT" mv src/lib.rs docs/lib.md
+  run_gate commit
+  assert_eq "commit: a .rs renamed into docs/ is not docs-only" 1 "$RC"
+  g -C "$FIX_WT" commit -q -m rename
+  run_gate push
+  assert_eq "push: a .rs renamed into docs/ is not docs-only" 1 "$RC"
 }

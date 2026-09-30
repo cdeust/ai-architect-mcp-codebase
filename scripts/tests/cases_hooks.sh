@@ -55,7 +55,7 @@ t_hook_gate_proof_push_e2e() {
 t_hook_docs_only_e2e() {
   hooks_present || return 0
   mkfix
-  stage "$FIX_WT" README.md
+  stage "$FIX_WT" CHANGELOG.md
   run_gate commit
   hook gate-proof.py "$(bash_payload 'git commit -m docs')"
   assert_eq "real hook accepts a docs-only proof: exit 0" 0 "$RC"

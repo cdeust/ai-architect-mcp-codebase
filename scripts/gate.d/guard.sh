@@ -14,12 +14,16 @@ gate_is_main_clone() { # toplevel
 }
 
 # rc 0 when path $1 cannot change what cargo builds or tests. Code-bearing directories and
-# scripts/ are refused first, so a .md under tests/ or scripts/ is NOT docs-only.
+# scripts/ are refused first, so a .md under tests/ or scripts/ is NOT docs-only. So are the .md
+# files that CI parses with python: README.md (check_doc_claims.py --readme), skills/ and
+# plugins/ (sync_portable_skills.py --check), docs/ASSURANCE-CASE.md (check_doc_claims.py
+# MANIFEST_CLAIMS). A docs-only proof would certify them with no check at all.
 gate_is_doc_path() {
   case "$1" in
     *.rs | Cargo.toml | */Cargo.toml | Cargo.lock | */Cargo.lock) return 1 ;;
     .github/workflows/* | scripts/* | src/* | tests/* | benches/* | crates/*) return 1 ;;
     examples/* | kani/* | fuzz/*) return 1 ;;
+    README.md | skills/* | plugins/* | docs/ASSURANCE-CASE.md) return 1 ;;
     *.md | docs/* | .github/ISSUE_TEMPLATE/*) return 0 ;;
     LICENSE*) case "$1" in */*) return 1 ;; *) return 0 ;; esac ;;
   esac

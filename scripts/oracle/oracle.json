@@ -4,7 +4,6 @@
   "repository": "https://github.com/DYResearch/dy-wcet",
   "tag": "v4.1.6",
   "commit": "8bb83ad7699e95a092bb6ed86f3b094ffab40cee",
-  "path": "/private/tmp/claude-501/-Users-cdeust-Developments-anthropic-partnership-ai-architect-mcp-codebase/4e71ce35-1696-4b48-be02-deedae88ba5e/scratchpad/dy-wcet-v4.1.6",
   "files": [
    {
     "file": "examples/rta_probe.rs",
