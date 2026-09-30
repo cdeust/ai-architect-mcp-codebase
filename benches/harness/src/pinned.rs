@@ -32,8 +32,8 @@ impl PinnedTree {
 
 /// Extract `<rev>:<subdir>` of the git repository containing `repo_hint`.
 ///
-/// precondition:  `repo_hint` is a directory inside a git work tree or bare
-///                repo; `rev` names a commit (or tree-ish) present in that
+/// precondition:  `repo_hint` is a directory inside a git work tree (a bare
+///                repo is rejected by `git_toplevel`); `rev` names a commit (or tree-ish) present in that
 ///                repo's object database; `subdir` is a repo-root-relative
 ///                directory of that tree.
 /// postcondition: on `Ok`, `source_dir()` holds exactly the files of
@@ -48,11 +48,33 @@ pub fn materialize(repo_hint: &Path, rev: &str, subdir: &str) -> Result<PinnedTr
     // hint that is a subdirectory of the repo (the corpus dir is) would yield
     // an empty archive. Run it from the work-tree root instead.
     let top = git_toplevel(repo_hint)?;
+    // `--` in `extract_archive` keeps a `rev` starting with `-` from being read
+    // as an option.
     let treeish = format!("{rev}:{subdir}");
+    extract_archive(&top, &treeish, &source_dir)?;
+    let extracted = std::fs::read_dir(&source_dir)
+        .map_err(|e| format!("read {source_dir:?}: {e}"))?
+        .next()
+        .is_some();
+    if !extracted {
+        return Err(format!("pinned corpus {treeish:?} extracted no files"));
+    }
+    Ok(PinnedTree {
+        _dir: dir,
+        source_dir,
+    })
+}
+
+/// Stream `git archive <treeish>` (run from `top`) into `tar -x -C dest`.
+///
+/// precondition:  `top` is a git work-tree root; `dest` is an existing directory.
+/// postcondition: on `Ok`, both processes exited 0 and `dest` holds the archive;
+///                on `Err`, the message names which process failed and why.
+fn extract_archive(top: &Path, treeish: &str, dest: &Path) -> Result<(), String> {
     let mut archive = Command::new("git")
         .arg("-C")
-        .arg(&top)
-        .args(["archive", "--format=tar", &treeish])
+        .arg(top)
+        .args(["archive", "--format=tar", "--", treeish])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -61,7 +83,7 @@ pub fn materialize(repo_hint: &Path, rev: &str, subdir: &str) -> Result<PinnedTr
     let untar = Command::new("tar")
         .arg("-x")
         .arg("-C")
-        .arg(&source_dir)
+        .arg(dest)
         .stdin(Stdio::from(tar_stdin))
         .stderr(Stdio::piped())
         .output()
@@ -82,20 +104,12 @@ pub fn materialize(repo_hint: &Path, rev: &str, subdir: &str) -> Result<PinnedTr
             String::from_utf8_lossy(&untar.stderr).trim()
         ));
     }
-    let extracted = std::fs::read_dir(&source_dir)
-        .map_err(|e| format!("read {source_dir:?}: {e}"))?
-        .next()
-        .is_some();
-    if !extracted {
-        return Err(format!("pinned corpus {treeish:?} extracted no files"));
-    }
-    Ok(PinnedTree {
-        _dir: dir,
-        source_dir,
-    })
+    Ok(())
 }
 
-/// Root of the git work tree (or the git dir of a bare repo) holding `hint`.
+/// Root of the git work tree holding `hint`. `git rev-parse --show-toplevel`
+/// fails ("this operation must be run in a work tree") in a bare repository,
+/// so a bare repo is reported as an error here, like any non-repository.
 fn git_toplevel(hint: &Path) -> Result<PathBuf, String> {
     let out = Command::new("git")
         .arg("-C")
@@ -169,6 +183,35 @@ mod tests {
         commit_file(tmp.path(), "fn a() {}");
         let err = materialize(tmp.path(), &"0".repeat(40), "src").unwrap_err();
         assert!(err.contains("not available"), "{err}");
+        assert!(err.contains("git fetch --unshallow"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_archive_is_a_named_error_not_an_empty_corpus() {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q"]);
+        // The empty tree is built into git; its archive is valid but has no files.
+        let empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+        let err = materialize(tmp.path(), empty_tree, "").unwrap_err();
+        assert!(err.contains("extracted no files"), "{err}");
+    }
+
+    #[test]
+    fn a_hint_outside_any_git_work_tree_is_a_named_error() {
+        // A fresh temp dir sits under the OS temp root, which is not inside a repo.
+        let tmp = tempfile::tempdir().unwrap();
+        let err = materialize(tmp.path(), "HEAD", "src").unwrap_err();
+        assert!(err.contains("is not inside a git work tree"), "{err}");
+    }
+
+    #[test]
+    fn a_rev_starting_with_a_dash_is_not_read_as_an_option() {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q"]);
+        commit_file(tmp.path(), "fn a() {}");
+        let err = materialize(tmp.path(), "--output=/dev/null", "src").unwrap_err();
+        // With `--`, git reads it as a (missing) object name; without, as an option.
+        assert!(err.contains("not a valid object name"), "{err}");
     }
 
     #[test]

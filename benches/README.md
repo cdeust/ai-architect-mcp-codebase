@@ -150,8 +150,11 @@ score fell from 0.906 to 0.752 without any regression in the tools (issue
 that immutable tree. It needs the commit in the local object database, so a
 shallow clone must `git fetch --unshallow` first (the error says so).
 
-- q4/q7 callers are ALL callers, test functions included, even those the tool
-  cannot resolve (calls inside `assert!` token trees, `use super::*` imports).
+- q4/q7 callers are ALL callers, test functions included, including calls
+  inside `assert!` token trees and via `use super::*`. The labels follow the
+  source, not what the tool happens to see: measured on the pinned tree the
+  tool resolves all of them (q4 = q7 = 1.000 on rust-self), so the policy keeps
+  the labels honest if that ever regresses.
 - q14 queries only the external crate roots the label lists.
 
 Move the pin only deliberately: set `git_rev` to a commit on main, re-derive
