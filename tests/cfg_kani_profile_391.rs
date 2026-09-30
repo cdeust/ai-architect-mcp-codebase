@@ -6,7 +6,7 @@
 //! 141/147`: three constants, each defined once under `cfg(kani)` and once under
 //! `cfg(not(kani))`. Every fixture is a real Cargo package, so `cargo metadata`
 //! gives the package's features and the indexer writes `cfg_active`.
-use ai_architect_mcp::{graph_store::GraphStore, indexer, resolver};
+use ai_architect_mcp::{clustering, graph_store::GraphStore, indexer, resolver};
 use std::fs;
 use std::path::PathBuf;
 
@@ -45,6 +45,7 @@ impl Project {
         )
         .unwrap();
         for (name, text) in files {
+            fs::create_dir_all(root.join(name).parent().unwrap()).unwrap();
             fs::write(root.join(name), text).unwrap();
         }
         let graph = tmp.path().join("graph");
@@ -153,5 +154,45 @@ fn twins_in_a_not_kani_module_follow_their_own_gates() {
     assert_eq!(
         p.activity("Function", "g"),
         [pair("kani", "inactive"), pair("not(kani)", "active")]
+    );
+}
+
+/// Issue #423: a helper in a `#[cfg(kani)]` module has no `#[kani::proof]`, so
+/// its own marker is empty and its file decides. That file is compiled out of a
+/// default build and is Kani-only code, the way `#[cfg(test)] mod tests;` is
+/// test-only code: `get_impact` must not count its call as a production call.
+/// The shape is dy-wcet v4.1.6 `kani/response_bounds.rs`, placed by `#[path]`.
+#[test]
+fn a_helper_in_a_kani_gated_module_is_not_a_production_caller() {
+    let lib = "\
+pub struct Set;\n\n\
+impl Set {\n    pub fn respond(&self) -> u32 {\n        1\n    }\n}\n\n\
+pub fn from_production(s: &Set) -> u32 {\n    s.respond()\n}\n\n\
+#[cfg(kani)]\n#[path = \"../kani/bounds.rs\"]\nmod bounds;\n";
+    let bounds = "\
+use crate::Set;\n\n\
+fn helper(s: &Set) -> u32 {\n    s.respond()\n}\n\n\
+#[kani::proof]\nfn harness() {\n    let _ = helper(&Set);\n}\n";
+    let p = Project::with_files(&[("src/lib.rs", lib), ("kani/bounds.rs", bounds)]);
+    let mut callers: Vec<(String, String)> =
+        clustering::get_impact(&p.store(), "src/lib.rs::Set::respond")
+            .expect("impact")
+            .callers
+            .into_iter()
+            .map(|c| (c.id, c.context))
+            .collect();
+    callers.sort();
+    assert_eq!(
+        callers,
+        [
+            pair("kani/bounds.rs::helper", "proof"),
+            pair("src/lib.rs::from_production", "production"),
+        ]
+    );
+    assert_eq!(
+        p.rows(
+            "MATCH (f:File) WHERE f.id = 'kani/bounds.rs' RETURN f.cfg_active, f.target_context"
+        ),
+        [["inactive", "proof"]]
     );
 }

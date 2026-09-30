@@ -51,6 +51,17 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `get_impact` no longer reports as `production` a caller in a file only a
+  `#[cfg(kani)] mod` declares (issue #423). Such a file is compiled out of a
+  default build and is Kani-only code, as a `#[cfg(test)] mod` file is test-only
+  code; its `File.target_context` was `production` because the module walk
+  looked only at `cfg(test)`, and a helper without `#[kani::proof]` inherits
+  its file's context. The file is now `proof`, so its helpers are `proof`
+  callers (dy-wcet `kani/response_bounds.rs::two_tasks_terminate`), and
+  `check_doc_claims` keeps counting the harnesses of such a file. A module a
+  Cargo feature compiles out stays `production`, a build with the feature
+  compiles it.
+
 - `#[cfg]` twins under `kani`, `miri`, `doc` or `doctest` are decided by the
   default build profile (issue #391). A plain `cargo build` never sets those four
   options (`cargo kani`, `cargo miri` and rustdoc do), so the profile now fixes

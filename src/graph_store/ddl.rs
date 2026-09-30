@@ -16,7 +16,8 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // tools must be able to tell the two apart.
         // target_context: issue #354: what the Cargo package says the file is:
         // 'test' / 'bench' / 'example' when every path to it comes from such
-        // targets (or through a `#[cfg(test)] mod`), 'production' when a lib, bin
+        // targets (or through a `#[cfg(test)] mod`), 'proof' when every path to it
+        // is a `#[cfg(kani)] mod` (issue #423), 'production' when a lib, bin
         // or build target reaches it, '' when nothing is decided (see
         // `indexer::target_context`). '' on a graph from before the column.
         // cfg_gate / cfg_active / module_path: issue #366 (B): the gate a file

@@ -103,6 +103,57 @@ fn a_file_declared_only_under_cfg_test_is_test_code_below_a_lib() {
 }
 
 #[test]
+fn a_file_declared_only_under_cfg_kani_is_proof_code_below_a_lib() {
+    let map = contexts(
+        &[
+            (
+                "src/lib.rs",
+                "#[cfg(kani)]\n#[path = \"../kani/bounds.rs\"]\nmod bounds;\nmod util;\n",
+            ),
+            ("kani/bounds.rs", "mod inner;\n"),
+            ("kani/bounds/inner.rs", ""),
+            ("src/util.rs", ""),
+        ],
+        &[("src/lib.rs", Production)],
+    );
+    assert_eq!(map["kani/bounds.rs"], "proof");
+    assert_eq!(map["kani/bounds/inner.rs"], "proof");
+    assert_eq!(map["src/util.rs"], "production");
+}
+
+#[test]
+fn cfg_not_kani_and_any_kani_do_not_make_a_module_proof_code() {
+    let map = contexts(
+        &[
+            (
+                "src/lib.rs",
+                "#[cfg(not(kani))]\nmod a;\n#[cfg(any(kani, feature = \"x\"))]\nmod b;\n",
+            ),
+            ("src/a.rs", ""),
+            ("src/b.rs", ""),
+        ],
+        &[("src/lib.rs", Production)],
+    );
+    assert_eq!(map["src/a.rs"], "production");
+    assert_eq!(map["src/b.rs"], "production");
+}
+
+#[test]
+fn a_kani_module_another_declaration_compiles_in_a_build_is_production() {
+    let map = contexts(
+        &[
+            (
+                "src/lib.rs",
+                "#[cfg(kani)]\nmod shared;\n#[cfg(feature = \"x\")]\n#[path = \"shared.rs\"]\nmod shared_x;\n",
+            ),
+            ("src/shared.rs", ""),
+        ],
+        &[("src/lib.rs", Production)],
+    );
+    assert_eq!(map["src/shared.rs"], "production");
+}
+
+#[test]
 fn a_file_named_tests_declared_as_a_plain_mod_is_production() {
     let map = contexts(
         &[("src/lib.rs", "mod tests;\n"), ("src/tests.rs", "")],

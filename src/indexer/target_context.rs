@@ -4,15 +4,22 @@
 // A file is `test`, `bench` or `example` code when it is reached only from such
 // targets (`tests/*.rs`, `benches/*.rs`, `examples/*.rs`, and the modules they
 // declare) or only through a `mod` declaration gated on `cfg(test)`
-// (`#[cfg(test)] mod tests;`). It is `production` when some lib, bin or build
-// target reaches it through declarations none of which requires `cfg(test)`.
+// (`#[cfg(test)] mod tests;`). It is `proof` when it is reached only through a
+// `mod` declaration gated on `cfg(kani)` (`#[cfg(kani)] #[path = "../kani/x.rs"]
+// mod x;`, issue #423): Kani-only code, compiled out of every build but the
+// verifier's, as `cfg(test)` code is compiled out of every build but the test
+// harness's. The helpers of such a file carry no `#[kani::proof]`, so this is
+// the only place their kind is decided. It is `production` when some lib, bin
+// or build target reaches it through declarations none of which requires
+// `cfg(test)` or `cfg(kani)`.
 //
 // Method: walk each target's module tree from its entry file (the tree
 // `feature_gated` walks), carrying the class of the path. A declaration that
-// requires `cfg(test)` turns the class of everything below it into `test`; a
-// declaration's own feature gate is ignored, because a compiled-out module is
-// still not test code. A file reached by several paths is `production` if any
-// path is; else the class of its non-production paths when they agree; else
+// requires `cfg(test)` turns the class of everything below it into `test`, one
+// that requires `cfg(kani)` into `proof`; a declaration's own feature gate is
+// ignored, because a module compiled out by a Cargo feature is still production
+// code (a build with that feature compiles it), unlike test and Kani-only code.
+// A file reached by several paths is `production` if any path is; else the class of its non-production paths when they agree; else
 // nothing is decided.
 //
 // Evidence is positive only. A file no declaration reaches (an orphan, a file
@@ -34,6 +41,7 @@ pub(crate) const PRODUCTION: &str = "production";
 const TEST: &str = "test";
 const BENCH: &str = "bench";
 const EXAMPLE: &str = "example";
+const PROOF: &str = "proof";
 
 /// The class of one path from a target root to a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,6 +50,7 @@ enum Class {
     Test,
     Bench,
     Example,
+    Proof,
 }
 
 impl Class {
@@ -60,6 +69,7 @@ impl Class {
             Class::Test => TEST,
             Class::Bench => BENCH,
             Class::Example => EXAMPLE,
+            Class::Proof => PROOF,
         }
     }
 }
@@ -86,8 +96,10 @@ pub(crate) fn analyse(
                 continue;
             }
             for (decl, target) in tree.children(&file) {
-                let below = if requires_test(&decl.cfg) {
+                let below = if requires_option(&decl.cfg, "test") {
                     Class::Test
+                } else if requires_option(&decl.cfg, "kani") {
+                    Class::Proof
                 } else {
                     class
                 };
@@ -135,11 +147,12 @@ pub(crate) fn owners(
     owned
 }
 
-/// True when the declaration exists only under `cfg(test)`. A declaration whose
-/// `cfg` did not parse (`None`) is not test-gated: it keeps the class above it.
-fn requires_test(cfg: &Option<Vec<CfgPredicate>>) -> bool {
+/// True when the declaration exists only under the bare option `key` (`test`,
+/// `kani`). A declaration whose `cfg` did not parse (`None`) is not gated: it
+/// keeps the class above it.
+fn requires_option(cfg: &Option<Vec<CfgPredicate>>, key: &str) -> bool {
     cfg.as_ref()
-        .is_some_and(|all| CfgPredicate::All(all.clone()).requires_option("test"))
+        .is_some_and(|all| CfgPredicate::All(all.clone()).requires_option(key))
 }
 
 /// Any production path wins; otherwise the classes must agree.

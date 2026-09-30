@@ -89,9 +89,7 @@ struct Project {
 }
 
 fn project() -> Project {
-    let tmp = tempfile::tempdir().expect("tmp");
-    let root = tmp.path().join("repo");
-    let files: &[(&str, &str)] = &[
+    build(&[
         (
             "Cargo.toml",
             "[package]\nname = \"fx\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
@@ -108,7 +106,12 @@ fn project() -> Project {
         ("loose/stray.rs", "#[test]\nfn stray() {}\n"),
         ("LICENSE", "MIT\n"),
         ("README.md", README),
-    ];
+    ])
+}
+
+fn build(files: &[(&str, &str)]) -> Project {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let root = tmp.path().join("repo");
     for (name, text) in files {
         let path = root.join(name);
         fs::create_dir_all(path.parent().expect("parent")).expect("dir");
@@ -250,6 +253,33 @@ fn a_proof_count_uses_the_kani_option_as_the_harness_gate() {
         ],
     );
     assert_verdict(&r, "one", Verdict::Supported, "");
+    assert_verdict(&r, "none", Verdict::Contradicted, "floor_exceeds_claim");
+}
+
+/// Issue #423: a harness in a file only `#[cfg(kani)] mod` declares has the file
+/// context `proof`; `cargo kani` verifies it, so it stays in the compiled floor.
+#[test]
+fn a_proof_in_a_file_only_a_kani_module_declares_is_in_the_floor() {
+    let p = build(&[
+        (
+            "Cargo.toml",
+            "[package]\nname = \"fx\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        (
+            "src/lib.rs",
+            "#[cfg(kani)]\n#[path = \"../kani/h.rs\"]\nmod h;\n",
+        ),
+        ("kani/h.rs", "#[kani::proof]\nfn one() {}\n"),
+        ("README.md", "One proof\nNo proof\n"),
+    ]);
+    let r = run(
+        &p,
+        vec![
+            claim("exact", (1, "One proof"), "proof_count", ("", "1")),
+            claim("none", (2, "No proof"), "proof_count", ("", "0")),
+        ],
+    );
+    assert_verdict(&r, "exact", Verdict::Supported, "");
     assert_verdict(&r, "none", Verdict::Contradicted, "floor_exceeds_claim");
 }
 

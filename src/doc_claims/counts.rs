@@ -12,7 +12,8 @@
 //   - its file is reached by a target the harness runs (`File.target_context`):
 //     `cargo test` runs the tests of lib, bin and test targets, and only builds
 //     examples and benches, whose `test` setting defaults to false; `cargo kani`
-//     verifies the harnesses of the package's lib and bin targets.
+//     verifies the harnesses of the package's lib and bin targets, including the
+//     modules only `cfg(kani)` declares (`proof`, issue #423).
 //     source: The Cargo Book, "Cargo Targets" (the `test` field) and
 //     "cargo test" (target selection); Kani reference, "Usage" (`cargo kani`).
 //   - no `#[cfg]` other than the harness's own option (`test`, `kani`) reaches
@@ -56,7 +57,7 @@ pub(super) const TESTS: Harness = Harness {
 pub(super) const PROOFS: Harness = Harness {
     entry_kind: "proof",
     option: "kani",
-    contexts: &["production"],
+    contexts: &["production", "proof"],
 };
 
 /// The value a count claim states.
