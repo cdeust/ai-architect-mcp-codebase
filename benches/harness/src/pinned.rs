@@ -126,6 +126,78 @@ fn git_toplevel(hint: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
 }
 
+/// True iff `repo_hint`'s repository is a shallow clone that does not hold
+/// `rev` in its object database. Distinguishes a CI checkout that
+/// intentionally dropped history (`fetch-depth: 1`) — not a defect, the
+/// caller should skip — from a full clone missing the same rev, which is a
+/// real, hard-failing defect (issue #428: the CI floor job runs a shallow
+/// checkout the `rust-self` corpus's pin cannot survive).
+///
+/// precondition:  `repo_hint` is a directory inside a git work tree.
+/// postcondition: `Ok(true)` only when the repo is shallow AND `rev` is
+///                absent from its object database; `Ok(false)` for a full
+///                clone regardless of whether `rev` is present (a full
+///                clone missing `rev` must still fail downstream, in
+///                `materialize`, not be silently skipped here).
+#[cfg(test)]
+pub fn is_shallow_clone_missing_rev(repo_hint: &Path, rev: &str) -> Result<bool, String> {
+    let top = git_toplevel(repo_hint)?;
+    let shallow_out = Command::new("git")
+        .arg("-C")
+        .arg(&top)
+        .args(["rev-parse", "--is-shallow-repository"])
+        .output()
+        .map_err(|e| format!("spawn `git rev-parse --is-shallow-repository`: {e}"))?;
+    if !shallow_out.status.success() {
+        return Err(format!(
+            "git rev-parse --is-shallow-repository: {}",
+            String::from_utf8_lossy(&shallow_out.stderr).trim()
+        ));
+    }
+    let is_shallow = String::from_utf8_lossy(&shallow_out.stdout).trim() == "true";
+    if !is_shallow {
+        return Ok(false);
+    }
+    let cat_out = Command::new("git")
+        .arg("-C")
+        .arg(&top)
+        .args(["cat-file", "-e", &format!("{rev}^{{commit}}")])
+        .output()
+        .map_err(|e| format!("spawn `git cat-file -e`: {e}"))?;
+    Ok(!cat_out.status.success())
+}
+
+/// First `(corpus dir, name, rev)` in `pins` whose rev is absent only
+/// because of a shallow checkout — see `is_shallow_clone_missing_rev` for
+/// the shallow-vs-full-clone distinction that keeps a full clone genuinely
+/// missing the rev a hard failure downstream, in `materialize` (issue #428).
+#[cfg(test)]
+pub fn shallow_skip_reason(pins: &[(PathBuf, String, String)]) -> Option<String> {
+    for (dir, name, rev) in pins {
+        if is_shallow_clone_missing_rev(dir, rev).unwrap_or(false) {
+            return Some(format!(
+                "corpus {name}: pinned rev {rev} is absent from this shallow checkout \
+                 (fetch-depth drops history); not a corpus defect"
+            ));
+        }
+    }
+    None
+}
+
+/// Writes straight to fd 2, bypassing libtest's output capture (which
+/// intercepts `eprintln!` on a passing test too) so a skip reason stays
+/// visible in CI without a `.github/`-workflow `--nocapture` flag this
+/// repo's owner has not approved (issue #428).
+#[cfg(test)]
+pub fn eprint_uncaptured(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/stderr") {
+        let _ = writeln!(f, "{msg}");
+    } else {
+        eprintln!("{msg}");
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -224,5 +296,61 @@ mod tests {
         assert!(path.exists());
         drop(tree);
         assert!(!path.exists());
+    }
+
+    /// A shallow clone of a *disposable* repo this test creates — never the
+    /// host repo (issue #428's mechanics tests stay isolated from the
+    /// checkout running them). `git clone --depth 1 <local path>` silently
+    /// ignores `--depth` for same-filesystem/hardlink clones unless the
+    /// source is addressed as a `file://` URL.
+    fn shallow_clone_of(src: &Path, depth: &str) -> tempfile::TempDir {
+        let dest = tempfile::tempdir().unwrap();
+        let url = format!("file://{}", src.display());
+        let out = Command::new("git")
+            .args(["clone", "-q", "--depth", depth, &url])
+            .arg(dest.path())
+            .output()
+            .expect("git clone runs");
+        assert!(out.status.success(), "git clone: {:?}", out.stderr);
+        dest
+    }
+
+    #[test]
+    fn full_clone_with_the_rev_present_is_not_reported_shallow_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q"]);
+        let rev = commit_file(tmp.path(), "fn a() {}");
+        assert!(!is_shallow_clone_missing_rev(tmp.path(), &rev).unwrap());
+    }
+
+    #[test]
+    fn full_clone_missing_the_rev_is_not_a_skip_it_is_a_real_defect() {
+        // A full clone missing `rev` must still hard-fail in `materialize`,
+        // never be silently skipped by the shallow-checkout escape hatch.
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q"]);
+        commit_file(tmp.path(), "fn a() {}");
+        assert!(!is_shallow_clone_missing_rev(tmp.path(), &"0".repeat(40)).unwrap());
+    }
+
+    #[test]
+    fn shallow_clone_missing_an_older_rev_is_reported_missing() {
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q"]);
+        let old = commit_file(origin.path(), "fn old() {}");
+        commit_file(origin.path(), "fn newer() {}");
+
+        let clone = shallow_clone_of(origin.path(), "1");
+        assert!(is_shallow_clone_missing_rev(clone.path(), &old).unwrap());
+    }
+
+    #[test]
+    fn shallow_clone_holding_the_rev_at_head_is_not_reported_missing() {
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q"]);
+        let head = commit_file(origin.path(), "fn a() {}");
+
+        let clone = shallow_clone_of(origin.path(), "1");
+        assert!(!is_shallow_clone_missing_rev(clone.path(), &head).unwrap());
     }
 }

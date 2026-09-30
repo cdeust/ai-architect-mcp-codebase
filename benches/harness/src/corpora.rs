@@ -384,6 +384,25 @@ mod tests {
         );
     }
 
+    /// Issue #428: every `(corpus dir, name, git_rev)` whose manifest sets
+    /// `git_rev` — feeds `pinned::shallow_skip_reason`, which tells a
+    /// shallow CI checkout (not a defect) apart from a full clone genuinely
+    /// missing the rev (a real defect `materialize` must still hard-fail on).
+    fn git_rev_pins(corpora_root: &Path) -> Vec<(PathBuf, String, String)> {
+        let Ok(entries) = fs::read_dir(corpora_root) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let dir = entry.path();
+                let manifest = read_manifest(&dir.join("corpus.toml")).ok()?;
+                let rev = manifest.git_rev.clone()?;
+                Some((dir, manifest.name, rev))
+            })
+            .collect()
+    }
+
     /// Issue #359: the guard above only warned when the whole benchmark ran,
     /// and three module splits (#132, #210, #359) left dead labels behind. This
     /// test reads the real corpora, so a split that deletes a labelled path
@@ -391,6 +410,10 @@ mod tests {
     #[test]
     fn every_label_of_every_corpus_references_existing_paths() {
         let corpora_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpora");
+        if let Some(reason) = pinned::shallow_skip_reason(&git_rev_pins(&corpora_root)) {
+            pinned::eprint_uncaptured(&format!("[bench] skipping: {reason}"));
+            return;
+        }
         let corpora = discover_all(&corpora_root).expect("load benches/corpora");
         assert!(!corpora.is_empty(), "no labelled corpus found");
         let mut dead = Vec::new();
@@ -458,6 +481,10 @@ mod tests {
     #[test]
     fn the_rust_self_corpus_is_read_from_its_pinned_revision() {
         let corpora_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpora");
+        if let Some(reason) = pinned::shallow_skip_reason(&git_rev_pins(&corpora_root)) {
+            pinned::eprint_uncaptured(&format!("[bench] skipping: {reason}"));
+            return;
+        }
         let corpus = load_one(&corpora_root, "rust-self").expect("load rust-self");
         assert!(
             corpus._pinned_tree.is_some(),
