@@ -32,6 +32,17 @@ Exit 0 requires aggregate ≥0.85 and every language ≥0.75.
 - **clippy `--all-targets`** compiles `lib` separately from `unittests`: anything reachable only from `#[cfg(test)]` code, imports included, must itself be `#[cfg(test)]`-gated.
 - CI catches blast radius that local gates miss — activating a resolver path can break a cross-repo defense test. Watch the run, don't assume.
 
+## Local proof gates
+
+`scripts/gate.sh commit` (fmt, clippy, `cargo test --lib`) and `scripts/gate.sh push` (those, plus
+plain `cargo test` with `check_doc_claims.py`, the bench, and the dy-wcet oracle when the diff
+touches `src/**/*.rs`) write a proof `<kind>-<tree>.json` to `$(git rev-parse --git-common-dir)/zetetic-gates/`;
+a failure writes no proof and one line to `failures.jsonl`. `verify [commit|push]` only reads the
+proof; `waive <gate> --reason "..."` appends an auditable line and never grants a proof. Docs-only
+changes get a proof without cargo. Bench and oracle are local and never run in CI; the oracle needs
+`GATE_ORACLE_CORPUS` (dy-wcet v4.1.6 checkout). Nothing compiles in the main clone. Tests:
+`bash scripts/tests/test_gate.sh`; mutants: `bash scripts/tests/mutation_check.sh`.
+
 ## Etiquette
 
 Conventional commits, staged file-by-file, never `git add -A`. One PR per concern. A pull

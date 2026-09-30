@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fake oracle replay for test_gate.sh (same control files as stubs/cargo).
+d=${GATE_STUB_DIR:?GATE_STUB_DIR unset}
+echo "oracle $*" >>"$d/calls"
+[ ! -f "$d/slow_oracle" ] || sleep "$(cat "$d/slow_oracle")"
+if [ -f "$d/fail_oracle" ]; then
+  echo "oracle deviation: marker-oracle"
+  exit 1
+fi
+echo "oracle ok"

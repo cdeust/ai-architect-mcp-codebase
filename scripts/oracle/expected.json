@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "source": "owner brief 2026-09-30 (expected values on main); raw measurement of b4714a8 in tasks/axon-main-b4714a8-20260930/SUMMARY.md; impact contexts are the post-#423 values (two_tasks_terminate is a kani-helper of the proof module, context proof)",
+  "corpus": {
+    "repository": "DYResearch/dy-wcet",
+    "tag": "v4.1.6",
+    "commit": "8bb83ad7699e95a092bb6ed86f3b094ffab40cee",
+    "oracle_sha256": "e2b974451887fa5d7b9cb03bca3a51729ad76f99d9f2b9295b3a51deb878a8c5"
+  },
+  "definitions": {"found": 171, "of": 171, "false": 0},
+  "callers": {"found": 66, "of": 66, "false": 0},
+  "sites": {"found": 99, "of": 99, "false": 0},
+  "node_count": 38003,
+  "edge_count": 40005,
+  "call_site_target_count": 1037,
+  "semantic_sha256": "aeaacccd592ff82ffd6e8b18b6cb35013464d272fd5a7ca35cf8bf6caf1a446d",
+  "impact_response_of": {"production": 4, "proof": 5, "example": 1, "test": 56},
+  "two_tasks_terminate_context": "proof"
+}
