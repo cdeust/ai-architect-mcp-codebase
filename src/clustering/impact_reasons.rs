@@ -70,37 +70,10 @@ pub(super) fn unresolved_callsite_attribution(
         .node_column_exists(NODE_CALL_SITE, "unresolved_reason")
         .unwrap_or(false);
     if !has_reason_col {
-        let total = count_unresolved(store, &name_filter);
-        let not_recorded = crate::graph_store::callsite_reasons::REASON_NOT_RECORDED;
-        let by_reason = (total > 0)
-            .then(|| (not_recorded.to_string(), total))
-            .into_iter()
-            .collect();
-        return UnresolvedCallsiteAttribution {
-            total,
-            outside_targets: 0,
-            outside_target_files: Vec::new(),
-            cfg_twins: 0,
-            by_reason,
-            excluded_other_owner: 0,
-        };
+        return attribution_without_reason_column(store, &name_filter);
     }
 
-    // Columns 2..: what the spelling of the site says about its owner (issue #392).
-    // The hint column is newer than the reason column, so it is asked for only
-    // when the graph has it.
-    let hint_col = if store
-        .node_column_exists(NODE_CALL_SITE, "receiver_hint")
-        .unwrap_or(false)
-    {
-        ", cs.receiver_hint"
-    } else {
-        ""
-    };
-    let cypher = format!(
-        "MATCH (cs:{NODE_CALL_SITE}) WHERE {name_filter} \
-         RETURN cs.id, cs.unresolved_reason, cs.callee_name, cs.language{hint_col}"
-    );
+    let cypher = unresolved_sites_query(store, &name_filter);
     let all_rows = store
         .execute_query(&cypher)
         .map(|qr| qr.rows)
@@ -108,16 +81,38 @@ pub(super) fn unresolved_callsite_attribution(
     let (rows, excluded_other_owner) =
         super::impact_other_owner::drop_other_owner_sites(store, esc, all_rows);
     let total = rows.len() as u64;
-    let mut outside_targets = 0u64;
-    let mut outside_target_files = std::collections::BTreeSet::new();
-    let cfg_twins = rows
-        .iter()
+    let cfg_twins = count_cfg_twins(&rows);
+    let (outside_targets, outside_target_files) = outside_target_sites(&rows);
+    let by_reason = crate::graph_store::callsite_reasons::count_by_reason(
+        rows.iter()
+            .map(|row| row.get(1).cloned().unwrap_or_default()),
+    );
+    UnresolvedCallsiteAttribution {
+        total,
+        outside_targets,
+        outside_target_files,
+        cfg_twins,
+        by_reason,
+        excluded_other_owner,
+    }
+}
+
+/// How many of the open sites carry the `cfg_twins` reason (issue #353).
+fn count_cfg_twins(rows: &[Vec<String>]) -> u64 {
+    rows.iter()
         .filter(|row| {
             row.get(1).map(String::as_str)
                 == Some(crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS)
         })
-        .count() as u64;
-    for row in &rows {
+        .count() as u64
+}
+
+/// How many of the open sites carry the `outside_targets` reason, and the
+/// sorted, de-duplicated files they sit in (issue #284).
+fn outside_target_sites(rows: &[Vec<String>]) -> (u64, Vec<String>) {
+    let mut outside_targets = 0u64;
+    let mut files = std::collections::BTreeSet::new();
+    for row in rows {
         let is_outside = row
             .get(1)
             .map(|r| r == crate::graph_store::CALLSITE_UNRESOLVED_REASON_OUTSIDE_TARGETS)
@@ -127,21 +122,51 @@ pub(super) fn unresolved_callsite_attribution(
         }
         outside_targets += 1;
         if let Some(id) = row.first() {
-            outside_target_files.insert(extract_file_prefix_or_self(id));
+            files.insert(extract_file_prefix_or_self(id));
         }
     }
-    let by_reason = crate::graph_store::callsite_reasons::count_by_reason(
-        rows.iter()
-            .map(|row| row.get(1).cloned().unwrap_or_default()),
-    );
+    (outside_targets, files.into_iter().collect())
+}
+
+/// The attribution when the graph predates the `unresolved_reason` column:
+/// every open site is counted, none can be attributed, so all land under
+/// `REASON_NOT_RECORDED`.
+fn attribution_without_reason_column(
+    store: &GraphStore,
+    name_filter: &str,
+) -> UnresolvedCallsiteAttribution {
+    let total = count_unresolved(store, name_filter);
+    let not_recorded = crate::graph_store::callsite_reasons::REASON_NOT_RECORDED;
+    let by_reason = (total > 0)
+        .then(|| (not_recorded.to_string(), total))
+        .into_iter()
+        .collect();
     UnresolvedCallsiteAttribution {
         total,
-        outside_targets,
-        outside_target_files: outside_target_files.into_iter().collect(),
-        cfg_twins,
+        outside_targets: 0,
+        outside_target_files: Vec::new(),
+        cfg_twins: 0,
         by_reason,
-        excluded_other_owner,
+        excluded_other_owner: 0,
     }
+}
+
+/// Cypher selecting the open sites and, as columns 2.., what the spelling of
+/// each says about its owner (issue #392). The hint column is newer than the
+/// reason column, so it is asked for only when the graph has it.
+fn unresolved_sites_query(store: &GraphStore, name_filter: &str) -> String {
+    let hint_col = if store
+        .node_column_exists(NODE_CALL_SITE, "receiver_hint")
+        .unwrap_or(false)
+    {
+        ", cs.receiver_hint"
+    } else {
+        ""
+    };
+    format!(
+        "MATCH (cs:{NODE_CALL_SITE}) WHERE {name_filter} \
+         RETURN cs.id, cs.unresolved_reason, cs.callee_name, cs.language{hint_col}"
+    )
 }
 
 /// The Cypher filter of the unresolved `CallSite` nodes that name

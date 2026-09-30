@@ -280,19 +280,12 @@ fn impact_envelope(
         "references": views.references.value,
         "references_total": sections.references.total_count,
         "dependents_total": sections.dependents_total,
-        "counts": {
-            "code": sections.dependents_total,
-            "references": sections.references_total_full,
-        },
+        "counts": dependents_counts(sections),
         "truncated": views.any_truncated(sections),
         "epistemic": impact.epistemic.as_str(),
         "epistemic_reasons": impact.epistemic_reasons,
-        "unresolved_callsites_naming_target": impact.unresolved_callsites_naming_target,
-        "unresolved_callsites_outside_targets": impact.unresolved_callsites_outside_targets,
-        "unresolved_callsites_by_reason": impact.unresolved_callsites_by_reason,
-        "unresolved_callsites_excluded_other_owner":
-            impact.unresolved_callsites_excluded_other_owner,
     });
+    attach_unresolved_callsites(&mut out, impact);
     attach_cfg_twins(&mut out, impact, qn);
     attach_caller_contexts(&mut out, impact, sections.dependents_total);
     if views.callers.columns.is_some() {
@@ -303,6 +296,26 @@ fn impact_envelope(
         out["next_offset"] = json!(next);
     }
     out
+}
+
+/// The `counts` object: code vs. reference fan-in reported together (issue #205).
+fn dependents_counts(sections: &ImpactSections) -> Value {
+    json!({
+        "code": sections.dependents_total,
+        "references": sections.references_total_full,
+    })
+}
+
+/// The open call sites that name the target, how they split by reason, and
+/// (issue #392) how many were left out because their spelling names another
+/// owner.
+fn attach_unresolved_callsites(out: &mut Value, impact: &clustering::ImpactResult) {
+    out["unresolved_callsites_naming_target"] = json!(impact.unresolved_callsites_naming_target);
+    out["unresolved_callsites_outside_targets"] =
+        json!(impact.unresolved_callsites_outside_targets);
+    out["unresolved_callsites_by_reason"] = json!(impact.unresolved_callsites_by_reason);
+    out["unresolved_callsites_excluded_other_owner"] =
+        json!(impact.unresolved_callsites_excluded_other_owner);
 }
 
 /// Issue #353: when the target is one of several twins of one item under

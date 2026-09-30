@@ -107,29 +107,8 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
     let communities = collect_communities(store, qualified_name);
     let processes = collect_processes(store, qualified_name);
 
-    // Reverse-dependency traversal — the actual blast radius. The tool is
-    // named for impact analysis but previously returned only community +
-    // process membership; the set of symbols that DEPEND ON the target
-    // (callers, importers, users, implementors) is what a "what breaks if I
-    // change this?" query needs. Each is a re-queryable handle so the caller
-    // can keep walking the graph through MCP rather than stopping at a digest.
-    let mut callers = reverse_dependents(store, &esc, "Calls_");
-    let code_context_basis = impact_context::attach(store, &mut callers);
-    let importers = reverse_dependents(store, &esc, "Imports_");
-    let users = reverse_dependents(store, &esc, "Uses_");
-    let implementors = reverse_dependents(store, &esc, "Implements_");
-    // Doc/script cross-references (issue #205) — kept separate from
-    // `importers` since these are file-level References_File_File edges, not
-    // a code dependency.
-    let references = reverse_dependents(store, &esc, "References_");
-
-    let deps = ReverseDependents {
-        callers: &callers,
-        importers: &importers,
-        users: &users,
-        implementors: &implementors,
-        references: &references,
-    };
+    let (dependents, code_context_basis) = collect_dependents(store, &esc);
+    let deps = dependents.as_view();
     let Epistemics {
         attribution,
         reasons: epistemic_reasons,
@@ -140,11 +119,11 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
     Ok(ImpactResult {
         communities,
         processes,
-        callers,
-        importers,
-        users,
-        implementors,
-        references,
+        callers: dependents.callers,
+        importers: dependents.importers,
+        users: dependents.users,
+        implementors: dependents.implementors,
+        references: dependents.references,
         epistemic,
         epistemic_reasons,
         unresolved_callsites_naming_target: attribution.total,
@@ -156,6 +135,49 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         cfg_twins,
         code_context_basis,
     })
+}
+
+/// The five reverse-dependency sections of one target, owned.
+struct OwnedDependents {
+    callers: Vec<ImpactNode>,
+    importers: Vec<ImpactNode>,
+    users: Vec<ImpactNode>,
+    implementors: Vec<ImpactNode>,
+    references: Vec<ImpactNode>,
+}
+
+impl OwnedDependents {
+    fn as_view(&self) -> ReverseDependents<'_> {
+        ReverseDependents {
+            callers: &self.callers,
+            importers: &self.importers,
+            users: &self.users,
+            implementors: &self.implementors,
+            references: &self.references,
+        }
+    }
+}
+
+/// Reverse-dependency traversal — the actual blast radius. The tool is named
+/// for impact analysis but previously returned only community + process
+/// membership; the set of symbols that DEPEND ON the target (callers,
+/// importers, users, implementors) is what a "what breaks if I change this?"
+/// query needs. Each is a re-queryable handle so the caller can keep walking
+/// the graph through MCP rather than stopping at a digest. Doc/script
+/// cross-references (issue #205) stay separate from `importers`: they are
+/// file-level References_File_File edges, not a code dependency. Also returns
+/// the basis the callers' code context was attached under.
+fn collect_dependents(store: &GraphStore, esc: &str) -> (OwnedDependents, &'static str) {
+    let mut callers = reverse_dependents(store, esc, "Calls_");
+    let code_context_basis = impact_context::attach(store, &mut callers);
+    let dependents = OwnedDependents {
+        callers,
+        importers: reverse_dependents(store, esc, "Imports_"),
+        users: reverse_dependents(store, esc, "Uses_"),
+        implementors: reverse_dependents(store, esc, "Implements_"),
+        references: reverse_dependents(store, esc, "References_"),
+    };
+    (dependents, code_context_basis)
 }
 
 /// Communities (`MemberOf_<Label>_Community`) the target symbol belongs to,
