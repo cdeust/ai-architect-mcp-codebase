@@ -1,4 +1,11 @@
 name = "rust-self"
 language = "rust"
-path = "../../../src"
-description = "The ai-architect-mcp crate's own src/ — self-referential corpus for bootstrapping the end-result harness."
+# Pinned (issue #397): the ground truth lists exhaustive per-file symbol and
+# caller sets, so it must describe an immutable tree. Indexing the live `src/`
+# made every merged PR a silent label regression (0.906 -> 0.752). `path` is
+# relative to the repository root and read from `git_rev`, not the work tree.
+# To move the pin: set git_rev to a new main commit, re-derive the labels
+# against that tree (see benches/README.md), and record the new baseline.
+git_rev = "081f5e6a7d93c810487e4c7e4f2203355cd3fc37"
+path = "src"
+description = "The ai-architect-mcp crate's own src/ at a pinned commit — self-referential corpus for the end-result harness."

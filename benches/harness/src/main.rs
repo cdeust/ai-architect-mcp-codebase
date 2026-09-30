@@ -13,7 +13,9 @@ use clap::Parser;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod binary;
 mod corpora;
+mod pinned;
 mod queries;
 mod report;
 mod runner;
@@ -32,8 +34,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     all: bool,
 
-    /// Path to the MCP server binary. Defaults to
-    /// `target/release/ai-architect-mcp-codebase`.
+    /// Path to the MCP server binary, used as given (you own its freshness).
+    /// Without it the runner runs `cargo build --release` for the server first
+    /// and measures `target/release/ai-architect-mcp-codebase`, so a stale
+    /// build is never measured (issue #397).
     #[arg(long)]
     binary: Option<PathBuf>,
 
@@ -49,24 +53,23 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let repo_root = detect_repo_root();
-    let binary = cli
-        .binary
-        .clone()
-        .unwrap_or_else(|| repo_root.join("target/release/ai-architect-mcp-codebase"));
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let binary = match binary::resolve_binary(
+        cli.binary.clone(),
+        &repo_root,
+        &cargo,
+        std::env::var_os("CARGO_TARGET_DIR"),
+    ) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
     let corpora_root = cli
         .corpora_root
         .clone()
         .unwrap_or_else(|| repo_root.join("benches/corpora"));
-
-    if !binary.exists() {
-        eprintln!(
-            "error: MCP binary not found at {:?}.\n  \
-             run `cargo build --release` first.",
-            binary
-        );
-        return ExitCode::from(2);
-    }
-
     let corpora = match select_corpora(&cli, &corpora_root) {
         Ok(list) => list,
         Err(e) => {
@@ -75,44 +78,54 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut runs = Vec::new();
-    for corpus in &corpora {
-        eprintln!(
-            "[bench] running corpus={} lang={}",
-            corpus.name, corpus.language
-        );
-        let run = runner::run_corpus(corpus, &binary);
-        runs.push(run);
-    }
-
+    let runs = run_corpora(&corpora, &binary);
     let summary = report::build_summary(&runs);
     println!("{}", report::to_json(&summary));
     eprintln!("{}", report::to_human(&summary));
-
     if cli.write_report {
-        let md_path = repo_root.join("benches/runs");
-        if let Err(e) = report::write_markdown(&md_path, &summary) {
+        if let Err(e) = report::write_markdown(&repo_root.join("benches/runs"), &summary) {
             eprintln!("warn: failed to write markdown report: {e}");
         }
     }
+    verdict_exit_code(&runs, summary.verdict_production_grade)
+}
 
-    // Ground-truth staleness is a hard failure (issue #132): a corpus that
-    // scores against deleted symbols is not measuring anything real, so it
-    // must never report a passing verdict. Gate before the score verdict.
-    if corpus_is_stale(&runs) {
-        let stale_total = total_stale_references(&runs);
+/// Run every selected corpus against `binary`, in order.
+fn run_corpora(
+    corpora: &[corpora::CorpusConfig],
+    binary: &std::path::Path,
+) -> Vec<runner::CorpusRun> {
+    corpora
+        .iter()
+        .map(|corpus| {
+            eprintln!(
+                "[bench] running corpus={} lang={}",
+                corpus.name, corpus.language
+            );
+            runner::run_corpus(corpus, binary)
+        })
+        .collect()
+}
+
+/// Process exit code: 3 when any ground truth is stale, else 0 iff the
+/// production-grade verdict holds, else 1.
+///
+/// Ground-truth staleness is a hard failure (issue #132): a corpus that
+/// scores against deleted symbols is not measuring anything real, so it must
+/// never report a passing verdict. It is gated before the score verdict.
+fn verdict_exit_code(runs: &[runner::CorpusRun], production_grade: bool) -> ExitCode {
+    if corpus_is_stale(runs) {
         eprintln!(
-            "\nerror: {stale_total} ground-truth reference(s) point at deleted source \
+            "\nerror: {} ground-truth reference(s) point at deleted source \
              paths (see [STALE GROUND TRUTH] lines above). The corpus is stale — fix the \
-             labels before trusting any score."
+             labels before trusting any score.",
+            total_stale_references(runs)
         );
         return ExitCode::from(3);
     }
-
-    if summary.verdict_production_grade {
+    if production_grade {
         ExitCode::SUCCESS
     } else {
-        // Non-zero exit so CI gates on the 85% + floor.
         ExitCode::from(1)
     }
 }
