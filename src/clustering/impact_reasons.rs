@@ -30,6 +30,10 @@ pub(super) struct UnresolvedCallsiteAttribution {
     pub(super) cfg_twins: u64,
     /// Every site of `total` by its recorded reason (issue #393).
     pub(super) by_reason: std::collections::BTreeMap<String, u64>,
+    /// Open sites with the target's bare name that the count leaves out because
+    /// their spelling names another owner (`Vec::new` for `TaskSet::new`, issue
+    /// #392). Not part of `total`.
+    pub(super) excluded_other_owner: u64,
 }
 
 /// Counts unresolved `CallSite` nodes (`is_resolved = false`) whose
@@ -57,6 +61,7 @@ pub(super) struct UnresolvedCallsiteAttribution {
 /// raise (measured 2026-08-24, lbug 0.19.1).
 pub(super) fn unresolved_callsite_attribution(
     store: &GraphStore,
+    esc: &str,
     target_bare_name: &str,
 ) -> UnresolvedCallsiteAttribution {
     let name_filter = unresolved_name_filter(target_bare_name);
@@ -77,16 +82,31 @@ pub(super) fn unresolved_callsite_attribution(
             outside_target_files: Vec::new(),
             cfg_twins: 0,
             by_reason,
+            excluded_other_owner: 0,
         };
     }
 
+    // Columns 2..: what the spelling of the site says about its owner (issue #392).
+    // The hint column is newer than the reason column, so it is asked for only
+    // when the graph has it.
+    let hint_col = if store
+        .node_column_exists(NODE_CALL_SITE, "receiver_hint")
+        .unwrap_or(false)
+    {
+        ", cs.receiver_hint"
+    } else {
+        ""
+    };
     let cypher = format!(
-        "MATCH (cs:{NODE_CALL_SITE}) WHERE {name_filter} RETURN cs.id, cs.unresolved_reason"
+        "MATCH (cs:{NODE_CALL_SITE}) WHERE {name_filter} \
+         RETURN cs.id, cs.unresolved_reason, cs.callee_name, cs.language{hint_col}"
     );
-    let rows = store
+    let all_rows = store
         .execute_query(&cypher)
         .map(|qr| qr.rows)
         .unwrap_or_default();
+    let (rows, excluded_other_owner) =
+        super::impact_other_owner::drop_other_owner_sites(store, esc, all_rows);
     let total = rows.len() as u64;
     let mut outside_targets = 0u64;
     let mut outside_target_files = std::collections::BTreeSet::new();
@@ -120,6 +140,7 @@ pub(super) fn unresolved_callsite_attribution(
         outside_target_files: outside_target_files.into_iter().collect(),
         cfg_twins,
         by_reason,
+        excluded_other_owner,
     }
 }
 
@@ -299,6 +320,13 @@ fn unresolved_callsite_reason(attribution: &UnresolvedCallsiteAttribution) -> Op
              them",
             out = attribution.outside_targets,
             files = attribution.outside_target_files.join(", ")
+        ));
+    }
+    if attribution.excluded_other_owner > 0 {
+        reason.push_str(&format!(
+            "; {out} more open call site(s) with the same bare name were left out because \
+             their path or receiver names another type",
+            out = attribution.excluded_other_owner
         ));
     }
     Some(reason)

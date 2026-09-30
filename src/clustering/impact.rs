@@ -79,6 +79,13 @@ pub struct ImpactResult {
     /// carries (issue #393); a site with no recorded reason counts as
     /// `not_recorded`, and the values sum to that count.
     pub unresolved_callsites_by_reason: std::collections::BTreeMap<String, u64>,
+    /// Open call sites with this target's bare name that are NOT counted in
+    /// `unresolved_callsites_naming_target` because their spelling names another
+    /// owner: a path to another type (`Vec::new`, `io::BufWriter::new` for
+    /// `TaskSet::new`) or a receiver hint of another type. Only a Rust method of
+    /// a struct or enum of the repository is filtered; a site with an unknown
+    /// receiver is kept. Issue #392.
+    pub unresolved_callsites_excluded_other_owner: u64,
     /// The twins of the target, itself included, with their gate and whether the
     /// default build compiles them; empty when the target is not a twin.
     /// Issue #353.
@@ -145,6 +152,7 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         unresolved_callsite_outside_target_files: attribution.outside_target_files,
         unresolved_callsites_cfg_twins: attribution.cfg_twins,
         unresolved_callsites_by_reason: attribution.by_reason,
+        unresolved_callsites_excluded_other_owner: attribution.excluded_other_owner,
         cfg_twins,
         code_context_basis,
     })
@@ -193,7 +201,7 @@ fn resolve_epistemic(
     Vec<String>,
     Boundary,
 ) {
-    let attribution = impact_reasons::unresolved_callsite_attribution(store, target_bare_name);
+    let attribution = impact_reasons::unresolved_callsite_attribution(store, esc, target_bare_name);
     let epistemic_reasons = impact_reasons::build_epistemic_reasons(store, esc, &attribution, deps);
     let epistemic = if epistemic_reasons.is_empty() {
         Boundary::Exact

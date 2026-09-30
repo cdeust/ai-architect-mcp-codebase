@@ -290,6 +290,8 @@ fn impact_envelope(
         "unresolved_callsites_naming_target": impact.unresolved_callsites_naming_target,
         "unresolved_callsites_outside_targets": impact.unresolved_callsites_outside_targets,
         "unresolved_callsites_by_reason": impact.unresolved_callsites_by_reason,
+        "unresolved_callsites_excluded_other_owner":
+            impact.unresolved_callsites_excluded_other_owner,
     });
     attach_cfg_twins(&mut out, impact, qn);
     attach_caller_contexts(&mut out, impact, sections.dependents_total);

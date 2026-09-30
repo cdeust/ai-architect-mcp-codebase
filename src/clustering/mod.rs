@@ -12,6 +12,7 @@
 mod community;
 mod impact;
 mod impact_context;
+mod impact_other_owner;
 mod impact_reasons;
 mod process;
 

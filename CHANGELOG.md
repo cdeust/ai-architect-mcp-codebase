@@ -51,6 +51,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `get_impact` no longer counts, as open call sites naming the target, the
+  sites whose spelling names another owner (#392). The count took every
+  unresolved call site by the bare method name, so `io::BufWriter::new` and
+  `Vec::new` were counted for `TaskSet::new` (dy-wcet v4.1.6). For a Rust
+  method of a struct or enum the repository defines, a site is now left out when
+  its path names another type (`Vec::new`, `io::BufWriter::new`, another type of
+  the repository) or its receiver hint is another type; the number left out is
+  the new field `unresolved_callsites_excluded_other_owner`. A site whose owner
+  is unknown (`x.new()` without a receiver type), `Self::`, the owner, an alias
+  of it, a smart pointer or a type with a `Deref` impl stays, and for a trait
+  impl a path that may name its trait (`Default::default`) stays, so the count
+  remains a lower bound. Other languages keep every site: a C or C++ callee is
+  recorded as its last segment and a receiver of another type may inherit the
+  method. The new field is additive; no field changed meaning.
+
 - `get_impact` no longer reports as `production` a caller in a file only a
   `#[cfg(kani)] mod` declares (issue #423). Such a file is compiled out of a
   default build and is Kani-only code, as a `#[cfg(test)] mod` file is test-only
