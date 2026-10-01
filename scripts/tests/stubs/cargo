@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Fake cargo for test_gate.sh. Control files in $GATE_STUB_DIR: fail_<gate>, slow_<gate> (seconds),
+# mutate (rewrites a tracked file), leak (text printed before a failure). Every call is appended to $GATE_STUB_DIR/calls.
+d=${GATE_STUB_DIR:?GATE_STUB_DIR unset}
+echo "cargo $* [jobs=$CARGO_BUILD_JOBS threads=$RUST_TEST_THREADS nice=$(ps -o nice= -p $$ | tr -d ' ')]" >>"$d/calls"
+echo "$$" >>"$d/pids"
+case "$1" in
+  fmt) g=fmt ;;
+  clippy) g=clippy ;;
+  run) g=bench ;;
+  test) case "$*" in *--lib*) g=unit ;; *) g="test" ;; esac ;;
+  *) echo "stub cargo: unexpected call: $*" >&2; exit 99 ;;
+esac
+[ ! -f "$d/slow_$g" ] || sleep "$(cat "$d/slow_$g")"
+[ ! -f "$d/mutate" ] || echo "# touched by stub" >>Cargo.lock
+if [ -f "$d/fail_$g" ]; then
+  [ ! -f "$d/leak" ] || cat "$d/leak"
+  echo "error: stub gate $g failed marker-$g"
+  exit 1
+fi
+echo "stub $g ok"
