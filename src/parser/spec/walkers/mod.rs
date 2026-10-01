@@ -176,16 +176,15 @@ fn parse_with_spec_twins(
     let mut rewritten: Option<String> = None;
     if spec.language == Language::Cpp {
         let mut best = count_parse_errors(tree.root_node());
-        let defined = count_type_definitions(tree.root_node());
         if best > 0 {
+            let defined = count_type_definitions(tree.root_node());
             for variant in super::cpp_macro_mask::variants(source) {
                 let Ok(retry) = parse_with_timeout(&mut parser, &variant) else {
                     continue;
                 };
                 let errors = count_parse_errors(retry.root_node());
-                // Fewer errors is not enough: a rewrite that loses a class or a
-                // namespace the plain parse had is worse than the errors it removes.
-                if errors < best && count_type_definitions(retry.root_node()) >= defined {
+                let kept = count_type_definitions(retry.root_node());
+                if keeps_rewrite((best, defined), (errors, kept)) {
                     best = errors;
                     rewritten = Some(variant);
                     tree = retry;
@@ -249,6 +248,13 @@ fn twin_keys(ctx: &WalkCtx) -> Option<HashMap<(String, String), Vec<String>>> {
         })
         .collect();
     (!twins.is_empty()).then_some(twins)
+}
+
+/// Whether a rewritten parse replaces the best one so far, each given as
+/// (errors, type definitions). Fewer errors is not enough: a rewrite that loses
+/// a class or a namespace the plain parse had is worse than the errors it removes.
+fn keeps_rewrite(best: (u32, usize), rewritten: (u32, usize)) -> bool {
+    rewritten.0 < best.0 && rewritten.1 >= best.1
 }
 
 /// Class, struct, union, enum and namespace definitions anywhere in the tree.
@@ -331,4 +337,22 @@ pub(super) fn line_of(node: Node) -> u64 {
 
 pub(super) fn end_line_of(node: Node) -> u64 {
     node.end_position().row as u64 + 1
+}
+
+#[cfg(test)]
+mod rewrite_tests {
+    use super::keeps_rewrite;
+
+    #[test]
+    fn a_rewrite_is_kept_only_with_fewer_errors_and_no_lost_type() {
+        // (errors, type definitions): the plain parse has 3 errors and 2 types.
+        assert!(keeps_rewrite((3, 2), (1, 2)), "fewer errors, same types");
+        assert!(keeps_rewrite((3, 2), (0, 5)), "fewer errors, more types");
+        assert!(
+            !keeps_rewrite((3, 2), (1, 1)),
+            "fewer errors but a class lost"
+        );
+        assert!(!keeps_rewrite((3, 2), (3, 2)), "no fewer errors");
+        assert!(!keeps_rewrite((3, 2), (4, 9)), "more errors");
+    }
 }

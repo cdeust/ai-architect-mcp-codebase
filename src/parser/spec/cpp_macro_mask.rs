@@ -332,6 +332,7 @@ fn blank_out(source: &str, ranges: Vec<(usize, usize)>) -> Option<String> {
 /// A call in a function body is never touched: its arguments hold real calls.
 fn blank_scope_macro_calls(source: &str) -> Option<String> {
     let toks = lex(source);
+    let closes = paren_closes(&toks);
     let mut scopes: Vec<bool> = Vec::new();
     // `statement` starts after the last `;`, `{`, `}` or directive; `head` also
     // restarts after an access label's `:`.
@@ -363,7 +364,7 @@ fn blank_scope_macro_calls(source: &str) -> Option<String> {
             && head == i
             && macro_style(&source[t.start..t.end])
         {
-            if let Some(j) = statement_call_close(&toks, i) {
+            if let Some(j) = statement_call_close(&toks, &closes, i) {
                 blank.push((t.start, toks[j].end));
                 i = j;
             }
@@ -385,27 +386,30 @@ fn opens_scope(source: &str, intro: &[Lexed]) -> bool {
         })
 }
 
-/// The index of the `)` of the call whose name is token `name`, when the call
-/// is a whole statement (followed by `;`).
-fn statement_call_close(toks: &[Lexed], name: usize) -> Option<usize> {
-    if toks.get(name + 1).map(|n| n.tok) != Some(Tok::Punct(b'(')) {
-        return None;
-    }
-    let mut depth = 0usize;
-    for (j, x) in toks.iter().enumerate().skip(name + 1) {
+/// For every `(` token the index of its matching `)`, in one pass; `None` for a
+/// `(` never closed and for every other token.
+fn paren_closes(toks: &[Lexed]) -> Vec<Option<usize>> {
+    let mut closes = vec![None; toks.len()];
+    let mut open: Vec<usize> = Vec::new();
+    for (j, x) in toks.iter().enumerate() {
         match x.tok {
-            Tok::Punct(b'(') => depth += 1,
+            Tok::Punct(b'(') => open.push(j),
             Tok::Punct(b')') => {
-                depth -= 1;
-                if depth == 0 {
-                    let ends = toks.get(j + 1).map(|n| n.tok) == Some(Tok::Punct(b';'));
-                    return ends.then_some(j);
+                if let Some(o) = open.pop() {
+                    closes[o] = Some(j);
                 }
             }
             _ => {}
         }
     }
-    None
+    closes
+}
+
+/// The index of the `)` of the call whose name is token `name`, when the call
+/// is a whole statement (followed by `;`).
+fn statement_call_close(toks: &[Lexed], closes: &[Option<usize>], name: usize) -> Option<usize> {
+    let close = closes.get(name + 1).copied().flatten()?;
+    (toks.get(close + 1).map(|n| n.tok) == Some(Tok::Punct(b';'))).then_some(close)
 }
 
 /// The rewrites of `source` worth a second parse, least invasive first: the
@@ -518,5 +522,29 @@ mod tests {
             collapse("#if A\nstruct X {};\n#else\nstruct Y {};\n#endif\n"),
             None
         );
+    }
+
+    #[test]
+    fn an_unclosed_call_is_left_alone() {
+        let src = "class A {\n  A_B( ;\n  A_C(x);\n};\n";
+        let out = super::blank_scope_macro_calls(src).expect("the closed call is blanked");
+        assert!(out.contains("A_B( ;"), "{out}");
+        assert!(!out.contains("A_C"), "{out}");
+        assert!(super::blank_scope_macro_calls("A_B( ;\nA_C( ;\n").is_none());
+    }
+
+    #[test]
+    fn parens_match_in_one_pass() {
+        let toks = super::lex("f(g(1), (2)) ) (");
+        let closes = super::paren_closes(&toks);
+        let at = |n: usize| {
+            toks.iter()
+                .enumerate()
+                .filter(|(_, t)| t.tok == super::Tok::Punct(b'('))
+                .nth(n)
+                .map(|(i, _)| closes[i])
+        };
+        assert_eq!(at(0), Some(Some(10)));
+        assert_eq!(at(3), Some(None));
     }
 }
