@@ -210,6 +210,15 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Removes every `CallSite` row and the edges on it. A full index starts
+    /// from none: rows an earlier index left in the same directory were written
+    /// by whatever parser ran then, and the rows marker written at the end of
+    /// this index would vouch for them (issue #414).
+    pub fn clear_callsite_rows(&self) -> Result<(), String> {
+        self.execute_query("MATCH (c:CallSite) DETACH DELETE c")?;
+        Ok(())
+    }
+
     /// Records that every `CallSite` row of this graph was written under the
     /// current parser form. Called at the END of a successful full index (the
     /// start clears every marker row).
@@ -224,10 +233,14 @@ impl GraphStore {
     /// (issue #408).
     pub fn write_callsite_reason_marker(&self) -> Result<(), String> {
         if !self.has_callsite_rows() {
-            self.execute_query(&format!(
-                "MATCH (m:{MARKER_TABLE} {{id: {}}}) DELETE m",
-                cypher_str(MARKER_ID)
-            ))?;
+            // A graph written before the marker table existed has no marker to
+            // withdraw: the resolution that just ran must not fail on it (#414).
+            if self.has_node_table(MARKER_TABLE)? {
+                self.execute_query(&format!(
+                    "MATCH (m:{MARKER_TABLE} {{id: {}}}) DELETE m",
+                    cypher_str(MARKER_ID)
+                ))?;
+            }
             return Ok(());
         }
         self.write_marker(MARKER_ID, CALLSITE_REASON_FORM)
