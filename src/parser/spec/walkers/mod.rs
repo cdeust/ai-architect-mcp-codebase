@@ -47,7 +47,7 @@ use tree_sitter::{Node, Parser};
 use super::lang_spec::LangSpec;
 use crate::parser::{
     collect_error_ranges, count_parse_errors, parse_tree_too_deep, parse_with_timeout,
-    ExtractedNode, ExtractedRef, ParseResult, MAX_TREE_DEPTH,
+    ExtractedNode, ExtractedRef, Language, ParseResult, MAX_TREE_DEPTH,
 };
 
 /// Mutable state threaded through a single file's walk. `next_seq` is the
@@ -169,7 +169,30 @@ fn parse_with_spec_twins(
     parser
         .set_language(&lang)
         .map_err(|e| format!("failed to set {:?} language: {e}", spec.language))?;
-    let tree = parse_with_timeout(&mut parser, source)?;
+    let mut tree = parse_with_timeout(&mut parser, source)?;
+    // Issue #410: unknown specifier macros turn a C++ header into ERROR nodes. A
+    // retry with them blanked (same length) replaces the parse only when it has
+    // fewer errors, so a file that parses cleanly is never touched.
+    let mut rewritten: Option<String> = None;
+    if spec.language == Language::Cpp {
+        let mut best = count_parse_errors(tree.root_node());
+        if best > 0 {
+            let defined = count_type_definitions(tree.root_node());
+            for variant in super::cpp_macro_mask::variants(source) {
+                let Ok(retry) = parse_with_timeout(&mut parser, &variant) else {
+                    continue;
+                };
+                let errors = count_parse_errors(retry.root_node());
+                let kept = count_type_definitions(retry.root_node());
+                if keeps_rewrite((best, defined), (errors, kept)) {
+                    best = errors;
+                    rewritten = Some(variant);
+                    tree = retry;
+                }
+            }
+        }
+    }
+    let source = rewritten.as_deref().unwrap_or(source);
     // Depth guard (issue #148): the definition walkers recurse one frame per tree
     // level, so a pathologically deep error-recovery tree would overflow the
     // stack or exhaust the heap. Reject before walking — a clean `Err` the
@@ -225,6 +248,34 @@ fn twin_keys(ctx: &WalkCtx) -> Option<HashMap<(String, String), Vec<String>>> {
         })
         .collect();
     (!twins.is_empty()).then_some(twins)
+}
+
+/// Whether a rewritten parse replaces the best one so far, each given as
+/// (errors, type definitions). Fewer errors is not enough: a rewrite that loses
+/// a class or a namespace the plain parse had is worse than the errors it removes.
+fn keeps_rewrite(best: (u32, usize), rewritten: (u32, usize)) -> bool {
+    rewritten.0 < best.0 && rewritten.1 >= best.1
+}
+
+/// Class, struct, union, enum and namespace definitions anywhere in the tree.
+fn count_type_definitions(root: Node) -> usize {
+    let mut count = 0;
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if matches!(
+            node.kind(),
+            "class_specifier"
+                | "struct_specifier"
+                | "union_specifier"
+                | "enum_specifier"
+                | "namespace_definition"
+        ) {
+            count += 1;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    count
 }
 
 pub(super) fn kind_in(kinds: &[&str], k: &str) -> bool {
@@ -286,4 +337,22 @@ pub(super) fn line_of(node: Node) -> u64 {
 
 pub(super) fn end_line_of(node: Node) -> u64 {
     node.end_position().row as u64 + 1
+}
+
+#[cfg(test)]
+mod rewrite_tests {
+    use super::keeps_rewrite;
+
+    #[test]
+    fn a_rewrite_is_kept_only_with_fewer_errors_and_no_lost_type() {
+        // (errors, type definitions): the plain parse has 3 errors and 2 types.
+        assert!(keeps_rewrite((3, 2), (1, 2)), "fewer errors, same types");
+        assert!(keeps_rewrite((3, 2), (0, 5)), "fewer errors, more types");
+        assert!(
+            !keeps_rewrite((3, 2), (1, 1)),
+            "fewer errors but a class lost"
+        );
+        assert!(!keeps_rewrite((3, 2), (3, 2)), "no fewer errors");
+        assert!(!keeps_rewrite((3, 2), (4, 9)), "more errors");
+    }
 }
