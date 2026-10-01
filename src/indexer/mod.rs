@@ -172,6 +172,9 @@ pub fn index_codebase_with_language(
     // No current marker while this index runs: a failure leaves a graph that the
     // next incremental refresh refuses (#353).
     store.clear_canonical_marker()?;
+    // Likewise the call sites an earlier index left here: the rows marker written
+    // at the end covers every row of the graph, so none may predate this index.
+    store.clear_callsite_rows()?;
 
     // Coverage-honesty accounting (issue #57): note every File node, and record
     // the parse-incomplete / skipped / quarantined gaps as they occur. Created
