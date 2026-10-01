@@ -254,6 +254,20 @@ fn written_path_gate(ctx: &ResolveContext, site: &CallSite, m: &str) -> Option<G
     Some((resolution, decline))
 }
 
+/// A `PathRule` that never falls back to the lookup by name on its own.
+fn rule_of<'e>(
+    hint: &str,
+    path: Option<receiver::WrittenPath<'e>>,
+    return_type: bool,
+) -> PathRule<'e> {
+    PathRule {
+        hint: hint.to_string(),
+        path,
+        fallback: false,
+        return_type,
+    }
+}
+
 /// The path rule of `site`'s hint, as described on `written_path_gate`.
 fn path_rule<'e>(
     ctx: &ResolveContext,
@@ -268,35 +282,54 @@ fn path_rule<'e>(
     };
     let (hint, via) = (site.receiver_hint, site.receiver_hint_via);
     let read_off_binding = via.is_empty() || via.starts_with(ASSOC);
-    let rule = |hint: &str, path, return_type| PathRule {
-        hint: hint.to_string(),
-        path,
-        fallback: false,
-        return_type,
-    };
     if hint.contains("::") {
         let path = receiver::WrittenPath::of(facts, site.caller_qn, hint);
-        return read_off_binding.then(|| rule(hint, path, false));
+        return read_off_binding.then(|| rule_of(hint, path, false));
     }
     if let Some(local) = via.strip_prefix(LOCAL_IMPORT) {
-        // `use crate::X` for a return type in a module of the library (#373);
-        // a test, bench, example or bin target keeps its `CrateScope` (#357).
-        let file_id = extract_file_prefix_or_self(site.caller_qn);
-        let scope =
-            super::crate_scope::CrateScope::of(ctx.evidence, ctx.file_imports, &file_id, local);
-        if !local.starts_with("crate::") || scope.restricts() {
-            return None;
-        }
-        return Some(rule(
-            local,
-            receiver::WrittenPath::of(facts, site.caller_qn, local),
-            true,
-        ));
+        return local_import_rule(ctx, facts, site, local);
     }
     if !(read_off_binding || via == CONSTRUCTED || via == CONSTRUCTED_RETURN_TYPE) {
         // A return type is named in the module of its function, not the caller's.
         return None;
     }
+    bound_rule(ctx, facts, site, m)
+}
+
+/// The rule of a return type shown by a `use crate::X` (#373): `None` for a
+/// path outside the library, or for a test, bench, example or bin target,
+/// which keeps its `CrateScope` (#357).
+fn local_import_rule<'e>(
+    ctx: &ResolveContext,
+    facts: &receiver::PathFacts<'e>,
+    site: &CallSite,
+    local: &str,
+) -> Option<PathRule<'e>> {
+    let file_id = extract_file_prefix_or_self(site.caller_qn);
+    let scope = super::crate_scope::CrateScope::of(ctx.evidence, ctx.file_imports, &file_id, local);
+    if !local.starts_with("crate::") || scope.restricts() {
+        return None;
+    }
+    Some(rule_of(
+        local,
+        receiver::WrittenPath::of(facts, site.caller_qn, local),
+        true,
+    ))
+}
+
+/// The rule of a bare type name bound by a `use` (explicit or glob) of the
+/// caller's module, in the order `receiver::bind` gives (#380).
+fn bound_rule<'e>(
+    ctx: &ResolveContext,
+    facts: &receiver::PathFacts<'e>,
+    site: &CallSite,
+    m: &str,
+) -> Option<PathRule<'e>> {
+    use crate::graph_store::{
+        RECEIVER_HINT_VIA_ASSOC_PREFIX as ASSOC,
+        RECEIVER_HINT_VIA_CONSTRUCTED_RETURN_TYPE as CONSTRUCTED_RETURN_TYPE,
+    };
+    let (hint, via) = (site.receiver_hint, site.receiver_hint_via);
     let assoc = via.strip_prefix(ASSOC);
     let admits_any = |hint: &str, path: &receiver::WrittenPath| {
         receiver::resolve_local_receiver_strict(ctx.idx, hint, m, |c| {
@@ -312,14 +345,14 @@ fn path_rule<'e>(
         receiver::Defines::Types,
     ) {
         receiver::Binding::ByName => None,
-        receiver::Binding::Decline => Some(rule(hint, None, false)),
+        receiver::Binding::Decline => Some(rule_of(hint, None, false)),
         receiver::Binding::Path {
             hint: path_hint,
             path,
             fallback,
         } => Some(PathRule {
             fallback,
-            ..rule(&path_hint, Some(path), via == CONSTRUCTED_RETURN_TYPE)
+            ..rule_of(&path_hint, Some(path), via == CONSTRUCTED_RETURN_TYPE)
         }),
     }
 }
