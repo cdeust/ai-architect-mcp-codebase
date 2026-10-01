@@ -47,7 +47,7 @@ use tree_sitter::{Node, Parser};
 use super::lang_spec::LangSpec;
 use crate::parser::{
     collect_error_ranges, count_parse_errors, parse_tree_too_deep, parse_with_timeout,
-    ExtractedNode, ExtractedRef, ParseResult, MAX_TREE_DEPTH,
+    ExtractedNode, ExtractedRef, Language, ParseResult, MAX_TREE_DEPTH,
 };
 
 /// Mutable state threaded through a single file's walk. `next_seq` is the
@@ -169,7 +169,31 @@ fn parse_with_spec_twins(
     parser
         .set_language(&lang)
         .map_err(|e| format!("failed to set {:?} language: {e}", spec.language))?;
-    let tree = parse_with_timeout(&mut parser, source)?;
+    let mut tree = parse_with_timeout(&mut parser, source)?;
+    // Issue #410: unknown specifier macros turn a C++ header into ERROR nodes. A
+    // retry with them blanked (same length) replaces the parse only when it has
+    // fewer errors, so a file that parses cleanly is never touched.
+    let mut rewritten: Option<String> = None;
+    if spec.language == Language::Cpp {
+        let mut best = count_parse_errors(tree.root_node());
+        let defined = count_type_definitions(tree.root_node());
+        if best > 0 {
+            for variant in super::cpp_macro_mask::variants(source) {
+                let Ok(retry) = parse_with_timeout(&mut parser, &variant) else {
+                    continue;
+                };
+                let errors = count_parse_errors(retry.root_node());
+                // Fewer errors is not enough: a rewrite that loses a class or a
+                // namespace the plain parse had is worse than the errors it removes.
+                if errors < best && count_type_definitions(retry.root_node()) >= defined {
+                    best = errors;
+                    rewritten = Some(variant);
+                    tree = retry;
+                }
+            }
+        }
+    }
+    let source = rewritten.as_deref().unwrap_or(source);
     // Depth guard (issue #148): the definition walkers recurse one frame per tree
     // level, so a pathologically deep error-recovery tree would overflow the
     // stack or exhaust the heap. Reject before walking — a clean `Err` the
@@ -225,6 +249,27 @@ fn twin_keys(ctx: &WalkCtx) -> Option<HashMap<(String, String), Vec<String>>> {
         })
         .collect();
     (!twins.is_empty()).then_some(twins)
+}
+
+/// Class, struct, union, enum and namespace definitions anywhere in the tree.
+fn count_type_definitions(root: Node) -> usize {
+    let mut count = 0;
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if matches!(
+            node.kind(),
+            "class_specifier"
+                | "struct_specifier"
+                | "union_specifier"
+                | "enum_specifier"
+                | "namespace_definition"
+        ) {
+            count += 1;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    count
 }
 
 pub(super) fn kind_in(kinds: &[&str], k: &str) -> bool {

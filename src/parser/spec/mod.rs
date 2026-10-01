@@ -15,6 +15,7 @@ mod c;
 mod c_family;
 mod conventions;
 mod cpp;
+mod cpp_macro_mask;
 mod cpp_receiver;
 mod declarative;
 mod declarative_rules;
