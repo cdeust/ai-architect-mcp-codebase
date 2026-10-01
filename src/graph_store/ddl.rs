@@ -31,8 +31,13 @@ const NODE_TABLE_SCHEMAS: &[(&str, &str)] = &[
         // without a twin; '' for every other item and for a graph written
         // before the column existed (see `require_cfg_gate_metadata`).
         // cfg_active: issue #353 (B): 'active' / 'inactive' / 'unknown' for the
-        // items that carry a gate: whether the default build compiles them. ''
-        // for every other item and for a graph written before the column.
+        // items that carry a gate: whether the default build compiles them,
+        // given that their file is compiled: the gate of the module that leads
+        // to the file is not folded in (a module the profile does not decide,
+        // `#[cfg(unix)] mod m;`, is `unknown` on its File node, issue #422),
+        // except when it is decided false, which makes the items inactive
+        // (issue #420). '' for every other item and for a graph written
+        // before the column.
         (NODE_MODULE, "id STRING, name STRING, qualified_name STRING, cfg_gate STRING DEFAULT '', cfg_active STRING DEFAULT ''"),
         // source: Spike B' BUG #5 fix — every symbol-bearing node gets a
         // `language` STRING column populated by the indexer from the file's
