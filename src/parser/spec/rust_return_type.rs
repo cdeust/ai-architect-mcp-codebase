@@ -298,14 +298,16 @@ fn wrapper_of(source: &str, ty: Node) -> Option<Wrapper> {
         return None;
     }
     let head = ty.child_by_field_name(TYPE_FIELD)?;
-    let last = match head.kind() {
-        "type_identifier" => node_text(source, head),
-        "scoped_type_identifier" => node_text(source, head.child_by_field_name(NAME_FIELD)?),
-        _ => return None,
-    };
-    match last.as_str() {
-        "Option" => Some(Wrapper::Option),
-        "Result" => Some(Wrapper::Result),
+    // source: `Option` and `Result` live in `std::option`, `std::result` (re-exported
+    // by `core`), plus `std::io::Result`; any other path, `my::Option` for one, is
+    // another type that only shares the name (#418).
+    match node_text(source, head).as_str() {
+        "Option" | "std::option::Option" | "core::option::Option" => Some(Wrapper::Option),
+        "Result"
+        | "std::result::Result"
+        | "core::result::Result"
+        | "io::Result"
+        | "std::io::Result" => Some(Wrapper::Result),
         _ => None,
     }
 }

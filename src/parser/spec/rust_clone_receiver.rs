@@ -150,6 +150,14 @@ fn is_std_clone(source: &str, at: Node, ty: &str) -> bool {
                 return false
             }
             "trait_item" if declares_clone_method(source, node) => return false,
+            // A macro may expand to an `impl` giving `ty` another `clone`, or to
+            // the `Clone` impl itself; the expansion is not in this file (#418).
+            "macro_definition" if mentions_clone(&node_text(source, node)) => return false,
+            "macro_invocation"
+                if is_item_position(node) && mentions_word(&node_text(source, node), ty) =>
+            {
+                return false
+            }
             "impl_item" => match clone_role(source, node, ty) {
                 Role::Competes => return false,
                 Role::CloneImpl => derived = true,
@@ -162,6 +170,17 @@ fn is_std_clone(source: &str, at: Node, ty: &str) -> bool {
         stack.extend(node.named_children(&mut cursor));
     }
     derived
+}
+
+fn mentions_clone(text: &str) -> bool {
+    mentions_word(text, CLONE_TRAIT) || mentions_word(text, CLONE)
+}
+
+/// True for a macro call that stands where an item can: at file level or in a
+/// `mod`, `impl` or `trait` body.
+fn is_item_position(call: Node) -> bool {
+    call.parent()
+        .is_some_and(|p| matches!(p.kind(), "source_file" | "declaration_list"))
 }
 
 /// What an `impl` means for `ty.clone()`.
@@ -224,8 +243,42 @@ fn derives_clone(source: &str, item: Node) -> bool {
         if mentions_word(&text, "cfg_attr") {
             return false;
         }
-        derives |= mentions_word(&text, "derive") && mentions_word(&text, CLONE_TRAIT);
+        derives |= attribute.kind() == "attribute_item" && derive_list_has_clone(&text);
         previous = attribute.prev_sibling();
     }
     derives
+}
+
+/// True when `attribute` (`#[derive(A, B)]`) is a derive and lists `Clone`. A
+/// doc attribute or a comment that says the words does not count (#418).
+fn derive_list_has_clone(attribute: &str) -> bool {
+    let inner = attribute
+        .trim_start_matches('#')
+        .trim_start_matches('!')
+        .trim_start()
+        .trim_start_matches('[')
+        .trim_start();
+    inner
+        .strip_prefix("derive")
+        .map(str::trim_start)
+        .is_some_and(|rest| rest.starts_with('(') && mentions_word(rest, CLONE_TRAIT))
+}
+
+#[cfg(test)]
+mod derive_tests {
+    use super::derive_list_has_clone;
+
+    // source: issue #418 item 3: the match must read the derive list, not any
+    // attribute holding the words `derive` and `Clone`.
+    #[test]
+    fn only_a_derive_list_names_clone() {
+        assert!(derive_list_has_clone("#[derive(Clone)]"));
+        assert!(derive_list_has_clone("#[derive(Debug, Clone, PartialEq)]"));
+        assert!(derive_list_has_clone("#[derive (std::clone::Clone)]"));
+        assert!(!derive_list_has_clone("#[derive(Debug)]"));
+        assert!(!derive_list_has_clone(
+            "#[doc = \"never derive Clone here\"]"
+        ));
+        assert!(!derive_list_has_clone("#[allow(derive_clone)]"));
+    }
 }

@@ -364,6 +364,9 @@ pub(super) struct Declared {
 fn binding_declared(source: &str, binding_node: Node, through_results: bool) -> Option<Declared> {
     if let Some(ty) = binding_node.child_by_field_name(TYPE_FIELD) {
         let ty = type_name(source, ty)?;
+        if is_generic_parameter(source, binding_node, &ty) {
+            return None;
+        }
         return Some(Declared { ty, assoc: None });
     }
     if binding_node.kind() != "let_declaration" {
@@ -384,6 +387,29 @@ fn binding_declared(source: &str, binding_node: Node, through_results: bool) -> 
         .map(|n| node_text(source, n));
     let ty = expr_path_name(source, path)?;
     Some(Declared { ty, assoc })
+}
+
+/// True when `name` is a generic parameter declared by an item enclosing `at`
+/// (`fn f<T>`, `impl<T>`, `trait Tr<T>`): the name then stands for whatever the
+/// caller passes, not for a struct of the file that happens to share it (#418).
+fn is_generic_parameter(source: &str, at: Node, name: &str) -> bool {
+    let mut current = at.parent();
+    while let Some(node) = current {
+        if let Some(params) = node.child_by_field_name("type_parameters") {
+            let mut cursor = params.walk();
+            let declared = params.named_children(&mut cursor).any(|p| {
+                ["name", "left"]
+                    .iter()
+                    .filter_map(|f| p.child_by_field_name(f))
+                    .any(|n| node_text(source, n) == name)
+            });
+            if declared {
+                return true;
+            }
+        }
+        current = node.parent();
+    }
+    false
 }
 
 // source: std constructors that return `Self`, or `Result<Self, _>` through
