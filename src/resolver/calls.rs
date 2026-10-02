@@ -5,6 +5,7 @@
 // resolution types/helpers exactly as when this lived in one module.
 
 use super::*;
+use crate::graph_store::{call_rel_table, call_site_rel_table};
 
 mod candidate_scope;
 mod crate_scope;
@@ -13,13 +14,11 @@ mod gates;
 mod includes;
 mod member_calls;
 mod reason;
-mod settle;
 mod variant_guard;
 use candidate_scope::qualified_path_gate;
 use gates::{rust_local_receiver_gate, same_class_receiver_gate};
 use includes::IncludeGraph;
 use reason::{Failure, Gated};
-use settle::{record_reason, settle, CallTally, Located};
 
 // ---------------------------------------------------------------------------
 // Phase 2: Call resolution
@@ -32,12 +31,20 @@ pub(super) fn resolve_calls(
     file_imports: &HashMap<String, Vec<String>>,
     buf: &mut EdgeBuffer,
 ) -> PhaseResult {
-    ensure_call_site_columns(store)?;
+    // source: tasks/plan-issues-282-283-284.md §2.3 (lot 6, issue #283
+    // palier 3) — a graph indexed by an older build has no such column; the
+    // DEFAULT backfills existing rows to "" (rust_local_receiver_gate reads
+    // that as "no hint"), same precedent as `lsp_resolver/sites.rs:113`'s
+    // `is_resolved` column.
+    store.ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
+    // Issues #348 and #349: same precedent; '' reads as "written at the binding".
+    store.ensure_node_column("CallSite", "receiver_hint_via", "STRING DEFAULT ''")?;
+    // Issue #401: same precedent; '' reads as a name.
+    store.ensure_node_column("CallSite", "callee_shape", "STRING DEFAULT ''")?;
     let qr = store.execute_query(
         "MATCH (cs:CallSite) RETURN cs.id, cs.callee_name, cs.language, cs.receiver_hint, \
          cs.receiver_hint_via, cs.callee_shape",
     )?;
-    let facts = CallFacts::load(store, idx, file_imports)?;
     let mut resolved = 0u64;
     let mut total = 0u64;
     let mut unresolved = Vec::new();
@@ -45,18 +52,61 @@ pub(super) fn resolve_calls(
     let mut resolved_ids: Vec<String> = Vec::new();
     // Issue #393: why each site left open is open.
     let mut reasons: Vec<crate::graph_store::callsite_reasons::SiteReasonRow> = Vec::new();
+    let twins = super::cfg_select::TwinView::load(store);
+    // Issue #358: the facts of the latest index pass, not those of the pass
+    // that parsed each file.
+    let evidence = store.crate_evidence();
+    // Issue #370: what each associated function returns, and every variant.
+    let assoc = super::receiver::AssocFacts::load(store);
+    // Issues #373 and #380: the `use` declarations of every Rust module.
+    let imports = super::receiver::ModuleImports::load(store, &evidence);
+    // Issue #400: prototypes, macros and `static` functions.
+    let callables = store.callable_facts();
+    let includes = IncludeGraph::load(store, file_imports)?;
+    let cpp = member_calls::CppClasses::load(store, includes.clone());
+
     for row in &qr.rows {
-        let Some(input) = scanned_row(row) else {
+        if row.len() < 6 {
             continue;
-        };
+        }
+        let callee = &row[1];
+        // Macro invocations (`name!(...)`) are a distinct reference kind,
+        // resolved exclusively by resolver_layers::run_macro_expansion.
+        // Counting them here too would attempt (and fail) a plain-function
+        // lookup for every macro call, double-counting the same physical
+        // CallSite into both phases' total_refs — the root cause of the
+        // >1.0 / undercounted-denominator half of issue #28.
+        // A Rust macro only: Ruby keeps the `!` of `save!` in its callee name.
+        if crate::graph_store::is_rust_macro_site(callee, &row[2]) {
+            continue;
+        }
         total += 1;
         let mut tally = CallTally {
             resolved: &mut resolved,
             unresolved: &mut unresolved,
             reasons: &mut reasons,
         };
-        if resolve_one_call_site(&facts.context(), buf, &input, &mut tally) {
-            resolved_ids.push(input.cs_id.to_string());
+        let graph = GraphContext {
+            idx,
+            file_imports,
+            twins: &twins,
+            evidence: &evidence,
+            assoc: &assoc,
+            imports: &imports,
+            callables: &callables,
+            includes: &includes,
+            cpp: &cpp,
+        };
+        let row_input = RowInput {
+            cs_id: &row[0],
+            callee,
+            language: &row[2],
+            receiver_hint: &row[3],
+            receiver_hint_via: &row[4],
+            callee_shape: &row[5],
+        };
+        if resolve_one_call_site(&graph, buf, &row_input, &mut tally) {
+            resolved_ids.push(row[0].clone());
         }
     }
     let id_refs: Vec<&str> = resolved_ids.iter().map(|s| s.as_str()).collect();
@@ -67,104 +117,6 @@ pub(super) fn resolve_calls(
     store.clear_callsite_reasons(&id_refs)?;
     store.write_callsite_reasons(&reasons)?;
     Ok((resolved, total, unresolved))
-}
-
-/// A graph indexed by an older build has none of the columns the parser added
-/// later; the DEFAULT backfills existing rows.
-fn ensure_call_site_columns(store: &GraphStore) -> Result<(), String> {
-    // source: tasks/plan-issues-282-283-284.md §2.3 (lot 6, issue #283
-    // palier 3) — the DEFAULT backfills existing rows to "" (rust_local_receiver_gate
-    // reads that as "no hint"), same precedent as `lsp_resolver/sites.rs:113`'s
-    // `is_resolved` column.
-    store.ensure_node_column("CallSite", "receiver_hint", "STRING DEFAULT ''")?;
-    // Issues #348 and #349: same precedent; '' reads as "written at the binding".
-    store.ensure_node_column("CallSite", "receiver_hint_via", "STRING DEFAULT ''")?;
-    // Issue #401: same precedent; '' reads as a name.
-    store.ensure_node_column("CallSite", "callee_shape", "STRING DEFAULT ''")?;
-    Ok(())
-}
-
-/// The row of a `CallSite` scan as the resolver reads it; `None` for a short row
-/// and for a Rust macro invocation.
-fn scanned_row(row: &[String]) -> Option<RowInput<'_>> {
-    if row.len() < 6 {
-        return None;
-    }
-    // Macro invocations (`name!(...)`) are a distinct reference kind,
-    // resolved exclusively by resolver_layers::run_macro_expansion.
-    // Counting them here too would attempt (and fail) a plain-function
-    // lookup for every macro call, double-counting the same physical
-    // CallSite into both phases' total_refs — the root cause of the
-    // >1.0 / undercounted-denominator half of issue #28.
-    // A Rust macro only: Ruby keeps the `!` of `save!` in its callee name.
-    if crate::graph_store::is_rust_macro_site(&row[1], &row[2]) {
-        return None;
-    }
-    Some(RowInput {
-        cs_id: &row[0],
-        callee: &row[1],
-        language: &row[2],
-        receiver_hint: &row[3],
-        receiver_hint_via: &row[4],
-        callee_shape: &row[5],
-    })
-}
-
-/// What every call site of a pass is resolved against, read once.
-struct CallFacts<'a> {
-    idx: &'a SymbolIndex,
-    file_imports: &'a HashMap<String, Vec<String>>,
-    twins: super::cfg_select::TwinView,
-    evidence: crate::graph_store::import_roots::CrateEvidence,
-    assoc: super::receiver::AssocFacts,
-    imports: super::receiver::ModuleImports,
-    callables: crate::graph_store::body_kind::CallableFacts,
-    includes: IncludeGraph,
-    cpp: member_calls::CppClasses,
-}
-
-impl<'a> CallFacts<'a> {
-    fn load(
-        store: &GraphStore,
-        idx: &'a SymbolIndex,
-        file_imports: &'a HashMap<String, Vec<String>>,
-    ) -> Result<Self, String> {
-        // Issue #358: the facts of the latest index pass, not those of the pass
-        // that parsed each file.
-        let evidence = store.crate_evidence();
-        // Issue #370: what each associated function returns, and every variant.
-        let assoc = super::receiver::AssocFacts::load(store);
-        // Issues #373 and #380: the `use` declarations of every Rust module.
-        let imports = super::receiver::ModuleImports::load(store, &evidence);
-        let includes = IncludeGraph::load(store, file_imports)?;
-        let cpp = member_calls::CppClasses::load(store, includes.clone());
-        Ok(Self {
-            idx,
-            file_imports,
-            twins: super::cfg_select::TwinView::load(store),
-            evidence,
-            assoc,
-            imports,
-            // Issue #400: prototypes, macros and `static` functions.
-            callables: store.callable_facts(),
-            includes,
-            cpp,
-        })
-    }
-
-    fn context(&self) -> GraphContext<'_> {
-        GraphContext {
-            idx: self.idx,
-            file_imports: self.file_imports,
-            twins: &self.twins,
-            evidence: &self.evidence,
-            assoc: &self.assoc,
-            imports: &self.imports,
-            callables: &self.callables,
-            includes: &self.includes,
-            cpp: &self.cpp,
-        }
-    }
 }
 
 /// Resolves one CallSite row: gathers the caller-side evidence, delegates
@@ -213,22 +165,91 @@ fn resolve_one_call_site(
         cpp: graph.cpp,
     };
     let resolved_before = *tally.resolved;
-    let outcome = member_calls::open_call(row.language, row.callee_shape, row.receiver_hint_via)
-        .unwrap_or_else(|| resolve_single_call(&ctx, &site, &file_id));
-    let at = Located {
-        graph,
-        ctx: &ctx,
-        site: &site,
-        file_id: &file_id,
+    let (resolution, decline) =
+        member_calls::open_call(row.language, row.callee_shape, row.receiver_hint_via)
+            .unwrap_or_else(|| resolve_single_call(&ctx, &site, &file_id));
+    let failure = match resolution {
+        PolicyResolution::Resolved {
+            target,
+            evidence,
+            confidence,
+        } => {
+            let matched = MatchedCall {
+                target: &target,
+                evidence,
+                confidence,
+            };
+            stage_call_edge(buf, &site, &matched, tally);
+            let label = target.label.clone();
+            (*tally.resolved == resolved_before).then_some(label)
+        }
+        // Genuinely ambiguous (no evidence tier discriminates the
+        // candidates): labeled and dropped rather than guessed — see
+        // resolve_single_call's doc comment for why this beats a
+        // deterministic tiebreak here (issue #30).
+        PolicyResolution::Ambiguous { candidates } => {
+            // Issue #353: twins of one item under exclusive `#[cfg]` gates are
+            // resolved only when the build decides which one it compiles.
+            match super::cfg_select::choose(graph.twins, site.caller_qn, &candidates) {
+                Some(twin) => {
+                    let matched = MatchedCall {
+                        target: twin,
+                        evidence: ambiguity_policy::Evidence::CfgSelected,
+                        confidence: ambiguity_policy::confidence_for(
+                            ambiguity_policy::Evidence::CfgSelected,
+                        ),
+                    };
+                    stage_call_edge(buf, &site, &matched, tally);
+                    let label = twin.label.clone();
+                    (*tally.resolved == resolved_before).then_some(label)
+                }
+                None => {
+                    let twins = record_ambiguous(&site, tally, &candidates, graph.twins);
+                    let failure = Failure::Ambiguous {
+                        count: candidates.len(),
+                        twins,
+                    };
+                    record_reason(&ctx, &site, &file_id, &failure, tally);
+                    None
+                }
+            }
+        }
+        PolicyResolution::NotFound => {
+            record_call_unresolved(&site, tally, "no target found".to_string());
+            record_reason(&ctx, &site, &file_id, &Failure::NotFound(decline), tally);
+            None
+        }
     };
     // A target was found but no edge could be staged for it.
-    if let Some(label) = settle(buf, tally, &at, outcome) {
+    if let Some(label) = failure {
         record_reason(&ctx, &site, &file_id, &Failure::NoRelTable(&label), tally);
     }
     // The callee resolved to a graph target — flip the CallSite's
     // is_resolved (§10.4). Applies to both Calls and Uses edges (both mean
     // "target found").
     *tally.resolved > resolved_before
+}
+
+/// Queues the reason `failure` gives the site (issue #393).
+fn record_reason(
+    ctx: &ResolveContext,
+    site: &CallSite,
+    file_id: &str,
+    failure: &Failure,
+    tally: &mut CallTally,
+) {
+    let (why, detail) = reason::classify(ctx, site, file_id, failure);
+    tally.reasons.push((site.cs_id.to_string(), why, detail));
+}
+
+/// Records one unresolved `Calls` reference with the given reason.
+fn record_call_unresolved(site: &CallSite, tally: &mut CallTally, reason: String) {
+    tally.unresolved.push(UnresolvedRef {
+        kind: "Calls".to_string(),
+        from_id: site.cs_id.to_string(),
+        target_text: site.callee.to_string(),
+        reason,
+    });
 }
 
 /// One row from the `CallSite` scan, grouped so downstream helpers take a
@@ -298,6 +319,87 @@ struct RowInput<'a> {
     receiver_hint_via: &'a str,
     /// What the C or C++ callee is (issue #401); "" for other languages.
     callee_shape: &'a str,
+}
+
+/// A resolved callee plus the evidence/confidence the policy attached to it.
+struct MatchedCall<'a> {
+    target: &'a SymbolEntry,
+    evidence: ambiguity_policy::Evidence,
+    confidence: f64,
+}
+
+/// An ambiguous callee: dropped and labeled. When every candidate is a twin of
+/// one item under exclusive `#[cfg]` gates (issue #353) the label is `cfg_twins`;
+/// returns whether it is.
+fn record_ambiguous(
+    site: &CallSite,
+    tally: &mut CallTally,
+    candidates: &[SymbolEntry],
+    view: &super::cfg_select::TwinView,
+) -> bool {
+    let twins = super::cfg_twins::are_twins_of_one_item(view, candidates);
+    let label = if twins {
+        crate::graph_store::CALLSITE_UNRESOLVED_REASON_CFG_TWINS
+    } else {
+        "ambiguous"
+    };
+    record_call_unresolved(
+        site,
+        tally,
+        format!("{label} ({} candidates)", candidates.len()),
+    );
+    twins
+}
+
+/// Running counters for `resolve_calls`, grouped so helpers take one
+/// reference instead of two separate mutable accumulator parameters.
+struct CallTally<'a> {
+    resolved: &'a mut u64,
+    unresolved: &'a mut Vec<UnresolvedRef>,
+    /// Why each site left open is open (issue #393).
+    reasons: &'a mut Vec<crate::graph_store::callsite_reasons::SiteReasonRow>,
+}
+
+/// Stages the Calls/Uses edge for one resolved callee, or records why it
+/// couldn't be staged (no rel table for the label combination).
+///
+/// The label-pair rule itself lives in `graph_store::call_rel_table`, shared
+/// with the LSP fallback pass so the two resolvers cannot drift.
+fn stage_call_edge(
+    buf: &mut EdgeBuffer,
+    site: &CallSite,
+    matched: &MatchedCall,
+    tally: &mut CallTally,
+) {
+    let target = matched.target;
+    let Some(rel) = call_rel_table(site.caller_label, &target.label) else {
+        return record_call_unresolved(
+            site,
+            tally,
+            format!(
+                "no rel table for {} -> {} (callsite-as-call)",
+                site.caller_label, target.label
+            ),
+        );
+    };
+    // Schema guard: every name `call_rel_table` returns is in REL_TABLES
+    // today, so this defends against a future schema edit rather than
+    // filtering live traffic. A drop is already logged inside.
+    if !check_known_rel_table(&rel, site.caller_qn, &target.id) {
+        return;
+    }
+    // All three `AddOutcome` variants mean the reference resolved to a real
+    // target (see `AddOutcome` doc comment); they differ only in whether a
+    // DB write is queued.
+    let method = ambiguity_policy::resolution_label(matched.evidence);
+    buf.add(&rel, site.caller_qn, &target.id, matched.confidence, method);
+    // The per-site row (issue #335) records the same resolution at call-site
+    // granularity. It is not a second reference: `tally` stays untouched so
+    // `total_edges` keeps counting resolved references, not rows.
+    if let Some(site_rel) = call_site_rel_table(&target.label) {
+        buf.add(site_rel, site.cs_id, &target.id, matched.confidence, method);
+    }
+    *tally.resolved += 1;
 }
 
 /// Resolves one callee reference via the shared ambiguity policy (issue
