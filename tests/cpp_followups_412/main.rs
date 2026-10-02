@@ -4,12 +4,10 @@
 //      `string_pad_direction::left_n`;
 //   2. `catch (Foo& e)` declared no name, so `e.f()` had no receiver type (and, below
 //      a parameter of the same name, took that parameter's type);
-//   3. a declared type was matched by path suffix, so `Box` in `a::use` named every
-//      class `Box` of the repository, not the one its own scope declares. Only a
-//      parameter of the function definition is read through the scopes (its type is
-//      written outside every body); a receiver declared in a body keeps the suffix
-//      reading, because a block may declare the type's name and the graph has no
-//      node for a block.
+//   3. (not done here, stays open on #412) a declared type is matched by path suffix:
+//      one class of that name binds, several keep the site open, as on `main`.
+//      Every receiver below whose type C++ resolves by a scope the graph does not
+//      model stays open.
 
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::{indexer, resolver};
@@ -143,25 +141,6 @@ int handle(Err& e) {
 }
 
 #[test]
-fn a_declared_type_is_the_class_of_the_scope_that_declares_it() {
-    let src = "\
-namespace a {
-  struct Box { bool empty() const { return true; } };
-  bool use(Box& b) { return b.empty(); }
-}
-namespace b {
-  struct Box { bool empty() const { return false; } };
-}
-";
-    let (store, _tmp) = index_and_resolve(&[("boxes.cpp", src)]);
-    assert_eq!(
-        bound_methods(&store, "use"),
-        ["empty -> a::Box::empty"],
-        "Box in namespace a is a::Box, not every class named Box"
-    );
-}
-
-#[test]
 fn a_declared_type_no_enclosing_scope_declares_keeps_the_path_suffix_reading() {
     let src = "\
 namespace a {
@@ -175,7 +154,7 @@ namespace shapes {
     assert_eq!(
         bound_methods(&store, "use"),
         ["empty -> shapes::Box::empty"],
-        "a using-declaration may bring Box into a: the one class of that name still binds"
+        "the path-suffix reading of main: the one class of that name binds"
     );
 }
 
@@ -311,46 +290,39 @@ int fx4(Box& b) { return b.m(); }
 }
 
 #[test]
-fn the_class_of_the_namespace_the_caller_is_in_binds() {
+fn a_type_declared_in_a_namespace_of_the_caller_is_read_by_suffix_as_on_main() {
+    // C++ reads `a::Box` for `Box` inside namespace `a`; the path-suffix reading
+    // sees two classes of that name and keeps the site open (#412 point 3 is not
+    // done here).
     let src = "\
 struct Box { int m() { return 1; } };
 namespace a { struct Box { int m() { return 2; } }; int fx5(Box& b) { return b.m(); } }
 ";
     let (store, _tmp) = index_and_resolve(&[("fx5.cpp", src)]);
-    assert_eq!(bound_methods(&store, "fx5"), ["m -> a::Box::m"]);
-}
-
-#[test]
-fn a_member_type_of_the_callers_own_class_binds() {
-    let src = "\
-struct T { int m() { return 1; } };
-struct D { struct T { int m() { return 2; } }; int fx6(T& t) { return t.m(); } };
-";
-    let (store, _tmp) = index_and_resolve(&[("fx6.cpp", src)]);
-    assert_eq!(bound_methods(&store, "fx6"), ["m -> D::T::m"]);
+    assert!(bound_methods(&store, "fx5").is_empty());
+    assert_eq!(open_reasons(&store, "fx5"), ["ambiguous_candidates"]);
 }
 
 #[test]
 fn a_base_with_several_generic_arguments_is_one_known_base() {
     // ETLCPP `iunordered_map::const_iterator : public etl::iterator<tag, const T>`:
-    // the comma inside the generic arguments is no separator between two bases.
+    // the comma inside the generic arguments is no separator between two bases, so
+    // the class named by the second argument (`Other`) is no base of `It`.
     let src = "\
 namespace etl {
-  template <class A, class B> struct iterator {};
-  struct Outer {
-    struct It : public etl::iterator<int, const long> {
-      bool compare(const It&) const { return true; }
-      friend bool same(const It& l, const It& r) { return l.compare(r); }
-    };
-  };
-  struct Other { struct It { bool compare(const It&) const { return false; } }; };
+  template <class A, class B> struct iterator { int own() const { return 1; } };
+  struct Other { int zz() const { return 2; } };
+  struct It : public etl::iterator<int, Other> {};
 }
+int through_base(etl::It& i) { return i.own(); }
+int through_argument(etl::It& i) { return i.zz(); }
 ";
-    let (store, _tmp) = index_and_resolve(&[("it.h", src)]);
+    let (store, _tmp) = index_and_resolve(&[("it.cpp", src)]);
     assert_eq!(
-        bound_methods(&store, "same"),
-        ["compare -> etl::Outer::It::compare"]
+        bound_methods(&store, "through_base"),
+        ["own -> etl::iterator::own"]
     );
+    assert!(bound_methods(&store, "through_argument").is_empty());
 }
 
 #[test]

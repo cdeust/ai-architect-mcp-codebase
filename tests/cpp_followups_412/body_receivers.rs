@@ -1,12 +1,11 @@
-// cpp_followups_412::body_receivers: a receiver declared in a function, method or
-// lambda body keeps the suffix reading of `main` (issue #412), and a parameter of
-// the function definition is read through the scopes around the signature.
+// cpp_followups_412::body_receivers: a typed C++ receiver keeps the path-suffix
+// reading of `main` (issue #412): one class of that name binds, several keep the
+// site open. No block, signature or scope is read.
 
 use super::*;
 
-/// A receiver declared in a function, method or lambda body keeps the reading of
-/// `main`: its type is read by path suffix, and with two classes of that name the
-/// site stays open as `ambiguous_candidates`. The body may declare the type's first
+/// A typed receiver keeps the reading of `main`: its type is read by path suffix,
+/// and with two classes of that name the site stays open as `ambiguous_candidates`. The body may declare the type's first
 /// name itself (a using-declaration, a typedef, a local class, under a label or a
 /// `case`, in the declaration of the receiver) and the graph holds no node for it:
 /// nothing here tries to prove it does not.
@@ -17,7 +16,15 @@ fn assert_open_body_receiver(file: &str, src: &str, caller: &str) {
         "{:?}",
         bound_methods(&store, caller)
     );
-    assert_eq!(open_reasons(&store, caller), ["ambiguous_candidates"]);
+    // The call `m` only: a constructor or a lambda call of the body is another site.
+    let reasons = store
+        .execute_query(&format!(
+            "MATCH (cs:CallSite) WHERE cs.id CONTAINS '{caller}#' AND cs.callee_name = 'm' \
+             RETURN cs.unresolved_reason"
+        ))
+        .expect("query open sites");
+    let reasons: Vec<&str> = reasons.rows.iter().map(|r| r[0].as_str()).collect();
+    assert_eq!(reasons, ["ambiguous_candidates"]);
 }
 
 const OTHER_BOX_AND_GLOBAL_BOX: &str = "\
@@ -158,14 +165,14 @@ fn a_body_receiver_of_one_class_of_that_name_binds_as_on_main() {
 }
 
 #[test]
-fn a_parameter_type_is_read_in_the_scopes_around_the_signature() {
-    // The signature is outside the body: a class the body declares cannot hide the
-    // type the parameter is written with.
-    let src = format!(
-        "{OTHER_BOX_AND_GLOBAL_BOX}int p1(Box& b) {{ struct Box {{ int m() {{ return 3; }} }}; return b.m(); }}\n"
+fn a_parameter_type_is_read_by_suffix_as_on_main() {
+    // The scopes around the signature are not read: the two classes named Box keep
+    // the site open.
+    assert_open_after_preamble(
+        "p1.cpp",
+        "int p1(Box& b) { struct Box { int m() { return 3; } }; return b.m(); }",
+        "p1",
     );
-    let (store, _tmp) = index_and_resolve(&[("p1.cpp", &src)]);
-    assert_eq!(bound_methods(&store, "p1"), ["m -> Box::m"]);
 }
 
 #[test]
@@ -181,4 +188,50 @@ fn a_field_or_a_global_receiver_has_no_declared_type() {
         assert!(bound_methods(&store, caller).is_empty());
         assert_eq!(open_reasons(&store, caller), ["no_receiver_type"]);
     }
+}
+
+/// One test per fixture of the fourth review: the receiver `b` is named by a
+/// parameter `Box& b`, and a declaration the parser does not read (a structured
+/// binding, an init-capture, an init-statement, a label, a parenthesised declarator,
+/// a declaring macro) names it again with `other::Box`. C++ reads `other::Box`; the
+/// site stays open as on `main`, because nothing here proves which declaration of
+/// `b` is the innermost.
+macro_rules! shadowed_receiver_stays_open {
+    ($($test:ident: $name:literal ($params:literal) { $body:literal })+) => {$(
+        #[test]
+        fn $test() {
+            let src = format!(
+                "{OTHER_BOX_AND_GLOBAL_BOX}struct P {{ other::Box b; int c; }};\n\
+                 #define MAKE(x) other::Box x\n\
+                 int {n}({params}) {{ {body} }}\n",
+                n = $name,
+                params = $params,
+                body = $body,
+            );
+            assert_open_body_receiver(concat!($name, ".cpp"), &src, $name);
+        }
+    )+};
+}
+
+shadowed_receiver_stays_open! {
+    v01_a_declaration_under_a_label_leaves_the_call_open: "v01" ("Box& b") {
+        "{ L: other::Box b; return b.m(); }" }
+    v05_a_structured_binding_in_an_if_init_leaves_the_call_open: "v05" ("Box& b, P p") {
+        "if (auto [b, c] = p; true) return b.m(); return 0;" }
+    v06_an_init_capture_by_reference_leaves_the_call_open: "v06" ("Box& b, other::Box& ob") {
+        "auto l = [&b = ob]() { return b.m(); }; return l();" }
+    v07_an_init_capture_by_move_leaves_the_call_open: "v07" ("Box& b") {
+        "auto l = [b = other::Box()]() mutable { return b.m(); }; return l();" }
+    v15_a_parenthesised_declarator_leaves_the_call_open: "v15" ("Box& b") {
+        "{ other::Box (b); return b.m(); }" }
+    v27_a_switch_init_statement_leaves_the_call_open: "v27" ("Box& b") {
+        "switch (other::Box b; 1) { default: return b.m(); }" }
+    v31_a_structured_binding_in_a_lambda_leaves_the_call_open: "v31" ("Box& b, P p") {
+        "auto g = [&]() { auto [b, c] = p; return b.m(); }; return g();" }
+    v37_a_structured_binding_in_a_for_init_leaves_the_call_open: "v37" ("Box& b, P p") {
+        "for (auto [b, c] = p; ; ) { return b.m(); }" }
+    s28d_a_structured_binding_in_a_block_leaves_the_call_open: "s28d" ("Box& b, P p") {
+        "{ auto [b, c] = p; return b.m(); }" }
+    s29_a_declaring_macro_leaves_the_call_open: "s29" ("Box& b") {
+        "{ MAKE(b); return b.m(); }" }
 }

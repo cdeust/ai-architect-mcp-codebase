@@ -10,18 +10,12 @@
 // - a member call (`a.f()`, `p->f()`) on a receiver whose type the parser did
 //   not read stays open as `no_receiver_type` (`open_call`);
 // - through `this` or a receiver of a declared type, only the methods of that
-//   class and of its bases can be named. A type is read two ways. A parameter of
-//   the function definition (`cpp-declared`) is written in the signature, outside
-//   every body, so no block can hide the type: it is the class of the innermost
-//   enclosing scope that has one of that name (`family_in`), only when nothing the
-//   graph cannot see (a using-declaration, an inherited member type) may come first;
-//   otherwise the suffix reading stays. Anything declared in a body, or a parameter
-//   of a lambda (`cpp-declared-body`), keeps the path-suffix reading of before #412
-//   (`family`): the body may declare the type's first name and the graph holds no
-//   node for a block, so no scope is read for it and several classes of that name
-//   keep the site open (#412). A `typedef` or `using` a source file writes is
-//   visible to that file and to the files that `#include` it, directly or through
-//   other files;
+//   class and of its bases can be named. A declared type is read by path suffix,
+//   as before #412 (`family`): one class of that name binds, several keep the site
+//   open. Which declaration of a name C++ reaches (a using-declaration, a member
+//   type, a block, a structured binding) is not read from the graph. A `typedef` or
+//   `using` a source file writes is visible to that file and to the files that
+//   `#include` it, directly or through other files;
 // - an unqualified call names, first, a method of the caller's own class or of
 //   one of its bases (implicit `this`, which hides every namesake outside the
 //   class), then a function or a constructor; never a method of another class;
@@ -43,8 +37,8 @@ use super::reason::{
 use super::*;
 use crate::graph_store::{
     calls_through_a_pointer, GraphStore, CALLEE_SHAPE_DIRECT, CALLEE_SHAPE_INDIRECT,
-    CALLEE_SHAPE_MEMBER, RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY,
-    RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
+    CALLEE_SHAPE_MEMBER, RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER,
+    RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::language_provider::extract_file_prefix;
 use crate::parser::generic_args::{split_outside_generics, strip_generic_groups};
@@ -57,8 +51,6 @@ pub(super) struct CppClasses {
     bases: HashMap<String, Vec<String>>,
     /// The paths of the classes ending in a given last segment.
     by_last: HashMap<String, Vec<String>>,
-    /// The files that declare each class path (none known: every file sees it).
-    class_files: HashMap<String, Vec<String>>,
     /// The `using` aliases and `typedef`s by last segment: what each names.
     aliases: HashMap<String, Vec<Alias>>,
     /// Which file includes which (a source file is seen by the files that include it).
@@ -73,7 +65,26 @@ struct Alias {
     target: String,
 }
 
+/// True when a declaration written in `declared` is visible to a caller in
+/// `from` by the file alone: a header may be included by any file, a source file is
+/// a translation unit of its own and is seen by itself only.
+fn unit_sees(from: &str, declared: &str) -> bool {
+    declared == from
+        || !matches!(
+            declared.rsplit_once('.').map(|(_, ext)| ext),
+            Some("cpp" | "cc" | "cxx" | "c++" | "cp" | "c" | "C")
+        )
+}
+
 impl CppClasses {
+    /// True when a declaration written in `declared` is visible to a caller in
+    /// `from`: by the file alone (`unit_sees`), or because `from` includes it, directly
+    /// or through other files (a source file that `#include`s another source file
+    /// sees its typedefs).
+    fn sees(&self, from: &str, declared: &str) -> bool {
+        unit_sees(from, declared) || self.includes.reaches(from, declared)
+    }
+
     /// Reads the `bases` of every C++ class (the `Struct` nodes of the
     /// language). A graph without the table, or without the column, yields none.
     pub(super) fn load(store: &GraphStore, includes: IncludeGraph) -> Self {
@@ -99,13 +110,7 @@ impl CppClasses {
                 .filter(|b| !b.is_empty())
                 .collect();
             let last = path.rsplit("::").next().unwrap_or(&path).to_string();
-            let file = extract_file_prefix(&row[0]).unwrap_or_default();
             classes.by_last.entry(last).or_default().push(path.clone());
-            classes
-                .class_files
-                .entry(path.clone())
-                .or_default()
-                .push(file);
             classes.bases.entry(path).or_default().extend(bases);
         }
         classes.load_aliases(store);
@@ -187,12 +192,8 @@ impl Family {
 }
 
 /// True when `name`, written as a path or relative to a namespace, designates
-/// the class of full path `path`. A leading `::` makes `name` a full path: only
-/// that class.
+/// the class of full path `path`.
 fn names_class(path: &str, name: &str) -> bool {
-    if let Some(full) = name.strip_prefix("::") {
-        return path == full;
-    }
     path == name || path.strip_suffix(name).is_some_and(|p| p.ends_with("::"))
 }
 
@@ -266,12 +267,7 @@ pub(super) fn open_call(language: &str, shape: &str, via: &str) -> Option<Gated>
             Some(Decline::PointerCall(shape)),
         ));
     }
-    let typed = [
-        RECEIVER_HINT_VIA_CPP_THIS,
-        RECEIVER_HINT_VIA_CPP_DECLARED,
-        RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY,
-    ]
-    .contains(&via);
+    let typed = via == RECEIVER_HINT_VIA_CPP_THIS || via == RECEIVER_HINT_VIA_CPP_DECLARED;
     (language == "cpp" && shape == CALLEE_SHAPE_MEMBER && !typed)
         .then_some((PolicyResolution::NotFound, Some(Decline::NoReceiverType)))
 }
@@ -298,20 +294,6 @@ pub(super) fn scope(
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
         RECEIVER_HINT_VIA_CPP_DECLARED => {
-            let caller = Caller {
-                file: &caller_file(site),
-                scope: caller_scope(site),
-                in_class: site.caller_label == "Method",
-            };
-            let family = ctx.cpp.family_in(site.receiver_hint, &caller);
-            (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
-        }
-        // A body may declare the first name of the type (`using other::Box;`, a
-        // `typedef`, a local class) and the graph holds no node for a block: the
-        // scopes around the caller cannot be told to be where the name is looked
-        // up, so the path-suffix reading stays, and several classes keep the site
-        // open (fail closed).
-        RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY => {
             let family = ctx.cpp.family(site.receiver_hint, &caller_file(site));
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
@@ -334,14 +316,6 @@ fn caller_family(ctx: &ResolveContext, site: &CallSite) -> Family {
         Some(class) => ctx.cpp.family(&class, &caller_file(site)),
         None => Family(HashSet::new()),
     }
-}
-
-/// The namespaces and classes around the caller, outermost first: the owner path
-/// of its qualified name (empty for a function of the global namespace).
-fn caller_scope(site: &CallSite) -> Vec<String> {
-    owner_of(site.caller_qn)
-        .map(|owner| owner.split("::").map(str::to_string).collect())
-        .unwrap_or_default()
 }
 
 fn caller_file(site: &CallSite) -> String {
@@ -392,10 +366,6 @@ fn qualified(
         .cloned()
         .collect()
 }
-
-#[path = "member_calls_lookup.rs"]
-mod lookup;
-use lookup::Caller;
 
 #[cfg(test)]
 #[path = "member_calls_tests.rs"]

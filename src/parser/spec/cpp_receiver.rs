@@ -8,20 +8,13 @@
 //
 // - `cpp-this`: the receiver is `this`, `*this` or `(*this)`: the caller's own
 //   class.
-// - `cpp-declared` / `cpp-declared-body`: the receiver is a name that a parameter, a
-//   local, a range variable or a condition declares with a type written in the
-//   source (`Bloom* p`) or a catch clause (`catch (const E& e)`, in its handler
-//   only); the hint is that type without qualifier, pointer, reference or generic
-//   arguments. The via says where the type is written: a parameter of the function
-//   definition that holds the call (outside every body: no block can declare a name
-//   that hides the type) is `cpp-declared`; anything declared in a body (a local, a
-//   range variable, a condition, a catch parameter, a parameter of a lambda or of a
-//   function defined in a body) is `cpp-declared-body`, because a block around the
-//   declaration may declare the type's first name itself (a using-declaration, a
-//   `typedef`, a local class) and the graph holds no node for a block. A name
-//   declared with `auto`, a name no enclosing scope declares (a field, a global), a
-//   type that is a template parameter of an enclosing template (`template <class T>
-//   .. T& t`: not a class) or any other expression gives no hint.
+// - `cpp-declared`: the receiver is a name that a parameter, a local, a range
+//   variable, a condition or a catch clause (`catch (const E& e)`, in its handler
+//   only) declares with a type written in the source (`Bloom* p`); the hint is that
+//   type without qualifier, pointer, reference or generic arguments. A name declared
+//   with `auto`, a name no enclosing scope declares (a field, a global), a type that
+//   is a template parameter of an enclosing template (`template <class T> .. T& t`:
+//   not a class) or any other expression gives no hint.
 // - `cpp-qualifier`: the callee is written `a::b::f`; the hint is `a::b`.
 //
 // source: tree-sitter-cpp 0.23.4 node-types.json (field_expression.argument,
@@ -31,8 +24,7 @@
 use tree_sitter::Node;
 
 use crate::graph_store::{
-    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY,
-    RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
+    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::parser::generic_args::strip_generic_groups;
 use crate::parser::node_text;
@@ -82,36 +74,19 @@ fn member_receiver(source: &str, callee: Node) -> Option<(String, &'static str)>
         "this" => Some((String::new(), RECEIVER_HINT_VIA_CPP_THIS)),
         "identifier" => {
             let name = node_text(source, argument);
-            let written = declared_type(source, callee, &name)?;
-            let via = if written.in_signature {
-                RECEIVER_HINT_VIA_CPP_DECLARED
-            } else {
-                RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY
-            };
-            Some((written.name, via))
+            declared_type(source, callee, &name).map(|t| (t, RECEIVER_HINT_VIA_CPP_DECLARED))
         }
         _ => None,
     }
 }
 
-/// A type as a declaration writes it, and whether the declaration is a parameter
-/// of the function definition that holds the call (its signature, outside every
-/// body) rather than something a body declares.
-struct Written {
-    name: String,
-    in_signature: bool,
-}
-
 /// The type the innermost enclosing scope declares for `name`, read at `at`.
 /// The search stops at the enclosing function: a global or a field is not read.
-fn declared_type(source: &str, at: Node, name: &str) -> Option<Written> {
+fn declared_type(source: &str, at: Node, name: &str) -> Option<String> {
     let mut scope = at.parent();
     while let Some(s) = scope {
         if let Some(found) = binding_in(source, s, (at, name)) {
-            return found.map(|name| Written {
-                name,
-                in_signature: in_signature(s),
-            });
+            return found;
         }
         if s.kind() == "function_definition" {
             return None;
@@ -119,16 +94,6 @@ fn declared_type(source: &str, at: Node, name: &str) -> Option<Written> {
         scope = s.parent();
     }
     None
-}
-
-/// True when the parameters `scope` declares are written outside every body:
-/// `scope` is a function definition that no function body or lambda encloses. The
-/// parameters of a lambda, and of a function defined in a body (a method of a local
-/// class), are read where a block may declare the type's name.
-fn in_signature(scope: Node) -> bool {
-    scope.kind() == "function_definition"
-        && !std::iter::successors(scope.parent(), |n| n.parent())
-            .any(|n| matches!(n.kind(), "function_definition" | "lambda_expression"))
 }
 
 /// `Some(type)` when `scope` declares `name` before `at` (the last such
@@ -384,7 +349,7 @@ void f(const ns::Bloom<int>* pb, Umap& ru) {
             vec![
                 pair("ns::Bloom", "cpp-declared"),
                 pair("Umap", "cpp-declared"),
-                pair("Local", "cpp-declared-body"),
+                pair("Local", "cpp-declared"),
                 pair("-", "-"),
                 pair("", "cpp-this"),
                 pair("", "cpp-this"),
@@ -445,36 +410,5 @@ void f(T& a, U& b, Foo& c, C<int>& d, Ts& e, Real& g) {
 struct S { template <class V> void h(V& v, T& t) { v.go(); t.go(); } };";
         let hints: Vec<String> = calls_in(src).into_iter().map(|(h, _)| h).collect();
         assert_eq!(hints, ["-", "-", "Foo", "-", "-", "Real", "-", "T"]);
-    }
-
-    #[test]
-    fn only_a_parameter_of_the_function_definition_is_read_outside_the_body() {
-        let src = "\
-struct S { int m(Box& p) { return p.go(); } };
-void f(Box& p) {
-    Box a;
-    a.go();
-    p.go();
-    try { g(); } catch (Box& e) { e.go(); }
-    for (Box& r : xs) { r.go(); }
-    auto l = [](Box& q) { return q.go(); };
-    struct Local { int h(Box& w) { return w.go(); } };
-}
-auto k = [] { struct InLambda { int n(Box& v) { return v.go(); } }; };";
-        let via: Vec<String> = calls_in(src).into_iter().map(|(_, v)| v).collect();
-        assert_eq!(
-            via,
-            [
-                "cpp-declared",
-                "cpp-declared-body",
-                "cpp-declared",
-                "-",
-                "cpp-declared-body",
-                "cpp-declared-body",
-                "cpp-declared-body",
-                "cpp-declared-body",
-                "cpp-declared-body",
-            ]
-        );
     }
 }
