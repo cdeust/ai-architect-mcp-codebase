@@ -11,8 +11,10 @@
 //   not read stays open as `no_receiver_type` (`open_call`);
 // - through `this` or a receiver of a declared type, only the methods of that
 //   class and of its bases can be named; a declared type is the class of the
-//   innermost enclosing scope that has one of that name (`family_in`), the suffix
-//   reading staying only when no enclosing scope does (#412);
+//   innermost enclosing scope that has one of that name (`family_in`), only when
+//   nothing the graph cannot see (a using-declaration, an inherited member type)
+//   may come first; otherwise the suffix reading stays (#412). A `typedef` or
+//   `using` a source file writes is visible to that file only;
 // - an unqualified call names, first, a method of the caller's own class or of
 //   one of its bases (implicit `this`, which hides every namesake outside the
 //   class), then a function or a constructor; never a method of another class;
@@ -47,6 +49,8 @@ pub(super) struct CppClasses {
     bases: HashMap<String, Vec<String>>,
     /// The paths of the classes ending in a given last segment.
     by_last: HashMap<String, Vec<String>>,
+    /// The files that declare each class path (none known: every file sees it).
+    class_files: HashMap<String, Vec<String>>,
     /// The `using` aliases and `typedef`s by last segment: what each names.
     aliases: HashMap<String, Vec<Alias>>,
 }
@@ -76,13 +80,19 @@ impl CppClasses {
             } else {
                 &row[1]
             };
-            let bases: Vec<String> = bases
-                .split(',')
+            let bases: Vec<String> = split_bases(bases)
+                .into_iter()
                 .map(class_path)
                 .filter(|b| !b.is_empty())
                 .collect();
             let last = path.rsplit("::").next().unwrap_or(&path).to_string();
+            let file = extract_file_prefix(&row[0]).unwrap_or_default();
             classes.by_last.entry(last).or_default().push(path.clone());
+            classes
+                .class_files
+                .entry(path.clone())
+                .or_default()
+                .push(file);
             classes.bases.entry(path).or_default().extend(bases);
         }
         classes.load_aliases(store);
@@ -117,47 +127,6 @@ impl CppClasses {
         }
     }
 
-    /// The class a type written `name` designates inside `scope` (the namespaces
-    /// and classes around the caller, outermost first), and what `family` adds. C++
-    /// looks a name up from the innermost enclosing scope outwards, so `timer_data`
-    /// in `etl::icallback_timer::start` is `etl::icallback_timer::timer_data`, not
-    /// every class of the repository whose path ends in `timer_data`. When no
-    /// enclosing scope declares it (a using-declaration may bring it in) the
-    /// suffix reading of `family` stays.
-    fn family_in(&self, name: &str, from: &str, scope: &[String]) -> Family {
-        match self.declared_in(name, scope) {
-            Some(path) => self.family(&format!("::{path}"), from),
-            None => self.family(name, from),
-        }
-    }
-
-    /// The full path of the class or alias `name` names from inside `scope`: the
-    /// innermost `scope[..k]::name` that the graph holds.
-    fn declared_in(&self, name: &str, scope: &[String]) -> Option<String> {
-        if name.starts_with("::") {
-            return None;
-        }
-        let last = name.rsplit("::").next().unwrap_or(name);
-        let holds = |path: &str| {
-            self.by_last
-                .get(last)
-                .is_some_and(|paths| paths.iter().any(|p| p == path))
-                || self
-                    .aliases
-                    .get(last)
-                    .is_some_and(|aliases| aliases.iter().any(|a| a.path == path))
-        };
-        (0..=scope.len()).rev().find_map(|k| {
-            let path = scope[..k]
-                .iter()
-                .map(String::as_str)
-                .chain(std::iter::once(name))
-                .collect::<Vec<_>>()
-                .join("::");
-            holds(&path).then_some(path)
-        })
-    }
-
     /// The class named `name` (a path, possibly relative to a namespace), the
     /// classes an alias of that name stands for, and every base of them, through
     /// any depth. Of several aliases of one name, those the file `from` writes
@@ -186,7 +155,7 @@ impl CppClasses {
             .get(last)
             .into_iter()
             .flatten()
-            .filter(|a| names_class(&a.path, name))
+            .filter(|a| names_class(&a.path, name) && sees(from, &a.file))
             .collect();
         let local: Vec<&Alias> = named.iter().copied().filter(|a| a.file == from).collect();
         let chosen = if local.is_empty() { named } else { local };
@@ -212,6 +181,27 @@ fn names_class(path: &str, name: &str) -> bool {
         return path == full;
     }
     path == name || path.strip_suffix(name).is_some_and(|p| p.ends_with("::"))
+}
+
+/// The bases of a class as the parser writes them, comma separated: the commas
+/// inside generic arguments (`etl::iterator<tag, const T>`) do not separate two
+/// bases.
+fn split_bases(bases: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0usize, 0);
+    for (i, c) in bases.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&bases[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&bases[start..]);
+    parts
 }
 
 /// `Base` of `public Base<T>`, `::ns::Base` or `ns::Base`: a class as a path,
@@ -311,9 +301,12 @@ pub(super) fn scope(
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
         RECEIVER_HINT_VIA_CPP_DECLARED => {
-            let family =
-                ctx.cpp
-                    .family_in(site.receiver_hint, &caller_file(site), &caller_scope(site));
+            let caller = Caller {
+                file: &caller_file(site),
+                scope: caller_scope(site),
+                in_class: site.caller_label == "Method",
+            };
+            let family = ctx.cpp.family_in(site.receiver_hint, &caller);
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
         RECEIVER_HINT_VIA_CPP_QUALIFIER => (qualified(ctx, site, candidates), SCOPE_CPP_QUALIFIER),
@@ -393,6 +386,10 @@ fn qualified(
         .cloned()
         .collect()
 }
+
+#[path = "member_calls_lookup.rs"]
+mod lookup;
+use lookup::{sees, Caller};
 
 #[cfg(test)]
 #[path = "member_calls_tests.rs"]

@@ -62,11 +62,23 @@ adheres to [Semantic Versioning](https://semver.org/).
   parameter now types `e` in its handler only (the 5 such calls of the corpus had
   no receiver type; below a parameter of the same name `e` took that parameter's
   type). A declared type is the class of the innermost enclosing scope that has
-  one of that name, the path-suffix reading staying only when no scope does: of
-  241 member calls whose receiver type matched two classes that both hold the
-  callee (`timer_data` of the four `etl::*timer*` classes), 125 were resolved
-  before and 169 after, the 72 left being overloads of one class, which the
-  graph cannot tell apart. The three copies of the generic-argument stripping are
+  one of that name when no scope between it and the caller can supply another
+  (a namespace through a using-declaration, a class through a member type it or
+  a base declares, a base the graph does not hold, a template parameter), the
+  path-suffix reading staying otherwise: of 241 member calls whose receiver type
+  matched two classes that both hold the callee (`timer_data` of the four
+  `etl::*timer*` classes), 125 were resolved before and 169 after, the 72 left
+  being overloads of one class, which the graph cannot tell apart. A `typedef`
+  or `using` a source file (`.cpp`) writes is seen by that file only: on
+  ETLCPP, the 21 calls of `test_reference_flat_set.cpp` on a `reference_flat_set`
+  typedef bind to `ireference_flat_set` again, not to the `reference_flat_map`
+  one another test file writes under the same name, and 1,282 calls that were
+  bound through another file's typedef of the same name (`View`, `String`,
+  `QueueInt`, `NDC` of the other tests; the file's own typedef is not in the
+  graph) stay open (`declined_by_scope`). A receiver whose type is a template
+  parameter (`template <class T> .. T& t`) has no type. A base class list is
+  split at the commas outside generic arguments (`etl::iterator<tag, const T>`
+  is one base, not two). The three copies of the generic-argument stripping are
   one helper (`parser::generic_args`).
 
 - `get_impact` no longer counts, as open call sites naming the target, the

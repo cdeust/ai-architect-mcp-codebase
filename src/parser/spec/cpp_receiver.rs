@@ -12,7 +12,9 @@
 //   variable or a condition declares with a type written in the source (`Bloom*
 //   p`) or a catch clause (`catch (const E& e)`, in its handler only); the
 //   hint is that type without qualifier, pointer, reference or generic arguments. A name declared with `auto`, a name no enclosing scope
-//   declares (a field, a global) or any other expression gives no hint.
+//   declares (a field, a global), a type that is a template parameter of an
+//   enclosing template (`template <class T> .. T& t`: not a class) or any other
+//   expression gives no hint.
 // - `cpp-qualifier`: the callee is written `a::b::f`; the hint is `a::b`.
 //
 // source: tree-sitter-cpp 0.23.4 node-types.json (field_expression.argument,
@@ -214,7 +216,64 @@ fn written_type(source: &str, decl: Node) -> Option<String> {
         _ => return None,
     };
     let name = plain_type_text(&text);
-    (!name.is_empty()).then_some(name)
+    let first = name.split("::").next().unwrap_or(&name);
+    (!name.is_empty() && !is_template_parameter(source, decl, first)).then_some(name)
+}
+
+/// True when `name` is a parameter of a template that encloses `at`
+/// (`template <class T>`, `typename... Ts`, `template <class> class C`): a type
+/// written with it names no class of the repository.
+fn is_template_parameter(source: &str, at: Node, name: &str) -> bool {
+    let mut scope = at.parent();
+    while let Some(s) = scope {
+        if s.kind() == "template_declaration" {
+            if let Some(list) = s.child_by_field_name("parameters") {
+                if template_parameter_names(source, list)
+                    .iter()
+                    .any(|n| n == name)
+                {
+                    return true;
+                }
+            }
+        }
+        scope = s.parent();
+    }
+    false
+}
+
+/// The names a `template_parameter_list` declares for types: `T` of `class T`,
+/// `typename... Ts` or `class T = Default`, and `C` of `template <class> class
+/// C`. A non-type parameter (`int N`) names no type.
+fn template_parameter_names(source: &str, list: Node) -> Vec<String> {
+    let mut cursor = list.walk();
+    list.named_children(&mut cursor)
+        .filter_map(|parameter| type_parameter_name(source, parameter))
+        .collect()
+}
+
+/// The first `type_identifier` of a type parameter is its name (a default type
+/// follows it).
+fn type_parameter_name(source: &str, parameter: Node) -> Option<String> {
+    match parameter.kind() {
+        "type_parameter_declaration"
+        | "variadic_type_parameter_declaration"
+        | "optional_type_parameter_declaration" => {
+            let mut cursor = parameter.walk();
+            let name = parameter
+                .named_children(&mut cursor)
+                .find(|c| c.kind() == "type_identifier")
+                .map(|c| node_text(source, c));
+            name
+        }
+        "template_template_parameter_declaration" => {
+            let mut cursor = parameter.walk();
+            let name = parameter
+                .named_children(&mut cursor)
+                .find_map(|c| type_parameter_name(source, c));
+            name
+        }
+        _ => None,
+    }
 }
 
 /// `text` without its `<...>` groups and whitespace.
@@ -336,5 +395,17 @@ void h() {
             hints,
             ["-", "ns::Err", "Other", "A", "A", "-", "-", "A", "-", "B"]
         );
+    }
+
+    #[test]
+    fn a_template_parameter_is_no_receiver_type() {
+        let src = "\
+template <class T, typename U = Foo, int N, template <class> class C, typename... Ts>
+void f(T& a, U& b, Foo& c, C<int>& d, Ts& e, Real& g) {
+    a.go(); b.go(); c.go(); d.go(); e.go(); g.go();
+}
+struct S { template <class V> void h(V& v, T& t) { v.go(); t.go(); } };";
+        let hints: Vec<String> = calls_in(src).into_iter().map(|(h, _)| h).collect();
+        assert_eq!(hints, ["-", "-", "Foo", "-", "-", "Real", "-", "T"]);
     }
 }
