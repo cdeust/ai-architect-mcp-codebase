@@ -32,6 +32,7 @@ const C_FAMILY_EXTENSIONS: [&str; 10] = [
 
 /// The files each C-family file includes, read once per resolution pass, and
 /// the closure of that relation asked for on demand.
+#[derive(Clone, Default)]
 pub(super) struct IncludeGraph {
     direct: HashMap<String, Vec<String>>,
     reached: RefCell<HashMap<String, HashSet<String>>>,
@@ -55,7 +56,10 @@ impl IncludeGraph {
 
     /// `file_imports` maps a file id to the import paths written in it;
     /// `file_ids` is every file of the graph.
-    fn build(file_imports: &HashMap<String, Vec<String>>, file_ids: &HashSet<String>) -> Self {
+    pub(super) fn build(
+        file_imports: &HashMap<String, Vec<String>>,
+        file_ids: &HashSet<String>,
+    ) -> Self {
         let by_basename = by_basename(file_ids);
         let direct = file_imports
             .iter()

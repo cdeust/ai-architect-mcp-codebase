@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use crate::call_evidence::callee_names_type;
 use crate::graph_store::callsite_reasons::REASON_EXTERNAL_CALLEE;
 use crate::graph_store::{cypher_str, GraphStore, NODE_ENUM, NODE_METHOD, NODE_STRUCT};
+use crate::parser::generic_args::strip_generics;
 
 /// The `language` of a Rust call site and method.
 const RUST: &str = "rust";
@@ -298,10 +299,6 @@ fn hint_type_name(hint: &str) -> Option<&str> {
     plain_path
         .then(|| last_segment(plain))
         .filter(|s| !s.is_empty())
-}
-
-fn strip_generics(s: &str) -> &str {
-    s.split('<').next().unwrap_or(s)
 }
 
 fn last_segment(s: &str) -> &str {

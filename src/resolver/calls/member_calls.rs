@@ -10,7 +10,12 @@
 // - a member call (`a.f()`, `p->f()`) on a receiver whose type the parser did
 //   not read stays open as `no_receiver_type` (`open_call`);
 // - through `this` or a receiver of a declared type, only the methods of that
-//   class and of its bases can be named;
+//   class and of its bases can be named. A declared type is read by path suffix,
+//   as before #412 (`family`): one class of that name binds, several keep the site
+//   open. Which declaration of a name C++ reaches (a using-declaration, a member
+//   type, a block, a structured binding) is not read from the graph. A `typedef` or
+//   `using` a source file writes is visible to that file and to the files that
+//   `#include` it, directly or through other files;
 // - an unqualified call names, first, a method of the caller's own class or of
 //   one of its bases (implicit `this`, which hides every namesake outside the
 //   class), then a function or a constructor; never a method of another class;
@@ -25,6 +30,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::includes::IncludeGraph;
 use super::reason::{
     Decline, Gated, SCOPE_CPP_QUALIFIER, SCOPE_CPP_RECEIVER_CLASS, SCOPE_CPP_UNQUALIFIED_CALL,
 };
@@ -35,6 +41,7 @@ use crate::graph_store::{
     RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::language_provider::extract_file_prefix;
+use crate::parser::generic_args::{split_outside_generics, strip_generic_groups};
 
 /// The C++ classes of the graph: where each is, and the base classes it names.
 #[derive(Default)]
@@ -46,6 +53,8 @@ pub(super) struct CppClasses {
     by_last: HashMap<String, Vec<String>>,
     /// The `using` aliases and `typedef`s by last segment: what each names.
     aliases: HashMap<String, Vec<Alias>>,
+    /// Which file includes which (a source file is seen by the files that include it).
+    includes: IncludeGraph,
 }
 
 /// A `using X = T;` or `typedef T X;`: the path of `X`, the file that writes
@@ -56,11 +65,33 @@ struct Alias {
     target: String,
 }
 
+/// True when a declaration written in `declared` is visible to a caller in
+/// `from` by the file alone: a header may be included by any file, a source file is
+/// a translation unit of its own and is seen by itself only.
+fn unit_sees(from: &str, declared: &str) -> bool {
+    declared == from
+        || !matches!(
+            declared.rsplit_once('.').map(|(_, ext)| ext),
+            Some("cpp" | "cc" | "cxx" | "c++" | "cp" | "c" | "C")
+        )
+}
+
 impl CppClasses {
+    /// True when a declaration written in `declared` is visible to a caller in
+    /// `from`: by the file alone (`unit_sees`), or because `from` includes it, directly
+    /// or through other files (a source file that `#include`s another source file
+    /// sees its typedefs).
+    fn sees(&self, from: &str, declared: &str) -> bool {
+        unit_sees(from, declared) || self.includes.reaches(from, declared)
+    }
+
     /// Reads the `bases` of every C++ class (the `Struct` nodes of the
     /// language). A graph without the table, or without the column, yields none.
-    pub(super) fn load(store: &GraphStore) -> Self {
-        let mut classes = Self::default();
+    pub(super) fn load(store: &GraphStore, includes: IncludeGraph) -> Self {
+        let mut classes = Self {
+            includes,
+            ..Self::default()
+        };
         let Ok(qr) =
             store.execute_query("MATCH (s:Struct) RETURN s.qualified_name, s.bases, s.language")
         else {
@@ -73,8 +104,8 @@ impl CppClasses {
             } else {
                 &row[1]
             };
-            let bases: Vec<String> = bases
-                .split(',')
+            let bases: Vec<String> = split_outside_generics(bases, ',')
+                .into_iter()
                 .map(class_path)
                 .filter(|b| !b.is_empty())
                 .collect();
@@ -142,7 +173,7 @@ impl CppClasses {
             .get(last)
             .into_iter()
             .flatten()
-            .filter(|a| names_class(&a.path, name))
+            .filter(|a| names_class(&a.path, name) && self.sees(from, &a.file))
             .collect();
         let local: Vec<&Alias> = named.iter().copied().filter(|a| a.file == from).collect();
         let chosen = if local.is_empty() { named } else { local };
@@ -169,16 +200,7 @@ fn names_class(path: &str, name: &str) -> bool {
 /// `Base` of `public Base<T>`, `::ns::Base` or `ns::Base`: a class as a path,
 /// without access specifier, `virtual`, generic arguments or leading `::`.
 fn class_path(raw: &str) -> String {
-    let mut depth = 0usize;
-    let mut plain = String::new();
-    for c in raw.chars() {
-        match c {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            c if depth == 0 => plain.push(c),
-            _ => {}
-        }
-    }
+    let plain = strip_generic_groups(raw);
     let name: String = plain
         .split_whitespace()
         .skip_while(|t| {
@@ -346,51 +368,5 @@ fn qualified(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_method_belongs_to_the_class_of_its_qualified_name() {
-        assert_eq!(
-            owner_of("b.cpp::etl::bloom::width#1").as_deref(),
-            Some("etl::bloom")
-        );
-        assert_eq!(owner_of("b.cpp::freefn#2").as_deref(), None);
-    }
-
-    #[test]
-    fn a_class_is_named_by_its_path_or_by_a_suffix_of_it() {
-        assert!(names_class("etl::bloom", "bloom"));
-        assert!(names_class("etl::bloom", "etl::bloom"));
-        assert!(!names_class("etl::bloom", "loom"));
-        assert!(!names_class("etl::bloom", "other::bloom"));
-    }
-
-    #[test]
-    fn a_base_is_read_without_access_specifier_generics_or_root() {
-        assert_eq!(class_path(" public Base<T> "), "Base");
-        assert_eq!(class_path("::ns::Base"), "ns::Base");
-        assert_eq!(class_path("virtual ns::Base<A, B>"), "ns::Base");
-        assert_eq!(class_path("public_base"), "public_base");
-        assert_eq!(class_path("virtual_base<T>"), "virtual_base");
-    }
-
-    #[test]
-    fn a_family_holds_the_bases_at_any_depth_and_survives_a_cycle() {
-        let mut classes = CppClasses::default();
-        for (path, bases) in [("ns::a", "b"), ("ns::b", "c"), ("ns::c", "a")] {
-            let last = path.rsplit("::").next().unwrap().to_string();
-            classes
-                .by_last
-                .entry(last)
-                .or_default()
-                .push(path.to_string());
-            classes
-                .bases
-                .insert(path.to_string(), vec![bases.to_string()]);
-        }
-        let family = classes.family("a", "");
-        assert!(family.holds("ns::a") && family.holds("ns::b") && family.holds("ns::c"));
-        assert!(!family.holds("ns::d"));
-    }
-}
+#[path = "member_calls_tests.rs"]
+mod tests;

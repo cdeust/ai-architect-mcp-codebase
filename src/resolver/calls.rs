@@ -63,7 +63,7 @@ pub(super) fn resolve_calls(
     // Issue #400: prototypes, macros and `static` functions.
     let callables = store.callable_facts();
     let includes = IncludeGraph::load(store, file_imports)?;
-    let cpp = member_calls::CppClasses::load(store);
+    let cpp = member_calls::CppClasses::load(store, includes.clone());
 
     for row in &qr.rows {
         if row.len() < 6 {

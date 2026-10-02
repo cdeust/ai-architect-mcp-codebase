@@ -9,10 +9,12 @@
 // - `cpp-this`: the receiver is `this`, `*this` or `(*this)`: the caller's own
 //   class.
 // - `cpp-declared`: the receiver is a name that a parameter, a local, a range
-//   variable or a condition declares with a type written in the source (`Bloom*
-//   p`); the hint is that type without qualifier, pointer, reference or
-//   generic arguments. A name declared with `auto`, a name no enclosing scope
-//   declares (a field, a global) or any other expression gives no hint.
+//   variable, a condition or a catch clause (`catch (const E& e)`, in its handler
+//   only) declares with a type written in the source (`Bloom* p`); the hint is that
+//   type without qualifier, pointer, reference or generic arguments. A name declared
+//   with `auto`, a name no enclosing scope declares (a field, a global), a type that
+//   is a template parameter of an enclosing template (`template <class T> .. T& t`:
+//   not a class) or any other expression gives no hint.
 // - `cpp-qualifier`: the callee is written `a::b::f`; the hint is `a::b`.
 //
 // source: tree-sitter-cpp 0.23.4 node-types.json (field_expression.argument,
@@ -24,6 +26,7 @@ use tree_sitter::Node;
 use crate::graph_store::{
     RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
+use crate::parser::generic_args::strip_generic_groups;
 use crate::parser::node_text;
 
 /// The `receiver_hint` and `receiver_hint_via` properties of one call, or none
@@ -53,7 +56,7 @@ pub(super) fn receiver_props(
 /// `a::b` of a callee written `a::b::f` (generic arguments dropped); empty for
 /// `::f`. Not qualified: `None`.
 fn qualifier(source: &str, callee: Node) -> Option<(String, &'static str)> {
-    let text = strip_generics(&node_text(source, callee));
+    let text = plain_type_text(&node_text(source, callee));
     let (scope, _) = text.rsplit_once("::")?;
     Some((scope.to_string(), RECEIVER_HINT_VIA_CPP_QUALIFIER))
 }
@@ -126,6 +129,18 @@ fn declarations_of(scope: Node) -> Vec<Node> {
             }
         }
         "for_range_loop" => out.push(scope),
+        // `catch (const E& e) { .. }`: the parameter is in scope in the handler only.
+        "catch_clause" => out.extend(
+            scope
+                .child_by_field_name("parameters")
+                .into_iter()
+                .flat_map(|list| {
+                    let mut cursor = list.walk();
+                    list.named_children(&mut cursor)
+                        .filter(|p| p.kind() == "parameter_declaration")
+                        .collect::<Vec<_>>()
+                }),
+        ),
         "if_statement" | "while_statement" | "switch_statement" => {
             let value = scope
                 .child_by_field_name("condition")
@@ -200,23 +215,76 @@ fn written_type(source: &str, decl: Node) -> Option<String> {
         }
         _ => return None,
     };
-    let name = strip_generics(&text);
-    (!name.is_empty()).then_some(name)
+    let name = plain_type_text(&text);
+    let first = name.split("::").next().unwrap_or(&name);
+    if name.is_empty() || is_template_parameter(source, decl, first) {
+        return None;
+    }
+    Some(name)
+}
+
+/// True when `name` is a parameter of a template that encloses `at`
+/// (`template <class T>`, `typename... Ts`, `template <class> class C`): a type
+/// written with it names no class of the repository.
+fn is_template_parameter(source: &str, at: Node, name: &str) -> bool {
+    let mut scope = at.parent();
+    while let Some(s) = scope {
+        if s.kind() == "template_declaration" {
+            if let Some(list) = s.child_by_field_name("parameters") {
+                if template_parameter_names(source, list)
+                    .iter()
+                    .any(|n| n == name)
+                {
+                    return true;
+                }
+            }
+        }
+        scope = s.parent();
+    }
+    false
+}
+
+/// The names a `template_parameter_list` declares for types: `T` of `class T`,
+/// `typename... Ts` or `class T = Default`, and `C` of `template <class> class
+/// C`. A non-type parameter (`int N`) names no type.
+fn template_parameter_names(source: &str, list: Node) -> Vec<String> {
+    let mut cursor = list.walk();
+    list.named_children(&mut cursor)
+        .filter_map(|parameter| type_parameter_name(source, parameter))
+        .collect()
+}
+
+/// The first `type_identifier` of a type parameter is its name (a default type
+/// follows it).
+fn type_parameter_name(source: &str, parameter: Node) -> Option<String> {
+    match parameter.kind() {
+        "type_parameter_declaration"
+        | "variadic_type_parameter_declaration"
+        | "optional_type_parameter_declaration" => {
+            let mut cursor = parameter.walk();
+            let name = parameter
+                .named_children(&mut cursor)
+                .find(|c| c.kind() == "type_identifier")
+                .map(|c| node_text(source, c));
+            name
+        }
+        "template_template_parameter_declaration" => {
+            let mut cursor = parameter.walk();
+            let name = parameter
+                .named_children(&mut cursor)
+                .find_map(|c| type_parameter_name(source, c));
+            name
+        }
+        _ => None,
+    }
 }
 
 /// `text` without its `<...>` groups and whitespace.
-fn strip_generics(text: &str) -> String {
-    let mut depth = 0usize;
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            c if depth == 0 && !c.is_whitespace() => out.push(c),
-            _ => {}
-        }
-    }
-    out
+fn plain_type_text(text: &str) -> String {
+    strip_generic_groups(text)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
 }
 
 #[cfg(test)]
@@ -307,5 +375,40 @@ void f(A& x) {
 }";
         let hints: Vec<String> = calls_in(src).into_iter().map(|(h, _)| h).collect();
         assert_eq!(hints, ["B", "A", "C", "-", "D", "-", "Local"]);
+    }
+
+    #[test]
+    fn a_catch_parameter_declares_its_name_in_its_handler_only() {
+        let src = "\
+void f(A& e) {
+    try { g(); }
+    catch (const ns::Err& e) { e.what(); }
+    catch (Other o) { o.go(); }
+    catch (...) { e.stop(); }
+    e.after();
+    catch_not(1);
+}
+void h() {
+    try { g(); }
+    catch (A a) { a.one(); }
+    catch (B b) { a.two(); b.three(); }
+}";
+        let hints: Vec<String> = calls_in(src).into_iter().map(|(h, _)| h).collect();
+        assert_eq!(
+            hints,
+            ["-", "ns::Err", "Other", "A", "A", "-", "-", "A", "-", "B"]
+        );
+    }
+
+    #[test]
+    fn a_template_parameter_is_no_receiver_type() {
+        let src = "\
+template <class T, typename U = Foo, int N, template <class> class C, typename... Ts>
+void f(T& a, U& b, Foo& c, C<int>& d, Ts& e, Real& g) {
+    a.go(); b.go(); c.go(); d.go(); e.go(); g.go();
+}
+struct S { template <class V> void h(V& v, T& t) { v.go(); t.go(); } };";
+        let hints: Vec<String> = calls_in(src).into_iter().map(|(h, _)| h).collect();
+        assert_eq!(hints, ["-", "-", "Foo", "-", "-", "Real", "-", "T"]);
     }
 }

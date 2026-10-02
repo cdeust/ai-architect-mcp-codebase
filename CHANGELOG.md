@@ -51,6 +51,48 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- C++ follow-ups of #406 (#412, points 1 and 2; point 3, the suffix matching of a
+  declared type, stays open on #412). Measured on ETLCPP 7d604f2e, `origin/main`
+  f4f88ea against this branch, over all 262,724 / 262,985 call sites (260,095 in
+  common). A macro that closes a brace the parser cannot see
+  (`ETL_DECLARE_ENUM_TYPE`, `ETL_ENUM_TYPE`, `ETL_END_ENUM_TYPE`) no longer makes the
+  class swallow the rest of the header: in `string_utilities.h`, 54 methods were
+  attributed to `string_pad_direction` and there are now 0 (`left_n` is `etl::left_n`);
+  the 18 `ETL_DECLARE_ENUM_TYPE` pseudo-methods of the corpus are gone too; 9 of the
+  334 headers declaring `namespace etl` had no `etl` node, 3 have none now. A
+  `catch (const E& e)` parameter types `e` in its handler only (the 5 such calls of
+  the corpus had no receiver type; below a parameter of the same name `e` took that
+  parameter's type). A template parameter gives no receiver type. A base class list
+  is split at the commas outside generic arguments (`etl::iterator<tag, const T>` is
+  one base, not two); the copies of the generic-argument stripping and splitting are
+  one helper (`parser::generic_args`). A `typedef` or `using` a source file (`.cpp`)
+  writes is seen by that file and by the files that `#include` it, not by any other.
+  A typed receiver is still read by path suffix, as on `main`: one class of that name
+  binds, several leave the site open. Nothing reads which declaration of a name C++
+  reaches (a using-declaration, a member type, a block, a structured binding, an
+  init-capture, a declaring macro).
+
+  Measured on the corpus. None of the 260,095 common sites bound on both sides is
+  retargeted (0). 1,908 calls bound on main are open (1,283 `declined_by_scope`:
+  `String` 1,110, `View` 132, `Observable` 17, `NDC` 12, `ItemNDC` 11, `Data` 1; and
+  625 `ambiguous_candidates`, all `etl::bitset`), 1,500 calls open on main are bound
+  (1,375 `declined_by_scope`, 121 `ambiguous_candidates`, 4 `no_receiver_type`; by
+  `receiver_hint_via`: `cpp-qualifier` 1,057, `cpp-declared` 443). Of the 443, 315 are
+  classes whose path was wrong on main because of the macros above and is right now
+  (`etl::bitset_ext` 170, `etl::bit_stream_reader` 58, `etl::bit_stream` 39,
+  `etl::to_arithmetic_result` 24, `etl::bit_stream_writer` 22,
+  `bit_stream_writer::callback_parameter_type` 2); then `QueueInt` 110 (its base
+  `etl::queue_lockable<int, 4>` was cut at the comma), `test_variant_3a` 10, `Data` 4
+  (a `using` the calling file writes) and `etl::exception` 4 (the `catch` parameter).
+  The 241 member calls whose receiver type matches two classes that both hold the
+  callee are 125 resolved before and 125 after. The 44 `const_iterator` parameters of
+  `circular_buffer.h`, `deque.h` and the four `unordered_*` headers are open on both
+  sides. 7,703 calls open on both sides change their `unresolved_reason`: 5,728
+  `ambiguous_candidates` -> `declined_by_scope`, 1,074 `declined_by_scope` ->
+  `ambiguous_candidates`, 892 `declined_by_scope` -> `no_receiver_type`, 7
+  `declined_by_scope` -> `not_a_call`, 1 `unknown_callee` -> `no_receiver_type`, 1
+  `no_receiver_type` -> `declined_by_scope`; none of them becomes bound.
+
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every
   unresolved call site by the bare method name, so `io::BufWriter::new` and
