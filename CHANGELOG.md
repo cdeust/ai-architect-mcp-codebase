@@ -89,22 +89,25 @@ adheres to [Semantic Versioning](https://semver.org/).
 
   Measured on the corpus. The 241 member calls whose receiver type matched two
   classes that both hold the callee: 125 resolved before, 169 after; the 44 gained
-  are the `const_iterator` parameters of `operator<`, `operator==` and `erase`
-  in `circular_buffer.h`, `deque.h` and the four `unordered_*` headers, which the
+  are the `const_iterator` parameters of `operator<`, `operator==` and `erase` in
+  `circular_buffer.h`, `deque.h` and the four `unordered_*` headers, which the
   signature rule reads; the 28 `timer_data` sites of `include/` are 25 bound and 3
   open on both sides (the local `timer_data` is read by suffix, as on main). Across
-  all sites, 1,909 calls bound on main are open (1,284 `declined_by_scope`:
-  `String` 1,110, `View` 132, `Observable` 17, `NDC` 12, `ItemNDC` 11, `link_type`
-  1, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`), 1,544 calls open
-  on main are bound (1,375 `declined_by_scope`, 165 `ambiguous_candidates`, 4
+  all sites, 1,909 calls bound on main are open (1,284 `declined_by_scope`: `String`
+  1,110, `View` 132, `Observable` 17, `NDC` 12, `ItemNDC` 11, `link_type` 1, `Data`
+  1; and 625 `ambiguous_candidates`, all `etl::bitset`), 1,544 calls open on main
+  are bound (1,375 `declined_by_scope`, 165 `ambiguous_candidates`, 4
   `no_receiver_type`), and none bound on both sides is retargeted (0 of 260,095).
-  The `SUITE(name) { using codec = ..; }` bodies of ETL keep their 34 bindings of main
-  (`codec` 26, `Data` 6, `milliseconds` 2, same targets). 7,708 calls open on both
-  sides change their `unresolved_reason`: 5,733 `ambiguous_candidates` ->
-  `declined_by_scope`, 1,074 `declined_by_scope` -> `ambiguous_candidates`, 892
-  `declined_by_scope` -> `no_receiver_type`, 7 `declined_by_scope` -> `not_a_call`,
-  1 `unknown_callee` -> `no_receiver_type`, 1 `no_receiver_type` ->
-  `declined_by_scope`.
+  The `SUITE(name) { using codec = ..; }` bodies of ETL keep their 34 bindings of
+  main (`codec` 26, `Data` 6, `milliseconds` 2, same targets). The price of the body
+  rule: a local whose type is a member typedef of a template parameter (`link_type`
+  of `intrusive_list.h` and its siblings, 5 sites) is read by suffix again and binds
+  to `tree_link::clear` as on `main`, where the scope reading left it open. 7,708
+  calls open on both sides change their `unresolved_reason`: 5,733
+  `ambiguous_candidates` -> `declined_by_scope`, 1,074 `declined_by_scope` ->
+  `ambiguous_candidates`, 892 `declined_by_scope` -> `no_receiver_type`, 7
+  `declined_by_scope` -> `not_a_call`, 1 `unknown_callee` -> `no_receiver_type`, 1
+  `no_receiver_type` -> `declined_by_scope`.
 
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every
