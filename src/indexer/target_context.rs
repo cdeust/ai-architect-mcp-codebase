@@ -19,8 +19,17 @@
 // that requires `cfg(kani)` into `proof`; a declaration's own feature gate is
 // ignored, because a module compiled out by a Cargo feature is still production
 // code (a build with that feature compiles it), unlike test and Kani-only code.
-// A file reached by several paths is `production` if any path is; else the class of its non-production paths when they agree; else
-// nothing is decided.
+// A file reached by several paths is `production` if any path is; else the class
+// of its non-production paths when they agree; else nothing is decided (a file
+// reached both through `cfg(test)` and through `cfg(kani)` is `{test, proof}`:
+// undecided, no entry).
+//
+// Combinations (pinned by tests): `cfg(all(kani, test))` is `test`, because the
+// `cfg(test)` requirement is read first and a build that compiles it is the test
+// harness's; `cfg(test)` below a `cfg(kani)` module stays `test` (the nearest
+// declaration that requires an option decides); `cfg(kani)` below a test-class
+// file (a `tests/*.rs` target or a `cfg(test)` module) is `proof`, on purpose:
+// the module compiles only under Kani, whatever the class of its parent.
 //
 // Evidence is positive only. A file no declaration reaches (an orphan, a file
 // behind an inline `mod a { mod b; }`, a `kani/` directory outside every
