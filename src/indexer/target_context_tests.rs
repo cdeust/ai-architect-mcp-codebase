@@ -254,3 +254,87 @@ fn a_target_kind_comes_from_the_cargo_kind_list_and_defaults_to_production() {
         [Production, Test, Bench, Example, Production, Production]
     );
 }
+
+#[test]
+fn cfg_all_kani_test_is_test_code_not_proof_code() {
+    let map = contexts(
+        &[
+            (
+                "src/lib.rs",
+                "#[cfg(all(kani, test))]\nmod both;\n#[cfg(all(test, kani))]\nmod both_rev;\n",
+            ),
+            ("src/both.rs", "mod inner;\n"),
+            ("src/both/inner.rs", ""),
+            ("src/both_rev.rs", ""),
+        ],
+        &[("src/lib.rs", Production)],
+    );
+    assert_eq!(map["src/both.rs"], "test");
+    assert_eq!(map["src/both/inner.rs"], "test");
+    assert_eq!(map["src/both_rev.rs"], "test");
+}
+
+#[test]
+fn a_file_reached_through_cfg_test_and_through_cfg_kani_is_not_decided() {
+    let map = contexts(
+        &[
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\nmod as_test;\n#[cfg(kani)]\n#[path = \"as_test.rs\"]\nmod as_proof;\n",
+            ),
+            ("src/as_test.rs", ""),
+        ],
+        &[("src/lib.rs", Production)],
+    );
+    assert!(!map.contains_key("src/as_test.rs"));
+}
+
+#[test]
+fn a_production_path_still_wins_over_the_test_and_proof_pair() {
+    let map = contexts(
+        &[
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\nmod a;\n#[cfg(kani)]\n#[path = \"a.rs\"]\nmod b;\n#[path = \"a.rs\"]\nmod plain;\n",
+            ),
+            ("src/a.rs", ""),
+        ],
+        &[("src/lib.rs", Production)],
+    );
+    assert_eq!(map["src/a.rs"], "production");
+}
+
+#[test]
+fn a_cfg_test_module_below_a_cfg_kani_module_is_test_code() {
+    let map = contexts(
+        &[
+            ("src/lib.rs", "#[cfg(kani)]\nmod proofs;\n"),
+            ("src/proofs.rs", "#[cfg(test)]\nmod checks;\nmod plain;\n"),
+            ("src/proofs/checks.rs", ""),
+            ("src/proofs/plain.rs", ""),
+        ],
+        &[("src/lib.rs", Production)],
+    );
+    assert_eq!(map["src/proofs.rs"], "proof");
+    assert_eq!(map["src/proofs/checks.rs"], "test");
+    assert_eq!(map["src/proofs/plain.rs"], "proof");
+}
+
+#[test]
+fn a_cfg_kani_module_below_a_test_class_file_is_proof_code() {
+    let map = contexts(
+        &[
+            ("tests/all.rs", "#[cfg(kani)]\nmod harness;\nmod support;\n"),
+            ("tests/harness.rs", ""),
+            ("tests/support.rs", ""),
+            ("src/lib.rs", "#[cfg(test)]\nmod t;\n"),
+            ("src/t.rs", "#[cfg(kani)]\nmod k;\n"),
+            ("src/t/k.rs", ""),
+        ],
+        &[("tests/all.rs", Test), ("src/lib.rs", Production)],
+    );
+    assert_eq!(map["tests/harness.rs"], "proof");
+    assert_eq!(map["tests/support.rs"], "test");
+    assert_eq!(map["src/t.rs"], "test");
+    assert_eq!(map["src/t/k.rs"], "proof");
+}

@@ -481,3 +481,53 @@ fn get_impact_ignores_unresolved_callsite_naming_a_different_symbol() {
     );
     assert!(result.epistemic_reasons.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// The reverse traversal binds the target by id OR by qualified name (#434)
+// ---------------------------------------------------------------------------
+
+/// A function whose node `id` differs from its `qualified_name`, the shape a
+/// graph with opaque ids gives. `get_impact` takes the qualified name, so the
+/// `b.qualified_name = {esc}` alternative of the reverse query is the only way
+/// to reach a target whose id is not its qualified name.
+fn insert_function_with_id(store: &GraphStore, id: &str, qn: &str) {
+    store
+        .insert_node(
+            NODE_FUNCTION,
+            &[
+                ("id", &cypher_str(id)),
+                ("name", &cypher_str(qn)),
+                ("qualified_name", &cypher_str(qn)),
+                ("start_line", "1"),
+                ("end_line", "1"),
+                ("visibility", &cypher_str("pub")),
+                ("is_async", "false"),
+                ("language", &cypher_str("rust")),
+            ],
+        )
+        .expect("insert function node");
+}
+
+#[test]
+fn get_impact_finds_a_caller_of_a_target_whose_id_is_not_its_qualified_name() {
+    let (_dir, store) = empty_store();
+    insert_function_with_id(&store, "id-of-target", "app::svc::target");
+    insert_function(&store, "app::svc::caller");
+    store
+        .insert_edge(
+            "Calls_Function_Function",
+            "app::svc::caller",
+            "id-of-target",
+            &[],
+        )
+        .expect("insert Calls edge");
+
+    let result = get_impact(&store, "app::svc::target").expect("get_impact");
+
+    let callers: Vec<&str> = result
+        .callers
+        .iter()
+        .map(|c| c.qualified_name.as_str())
+        .collect();
+    assert_eq!(callers, ["app::svc::caller"]);
+}

@@ -62,7 +62,28 @@ pub fn macro_clone(c: Cl) -> bool {
     d.ok() // macro-clone
 }
 
-// 3: the words `derive` and `Clone` sit in a doc attribute, not in a derive list.
+// 4: `my::Option` is not `Option`; its `Some` binds something else.
+pub fn build() -> my::Option<Real> {
+    my::make()
+}
+pub fn path_option() -> bool {
+    if let Some(s) = build() {
+        return s.ok(); // path-option
+    }
+    false
+}
+";
+
+// 3: the words `derive` and `Clone` sit in a doc attribute, not in a derive list. Its own
+// source, not part of `LIB`: `LIB` holds a macro that mentions `clone`, which alone makes
+// the resolver decline every `.clone()` of the file, so a `doc_clone` there would pass
+// whatever the attribute reading did.
+const DOC_CLONE: &str = "pub struct Real;
+impl Real {
+    pub fn ok(&self) -> bool {
+        true
+    }
+}
 #[doc = \"never derive Clone here\"]
 pub struct Doc;
 impl Doc {
@@ -73,17 +94,6 @@ impl Doc {
 pub fn doc_clone(d: Doc) -> bool {
     let e = d.clone();
     e.ok() // doc-clone
-}
-
-// 4: `my::Option` is not `Option`; its `Some` binds something else.
-pub fn build() -> my::Option<Real> {
-    my::make()
-}
-pub fn path_option() -> bool {
-    if let Some(s) = build() {
-        return s.ok(); // path-option
-    }
-    false
 }
 ";
 
@@ -165,6 +175,17 @@ pub fn go(a: A) -> bool {
     let (store, _root) = index_and_resolve(src);
     let edges = ok_edges(&store);
     assert_eq!(targets(&edges, "go"), vec!["src/lib.rs::A::ok".to_string()]);
+}
+
+#[test]
+fn a_doc_attribute_naming_derive_and_clone_is_not_a_derive_list() {
+    let (store, _root) = index_and_resolve(DOC_CLONE);
+    let edges = ok_edges(&store);
+    assert!(
+        targets(&edges, "doc_clone").is_empty(),
+        "`Doc` has no proven `clone`, so `e` has no proven type; edges: {:?}",
+        targets(&edges, "doc_clone")
+    );
 }
 
 #[test]
