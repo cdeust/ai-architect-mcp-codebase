@@ -28,6 +28,29 @@ pub(crate) fn strip_generics(s: &str) -> &str {
     s.split('<').next().unwrap_or(s)
 }
 
+/// `text` cut at every `sep` that is outside the `<...>` groups (the commas of
+/// `etl::iterator<tag, const T>, Other` separate two bases, not three), with the
+/// same depth count as `strip_generic_groups`; the parts keep their whitespace.
+/// precondition: none. postcondition: at least one part (the empty text gives one
+/// empty part); joining the parts with `sep` gives `text` back.
+pub(crate) fn split_outside_generics(text: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0usize, 0);
+    for (i, c) in text.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            c if c == sep && depth == 0 => {
+                parts.push(&text[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,5 +72,23 @@ mod tests {
         assert_eq!(strip_generics("Wrapper<T>"), "Wrapper");
         assert_eq!(strip_generics("TaskSet"), "TaskSet");
         assert_eq!(strip_generics("a::B<c>::D"), "a::B");
+    }
+
+    #[test]
+    fn the_separators_inside_generic_arguments_do_not_cut() {
+        assert_eq!(
+            split_outside_generics(
+                "etl::iterator<tag, const T>, public Other<A<B, C>, D>,Last",
+                ','
+            ),
+            [
+                "etl::iterator<tag, const T>",
+                " public Other<A<B, C>, D>",
+                "Last"
+            ]
+        );
+        assert_eq!(split_outside_generics("", ','), [""]);
+        assert_eq!(split_outside_generics("a>,b", ','), ["a>", "b"]);
+        assert_eq!(split_outside_generics("a,é,b", ','), ["a", "é", "b"]);
     }
 }

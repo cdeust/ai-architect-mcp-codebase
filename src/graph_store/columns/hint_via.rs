@@ -45,6 +45,14 @@ pub(crate) const RECEIVER_HINT_VIA_CPP_THIS: &str = "cpp-this";
 /// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
 pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED: &str = "cpp-declared";
 
+/// The `receiver_hint_via` of a C++ member call whose receiver is declared as
+/// `cpp-declared` is, with a type whose first name a block around the declaration
+/// declares itself (`using other::Box;`, a `typedef`, a local `struct Box`). The
+/// graph holds no node for a block, so the hint does not say which class that name
+/// designates: the resolver keeps no candidate for it (issue #412).
+/// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
+pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK: &str = "cpp-declared-block";
+
 /// The `receiver_hint_via` of a C++ call written with a qualifier (`a::b::f()`):
 /// the hint is the qualifier. The callee name is always the last segment, so the
 /// hint is the only trace of the qualifier the resolver has.

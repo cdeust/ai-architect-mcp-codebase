@@ -346,3 +346,93 @@ namespace etl {
         ["compare -> etl::Outer::It::compare"]
     );
 }
+
+/// A declaration a function body writes (a block scope no owner path names) hides
+/// the class the enclosing namespace holds under that name, so the site stays open.
+fn assert_open_in_block(file: &str, src: &str, caller: &str) {
+    let (store, _tmp) = index_and_resolve(&[(file, src)]);
+    assert!(
+        bound_methods(&store, caller).is_empty(),
+        "{:?}",
+        bound_methods(&store, caller)
+    );
+    assert_eq!(open_reasons(&store, caller), ["declined_by_scope"]);
+}
+
+const OTHER_BOX_AND_GLOBAL_BOX: &str = "\
+namespace other { struct Box { int m() { return 1; } }; }
+struct Box { int m() { return 2; } };
+";
+
+#[test]
+fn a_using_declaration_in_a_function_body_leaves_the_call_open() {
+    // `using other::Box;` in `x1` makes `Box` mean `other::Box`, not `::Box`.
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int x1() {{ using other::Box; Box b; return b.m(); }}\n"
+    );
+    assert_open_in_block("x1.cpp", &src, "x1");
+}
+
+#[test]
+fn a_typedef_in_a_function_body_leaves_the_call_open() {
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int x2() {{ typedef other::Box Box; Box b; return b.m(); }}\n"
+    );
+    assert_open_in_block("x2.cpp", &src, "x2");
+    let alias = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int x2b() {{ using Box = other::Box; Box b; return b.m(); }}\n"
+    );
+    assert_open_in_block("x2b.cpp", &alias, "x2b");
+}
+
+#[test]
+fn a_local_class_leaves_the_call_open() {
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int x3() {{ struct Box {{ int m() {{ return 3; }} }}; Box b; return b.m(); }}\n"
+    );
+    assert_open_in_block("x3.cpp", &src, "x3");
+}
+
+#[test]
+fn a_using_declaration_in_a_method_body_leaves_the_call_open() {
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}struct C {{ int y3() {{ using other::Box; Box b; return b.m(); }} }};\n"
+    );
+    assert_open_in_block("y3.cpp", &src, "y3");
+}
+
+#[test]
+fn a_local_class_in_a_namespace_function_leaves_the_call_open() {
+    let src = "\
+namespace a { struct Box { int m() { return 1; } }; }
+namespace b { struct Box { int m() { return 2; } }; }
+namespace a { int y4() { struct Box { int m() { return 3; } }; Box x; return x.m(); } }
+";
+    assert_open_in_block("y4.cpp", src, "y4");
+}
+
+#[test]
+fn a_declaration_of_another_name_or_in_a_closed_block_leaves_the_binding() {
+    // Only a block that encloses the call and declares the receiver's own type name
+    // hides the class of the namespace: `Other` is not `Box`, and the using of a
+    // sibling block is out of scope at the call.
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}\
+int z1() {{ struct Other {{ int m() {{ return 3; }} }}; Box b; return b.m(); }}
+int z2() {{ {{ using other::Box; }} Box b; return b.m(); }}
+"
+    );
+    let (store, _tmp) = index_and_resolve(&[("z.cpp", &src)]);
+    assert_eq!(bound_methods(&store, "z1"), ["m -> Box::m"]);
+    assert_eq!(bound_methods(&store, "z2"), ["m -> Box::m"]);
+}
+
+#[test]
+fn a_source_file_sees_the_typedef_of_the_source_file_it_includes() {
+    let x = "struct S { int go() { return 1; } };\ntypedef S T;\n";
+    let y = "#include \"x.cpp\"\nint via_include() { T t; return t.go(); }\n";
+    let z = "int no_include() { T t; return t.go(); }\n";
+    let (store, _tmp) = index_and_resolve(&[("x.cpp", x), ("y.cpp", y), ("z.cpp", z)]);
+    assert_eq!(bound_methods(&store, "via_include"), ["go -> S::go"]);
+    assert!(bound_methods(&store, "no_include").is_empty());
+}

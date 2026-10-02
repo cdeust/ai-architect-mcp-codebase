@@ -14,7 +14,10 @@
 //   hint is that type without qualifier, pointer, reference or generic arguments. A name declared with `auto`, a name no enclosing scope
 //   declares (a field, a global), a type that is a template parameter of an
 //   enclosing template (`template <class T> .. T& t`: not a class) or any other
-//   expression gives no hint.
+//   expression gives no hint. A type whose first name an enclosing block declares
+//   itself (`using other::Box;`, `typedef`, a local `struct Box`:
+//   `cpp_local_decls`) is a `cpp-declared-block` hint: the graph holds no node for
+//   a block, so the resolver cannot tell which class the name designates.
 // - `cpp-qualifier`: the callee is written `a::b::f`; the hint is `a::b`.
 //
 // source: tree-sitter-cpp 0.23.4 node-types.json (field_expression.argument,
@@ -24,10 +27,13 @@
 use tree_sitter::Node;
 
 use crate::graph_store::{
-    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
+    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK,
+    RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::parser::generic_args::strip_generic_groups;
 use crate::parser::node_text;
+
+use super::cpp_local_decls::block_declares;
 
 /// The `receiver_hint` and `receiver_hint_via` properties of one call, or none
 /// when the source states nothing about its receiver.
@@ -74,15 +80,28 @@ fn member_receiver(source: &str, callee: Node) -> Option<(String, &'static str)>
         "this" => Some((String::new(), RECEIVER_HINT_VIA_CPP_THIS)),
         "identifier" => {
             let name = node_text(source, argument);
-            declared_type(source, callee, &name).map(|t| (t, RECEIVER_HINT_VIA_CPP_DECLARED))
+            let written = declared_type(source, callee, &name)?;
+            let via = if written.in_block {
+                RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK
+            } else {
+                RECEIVER_HINT_VIA_CPP_DECLARED
+            };
+            Some((written.name, via))
         }
         _ => None,
     }
 }
 
+/// A type as a declaration writes it, and whether a block that encloses the
+/// declaration declares its first name itself (`cpp_local_decls`).
+struct Written {
+    name: String,
+    in_block: bool,
+}
+
 /// The type the innermost enclosing scope declares for `name`, read at `at`.
 /// The search stops at the enclosing function: a global or a field is not read.
-fn declared_type(source: &str, at: Node, name: &str) -> Option<String> {
+fn declared_type(source: &str, at: Node, name: &str) -> Option<Written> {
     let mut scope = at.parent();
     while let Some(s) = scope {
         if let Some(found) = binding_in(source, s, (at, name)) {
@@ -99,7 +118,7 @@ fn declared_type(source: &str, at: Node, name: &str) -> Option<String> {
 /// `Some(type)` when `scope` declares `name` before `at` (the last such
 /// declaration wins); the inner `None` is a declaration whose type the source
 /// does not write (`auto`). `None` when `scope` does not declare it.
-fn binding_in(source: &str, scope: Node, at: (Node, &str)) -> Option<Option<String>> {
+fn binding_in(source: &str, scope: Node, at: (Node, &str)) -> Option<Option<Written>> {
     let (call, name) = at;
     let mut found = None;
     for decl in declarations_of(scope) {
@@ -206,7 +225,7 @@ fn declarator_name(source: &str, declarator: Node) -> Option<String> {
 /// The class a declaration's `type` names, as written: `Bloom` of `const
 /// Bloom*`, `ns::Bloom` of `ns::Bloom&`, `Map` of `Map<K, V>`. `auto`,
 /// `decltype` and the builtin types give `None`.
-fn written_type(source: &str, decl: Node) -> Option<String> {
+fn written_type(source: &str, decl: Node) -> Option<Written> {
     let ty = decl.child_by_field_name("type")?;
     let text = match ty.kind() {
         "type_identifier" | "qualified_identifier" | "template_type" => node_text(source, ty),
@@ -217,7 +236,11 @@ fn written_type(source: &str, decl: Node) -> Option<String> {
     };
     let name = plain_type_text(&text);
     let first = name.split("::").next().unwrap_or(&name);
-    (!name.is_empty() && !is_template_parameter(source, decl, first)).then_some(name)
+    if name.is_empty() || is_template_parameter(source, decl, first) {
+        return None;
+    }
+    let in_block = block_declares(source, decl, first);
+    Some(Written { name, in_block })
 }
 
 /// True when `name` is a parameter of a template that encloses `at`
@@ -407,5 +430,34 @@ void f(T& a, U& b, Foo& c, C<int>& d, Ts& e, Real& g) {
 struct S { template <class V> void h(V& v, T& t) { v.go(); t.go(); } };";
         let hints: Vec<String> = calls_in(src).into_iter().map(|(h, _)| h).collect();
         assert_eq!(hints, ["-", "-", "Foo", "-", "-", "Real", "-", "T"]);
+    }
+
+    #[test]
+    fn a_type_a_block_declares_is_a_block_hint() {
+        let src = "\
+void f(Box& p) {
+    using other::Box;
+    Box a;
+    a.go();
+    p.go();
+    { struct Own {}; Own o; o.go(); }
+    { Own o; o.go(); }
+    typedef Real Alias;
+    Alias c;
+    c.go();
+    Box late;
+    late.go();
+}";
+        assert_eq!(
+            calls_in(src),
+            vec![
+                pair("Box", "cpp-declared-block"),
+                pair("Box", "cpp-declared"),
+                pair("Own", "cpp-declared-block"),
+                pair("Own", "cpp-declared"),
+                pair("Alias", "cpp-declared-block"),
+                pair("Box", "cpp-declared-block"),
+            ]
+        );
     }
 }

@@ -27,19 +27,6 @@ fn a_base_is_read_without_access_specifier_generics_or_root() {
 }
 
 #[test]
-fn the_commas_of_generic_arguments_do_not_separate_bases() {
-    assert_eq!(
-        split_bases("etl::iterator<tag, const T>, public Other<A<B, C>, D>,Last"),
-        [
-            "etl::iterator<tag, const T>",
-            " public Other<A<B, C>, D>",
-            "Last"
-        ]
-    );
-    assert_eq!(split_bases(""), [""]);
-}
-
-#[test]
 fn a_family_holds_the_bases_at_any_depth_and_survives_a_cycle() {
     let mut classes = CppClasses::default();
     for (path, bases) in [("ns::a", "b"), ("ns::b", "c"), ("ns::c", "a")] {
@@ -246,4 +233,66 @@ fn a_multi_segment_type_is_looked_up_from_the_innermost_scope_too() {
     let classes = classes_of(&["etl::inner::Box", "other::inner::Box", "etl::x"]);
     let family = classes.family_in("inner::Box", &in_method("", "etl::x"));
     assert!(family.holds("etl::inner::Box") && !family.holds("other::inner::Box"));
+}
+
+#[test]
+fn a_typedef_of_the_callers_file_hides_a_header_typedef_of_the_same_name() {
+    // The file's `D` is the one in scope: the header's `D` of the same path is no
+    // alternative (`alias_targets` keeps the aliases of `from` when it writes any).
+    let mut classes = classes_of(&["x::Local", "x::Header"]);
+    alias(&mut classes, "D", "types.h", "x::Header");
+    alias(&mut classes, "D", "set.cpp", "x::Local");
+    let family = classes.family("D", "set.cpp");
+    assert!(family.holds("x::Local") && !family.holds("x::Header"));
+    let family = classes.family("D", "other.cpp");
+    assert!(family.holds("x::Header") && !family.holds("x::Local"));
+}
+
+fn including(pairs: &[(&str, &str)]) -> IncludeGraph {
+    let ids = ["x.cpp", "y.cpp", "z.cpp", "h.h"]
+        .iter()
+        .map(|f| (*f).to_string())
+        .collect();
+    let mut imports: HashMap<String, Vec<String>> = HashMap::new();
+    for (file, included) in pairs {
+        imports
+            .entry((*file).to_string())
+            .or_default()
+            .push((*included).to_string());
+    }
+    IncludeGraph::build(&imports, &ids)
+}
+
+#[test]
+fn a_source_file_sees_what_the_source_files_it_includes_declare() {
+    let classes = CppClasses {
+        includes: including(&[("y.cpp", "x.cpp"), ("z.cpp", "h.h"), ("h.h", "x.cpp")]),
+        ..CppClasses::default()
+    };
+    assert!(classes.sees("y.cpp", "x.cpp"), "directly");
+    assert!(classes.sees("z.cpp", "x.cpp"), "through a header");
+    assert!(classes.sees("x.cpp", "x.cpp"), "itself");
+    assert!(
+        classes.sees("y.cpp", "any.h"),
+        "a header is seen by every file"
+    );
+    assert!(
+        !classes.sees("x.cpp", "y.cpp"),
+        "an include is not symmetric"
+    );
+    assert!(
+        !classes.sees("h.h", "z.cpp"),
+        "nor is a file seen by a header it includes"
+    );
+}
+
+#[test]
+fn a_typedef_of_an_included_source_file_is_in_scope() {
+    let mut classes = classes_of(&["lib::S", "other::S"]);
+    alias(&mut classes, "T", "x.cpp", "lib::S");
+    classes.includes = including(&[("y.cpp", "x.cpp")]);
+    let family = classes.family_in("T", &in_function("y.cpp", ""));
+    assert!(family.holds("lib::S") && !family.holds("other::S"));
+    let family = classes.family_in("T", &in_function("z.cpp", ""));
+    assert!(!family.holds("lib::S"), "z.cpp does not include x.cpp");
 }

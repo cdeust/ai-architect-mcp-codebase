@@ -13,8 +13,11 @@
 //   class and of its bases can be named; a declared type is the class of the
 //   innermost enclosing scope that has one of that name (`family_in`), only when
 //   nothing the graph cannot see (a using-declaration, an inherited member type)
-//   may come first; otherwise the suffix reading stays (#412). A `typedef` or
-//   `using` a source file writes is visible to that file only;
+//   may come first; otherwise the suffix reading stays (#412); a type whose first
+//   name a block around the declaration declares itself (`cpp-declared-block`) names
+//   no class. A `typedef` or
+//   `using` a source file writes is visible to that file and to the files that
+//   `#include` it, directly or through other files;
 // - an unqualified call names, first, a method of the caller's own class or of
 //   one of its bases (implicit `this`, which hides every namesake outside the
 //   class), then a function or a constructor; never a method of another class;
@@ -29,17 +32,18 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::includes::IncludeGraph;
 use super::reason::{
     Decline, Gated, SCOPE_CPP_QUALIFIER, SCOPE_CPP_RECEIVER_CLASS, SCOPE_CPP_UNQUALIFIED_CALL,
 };
 use super::*;
 use crate::graph_store::{
     calls_through_a_pointer, GraphStore, CALLEE_SHAPE_DIRECT, CALLEE_SHAPE_INDIRECT,
-    CALLEE_SHAPE_MEMBER, RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER,
-    RECEIVER_HINT_VIA_CPP_THIS,
+    CALLEE_SHAPE_MEMBER, RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK,
+    RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::language_provider::extract_file_prefix;
-use crate::parser::generic_args::strip_generic_groups;
+use crate::parser::generic_args::{split_outside_generics, strip_generic_groups};
 
 /// The C++ classes of the graph: where each is, and the base classes it names.
 #[derive(Default)]
@@ -53,6 +57,8 @@ pub(super) struct CppClasses {
     class_files: HashMap<String, Vec<String>>,
     /// The `using` aliases and `typedef`s by last segment: what each names.
     aliases: HashMap<String, Vec<Alias>>,
+    /// Which file includes which (a source file is seen by the files that include it).
+    includes: IncludeGraph,
 }
 
 /// A `using X = T;` or `typedef T X;`: the path of `X`, the file that writes
@@ -66,8 +72,11 @@ struct Alias {
 impl CppClasses {
     /// Reads the `bases` of every C++ class (the `Struct` nodes of the
     /// language). A graph without the table, or without the column, yields none.
-    pub(super) fn load(store: &GraphStore) -> Self {
-        let mut classes = Self::default();
+    pub(super) fn load(store: &GraphStore, includes: IncludeGraph) -> Self {
+        let mut classes = Self {
+            includes,
+            ..Self::default()
+        };
         let Ok(qr) =
             store.execute_query("MATCH (s:Struct) RETURN s.qualified_name, s.bases, s.language")
         else {
@@ -80,7 +89,7 @@ impl CppClasses {
             } else {
                 &row[1]
             };
-            let bases: Vec<String> = split_bases(bases)
+            let bases: Vec<String> = split_outside_generics(bases, ',')
                 .into_iter()
                 .map(class_path)
                 .filter(|b| !b.is_empty())
@@ -155,7 +164,7 @@ impl CppClasses {
             .get(last)
             .into_iter()
             .flatten()
-            .filter(|a| names_class(&a.path, name) && sees(from, &a.file))
+            .filter(|a| names_class(&a.path, name) && self.sees(from, &a.file))
             .collect();
         let local: Vec<&Alias> = named.iter().copied().filter(|a| a.file == from).collect();
         let chosen = if local.is_empty() { named } else { local };
@@ -181,27 +190,6 @@ fn names_class(path: &str, name: &str) -> bool {
         return path == full;
     }
     path == name || path.strip_suffix(name).is_some_and(|p| p.ends_with("::"))
-}
-
-/// The bases of a class as the parser writes them, comma separated: the commas
-/// inside generic arguments (`etl::iterator<tag, const T>`) do not separate two
-/// bases.
-fn split_bases(bases: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let (mut depth, mut start) = (0usize, 0);
-    for (i, c) in bases.char_indices() {
-        match c {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                parts.push(&bases[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push(&bases[start..]);
-    parts
 }
 
 /// `Base` of `public Base<T>`, `::ns::Base` or `ns::Base`: a class as a path,
@@ -274,7 +262,12 @@ pub(super) fn open_call(language: &str, shape: &str, via: &str) -> Option<Gated>
             Some(Decline::PointerCall(shape)),
         ));
     }
-    let typed = via == RECEIVER_HINT_VIA_CPP_THIS || via == RECEIVER_HINT_VIA_CPP_DECLARED;
+    let typed = [
+        RECEIVER_HINT_VIA_CPP_THIS,
+        RECEIVER_HINT_VIA_CPP_DECLARED,
+        RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK,
+    ]
+    .contains(&via);
     (language == "cpp" && shape == CALLEE_SHAPE_MEMBER && !typed)
         .then_some((PolicyResolution::NotFound, Some(Decline::NoReceiverType)))
 }
@@ -309,6 +302,10 @@ pub(super) fn scope(
             let family = ctx.cpp.family_in(site.receiver_hint, &caller);
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
+        // A block declares the first name of the type (`using other::Box;`, a
+        // `typedef`, a local class): the graph holds no node for it, so no class
+        // of the repository can be told to be the one the name designates.
+        RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK => (Vec::new(), SCOPE_CPP_RECEIVER_CLASS),
         RECEIVER_HINT_VIA_CPP_QUALIFIER => (qualified(ctx, site, candidates), SCOPE_CPP_QUALIFIER),
         _ if site.callee_shape == CALLEE_SHAPE_DIRECT => (
             unqualified(ctx, site, candidates),
@@ -389,7 +386,7 @@ fn qualified(
 
 #[path = "member_calls_lookup.rs"]
 mod lookup;
-use lookup::{sees, Caller};
+use lookup::Caller;
 
 #[cfg(test)]
 #[path = "member_calls_tests.rs"]

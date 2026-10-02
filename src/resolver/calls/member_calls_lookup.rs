@@ -14,9 +14,9 @@ pub(super) struct Caller<'a> {
 }
 
 /// True when a declaration written in `declared` is visible to a caller in
-/// `from`: a header may be included by any file, a source file is a translation
-/// unit of its own and is seen by itself only.
-pub(super) fn sees(from: &str, declared: &str) -> bool {
+/// `from` by the file alone: a header may be included by any file, a source file is
+/// a translation unit of its own and is seen by itself only.
+fn unit_sees(from: &str, declared: &str) -> bool {
     declared == from
         || !matches!(
             declared.rsplit_once('.').map(|(_, ext)| ext),
@@ -25,6 +25,14 @@ pub(super) fn sees(from: &str, declared: &str) -> bool {
 }
 
 impl CppClasses {
+    /// True when a declaration written in `declared` is visible to a caller in
+    /// `from`: by the file alone (`unit_sees`), or because `from` includes it, directly
+    /// or through other files (a source file that `#include`s another source file
+    /// sees its typedefs).
+    pub(super) fn sees(&self, from: &str, declared: &str) -> bool {
+        unit_sees(from, declared) || self.includes.reaches(from, declared)
+    }
+
     /// The class a type written `name` designates for a caller in `from` inside
     /// `scope` (the namespaces and classes around it, outermost first), and what
     /// `family` adds. C++ looks a name up from the innermost enclosing scope
@@ -85,7 +93,7 @@ impl CppClasses {
                 || self.aliases.get(last).is_some_and(|aliases| {
                     aliases
                         .iter()
-                        .any(|a| a.path == path && sees(caller.file, &a.file))
+                        .any(|a| a.path == path && self.sees(caller.file, &a.file))
                 })
         };
         (0..=caller.scope.len()).rev().find_map(|k| {
@@ -103,7 +111,7 @@ impl CppClasses {
     fn class_seen_from(&self, class: &str, from: &str) -> bool {
         self.class_files
             .get(class)
-            .is_none_or(|files| files.iter().any(|file| sees(from, file)))
+            .is_none_or(|files| files.iter().any(|file| self.sees(from, file)))
     }
 
     /// True when the declaration of `name` found under `depth` scope segments is the

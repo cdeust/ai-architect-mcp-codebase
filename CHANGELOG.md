@@ -62,24 +62,34 @@ adheres to [Semantic Versioning](https://semver.org/).
   parameter now types `e` in its handler only (the 5 such calls of the corpus had
   no receiver type; below a parameter of the same name `e` took that parameter's
   type). A declared type is the class of the innermost enclosing scope that has
-  one of that name when no scope between it and the caller can supply another
-  (a namespace through a using-declaration, a class through a member type it or
-  a base declares, a base the graph does not hold, a template parameter), the
-  path-suffix reading staying otherwise: of 241 member calls whose receiver type
+  one of that name only when nothing the graph cannot see may come first. A
+  namespace between the declaring scope and the caller (a using-declaration), a
+  member type the caller's class or one of its bases declares, or a base the graph
+  does not hold keeps the path-suffix reading of before; a template parameter
+  gives no type; a name the function body itself declares (`using other::Box;`, a
+  `typedef`, `using Box = ..;`, a local class) names no class, and the call
+  stays open (`declined_by_scope`). Of 241 member calls whose receiver type
   matched two classes that both hold the callee (`timer_data` of the four
   `etl::*timer*` classes), 125 were resolved before and 169 after, the 72 left
   being overloads of one class, which the graph cannot tell apart. A `typedef`
-  or `using` a source file (`.cpp`) writes is seen by that file only: on
-  ETLCPP, the 21 calls of `test_reference_flat_set.cpp` on a `reference_flat_set`
-  typedef bind to `ireference_flat_set` again, not to the `reference_flat_map`
-  one another test file writes under the same name, and 1,282 calls that were
-  bound through another file's typedef of the same name (`View`, `String`,
-  `QueueInt`, `NDC` of the other tests; the file's own typedef is not in the
-  graph) stay open (`declined_by_scope`). A receiver whose type is a template
-  parameter (`template <class T> .. T& t`) has no type. A base class list is
-  split at the commas outside generic arguments (`etl::iterator<tag, const T>`
-  is one base, not two). The three copies of the generic-argument stripping are
-  one helper (`parser::generic_args`).
+  or `using` a source file (`.cpp`) writes is seen by that file and by the files
+  that `#include` it, not by any other: on ETLCPP, the 21 calls of
+  `test_reference_flat_set.cpp` on a `reference_flat_set` typedef bind to
+  `ireference_flat_set` again, not to the `reference_flat_map` one another test
+  file writes under the same name. Measured on ETLCPP over all call sites, 1,324
+  calls that were bound stay open (`declined_by_scope`): those made through
+  another file's typedef of the same name or through a type a block declares
+  (`String` 1,110, `View` 132, `codec` 26, `Observable` 17, `NDC` 12,
+  `ItemNDC` 11, `Data` 7, `link_type` 6, `milliseconds` 2, `duration` 1; the
+  file's own typedef is not always in the graph), and 625 `etl::bitset` calls
+  pass from bound to `ambiguous_candidates` (the 402 of `test_bitset_new_*` were
+  bound wrongly to `bitset_legacy.h`; the 223 of `test_bitset_legacy.cpp` lose a
+  correct binding). 1,596 calls that were open are bound; no call bound in both is
+  retargeted. A receiver whose type is a
+  template parameter (`template <class T> .. T& t`) has no type. A base class
+  list is split at the commas outside generic arguments
+  (`etl::iterator<tag, const T>` is one base, not two). The copies of the
+  generic-argument stripping and splitting are one helper (`parser::generic_args`).
 
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every
