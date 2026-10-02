@@ -51,6 +51,24 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- C++ follow-ups of #406 (#412). Measured on ETLCPP 7d604f2e before and after:
+  a macro that closes a brace the parser cannot see (`ETL_DECLARE_ENUM_TYPE`,
+  `ETL_ENUM_TYPE`, `ETL_END_ENUM_TYPE`) no longer makes the class swallow the rest
+  of the header: in `string_utilities.h`, 54 methods were attributed to
+  `string_pad_direction` (3 of them named after the macros, the others the
+  functions of namespace `etl` that follow; `left_n` is now `etl::left_n`) and
+  there are now 0; the 18 `ETL_DECLARE_ENUM_TYPE` pseudo-methods of the corpus
+  are gone too. A `catch (const E& e)`
+  parameter now types `e` in its handler only (the 5 such calls of the corpus had
+  no receiver type; below a parameter of the same name `e` took that parameter's
+  type). A declared type is the class of the innermost enclosing scope that has
+  one of that name, the path-suffix reading staying only when no scope does: of
+  241 member calls whose receiver type matched two classes that both hold the
+  callee (`timer_data` of the four `etl::*timer*` classes), 125 were resolved
+  before and 169 after, the 72 left being overloads of one class, which the
+  graph cannot tell apart. The three copies of the generic-argument stripping are
+  one helper (`parser::generic_args`).
+
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every
   unresolved call site by the bare method name, so `io::BufWriter::new` and

@@ -10,7 +10,9 @@
 // - a member call (`a.f()`, `p->f()`) on a receiver whose type the parser did
 //   not read stays open as `no_receiver_type` (`open_call`);
 // - through `this` or a receiver of a declared type, only the methods of that
-//   class and of its bases can be named;
+//   class and of its bases can be named; a declared type is the class of the
+//   innermost enclosing scope that has one of that name (`family_in`), the suffix
+//   reading staying only when no enclosing scope does (#412);
 // - an unqualified call names, first, a method of the caller's own class or of
 //   one of its bases (implicit `this`, which hides every namesake outside the
 //   class), then a function or a constructor; never a method of another class;
@@ -35,6 +37,7 @@ use crate::graph_store::{
     RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::language_provider::extract_file_prefix;
+use crate::parser::generic_args::strip_generic_groups;
 
 /// The C++ classes of the graph: where each is, and the base classes it names.
 #[derive(Default)]
@@ -114,6 +117,47 @@ impl CppClasses {
         }
     }
 
+    /// The class a type written `name` designates inside `scope` (the namespaces
+    /// and classes around the caller, outermost first), and what `family` adds. C++
+    /// looks a name up from the innermost enclosing scope outwards, so `timer_data`
+    /// in `etl::icallback_timer::start` is `etl::icallback_timer::timer_data`, not
+    /// every class of the repository whose path ends in `timer_data`. When no
+    /// enclosing scope declares it (a using-declaration may bring it in) the
+    /// suffix reading of `family` stays.
+    fn family_in(&self, name: &str, from: &str, scope: &[String]) -> Family {
+        match self.declared_in(name, scope) {
+            Some(path) => self.family(&format!("::{path}"), from),
+            None => self.family(name, from),
+        }
+    }
+
+    /// The full path of the class or alias `name` names from inside `scope`: the
+    /// innermost `scope[..k]::name` that the graph holds.
+    fn declared_in(&self, name: &str, scope: &[String]) -> Option<String> {
+        if name.starts_with("::") {
+            return None;
+        }
+        let last = name.rsplit("::").next().unwrap_or(name);
+        let holds = |path: &str| {
+            self.by_last
+                .get(last)
+                .is_some_and(|paths| paths.iter().any(|p| p == path))
+                || self
+                    .aliases
+                    .get(last)
+                    .is_some_and(|aliases| aliases.iter().any(|a| a.path == path))
+        };
+        (0..=scope.len()).rev().find_map(|k| {
+            let path = scope[..k]
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(name))
+                .collect::<Vec<_>>()
+                .join("::");
+            holds(&path).then_some(path)
+        })
+    }
+
     /// The class named `name` (a path, possibly relative to a namespace), the
     /// classes an alias of that name stands for, and every base of them, through
     /// any depth. Of several aliases of one name, those the file `from` writes
@@ -161,24 +205,19 @@ impl Family {
 }
 
 /// True when `name`, written as a path or relative to a namespace, designates
-/// the class of full path `path`.
+/// the class of full path `path`. A leading `::` makes `name` a full path: only
+/// that class.
 fn names_class(path: &str, name: &str) -> bool {
+    if let Some(full) = name.strip_prefix("::") {
+        return path == full;
+    }
     path == name || path.strip_suffix(name).is_some_and(|p| p.ends_with("::"))
 }
 
 /// `Base` of `public Base<T>`, `::ns::Base` or `ns::Base`: a class as a path,
 /// without access specifier, `virtual`, generic arguments or leading `::`.
 fn class_path(raw: &str) -> String {
-    let mut depth = 0usize;
-    let mut plain = String::new();
-    for c in raw.chars() {
-        match c {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            c if depth == 0 => plain.push(c),
-            _ => {}
-        }
-    }
+    let plain = strip_generic_groups(raw);
     let name: String = plain
         .split_whitespace()
         .skip_while(|t| {
@@ -272,7 +311,9 @@ pub(super) fn scope(
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
         RECEIVER_HINT_VIA_CPP_DECLARED => {
-            let family = ctx.cpp.family(site.receiver_hint, &caller_file(site));
+            let family =
+                ctx.cpp
+                    .family_in(site.receiver_hint, &caller_file(site), &caller_scope(site));
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
         RECEIVER_HINT_VIA_CPP_QUALIFIER => (qualified(ctx, site, candidates), SCOPE_CPP_QUALIFIER),
@@ -294,6 +335,14 @@ fn caller_family(ctx: &ResolveContext, site: &CallSite) -> Family {
         Some(class) => ctx.cpp.family(&class, &caller_file(site)),
         None => Family(HashSet::new()),
     }
+}
+
+/// The namespaces and classes around the caller, outermost first: the owner path
+/// of its qualified name (empty for a function of the global namespace).
+fn caller_scope(site: &CallSite) -> Vec<String> {
+    owner_of(site.caller_qn)
+        .map(|owner| owner.split("::").map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
 fn caller_file(site: &CallSite) -> String {
@@ -346,51 +395,5 @@ fn qualified(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_method_belongs_to_the_class_of_its_qualified_name() {
-        assert_eq!(
-            owner_of("b.cpp::etl::bloom::width#1").as_deref(),
-            Some("etl::bloom")
-        );
-        assert_eq!(owner_of("b.cpp::freefn#2").as_deref(), None);
-    }
-
-    #[test]
-    fn a_class_is_named_by_its_path_or_by_a_suffix_of_it() {
-        assert!(names_class("etl::bloom", "bloom"));
-        assert!(names_class("etl::bloom", "etl::bloom"));
-        assert!(!names_class("etl::bloom", "loom"));
-        assert!(!names_class("etl::bloom", "other::bloom"));
-    }
-
-    #[test]
-    fn a_base_is_read_without_access_specifier_generics_or_root() {
-        assert_eq!(class_path(" public Base<T> "), "Base");
-        assert_eq!(class_path("::ns::Base"), "ns::Base");
-        assert_eq!(class_path("virtual ns::Base<A, B>"), "ns::Base");
-        assert_eq!(class_path("public_base"), "public_base");
-        assert_eq!(class_path("virtual_base<T>"), "virtual_base");
-    }
-
-    #[test]
-    fn a_family_holds_the_bases_at_any_depth_and_survives_a_cycle() {
-        let mut classes = CppClasses::default();
-        for (path, bases) in [("ns::a", "b"), ("ns::b", "c"), ("ns::c", "a")] {
-            let last = path.rsplit("::").next().unwrap().to_string();
-            classes
-                .by_last
-                .entry(last)
-                .or_default()
-                .push(path.to_string());
-            classes
-                .bases
-                .insert(path.to_string(), vec![bases.to_string()]);
-        }
-        let family = classes.family("a", "");
-        assert!(family.holds("ns::a") && family.holds("ns::b") && family.holds("ns::c"));
-        assert!(!family.holds("ns::d"));
-    }
-}
+#[path = "member_calls_tests.rs"]
+mod tests;

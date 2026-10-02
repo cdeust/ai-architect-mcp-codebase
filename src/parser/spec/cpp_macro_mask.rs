@@ -325,11 +325,15 @@ fn blank_out(source: &str, ranges: Vec<(usize, usize)>) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// `source` with every call of a macro-style name that stands alone as a
-/// statement at declaration level (class, namespace or file scope) blanked,
-/// same length, or `None` when there is none. `ETL_STATIC_ASSERT((N > 0), "..")`
-/// in a class body reads as a declaration with a `>` in it and loses the class.
-/// A call in a function body is never touched: its arguments hold real calls.
+/// `source` with every macro statement at declaration level (class, namespace or
+/// file scope) blanked, same length, or `None` when there is none. A macro
+/// statement is a call of a macro-style name followed by `;`
+/// (`ETL_STATIC_ASSERT((N > 0), "..");` reads as a declaration with a `>` in it and
+/// loses the class), or one that needs no `;`: a call followed by another macro
+/// statement or by `}`, and a bare macro-style name followed by `}`. ETL's
+/// `ETL_DECLARE_ENUM_TYPE(T, int) ETL_ENUM_TYPE(A, "a") ETL_END_ENUM_TYPE }` is that
+/// shape (issue #412): left in, the macros make the class swallow the rest of the
+/// header. A call in a function body is never touched: its arguments hold real calls.
 fn blank_scope_macro_calls(source: &str) -> Option<String> {
     let toks = lex(source);
     let closes = paren_closes(&toks);
@@ -364,9 +368,12 @@ fn blank_scope_macro_calls(source: &str) -> Option<String> {
             && head == i
             && macro_style(&source[t.start..t.end])
         {
-            if let Some(j) = statement_call_close(&toks, &closes, i) {
+            if let Some(j) = macro_statement_end(source, &toks, &closes, i) {
                 blank.push((t.start, toks[j].end));
                 i = j;
+                // A statement without `;` leaves the next macro at the head.
+                statement = j + 1;
+                head = j + 1;
             }
         }
         i += 1;
@@ -405,11 +412,31 @@ fn paren_closes(toks: &[Lexed]) -> Vec<Option<usize>> {
     closes
 }
 
-/// The index of the `)` of the call whose name is token `name`, when the call
-/// is a whole statement (followed by `;`).
-fn statement_call_close(toks: &[Lexed], closes: &[Option<usize>], name: usize) -> Option<usize> {
+/// True when `next` ends a macro statement that has no `;`: it is a `}` or another
+/// macro-style name.
+fn ends_a_bare_statement(source: &str, next: Option<&Lexed>) -> bool {
+    next.is_some_and(|n| {
+        n.tok == Tok::Punct(b'}') || (n.tok == Tok::Ident && macro_style(&source[n.start..n.end]))
+    })
+}
+
+/// The index of the last token of the macro statement that starts at token `name`:
+/// the `)` of a call followed by `;`, `}` or another macro-style name, or `name`
+/// itself when it is a bare macro-style name followed by `}`. `None` otherwise.
+fn macro_statement_end(
+    source: &str,
+    toks: &[Lexed],
+    closes: &[Option<usize>],
+    name: usize,
+) -> Option<usize> {
+    if toks.get(name + 1).map(|n| n.tok) != Some(Tok::Punct(b'(')) {
+        let next = toks.get(name + 1);
+        return (next.map(|n| n.tok) == Some(Tok::Punct(b'}'))).then_some(name);
+    }
     let close = closes.get(name + 1).copied().flatten()?;
-    (toks.get(close + 1).map(|n| n.tok) == Some(Tok::Punct(b';'))).then_some(close)
+    let after = toks.get(close + 1);
+    (after.map(|n| n.tok) == Some(Tok::Punct(b';')) || ends_a_bare_statement(source, after))
+        .then_some(close)
 }
 
 /// The rewrites of `source` worth a second parse, least invasive first: the
@@ -432,119 +459,5 @@ pub(crate) fn variants(source: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::mask_specifier_macros;
-
-    // source: tree-sitter-cpp 0.23.4 on ETLCPP 7d604f2e `string.h`: each shape
-    // below (trailing `ETL_NOEXCEPT` / `ETL_OVERRIDE`, leading `ETL_CONSTANT` /
-    // `ETL_EXPLICIT_STRING_FROM_CHAR`) produced an ERROR node.
-    fn masked(src: &str) -> String {
-        mask_specifier_macros(src).unwrap_or_else(|| src.to_string())
-    }
-
-    #[test]
-    fn blanks_trailing_specifiers_after_a_parameter_list() {
-        let src = "void f(int a) ETL_NOEXCEPT ETL_OVERRIDE { }";
-        let m = masked(src);
-        assert_eq!(m.len(), src.len());
-        assert!(!m.contains("ETL_"));
-        assert!(m.starts_with("void f(int a)"));
-        assert!(m.ends_with("{ }"));
-    }
-
-    #[test]
-    fn blanks_leading_specifiers_before_a_declaration() {
-        let m = masked(
-            "struct S { ETL_CONSTANT size_t N = 3; ETL_EXPLICIT_STRING_FROM_CHAR S(int x); };",
-        );
-        assert!(!m.contains("ETL_"));
-        assert!(m.contains("size_t N = 3;"));
-        assert!(m.contains("S(int x);"));
-    }
-
-    #[test]
-    fn keeps_function_like_macros_and_plain_words() {
-        for src in [
-            "void f() { ETL_ASSERT(x, ETL_ERROR(e)); }",
-            "int x = LIMIT_MAX;",
-            "void f() { return SOME_VALUE; }",
-            "HANDLE h;",
-            "SECURITY_ATTRIBUTES sa;",
-            "// ETL_NOEXCEPT in a comment\nint a;",
-            "const char* s = \"ETL_NOEXCEPT\";",
-            "#define ETL_NOEXCEPT noexcept\nint a;",
-        ] {
-            assert_eq!(mask_specifier_macros(src), None, "{src}");
-        }
-    }
-
-    #[test]
-    fn keeps_offsets_and_lines() {
-        let src = "class A {\n  void f() ETL_NOEXCEPT;\n};\n";
-        let m = masked(src);
-        assert_eq!(m.len(), src.len());
-        assert_eq!(m.lines().count(), src.lines().count());
-    }
-
-    #[test]
-    fn blanks_a_macro_after_a_specifier_keyword_and_after_if() {
-        let m = masked("struct S { static ETL_CONSTANT size_t N = 3; };");
-        assert!(!m.contains("ETL_CONSTANT") && m.contains("static"));
-        let m = masked("void f() { if ETL_IF_CONSTEXPR (x) { g(); } }");
-        assert!(!m.contains("ETL_IF_CONSTEXPR") && m.contains("if "));
-    }
-
-    #[test]
-    fn blanks_a_macro_call_at_declaration_level_only() {
-        use super::blank_scope_macro_calls as blank;
-        let class =
-            "class A : public B {\npublic:\n  ETL_STATIC_ASSERT((N > 0U), \"zero\");\n  int x;\n};";
-        let out = blank(class).expect("class-level call is blanked");
-        assert!(!out.contains("ETL_STATIC_ASSERT") && out.contains("int x;"));
-        assert_eq!(out.len(), class.len());
-        // In a function body the arguments hold real calls: never touched.
-        assert_eq!(blank("void f() { ETL_ASSERT(g(), \"m\"); }"), None);
-    }
-
-    #[test]
-    fn collapses_conditionals_to_their_first_branch() {
-        use super::collapse_conditionals as collapse;
-        let src = "#if A\nvirtual void r() X\n#else\nvoid r()\n#endif\n{ }\n";
-        let out = collapse(src).expect("conditional collapsed");
-        assert_eq!(out.len(), src.len());
-        assert_eq!(out.lines().count(), src.lines().count());
-        assert!(out.contains("virtual void r() X"));
-        assert!(!out.contains("void r()\n") && !out.contains("#"));
-        assert!(out.contains("{ }"));
-        assert_eq!(collapse("int a;\n"), None);
-        // Whole declarations in each branch: the `#else` holds definitions.
-        assert_eq!(
-            collapse("#if A\nstruct X {};\n#else\nstruct Y {};\n#endif\n"),
-            None
-        );
-    }
-
-    #[test]
-    fn an_unclosed_call_is_left_alone() {
-        let src = "class A {\n  A_B( ;\n  A_C(x);\n};\n";
-        let out = super::blank_scope_macro_calls(src).expect("the closed call is blanked");
-        assert!(out.contains("A_B( ;"), "{out}");
-        assert!(!out.contains("A_C"), "{out}");
-        assert!(super::blank_scope_macro_calls("A_B( ;\nA_C( ;\n").is_none());
-    }
-
-    #[test]
-    fn parens_match_in_one_pass() {
-        let toks = super::lex("f(g(1), (2)) ) (");
-        let closes = super::paren_closes(&toks);
-        let at = |n: usize| {
-            toks.iter()
-                .enumerate()
-                .filter(|(_, t)| t.tok == super::Tok::Punct(b'('))
-                .nth(n)
-                .map(|(i, _)| closes[i])
-        };
-        assert_eq!(at(0), Some(Some(10)));
-        assert_eq!(at(3), Some(None));
-    }
-}
+#[path = "cpp_macro_mask_tests.rs"]
+mod tests;
