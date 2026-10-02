@@ -38,20 +38,22 @@ pub(crate) const RECEIVER_HINT_VIA_ASSOC_PREFIX: &str = "assoc:";
 /// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
 pub(crate) const RECEIVER_HINT_VIA_CPP_THIS: &str = "cpp-this";
 
-/// The `receiver_hint_via` of a C++ member call whose receiver is a parameter
-/// or a local declared with an explicit type (`Bloom* p` then `p->f()`): the
-/// hint is that type as written, without qualifiers, pointer, reference or
-/// generic arguments.
+/// The `receiver_hint_via` of a C++ member call whose receiver is a parameter of
+/// the function definition that holds the call, declared with an explicit type
+/// (`Bloom* p` then `p->f()`): the hint is that type as written, without
+/// qualifiers, pointer, reference or generic arguments. The signature is outside
+/// the body, so no block of the body can hide the type it names.
 /// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
 pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED: &str = "cpp-declared";
 
-/// The `receiver_hint_via` of a C++ member call whose receiver is declared as
-/// `cpp-declared` is, with a type whose first name a block around the declaration
-/// declares itself (`using other::Box;`, a `typedef`, a local `struct Box`). The
-/// graph holds no node for a block, so the hint does not say which class that name
-/// designates: the resolver keeps no candidate for it (issue #412).
+/// The `receiver_hint_via` of a C++ member call whose receiver is declared inside
+/// a function, method or lambda body, or is a parameter of a lambda: the hint is the
+/// type as written, as for `cpp-declared`. The body may declare the type's first
+/// name itself (a using-declaration, a `typedef`, a local class) and the graph
+/// holds no node for a block, so the resolver reads the type by path suffix only,
+/// as before #412, and keeps the site open when several classes match.
 /// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
-pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK: &str = "cpp-declared-block";
+pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY: &str = "cpp-declared-body";
 
 /// The `receiver_hint_via` of a C++ call written with a qualifier (`a::b::f()`):
 /// the hint is the qualifier. The callee name is always the last segment, so the

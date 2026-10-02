@@ -8,16 +8,20 @@
 //
 // - `cpp-this`: the receiver is `this`, `*this` or `(*this)`: the caller's own
 //   class.
-// - `cpp-declared`: the receiver is a name that a parameter, a local, a range
-//   variable or a condition declares with a type written in the source (`Bloom*
-//   p`) or a catch clause (`catch (const E& e)`, in its handler only); the
-//   hint is that type without qualifier, pointer, reference or generic arguments. A name declared with `auto`, a name no enclosing scope
-//   declares (a field, a global), a type that is a template parameter of an
-//   enclosing template (`template <class T> .. T& t`: not a class) or any other
-//   expression gives no hint. A type whose first name an enclosing block declares
-//   itself (`using other::Box;`, `typedef`, a local `struct Box`:
-//   `cpp_local_decls`) is a `cpp-declared-block` hint: the graph holds no node for
-//   a block, so the resolver cannot tell which class the name designates.
+// - `cpp-declared` / `cpp-declared-body`: the receiver is a name that a parameter, a
+//   local, a range variable or a condition declares with a type written in the
+//   source (`Bloom* p`) or a catch clause (`catch (const E& e)`, in its handler
+//   only); the hint is that type without qualifier, pointer, reference or generic
+//   arguments. The via says where the type is written: a parameter of the function
+//   definition that holds the call (outside every body: no block can declare a name
+//   that hides the type) is `cpp-declared`; anything declared in a body (a local, a
+//   range variable, a condition, a catch parameter, a parameter of a lambda or of a
+//   function defined in a body) is `cpp-declared-body`, because a block around the
+//   declaration may declare the type's first name itself (a using-declaration, a
+//   `typedef`, a local class) and the graph holds no node for a block. A name
+//   declared with `auto`, a name no enclosing scope declares (a field, a global), a
+//   type that is a template parameter of an enclosing template (`template <class T>
+//   .. T& t`: not a class) or any other expression gives no hint.
 // - `cpp-qualifier`: the callee is written `a::b::f`; the hint is `a::b`.
 //
 // source: tree-sitter-cpp 0.23.4 node-types.json (field_expression.argument,
@@ -27,13 +31,11 @@
 use tree_sitter::Node;
 
 use crate::graph_store::{
-    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK,
+    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY,
     RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::parser::generic_args::strip_generic_groups;
 use crate::parser::node_text;
-
-use super::cpp_local_decls::block_declares;
 
 /// The `receiver_hint` and `receiver_hint_via` properties of one call, or none
 /// when the source states nothing about its receiver.
@@ -81,10 +83,10 @@ fn member_receiver(source: &str, callee: Node) -> Option<(String, &'static str)>
         "identifier" => {
             let name = node_text(source, argument);
             let written = declared_type(source, callee, &name)?;
-            let via = if written.in_block {
-                RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK
-            } else {
+            let via = if written.in_signature {
                 RECEIVER_HINT_VIA_CPP_DECLARED
+            } else {
+                RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY
             };
             Some((written.name, via))
         }
@@ -92,11 +94,12 @@ fn member_receiver(source: &str, callee: Node) -> Option<(String, &'static str)>
     }
 }
 
-/// A type as a declaration writes it, and whether a block that encloses the
-/// declaration declares its first name itself (`cpp_local_decls`).
+/// A type as a declaration writes it, and whether the declaration is a parameter
+/// of the function definition that holds the call (its signature, outside every
+/// body) rather than something a body declares.
 struct Written {
     name: String,
-    in_block: bool,
+    in_signature: bool,
 }
 
 /// The type the innermost enclosing scope declares for `name`, read at `at`.
@@ -105,7 +108,10 @@ fn declared_type(source: &str, at: Node, name: &str) -> Option<Written> {
     let mut scope = at.parent();
     while let Some(s) = scope {
         if let Some(found) = binding_in(source, s, (at, name)) {
-            return found;
+            return found.map(|name| Written {
+                name,
+                in_signature: in_signature(s),
+            });
         }
         if s.kind() == "function_definition" {
             return None;
@@ -115,10 +121,20 @@ fn declared_type(source: &str, at: Node, name: &str) -> Option<Written> {
     None
 }
 
+/// True when the parameters `scope` declares are written outside every body:
+/// `scope` is a function definition that no function body or lambda encloses. The
+/// parameters of a lambda, and of a function defined in a body (a method of a local
+/// class), are read where a block may declare the type's name.
+fn in_signature(scope: Node) -> bool {
+    scope.kind() == "function_definition"
+        && !std::iter::successors(scope.parent(), |n| n.parent())
+            .any(|n| matches!(n.kind(), "function_definition" | "lambda_expression"))
+}
+
 /// `Some(type)` when `scope` declares `name` before `at` (the last such
 /// declaration wins); the inner `None` is a declaration whose type the source
 /// does not write (`auto`). `None` when `scope` does not declare it.
-fn binding_in(source: &str, scope: Node, at: (Node, &str)) -> Option<Option<Written>> {
+fn binding_in(source: &str, scope: Node, at: (Node, &str)) -> Option<Option<String>> {
     let (call, name) = at;
     let mut found = None;
     for decl in declarations_of(scope) {
@@ -225,7 +241,7 @@ fn declarator_name(source: &str, declarator: Node) -> Option<String> {
 /// The class a declaration's `type` names, as written: `Bloom` of `const
 /// Bloom*`, `ns::Bloom` of `ns::Bloom&`, `Map` of `Map<K, V>`. `auto`,
 /// `decltype` and the builtin types give `None`.
-fn written_type(source: &str, decl: Node) -> Option<Written> {
+fn written_type(source: &str, decl: Node) -> Option<String> {
     let ty = decl.child_by_field_name("type")?;
     let text = match ty.kind() {
         "type_identifier" | "qualified_identifier" | "template_type" => node_text(source, ty),
@@ -239,8 +255,7 @@ fn written_type(source: &str, decl: Node) -> Option<Written> {
     if name.is_empty() || is_template_parameter(source, decl, first) {
         return None;
     }
-    let in_block = block_declares(source, decl, first);
-    Some(Written { name, in_block })
+    Some(name)
 }
 
 /// True when `name` is a parameter of a template that encloses `at`
@@ -369,7 +384,7 @@ void f(const ns::Bloom<int>* pb, Umap& ru) {
             vec![
                 pair("ns::Bloom", "cpp-declared"),
                 pair("Umap", "cpp-declared"),
-                pair("Local", "cpp-declared"),
+                pair("Local", "cpp-declared-body"),
                 pair("-", "-"),
                 pair("", "cpp-this"),
                 pair("", "cpp-this"),
@@ -433,30 +448,32 @@ struct S { template <class V> void h(V& v, T& t) { v.go(); t.go(); } };";
     }
 
     #[test]
-    fn a_type_a_block_declares_is_a_block_hint() {
+    fn only_a_parameter_of_the_function_definition_is_read_outside_the_body() {
         let src = "\
+struct S { int m(Box& p) { return p.go(); } };
 void f(Box& p) {
-    using other::Box;
     Box a;
     a.go();
     p.go();
-    { struct Own {}; Own o; o.go(); }
-    { Own o; o.go(); }
-    typedef Real Alias;
-    Alias c;
-    c.go();
-    Box late;
-    late.go();
-}";
+    try { g(); } catch (Box& e) { e.go(); }
+    for (Box& r : xs) { r.go(); }
+    auto l = [](Box& q) { return q.go(); };
+    struct Local { int h(Box& w) { return w.go(); } };
+}
+auto k = [] { struct InLambda { int n(Box& v) { return v.go(); } }; };";
+        let via: Vec<String> = calls_in(src).into_iter().map(|(_, v)| v).collect();
         assert_eq!(
-            calls_in(src),
-            vec![
-                pair("Box", "cpp-declared-block"),
-                pair("Box", "cpp-declared"),
-                pair("Own", "cpp-declared-block"),
-                pair("Own", "cpp-declared"),
-                pair("Alias", "cpp-declared-block"),
-                pair("Box", "cpp-declared-block"),
+            via,
+            [
+                "cpp-declared",
+                "cpp-declared-body",
+                "cpp-declared",
+                "-",
+                "cpp-declared-body",
+                "cpp-declared-body",
+                "cpp-declared-body",
+                "cpp-declared-body",
+                "cpp-declared-body",
             ]
         );
     }

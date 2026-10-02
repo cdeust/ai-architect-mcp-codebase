@@ -10,14 +10,18 @@
 // - a member call (`a.f()`, `p->f()`) on a receiver whose type the parser did
 //   not read stays open as `no_receiver_type` (`open_call`);
 // - through `this` or a receiver of a declared type, only the methods of that
-//   class and of its bases can be named; a declared type is the class of the
-//   innermost enclosing scope that has one of that name (`family_in`), only when
-//   nothing the graph cannot see (a using-declaration, an inherited member type)
-//   may come first; otherwise the suffix reading stays (#412); a type whose first
-//   name a block around the declaration declares itself (`cpp-declared-block`) names
-//   no class. A `typedef` or
-//   `using` a source file writes is visible to that file and to the files that
-//   `#include` it, directly or through other files;
+//   class and of its bases can be named. A type is read two ways. A parameter of
+//   the function definition (`cpp-declared`) is written in the signature, outside
+//   every body, so no block can hide the type: it is the class of the innermost
+//   enclosing scope that has one of that name (`family_in`), only when nothing the
+//   graph cannot see (a using-declaration, an inherited member type) may come first;
+//   otherwise the suffix reading stays. Anything declared in a body, or a parameter
+//   of a lambda (`cpp-declared-body`), keeps the path-suffix reading of before #412
+//   (`family`): the body may declare the type's first name and the graph holds no
+//   node for a block, so no scope is read for it and several classes of that name
+//   keep the site open (#412). A `typedef` or `using` a source file writes is
+//   visible to that file and to the files that `#include` it, directly or through
+//   other files;
 // - an unqualified call names, first, a method of the caller's own class or of
 //   one of its bases (implicit `this`, which hides every namesake outside the
 //   class), then a function or a constructor; never a method of another class;
@@ -39,7 +43,7 @@ use super::reason::{
 use super::*;
 use crate::graph_store::{
     calls_through_a_pointer, GraphStore, CALLEE_SHAPE_DIRECT, CALLEE_SHAPE_INDIRECT,
-    CALLEE_SHAPE_MEMBER, RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK,
+    CALLEE_SHAPE_MEMBER, RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY,
     RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::language_provider::extract_file_prefix;
@@ -265,7 +269,7 @@ pub(super) fn open_call(language: &str, shape: &str, via: &str) -> Option<Gated>
     let typed = [
         RECEIVER_HINT_VIA_CPP_THIS,
         RECEIVER_HINT_VIA_CPP_DECLARED,
-        RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK,
+        RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY,
     ]
     .contains(&via);
     (language == "cpp" && shape == CALLEE_SHAPE_MEMBER && !typed)
@@ -302,10 +306,15 @@ pub(super) fn scope(
             let family = ctx.cpp.family_in(site.receiver_hint, &caller);
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
-        // A block declares the first name of the type (`using other::Box;`, a
-        // `typedef`, a local class): the graph holds no node for it, so no class
-        // of the repository can be told to be the one the name designates.
-        RECEIVER_HINT_VIA_CPP_DECLARED_IN_BLOCK => (Vec::new(), SCOPE_CPP_RECEIVER_CLASS),
+        // A body may declare the first name of the type (`using other::Box;`, a
+        // `typedef`, a local class) and the graph holds no node for a block: the
+        // scopes around the caller cannot be told to be where the name is looked
+        // up, so the path-suffix reading stays, and several classes keep the site
+        // open (fail closed).
+        RECEIVER_HINT_VIA_CPP_DECLARED_IN_BODY => {
+            let family = ctx.cpp.family(site.receiver_hint, &caller_file(site));
+            (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
+        }
         RECEIVER_HINT_VIA_CPP_QUALIFIER => (qualified(ctx, site, candidates), SCOPE_CPP_QUALIFIER),
         _ if site.callee_shape == CALLEE_SHAPE_DIRECT => (
             unqualified(ctx, site, candidates),
