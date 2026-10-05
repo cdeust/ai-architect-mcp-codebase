@@ -14,8 +14,9 @@
 //   as before #412 (`family`): one class of that name binds, several keep the site
 //   open. Which declaration of a name C++ reaches (a using-declaration, a member
 //   type, a block, a structured binding) is not read from the graph. A `typedef` or
-//   `using` a source file writes is visible to that file and to the files that
-//   `#include` it, directly or through other files;
+//   `using` a source file writes is visible to a file that can be compiled with it in
+//   one translation unit (it includes it, it is included by it, or a third file includes
+//   both) and to any file when it is written in a header;
 // - an unqualified call names, first, a method of the caller's own class or of
 //   one of its bases (implicit `this`, which hides every namesake outside the
 //   class), then a function or a constructor; never a method of another class;
@@ -78,11 +79,12 @@ fn unit_sees(from: &str, declared: &str) -> bool {
 
 impl CppClasses {
     /// True when a declaration written in `declared` is visible to a caller in
-    /// `from`: by the file alone (`unit_sees`), or because `from` includes it, directly
-    /// or through other files (a source file that `#include`s another source file
-    /// sees its typedefs).
+    /// `from`: by the file alone (`unit_sees`), or because the two files can be one
+    /// translation unit (`share_a_unit`): `from` includes `declared`, `declared`
+    /// includes `from` (`using String = A;` then `#include "impl.h"`), or a third file
+    /// includes both. The order of the includes is not read.
     fn sees(&self, from: &str, declared: &str) -> bool {
-        unit_sees(from, declared) || self.includes.reaches(from, declared)
+        unit_sees(from, declared) || self.includes.share_a_unit(declared, from)
     }
 
     /// Reads the `bases` of every C++ class (the `Struct` nodes of the

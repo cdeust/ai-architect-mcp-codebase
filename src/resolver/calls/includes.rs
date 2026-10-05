@@ -35,6 +35,8 @@ const C_FAMILY_EXTENSIONS: [&str; 10] = [
 #[derive(Clone, Default)]
 pub(super) struct IncludeGraph {
     direct: HashMap<String, Vec<String>>,
+    /// The reverse of `direct`: the files that include each file directly.
+    includers: HashMap<String, Vec<String>>,
     reached: RefCell<HashMap<String, HashSet<String>>>,
 }
 
@@ -75,8 +77,10 @@ impl IncludeGraph {
                 (file.clone(), targets)
             })
             .collect();
+        let includers = reverse(&direct);
         Self {
             direct,
+            includers,
             reached: RefCell::default(),
         }
     }
@@ -96,6 +100,29 @@ impl IncludeGraph {
         found
     }
 
+    /// True when `a` and `b` can be compiled in one translation unit: a file (`a`
+    /// itself, or one that includes `a`, directly or through other files) is or
+    /// includes `b`. This holds when either includes the other and when a third
+    /// file includes both.
+    pub(super) fn share_a_unit(&self, a: &str, b: &str) -> bool {
+        if self.reaches(a, b) {
+            return true;
+        }
+        let mut seen: HashSet<&str> = HashSet::from([a]);
+        let mut pending = vec![a];
+        while let Some(file) = pending.pop() {
+            for includer in self.includers.get(file).into_iter().flatten() {
+                if seen.insert(includer) {
+                    if self.reaches(includer, b) {
+                        return true;
+                    }
+                    pending.push(includer);
+                }
+            }
+        }
+        false
+    }
+
     fn closure(&self, from: &str) -> HashSet<String> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut pending: Vec<&str> = vec![from];
@@ -108,6 +135,19 @@ impl IncludeGraph {
         }
         seen
     }
+}
+
+fn reverse(direct: &HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>> {
+    let mut includers: HashMap<String, Vec<String>> = HashMap::new();
+    for (file, targets) in direct {
+        for target in targets {
+            includers
+                .entry(target.clone())
+                .or_default()
+                .push(file.clone());
+        }
+    }
+    includers
 }
 
 fn is_c_family(file: &str) -> bool {
@@ -218,6 +258,23 @@ mod tests {
         );
         assert!(g.reaches("t.c", "l.h"));
         assert!(!g.reaches("l.h", "t.c"));
+    }
+
+    #[test]
+    fn two_files_share_a_unit_when_one_includes_the_other_or_a_third_includes_both() {
+        let g = graph(
+            &[
+                "d.cpp", "f.cpp", "g.cpp", "h.h", "x.cpp", "y.cpp", "lone.cpp",
+            ],
+            &[
+                ("f.cpp", &["d.cpp"]),
+                ("g.cpp", &["h.h"]),
+                ("h.h", &["x.cpp", "y.cpp"]),
+            ],
+        );
+        assert!(g.share_a_unit("d.cpp", "f.cpp") && g.share_a_unit("f.cpp", "d.cpp"));
+        assert!(g.share_a_unit("x.cpp", "y.cpp") && g.share_a_unit("y.cpp", "x.cpp"));
+        assert!(!g.share_a_unit("d.cpp", "x.cpp") && !g.share_a_unit("lone.cpp", "x.cpp"));
     }
 
     #[test]

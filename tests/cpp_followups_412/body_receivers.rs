@@ -10,6 +10,11 @@ use super::*;
 /// `case`, in the declaration of the receiver) and the graph holds no node for it:
 /// nothing here tries to prove it does not.
 fn assert_open_body_receiver(file: &str, src: &str, caller: &str) {
+    assert_open_for(file, src, caller, "ambiguous_candidates");
+}
+
+/// The call `m` of `caller` is open for `reason` and binds nothing.
+fn assert_open_for(file: &str, src: &str, caller: &str, reason: &str) {
     let (store, _tmp) = index_and_resolve(&[(file, src)]);
     assert!(
         bound_methods(&store, caller).is_empty(),
@@ -24,7 +29,7 @@ fn assert_open_body_receiver(file: &str, src: &str, caller: &str) {
         ))
         .expect("query open sites");
     let reasons: Vec<&str> = reasons.rows.iter().map(|r| r[0].as_str()).collect();
-    assert_eq!(reasons, ["ambiguous_candidates"]);
+    assert_eq!(reasons, [reason]);
 }
 
 const OTHER_BOX_AND_GLOBAL_BOX: &str = "\
@@ -191,13 +196,14 @@ fn a_field_or_a_global_receiver_has_no_declared_type() {
 }
 
 /// One test per fixture of the fourth review: the receiver `b` is named by a
-/// parameter `Box& b`, and a declaration the parser does not read (a structured
-/// binding, an init-capture, an init-statement, a label, a parenthesised declarator,
-/// a declaring macro) names it again with `other::Box`. C++ reads `other::Box`; the
-/// site stays open as on `main`, because nothing here proves which declaration of
-/// `b` is the innermost.
+/// parameter `Box& b`, and a declaration that is not the parameter names it again.
+/// C++ reads the second one. Where the source writes no type for it (a structured
+/// binding, an init-capture) the receiver has no type: `no_receiver_type`. Where
+/// the parser cannot read the declaration (a declaring macro, `other::Box (b);`
+/// which the grammar parses as a call) the parameter's suffix reading stays, as on
+/// `main`: `ambiguous_candidates`. Nothing binds `Box::m` of the wrong class.
 macro_rules! shadowed_receiver_stays_open {
-    ($($test:ident: $name:literal ($params:literal) { $body:literal })+) => {$(
+    ($($test:ident: $name:literal ($params:literal) $reason:literal { $body:literal })+) => {$(
         #[test]
         fn $test() {
             let src = format!(
@@ -208,30 +214,47 @@ macro_rules! shadowed_receiver_stays_open {
                 params = $params,
                 body = $body,
             );
-            assert_open_body_receiver(concat!($name, ".cpp"), &src, $name);
+            assert_open_for(concat!($name, ".cpp"), &src, $name, $reason);
         }
     )+};
 }
 
 shadowed_receiver_stays_open! {
-    v01_a_declaration_under_a_label_leaves_the_call_open: "v01" ("Box& b") {
-        "{ L: other::Box b; return b.m(); }" }
-    v05_a_structured_binding_in_an_if_init_leaves_the_call_open: "v05" ("Box& b, P p") {
+    v05_a_structured_binding_in_an_if_init_leaves_the_call_open: "v05" ("Box& b, P p") "no_receiver_type" {
         "if (auto [b, c] = p; true) return b.m(); return 0;" }
-    v06_an_init_capture_by_reference_leaves_the_call_open: "v06" ("Box& b, other::Box& ob") {
+    v06_an_init_capture_by_reference_leaves_the_call_open: "v06" ("Box& b, other::Box& ob") "no_receiver_type" {
         "auto l = [&b = ob]() { return b.m(); }; return l();" }
-    v07_an_init_capture_by_move_leaves_the_call_open: "v07" ("Box& b") {
+    v07_an_init_capture_by_move_leaves_the_call_open: "v07" ("Box& b") "no_receiver_type" {
         "auto l = [b = other::Box()]() mutable { return b.m(); }; return l();" }
-    v15_a_parenthesised_declarator_leaves_the_call_open: "v15" ("Box& b") {
+    v15_a_parenthesised_declarator_leaves_the_call_open: "v15" ("Box& b") "ambiguous_candidates" {
         "{ other::Box (b); return b.m(); }" }
-    v27_a_switch_init_statement_leaves_the_call_open: "v27" ("Box& b") {
-        "switch (other::Box b; 1) { default: return b.m(); }" }
-    v31_a_structured_binding_in_a_lambda_leaves_the_call_open: "v31" ("Box& b, P p") {
+    v31_a_structured_binding_in_a_lambda_leaves_the_call_open: "v31" ("Box& b, P p") "no_receiver_type" {
         "auto g = [&]() { auto [b, c] = p; return b.m(); }; return g();" }
-    v37_a_structured_binding_in_a_for_init_leaves_the_call_open: "v37" ("Box& b, P p") {
+    v37_a_structured_binding_in_a_for_init_leaves_the_call_open: "v37" ("Box& b, P p") "no_receiver_type" {
         "for (auto [b, c] = p; ; ) { return b.m(); }" }
-    s28d_a_structured_binding_in_a_block_leaves_the_call_open: "s28d" ("Box& b, P p") {
+    s28d_a_structured_binding_in_a_block_leaves_the_call_open: "s28d" ("Box& b, P p") "no_receiver_type" {
         "{ auto [b, c] = p; return b.m(); }" }
-    s29_a_declaring_macro_leaves_the_call_open: "s29" ("Box& b") {
+    s29_a_declaring_macro_leaves_the_call_open: "s29" ("Box& b") "ambiguous_candidates" {
         "{ MAKE(b); return b.m(); }" }
+}
+
+/// A declaration the parser reads with a type binds that class, not the parameter's
+/// suffix reading: `other::Box` is what C++ names (the two classes of that name kept
+/// the site open on `main`).
+#[test]
+fn v01_a_declaration_under_a_label_binds_the_class_it_writes() {
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int v01(Box& b) {{ {{ L: other::Box b; return b.m(); }} }}\n"
+    );
+    let (store, _tmp) = index_and_resolve(&[("v01.cpp", &src)]);
+    assert_eq!(bound_methods(&store, "v01"), ["m -> other::Box::m"]);
+}
+
+#[test]
+fn v27_a_switch_init_statement_binds_the_class_it_writes() {
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int v27(Box& b) {{ switch (other::Box b; 1) {{ default: return b.m(); }} }}\n"
+    );
+    let (store, _tmp) = index_and_resolve(&[("v27.cpp", &src)]);
+    assert_eq!(bound_methods(&store, "v27"), ["m -> other::Box::m"]);
 }

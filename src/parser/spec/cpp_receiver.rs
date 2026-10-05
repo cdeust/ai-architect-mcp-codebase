@@ -12,9 +12,10 @@
 //   variable, a condition or a catch clause (`catch (const E& e)`, in its handler
 //   only) declares with a type written in the source (`Bloom* p`); the hint is that
 //   type without qualifier, pointer, reference or generic arguments. A name declared
-//   with `auto`, a name no enclosing scope declares (a field, a global), a type that
-//   is a template parameter of an enclosing template (`template <class T> .. T& t`:
-//   not a class) or any other expression gives no hint.
+//   with `auto`, a structured binding, an init-capture or a `using` (no type written)
+//   gives no hint and hides the outer declarations of that name (`cpp_declared`); so
+//   does a name no enclosing scope declares (a field, a global), a type that is a
+//   template parameter of an enclosing template or any other expression.
 // - `cpp-qualifier`: the callee is written `a::b::f`; the hint is `a::b`.
 //
 // source: tree-sitter-cpp 0.23.4 node-types.json (field_expression.argument,
@@ -23,10 +24,10 @@
 
 use tree_sitter::Node;
 
+use super::cpp_declared::{declared_type, plain_type_text};
 use crate::graph_store::{
     RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
-use crate::parser::generic_args::strip_generic_groups;
 use crate::parser::node_text;
 
 /// The `receiver_hint` and `receiver_hint_via` properties of one call, or none
@@ -78,213 +79,6 @@ fn member_receiver(source: &str, callee: Node) -> Option<(String, &'static str)>
         }
         _ => None,
     }
-}
-
-/// The type the innermost enclosing scope declares for `name`, read at `at`.
-/// The search stops at the enclosing function: a global or a field is not read.
-fn declared_type(source: &str, at: Node, name: &str) -> Option<String> {
-    let mut scope = at.parent();
-    while let Some(s) = scope {
-        if let Some(found) = binding_in(source, s, (at, name)) {
-            return found;
-        }
-        if s.kind() == "function_definition" {
-            return None;
-        }
-        scope = s.parent();
-    }
-    None
-}
-
-/// `Some(type)` when `scope` declares `name` before `at` (the last such
-/// declaration wins); the inner `None` is a declaration whose type the source
-/// does not write (`auto`). `None` when `scope` does not declare it.
-fn binding_in(source: &str, scope: Node, at: (Node, &str)) -> Option<Option<String>> {
-    let (call, name) = at;
-    let mut found = None;
-    for decl in declarations_of(scope) {
-        if decl.start_byte() >= call.start_byte() {
-            continue;
-        }
-        if declares(source, decl, name) {
-            found = Some(written_type(source, decl));
-        }
-    }
-    found
-}
-
-/// The nodes of `scope` that carry a `type` and a `declarator`.
-fn declarations_of(scope: Node) -> Vec<Node> {
-    let mut out = Vec::new();
-    match scope.kind() {
-        "function_definition" | "lambda_expression" => {
-            if let Some(parameters) = parameters_of(scope) {
-                let mut cursor = parameters.walk();
-                out.extend(parameters.named_children(&mut cursor).filter(|p| {
-                    matches!(
-                        p.kind(),
-                        "parameter_declaration" | "optional_parameter_declaration"
-                    )
-                }));
-            }
-        }
-        "for_range_loop" => out.push(scope),
-        // `catch (const E& e) { .. }`: the parameter is in scope in the handler only.
-        "catch_clause" => out.extend(
-            scope
-                .child_by_field_name("parameters")
-                .into_iter()
-                .flat_map(|list| {
-                    let mut cursor = list.walk();
-                    list.named_children(&mut cursor)
-                        .filter(|p| p.kind() == "parameter_declaration")
-                        .collect::<Vec<_>>()
-                }),
-        ),
-        "if_statement" | "while_statement" | "switch_statement" => {
-            let value = scope
-                .child_by_field_name("condition")
-                .and_then(|c| c.child_by_field_name("value"))
-                .filter(|v| v.kind() == "declaration");
-            out.extend(value);
-        }
-        _ => {
-            let mut cursor = scope.walk();
-            out.extend(
-                scope
-                    .named_children(&mut cursor)
-                    .filter(|c| c.kind() == "declaration"),
-            );
-        }
-    }
-    out
-}
-
-fn parameters_of(callable: Node) -> Option<Node> {
-    let mut declarator = callable.child_by_field_name("declarator");
-    while let Some(d) = declarator {
-        if let Some(parameters) = d.child_by_field_name("parameters") {
-            return Some(parameters);
-        }
-        declarator = inner_declarator(d);
-    }
-    None
-}
-
-/// The declarator a wrapping declarator (pointer, reference, array, init,
-/// parenthesis) applies to. A reference declarator names it without a field.
-fn inner_declarator(node: Node) -> Option<Node> {
-    node.child_by_field_name("declarator")
-        .or_else(|| node.named_child(u32::try_from(node.named_child_count().checked_sub(1)?).ok()?))
-}
-
-fn declares(source: &str, decl: Node, name: &str) -> bool {
-    let mut cursor = decl.walk();
-    let declarators: Vec<Node> = decl
-        .children_by_field_name("declarator", &mut cursor)
-        .collect();
-    declarators
-        .into_iter()
-        .any(|d| declarator_name(source, d).as_deref() == Some(name))
-}
-
-fn declarator_name(source: &str, declarator: Node) -> Option<String> {
-    let mut node = declarator;
-    loop {
-        match node.kind() {
-            "identifier" => return Some(node_text(source, node)),
-            "init_declarator"
-            | "pointer_declarator"
-            | "reference_declarator"
-            | "array_declarator"
-            | "parenthesized_declarator" => node = inner_declarator(node)?,
-            _ => return None,
-        }
-    }
-}
-
-/// The class a declaration's `type` names, as written: `Bloom` of `const
-/// Bloom*`, `ns::Bloom` of `ns::Bloom&`, `Map` of `Map<K, V>`. `auto`,
-/// `decltype` and the builtin types give `None`.
-fn written_type(source: &str, decl: Node) -> Option<String> {
-    let ty = decl.child_by_field_name("type")?;
-    let text = match ty.kind() {
-        "type_identifier" | "qualified_identifier" | "template_type" => node_text(source, ty),
-        "struct_specifier" | "class_specifier" | "union_specifier" => {
-            node_text(source, ty.child_by_field_name("name")?)
-        }
-        _ => return None,
-    };
-    let name = plain_type_text(&text);
-    let first = name.split("::").next().unwrap_or(&name);
-    if name.is_empty() || is_template_parameter(source, decl, first) {
-        return None;
-    }
-    Some(name)
-}
-
-/// True when `name` is a parameter of a template that encloses `at`
-/// (`template <class T>`, `typename... Ts`, `template <class> class C`): a type
-/// written with it names no class of the repository.
-fn is_template_parameter(source: &str, at: Node, name: &str) -> bool {
-    let mut scope = at.parent();
-    while let Some(s) = scope {
-        if s.kind() == "template_declaration" {
-            if let Some(list) = s.child_by_field_name("parameters") {
-                if template_parameter_names(source, list)
-                    .iter()
-                    .any(|n| n == name)
-                {
-                    return true;
-                }
-            }
-        }
-        scope = s.parent();
-    }
-    false
-}
-
-/// The names a `template_parameter_list` declares for types: `T` of `class T`,
-/// `typename... Ts` or `class T = Default`, and `C` of `template <class> class
-/// C`. A non-type parameter (`int N`) names no type.
-fn template_parameter_names(source: &str, list: Node) -> Vec<String> {
-    let mut cursor = list.walk();
-    list.named_children(&mut cursor)
-        .filter_map(|parameter| type_parameter_name(source, parameter))
-        .collect()
-}
-
-/// The first `type_identifier` of a type parameter is its name (a default type
-/// follows it).
-fn type_parameter_name(source: &str, parameter: Node) -> Option<String> {
-    match parameter.kind() {
-        "type_parameter_declaration"
-        | "variadic_type_parameter_declaration"
-        | "optional_type_parameter_declaration" => {
-            let mut cursor = parameter.walk();
-            let name = parameter
-                .named_children(&mut cursor)
-                .find(|c| c.kind() == "type_identifier")
-                .map(|c| node_text(source, c));
-            name
-        }
-        "template_template_parameter_declaration" => {
-            let mut cursor = parameter.walk();
-            let name = parameter
-                .named_children(&mut cursor)
-                .find_map(|c| type_parameter_name(source, c));
-            name
-        }
-        _ => None,
-    }
-}
-
-/// `text` without its `<...>` groups and whitespace.
-fn plain_type_text(text: &str) -> String {
-    strip_generic_groups(text)
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect()
 }
 
 #[cfg(test)]
@@ -410,5 +204,49 @@ void f(T& a, U& b, Foo& c, C<int>& d, Ts& e, Real& g) {
 struct S { template <class V> void h(V& v, T& t) { v.go(); t.go(); } };";
         let hints: Vec<String> = calls_in(src).into_iter().map(|(h, _)| h).collect();
         assert_eq!(hints, ["-", "-", "Foo", "-", "-", "Real", "-", "T"]);
+    }
+
+    #[test]
+    fn a_declaring_form_hides_the_catch_parameter_it_redeclares() {
+        // `Some(T)`: the form declares `e` with the type `T`; `None`: it declares `e`
+        // with no type the source writes. The catch parameter `A& e` is never the receiver.
+        let forms = [
+            ("{ auto [e, c] = q; return e.m(); }", None),
+            ("{ auto l = [e = B()]() { return e.m(); }; }", None),
+            ("{ using ns::e; return e.m(); }", None),
+            ("{\n#if X\n B e;\n#endif\n return e.m(); }", None),
+            ("for (auto [e, c] : qs) { return e.m(); }", None),
+            (
+                "{ auto l = [](auto&... e) { return (e.m() + ...); }; }",
+                None,
+            ),
+            ("if (B e; true) { return e.m(); }", Some("B")),
+            ("switch (B e; 1) { default: return e.m(); }", Some("B")),
+            ("{ L: B e; return e.m(); }", Some("B")),
+            (
+                "switch (1) { case 1: B e; break; default: return e.m(); }",
+                Some("B"),
+            ),
+            ("for (B e; int x : xs) { return e.m(); }", Some("B")),
+            ("{ B e [[maybe_unused]] = B(); return e.m(); }", Some("B")),
+            ("{ auto l = []<B e>() { return e.m(); }; }", Some("B")),
+            ("{ bool ok = requires (B e) { e.m(); }; }", Some("B")),
+            ("{ B o; return e.m(); }", Some("A")),
+        ];
+        for (body, want) in forms {
+            let src = format!("int f() {{ try {{ g(); }} catch (A& e) {{ {body} }} }}");
+            let hints: Vec<(String, String)> = calls_in(&src)
+                .into_iter()
+                .filter(|(_, via)| via == "cpp-declared" || via == "-")
+                .collect();
+            let last = hints
+                .last()
+                .map(|(h, via)| (via == "cpp-declared").then_some(h.as_str()));
+            assert_eq!(
+                last.map(|h| h.map(str::to_string)),
+                Some(want.map(str::to_string)),
+                "{body}"
+            );
+        }
     }
 }

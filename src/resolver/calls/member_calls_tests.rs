@@ -146,12 +146,16 @@ fn a_source_file_sees_what_the_source_files_it_includes_declare() {
         "a header is seen by every file"
     );
     assert!(
-        !classes.sees("x.cpp", "y.cpp"),
-        "an include is not symmetric"
+        classes.sees("x.cpp", "y.cpp"),
+        "a file included by the declaring file: the alias is written, then it is included"
     );
     assert!(
-        !classes.sees("h.h", "z.cpp"),
-        "nor is a file seen by a header it includes"
+        classes.sees("h.h", "z.cpp"),
+        "a header the declaring file includes"
+    );
+    assert!(
+        !classes.sees("y.cpp", "z.cpp"),
+        "two files that include the same file are not one translation unit"
     );
 }
 

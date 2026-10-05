@@ -15,7 +15,9 @@ use std::fs;
 #[path = "../common/mod.rs"]
 mod common;
 use common::TempDirExt;
+mod alias_units;
 mod body_receivers;
+mod declaring_forms;
 
 fn index_and_resolve(files: &[(&str, &str)]) -> (GraphStore, common::TestTempDir) {
     let tmp = tempfile::Builder::new()

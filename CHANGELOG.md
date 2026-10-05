@@ -61,22 +61,45 @@ adheres to [Semantic Versioning](https://semver.org/).
   the 18 `ETL_DECLARE_ENUM_TYPE` pseudo-methods of the corpus are gone too; 9 of the
   334 headers declaring `namespace etl` had no `etl` node, 3 have none now. A
   `catch (const E& e)` parameter types `e` in its handler only (the 5 such calls of
-  the corpus had no receiver type; below a parameter of the same name `e` took that
-  parameter's type). A template parameter gives no receiver type. A base class list
-  is split at the commas outside generic arguments (`etl::iterator<tag, const T>` is
-  one base, not two); the copies of the generic-argument stripping and splitting are
-  one helper (`parser::generic_args`). A `typedef` or `using` a source file (`.cpp`)
-  writes is seen by that file and by the files that `#include` it, not by any other.
-  A typed receiver is still read by path suffix, as on `main`: one class of that name
-  binds, several leave the site open. Nothing reads which declaration of a name C++
-  reaches (a using-declaration, a member type, a block, a structured binding, an
-  init-capture, a declaring macro).
+  the corpus had no receiver type). Every form the grammar has for declaring a name
+  (a parameter, a declaration, a structured binding, a range-for variable, the
+  init-statement or the declaration of an `if` / `switch` / `while`, a declaration
+  under a label or a `case`, a lambda parameter or init-capture, a `requires`
+  parameter, a `using ns::e;`, a declaration under `#if`) now declares its name where
+  a call reads it, with the type it writes or, when it writes none (a structured
+  binding, an init-capture, a `using`, `#if`), with no type: the call then has no
+  receiver type, where the walk used to reach an outer declaration of the same name (a
+  catch parameter, a local, a parameter) and bind its class. This is the declaration
+  reader, not a rule about `catch`: a local `A e;` shadowed by `[e = B()]` bound
+  `A::m` on `main` and is open now. A name a macro declares (`MAKE(e);`) or a
+  statement `T (e);` (the grammar reads it as a call, C++ as a declaration) is not
+  read, as on `main` for a local. For a catch parameter, which `main` never typed, the
+  reader goes further: its type is used only when every statement before the call,
+  in the scopes between the handler and the call, is of a kind known not to declare
+  a name (a `return`, a `break`, a nested `if`, a declaration the reader reads...);
+  a statement of any other kind that mentions the name, or a call that takes the
+  name as a bare argument (`DECLARE_VAR(B, e);`), leaves the call with no receiver
+  type. A template parameter gives no receiver type. A
+  base class list is split at the commas outside generic arguments
+  (`etl::iterator<tag, const T>` is one base, not two); the copies of the
+  generic-argument stripping and splitting are one helper (`parser::generic_args`). A
+  `typedef` or `using` a source file (`.cpp`) writes is seen by a file that can be
+  compiled with it in one translation unit: the file includes it, the file is
+  included by it (`using String = A;` written before `#include "impl.h"`), or a third
+  file includes both (the order of the includes is not read); a `typedef` or `using`
+  written in a header is seen by every file; no other file sees a `.cpp` alias. A typed
+  receiver is still read by path suffix, as on `main`: one class of that name binds,
+  several leave the site open. Which declaration of a type name C++ reaches (a
+  using-declaration, a member type, a local class, a declaring macro) is not read.
 
   Measured on the corpus. None of the 260,095 common sites bound on both sides is
-  retargeted (0). 1,908 calls bound on main are open (1,283 `declined_by_scope`:
-  `String` 1,110, `View` 132, `Observable` 17, `NDC` 12, `ItemNDC` 11, `Data` 1; and
-  625 `ambiguous_candidates`, all `etl::bitset`), 1,500 calls open on main are bound
-  (1,375 `declined_by_scope`, 121 `ambiguous_candidates`, 4 `no_receiver_type`; by
+  retargeted (0, by site id; by position, `bitset_new.h:2559:5` (`lhs.swap(rhs)`)
+  goes from `bitset_legacy.h::etl::ibitset::swap` on `main`, wrong, to
+  `bitset_new.h::etl::bitset::swap`, right). 1,908 calls bound on main are open
+  (1,283 `declined_by_scope`: `String` 1,110, `View` 132, `Observable` 17, `NDC` 12,
+  `ItemNDC` 11, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`), 1,500
+  calls open on main are bound (1,375 `declined_by_scope`, 121 `ambiguous_candidates`,
+  4 `no_receiver_type`; by
   `receiver_hint_via`: `cpp-qualifier` 1,057, `cpp-declared` 443). Of the 443, 315 are
   classes whose path was wrong on main because of the macros above and is right now
   (`etl::bitset_ext` 170, `etl::bit_stream_reader` 58, `etl::bit_stream` 39,
