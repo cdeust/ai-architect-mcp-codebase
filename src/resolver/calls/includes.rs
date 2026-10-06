@@ -43,10 +43,9 @@ pub(super) struct IncludeGraph {
     direct: HashMap<String, Vec<String>>,
     /// The reverse of `direct`: the files that include each file directly.
     includers: HashMap<String, Vec<String>>,
-    /// The files that may be in one translation unit with any file: a file with an
-    /// `#include` the graph cannot read (`#include UNIT`) may include any file, so the files
-    /// that reach one, and everything those include, are in it.
-    in_opaque_unit: HashSet<String>,
+    /// A file with an `#include` the graph cannot read (`#include UNIT`) may include any
+    /// file, two at once: every file may share a unit with every other.
+    has_opaque: bool,
     reached: RefCell<HashMap<String, HashSet<String>>>,
 }
 
@@ -88,18 +87,13 @@ impl IncludeGraph {
             })
             .collect();
         let includers = reverse(&direct);
-        let opaque = file_imports
+        let has_opaque = file_imports
             .iter()
-            .filter(|(file, paths)| is_c_family(file) && paths.iter().any(|p| is_computed(p)))
-            .map(|(file, _)| file.as_str());
-        let in_opaque_unit = walk(&direct, walk(&includers, opaque))
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+            .any(|(file, paths)| is_c_family(file) && paths.iter().any(|p| is_computed(p)));
         Self {
             direct,
             includers,
-            in_opaque_unit,
+            has_opaque,
             reached: RefCell::default(),
         }
     }
@@ -112,12 +106,9 @@ impl IncludeGraph {
 
     /// True when `a` and `b` can be compiled in one translation unit: a file is or
     /// includes both. This holds when either includes the other and when a third file
-    /// includes both. A file that is in the unit of a computed include (`#include UNIT`)
-    /// shares one with every file.
+    /// includes both. With a computed include (`#include UNIT`) anywhere, every pair may.
     pub(super) fn share_a_unit(&self, a: &str, b: &str) -> bool {
-        self.in_opaque_unit.contains(a)
-            || self.in_opaque_unit.contains(b)
-            || !self.units_of(a).is_disjoint(&self.units_of(b))
+        self.has_opaque || !self.units_of(a).is_disjoint(&self.units_of(b))
     }
 
     /// The files whose translation unit holds `file`: itself and the files that include it.

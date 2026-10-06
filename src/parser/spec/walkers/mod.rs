@@ -192,7 +192,17 @@ fn parse_with_spec_twins(
             }
         }
     }
-    let source = rewritten.as_deref().unwrap_or(source);
+    // The walkers read the rewritten text with the bytes the rewrite erased marked
+    // (same length, same offsets as the tree): the guard of a catch parameter looks for
+    // the mark, because an erased macro may have declared the name.
+    let marked;
+    let source = match rewritten.as_deref() {
+        Some(blanked) => {
+            marked = super::cpp_unreadable::mark_erased(source, blanked);
+            marked.as_str()
+        }
+        None => source,
+    };
     // Depth guard (issue #148): the definition walkers recurse one frame per tree
     // level, so a pathologically deep error-recovery tree would overflow the
     // stack or exhaust the heap. Reject before walking — a clean `Err` the

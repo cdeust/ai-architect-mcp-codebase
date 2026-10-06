@@ -17,6 +17,7 @@ mod common;
 use common::TempDirExt;
 mod alias_units;
 mod body_receivers;
+mod catch_guard;
 mod declaring_forms;
 
 fn index_and_resolve(files: &[(&str, &str)]) -> (GraphStore, common::TestTempDir) {

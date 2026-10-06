@@ -224,6 +224,25 @@ fn a_file_that_includes_the_caller_and_a_header_with_a_computed_include_may_see_
     ]);
 }
 
+/// Two files that only a glue file with two computed includes puts in one unit: the glue
+/// may include both, whatever its macros name.
+#[test]
+fn a_glue_file_with_two_computed_includes_may_put_the_alias_and_the_caller_in_one_unit() {
+    assert_use_stays_open(&[
+        ("s.h", LIB_STRING),
+        ("ab.h", A_AND_B),
+        ("u.cpp", "#include \"ab.h\"\nusing String = A;\n"),
+        (
+            "t.cpp",
+            "#include \"s.h\"\nint use(String& s) { return s.m(); }\n",
+        ),
+        (
+            "glue.cpp",
+            "#define UNIT_U \"u.cpp\"\n#define UNIT_T \"t.cpp\"\n#include UNIT_U\n#include UNIT_T\n",
+        ),
+    ]);
+}
+
 #[test]
 fn an_alias_of_a_c_plus_plus_source_file_no_file_includes_with_the_caller_is_not_seen() {
     let (store, _tmp) = index_and_resolve(&[

@@ -5,20 +5,63 @@ use tree_sitter::Node;
 
 use crate::parser::node_text;
 
+/// What marks a byte the mask erased in the text the walkers read.
+const ERASED: u8 = 0x0c;
+
+/// `blanked` (the rewrite of `original`, same length) with a mark on each byte it erased.
+pub(super) fn mark_erased(original: &str, blanked: &str) -> String {
+    let bytes = original
+        .bytes()
+        .zip(blanked.bytes())
+        .map(|(o, b)| if o != b { ERASED } else { b })
+        .collect();
+    String::from_utf8(bytes).unwrap_or_else(|_| blanked.to_string())
+}
+
 /// True when a child of `scope` before the call (the one that holds it excluded) is
-/// opaque. The callee of a call that holds the call in its arguments is skipped.
+/// opaque, or when the mask erased a token there. The callee of a call that holds the
+/// call in its arguments, and the fields that name nothing, are skipped.
 pub(super) fn scope_has_unreadable_statement(source: &str, of: (Node, Node), name: &str) -> bool {
     let (scope, call) = of;
-    let callee = scope
-        .child_by_field_name("function")
-        .filter(|_| scope.kind() == "call_expression");
+    if source[scope.start_byte()..call.start_byte()].contains(char::from(ERASED)) {
+        return true;
+    }
     let mut cursor = scope.walk();
-    let found = scope
-        .named_children(&mut cursor)
-        .take_while(|c| c.end_byte() <= call.start_byte())
-        .filter(|c| callee.is_none_or(|f| f.id() != c.id()))
-        .any(|c| is_opaque(source, c, name));
-    found
+    if !cursor.goto_first_child() {
+        return false;
+    }
+    loop {
+        let child = cursor.node();
+        if child.end_byte() > call.start_byte() {
+            return false;
+        }
+        let field = cursor.field_name();
+        let callee = scope.kind() == "call_expression" && field == Some("function");
+        if child.is_named()
+            && !callee
+            && !names_nothing(scope, field)
+            && is_opaque(source, child, name)
+        {
+            return true;
+        }
+        if !cursor.goto_next_sibling() {
+            return false;
+        }
+    }
+}
+
+/// A field of a well formed node that declares nothing: the initial value, the size of an
+/// array, the parameters of a declared function, the test of an `#if`.
+fn names_nothing(node: Node, field: Option<&str>) -> bool {
+    !node.has_error()
+        && matches!(
+            (node.kind(), field),
+            ("init_declarator", Some("value"))
+                | ("array_declarator", Some("size"))
+                | ("function_declarator", Some("parameters"))
+                | ("preproc_ifdef" | "preproc_elifdef", Some("name"))
+                | ("preproc_if" | "preproc_elif", Some("condition"))
+        )
 }
 
 /// Statements that declare nothing the call can read: a scope closed before it, a type, a
@@ -52,16 +95,19 @@ const CLOSED: [&str; 20] = [
 fn is_opaque(source: &str, node: Node, name: &str) -> bool {
     match node.kind() {
         kind if CLOSED.contains(&kind) => false,
-        "preproc_include" | "preproc_def" | "preproc_function_def" | "preproc_call" => true,
         "declaration" if !node.has_error() => hits(source, node, ""),
         _ => hits(source, node, name),
     }
 }
 
-/// True when `node` holds a hit. The initial value, the size of an array and the parameters
-/// of a declared function name nothing.
+/// True when `node` holds a hit; a directive is one. The fields `names_nothing` lists are
+/// skipped.
 fn hits(source: &str, node: Node, name: &str) -> bool {
-    if is_hit(source, node, name) {
+    if matches!(
+        node.kind(),
+        "preproc_include" | "preproc_def" | "preproc_function_def" | "preproc_call"
+    ) || is_hit(source, node, name)
+    {
         return true;
     }
     let mut cursor = node.walk();
@@ -69,13 +115,7 @@ fn hits(source: &str, node: Node, name: &str) -> bool {
         return false;
     }
     loop {
-        let skipped = !node.has_error()
-            && matches!(
-                (node.kind(), cursor.field_name()),
-                ("init_declarator", Some("value"))
-                    | ("array_declarator", Some("size"))
-                    | ("function_declarator", Some("parameters"))
-            );
+        let skipped = names_nothing(node, cursor.field_name());
         if !skipped && hits(source, cursor.node(), name) {
             return true;
         }
@@ -89,7 +129,11 @@ fn hits(source: &str, node: Node, name: &str) -> bool {
 fn is_hit(source: &str, node: Node, name: &str) -> bool {
     matches!(
         node.kind(),
-        "identifier" | "type_identifier" | "namespace_identifier" | "statement_identifier"
+        "identifier"
+            | "type_identifier"
+            | "namespace_identifier"
+            | "statement_identifier"
+            | "field_identifier"
     ) && {
         let text = node_text(source, node);
         is_macro_like(&text) || (!name.is_empty() && text == name && !is_read(node))
