@@ -86,24 +86,45 @@ fn is_macro_like(text: &str) -> bool {
 /// True when a `declaration` may declare `name` in a way `Reader::declaration` does not
 /// read: it holds a parse error that mentions the name (`B e BRACES;`), its type is a
 /// macro name (`DECL_E if (1) {`, read as a declaration of a variable `if`), or one of its
-/// declarators is a bare macro name (`B DECL_E;`, `B NAMED(e);`), which stands for any
-/// declarator the preprocessor writes. `B e(y);` is not opaque: the reader names `e`.
+/// declarators is a bare macro name (`B DECL_E;`, `B NAMED(e);`, `B DECL_E = B();`,
+/// `B* DECL_E;`), which stands for any declarator the preprocessor writes. `B e(y);` is
+/// not opaque: the reader names `e`.
 fn declaration_is_opaque(source: &str, decl: Node, name: &str) -> bool {
     let mut cursor = decl.walk();
     let macro_declarator = decl
         .children_by_field_name("declarator", &mut cursor)
-        .any(|d| {
-            let named = if d.kind() == "function_declarator" {
-                d.child_by_field_name("declarator")
-            } else {
-                Some(d)
-            };
-            named.is_some_and(|n| n.kind() == "identifier" && is_macro_like(&node_text(source, n)))
-        });
+        .any(|d| declarator_is_macro(source, d));
     let macro_type = decl
         .child_by_field_name("type")
         .is_some_and(|t| t.kind() == "type_identifier" && is_macro_like(&node_text(source, t)));
     macro_declarator || macro_type || (has_error(decl) && mentions(source, decl, name))
+}
+
+/// True when the declarator, through the declarators that wrap it (a function, an
+/// initialiser, a pointer, an array, a reference, parentheses), is a macro name.
+fn declarator_is_macro(source: &str, declarator: Node) -> bool {
+    let mut node = declarator;
+    while node.kind() != "identifier" {
+        let wraps = matches!(
+            node.kind(),
+            "function_declarator"
+                | "init_declarator"
+                | "pointer_declarator"
+                | "array_declarator"
+                | "reference_declarator"
+                | "parenthesized_declarator"
+                | "attributed_declarator"
+        );
+        let last = node.named_child_count().checked_sub(1);
+        let inner = node
+            .child_by_field_name("declarator")
+            .or_else(|| node.named_child(u32::try_from(last?).ok()?));
+        match inner {
+            Some(next) if wraps => node = next,
+            _ => return false,
+        }
+    }
+    is_macro_like(&node_text(source, node))
 }
 
 /// True when a macro name is an identifier somewhere under `node`.
@@ -134,17 +155,36 @@ const READING_ARGUMENT: [&str; 7] = [
     "concatenated_string",
 ];
 
+/// The operand an assignment, a subscript or a dereference starts with: the part of
+/// `DECLARE(B, e) = B();` the preprocessor may turn into a declarator.
+fn leftmost_operand(node: Node) -> Node {
+    let mut node = node;
+    loop {
+        let next = match node.kind() {
+            "assignment_expression" => node.child_by_field_name("left"),
+            "subscript_expression" | "pointer_expression" => node.child_by_field_name("argument"),
+            _ => None,
+        };
+        match next {
+            Some(inner) => node = inner,
+            None => return node,
+        }
+    }
+}
+
 /// True when the call an expression statement starts with may be a macro that
 /// declares `name`: its callee is a macro name and it has no argument
 /// (`DECLARE_ALL();`), or one argument that is not a plain read mentions the name
-/// (`VAR(B* e);`, `VAR(B& e = b);`, `DECLARE(B, e);`). A statement that is only a macro
-/// name (`DECL_E` before a `return`) stands for any declaration.
+/// (`VAR(B* e);`, `VAR(B& e = b);`, `DECLARE(B, e);`), also when it is the start of an
+/// initialisation or an array (`DECLARE(B, e) = B();`, `DECLARE(B, e)[2];`). A statement
+/// that is only a macro name (`DECL_E` before a `return`) stands for any declaration.
 fn call_may_declare(source: &str, stmt: Node, name: &str) -> bool {
-    let Some(first) = stmt.named_child(0) else {
+    let Some(statement) = stmt.named_child(0) else {
         return false;
     };
+    let first = leftmost_operand(statement);
     if first.kind() == "identifier" {
-        return is_macro_like(&node_text(source, first));
+        return first.id() == statement.id() && is_macro_like(&node_text(source, first));
     }
     if first.kind() != "call_expression" {
         return false;

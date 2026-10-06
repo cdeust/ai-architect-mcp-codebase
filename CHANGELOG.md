@@ -81,10 +81,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   a name (a `return`, a `break`, a nested `if`, a declaration the reader reads...);
   a statement of any other kind that mentions the name, a declaration the reader
   cannot fully read (a parse error that mentions the name, a macro as its type or as a
-  declarator: `B e BRACES;`, `DECL_E if (1) {`), a statement that is a macro name, a
-  call of a macro without argument (`DECLARE_ALL();`) and a call of a macro whose
-  argument mentions the name and is not a plain read (`DECLARE_VAR(B, e);`,
-  `VAR(B* e);`; `log(e.v)` is a read) leaves the call with no receiver type. A macro
+  declarator, also under an initialiser, a pointer, a reference or an array: `B e
+  BRACES;`, `B DECL_E = B();`, `B* DECL_E;`, `DECL_E if (1) {`), a statement that is a
+  macro name, a call of a macro without argument (`DECLARE_ALL();`) and a call of a
+  macro whose argument mentions the name and is not a plain read (`DECLARE_VAR(B, e);`,
+  `VAR(B* e);`, also when it starts an initialisation or an array: `DECLARE(B, e) =
+  B();`; `log(e.v)` is a read) leaves the call with no receiver type. A local whose
+  name is written in upper case (`const int MAX = 3;`) is read as a macro declarator:
+  the type of a catch parameter is declined past it. A macro
   before a statement keyword (`DECL_E return e.m();`) is not blanked as a specifier:
   the statement is a parse error and its call is not extracted, where `main` blanks the
   macro and records an open site (no site of the corpus is lost to it). A
@@ -97,8 +101,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   included by it (`using String = A;` written before `#include "impl.h"`), or a third
   file includes both (the order of the includes is not read); a `typedef` or `using`
   written in a header is seen by every file; no other file sees a `.cpp` alias. An
-  `#include` written with a macro (`#include UNIT`) may include any file: the file that
-  holds it, and every file that includes it or is included by it, may see any alias.
+  `#include` written as a bare macro name (`#include UNIT`) may include any file: a file
+  that has one, or includes a file that has one, may include any file, so it shares a
+  translation unit with every other, and so does every file that includes it; one
+  written as a call (`#include PICK(x)`) is not read as such.
   The extensions `c++` and `ipp` are read as C++ like the other C++ ones. A typed
   receiver is still read by path suffix, as on `main`: one class of that name binds,
   several leave the site open. Which declaration of a type name C++ reaches (a
@@ -119,7 +125,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   `etl::to_arithmetic_result` 24, `etl::bit_stream_writer` 22,
   `bit_stream_writer::callback_parameter_type` 2); then `QueueInt` 110 (its base
   `etl::queue_lockable<int, 4>` was cut at the comma), `test_variant_3a` 10 and `Data`
-  4 (a `using` the calling file writes). Of the 1,837, 1,597 are 14 classes
+  4 (a `using` the calling file writes). Of the 1,837, 1,557 are 14 classes
   (`Data` 254, `etl::bitset_ext` 254, `DataTransparentComparator` 208,
   `etl::message_timer_locked` 154, `etl::callback_timer_locked` 146,
   `etl::callback_timer_deferred_locked` 144, `etl::poly_span` 74,

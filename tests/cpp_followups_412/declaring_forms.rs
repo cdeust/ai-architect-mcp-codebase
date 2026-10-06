@@ -166,8 +166,24 @@ fn assert_catch_param_is_not_the_receiver(body: &str) {
         "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ {body} }} return 0; }}\n"
     );
     let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
-    let (bound, _) = m_sites(&store, "c");
+    let (bound, sites) = m_sites(&store, "c");
+    // The call is a site (a test that finds none passes for the wrong reason).
+    assert!(!sites.is_empty(), "no `m` site: {src}");
     assert!(!bound.contains(&"A::m".to_string()), "{bound:?}: {src}");
+}
+
+/// The statements of these bodies are a parse error that costs the call its site, as
+/// the CHANGELOG says: nothing is bound, whatever the catch parameter is.
+fn assert_call_is_not_extracted(body: &str) {
+    let src = format!(
+        "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ {body} }} return 0; }}\n"
+    );
+    let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
+    let (bound, sites) = m_sites(&store, "c");
+    assert!(
+        sites.is_empty() && bound.is_empty(),
+        "{bound:?} {sites:?}: {src}"
+    );
 }
 
 #[test]
@@ -229,10 +245,18 @@ fn a_macro_statement_with_a_declaration_argument_may_declare_the_catch_parameter
 #[test]
 fn a_macro_statement_without_arguments_may_declare_the_catch_parameter() {
     assert_catch_param_is_not_the_receiver("{ DECLARE_ALL(); return e.m(); }");
-    assert_catch_param_is_not_the_receiver("{ DECL_E return e.m(); }");
-    assert_catch_param_is_not_the_receiver("{ L1: DECL_E return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ DECL_E if (1) { return e.m(); } }");
     assert_catch_param_is_not_the_receiver("{ DECL_E; return e.m(); }");
+}
+
+/// A macro before a statement keyword is a parse error, and the parse error costs the
+/// call its site (the CHANGELOG says so): nothing is bound, nothing is open. `# B e;`
+/// is a stray directive that does the same.
+#[test]
+fn a_statement_the_grammar_cannot_read_at_all_costs_the_call_its_site() {
+    assert_call_is_not_extracted("{ DECL_E return e.m(); }");
+    assert_call_is_not_extracted("{ L1: DECL_E return e.m(); }");
+    assert_call_is_not_extracted("{ # B e; return e.m(); }");
 }
 
 /// A parse error beside the name hides what the statement declares: `B x e;` may be
@@ -242,7 +266,6 @@ fn a_macro_statement_without_arguments_may_declare_the_catch_parameter() {
 fn a_parse_error_beside_the_catch_parameter_may_hide_its_declaration() {
     assert_catch_param_is_not_the_receiver("{ B x e; return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ B x(e; return e.m(); }");
-    assert_catch_param_is_not_the_receiver("{ # B e; return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ x y z e; return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ DECL_E ) return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ @ B e 1; return e.m(); }");
@@ -254,6 +277,45 @@ fn a_declaration_with_a_macro_declarator_may_declare_the_catch_parameter() {
     assert_catch_param_is_not_the_receiver("{ B NAMED(e); return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ B DECL_E; return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ B e BRACES; return e.m(); }");
+}
+
+/// The macro name is the declarator under an initialiser, a pointer, a reference or an
+/// array: `#define DECL_E e` makes `B DECL_E = B();` a declaration of `e`.
+#[test]
+fn a_macro_declarator_under_a_wrapping_declarator_may_declare_the_catch_parameter() {
+    assert_catch_param_is_not_the_receiver("{ B DECL_E = B(); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B NAMED(e) = B(); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B* NAMED(e); return e->m(); }");
+    assert_catch_param_is_not_the_receiver("{ B* DECL_E = nullptr; return e->m(); }");
+    assert_catch_param_is_not_the_receiver("{ B& DECL_E = b; return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B DECL_E[2]; return e[0].m(); }");
+}
+
+/// A macro call that starts an initialisation or an array: `#define DECLARE(T, n) T n`
+/// makes `DECLARE(B, e) = B();` a declaration of `e`.
+#[test]
+fn a_macro_call_that_starts_an_initialisation_may_declare_the_catch_parameter() {
+    assert_catch_param_is_not_the_receiver("{ DECLARE(B, e) = B(); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ DECLARE(B, e)[2]; return e[0].m(); }");
+    assert_catch_param_is_not_the_receiver("{ *DECLARE(B, e) = nullptr; return e->m(); }");
+}
+
+/// What the unwrapping must not swallow: an assignment to a plain name or a member, an
+/// element of a constant array, a lower case initialised local.
+#[test]
+fn an_assignment_that_is_not_a_macro_declaration_keeps_the_type_of_the_catch_parameter() {
+    for body in [
+        "{ B other = B(); (void)other; return e.m(); }",
+        "{ int n = 0; n = 1; return e.m(); }",
+        "{ TABLE[2] = 1; return e.m(); }",
+        "{ p.c = 1; return e.m(); }",
+    ] {
+        let src = format!(
+            "{PRELUDE}int TABLE[3]; P p;\nint c() {{ try {{ g(); }} catch (const A& e) {{ {body} }} return 0; }}\n"
+        );
+        let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
+        assert_eq!(m_sites(&store, "c").0, ["A::m".to_string()], "{src}");
+    }
 }
 
 /// What the macro rule must not swallow: a call whose arguments only read the name.

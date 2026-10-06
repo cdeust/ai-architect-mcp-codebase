@@ -103,32 +103,31 @@ impl IncludeGraph {
     /// True when `to` is `from` or a file `from` includes, directly or
     /// through other includes.
     pub(super) fn reaches(&self, from: &str, to: &str) -> bool {
-        if from == to {
-            return true;
-        }
-        if let Some(set) = self.reached.borrow().get(from) {
-            return set.contains(to);
-        }
-        let set = self.closure(from);
-        let found = set.contains(to);
-        self.reached.borrow_mut().insert(from.to_string(), set);
-        found
+        from == to || self.with_closure(from, |set| set.contains(to))
     }
 
-    /// True when `a` and `b` can be compiled in one translation unit: a file (`a`
-    /// itself, or one that includes `a`, directly or through other files) is or
-    /// includes `b`. This holds when either includes the other and when a third
-    /// file includes both.
+    /// True when `a` and `b` can be compiled in one translation unit: a file (`a` or
+    /// `b` itself, or one that includes it, directly or through other files) is or
+    /// includes the other. This holds when either includes the other and when a third
+    /// file includes both. A file that reaches a computed include (`#include UNIT`)
+    /// may include any file, so it stands for all of them.
     pub(super) fn share_a_unit(&self, a: &str, b: &str) -> bool {
-        if self.reaches(a, b) || self.reaches_opaque(a) || self.reaches_opaque(b) {
+        self.some_includer_reaches(a, b) || self.some_includer_reaches(b, a)
+    }
+
+    /// True when `from`, or a file that includes `from`, is or may be a file that
+    /// includes `to`.
+    fn some_includer_reaches(&self, from: &str, to: &str) -> bool {
+        let covers = |file: &str| self.reaches(file, to) || self.reaches_opaque(file);
+        if covers(from) {
             return true;
         }
-        let mut seen: HashSet<&str> = HashSet::from([a]);
-        let mut pending = vec![a];
+        let mut seen: HashSet<&str> = HashSet::from([from]);
+        let mut pending = vec![from];
         while let Some(file) = pending.pop() {
             for includer in self.includers.get(file).into_iter().flatten() {
                 if seen.insert(includer) {
-                    if self.reaches(includer, b) || self.opaque.contains(includer.as_str()) {
+                    if covers(includer) {
                         return true;
                     }
                     pending.push(includer);
@@ -142,7 +141,18 @@ impl IncludeGraph {
     fn reaches_opaque(&self, file: &str) -> bool {
         !self.opaque.is_empty()
             && (self.opaque.contains(file)
-                || self.closure(file).iter().any(|f| self.opaque.contains(f)))
+                || self.with_closure(file, |set| set.iter().any(|f| self.opaque.contains(f))))
+    }
+
+    /// Runs `read` on the closure of `from`, computed once per pass.
+    fn with_closure<R>(&self, from: &str, read: impl FnOnce(&HashSet<String>) -> R) -> R {
+        if let Some(set) = self.reached.borrow().get(from) {
+            return read(set);
+        }
+        let set = self.closure(from);
+        let found = read(&set);
+        self.reached.borrow_mut().insert(from.to_string(), set);
+        found
     }
 
     fn closure(&self, from: &str) -> HashSet<String> {

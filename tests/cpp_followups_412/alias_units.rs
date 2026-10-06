@@ -190,6 +190,40 @@ fn a_computed_include_in_a_header_the_caller_includes_makes_the_alias_possibly_v
     ]);
 }
 
+/// The other direction: a file that includes the caller, and that has a computed
+/// include or reaches one, may include the file that holds the alias.
+#[test]
+fn a_computed_include_in_a_file_that_includes_the_caller_makes_the_alias_possibly_visible() {
+    assert_use_stays_open(&[
+        ("s.h", LIB_STRING),
+        ("ab.h", A_AND_B),
+        ("u.cpp", "#include \"ab.h\"\nusing String = A;\n"),
+        (
+            "t.cpp",
+            "#include \"s.h\"\nint use(String& s) { return s.m(); }\n",
+        ),
+        (
+            "glue.cpp",
+            "#define UNIT \"u.cpp\"\n#include UNIT\n#include \"t.cpp\"\n",
+        ),
+    ]);
+}
+
+#[test]
+fn a_file_that_includes_the_caller_and_a_header_with_a_computed_include_may_see_the_alias() {
+    assert_use_stays_open(&[
+        ("s.h", LIB_STRING),
+        ("ab.h", A_AND_B),
+        ("u.cpp", "#include \"ab.h\"\nusing String = A;\n"),
+        ("pick.h", "#define UNIT \"u.cpp\"\n#include UNIT\n"),
+        (
+            "t.cpp",
+            "#include \"s.h\"\nint use(String& s) { return s.m(); }\n",
+        ),
+        ("all.cpp", "#include \"t.cpp\"\n#include \"pick.h\"\n"),
+    ]);
+}
+
 #[test]
 fn an_alias_of_a_c_plus_plus_source_file_no_file_includes_with_the_caller_is_not_seen() {
     let (store, _tmp) = index_and_resolve(&[
