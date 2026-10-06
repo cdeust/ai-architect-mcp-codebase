@@ -469,6 +469,9 @@ fn a_macro_or_the_name_where_no_declaration_is_may_declare_the_catch_parameter()
         "{ DECL_E = B(); return e.m(); }",
         "{ DECL_T DECL_E(1); return e.m(); }",
         "{ DECL_E LOG(1); return e.m(); }",
+        "{ DWORD n; return e.m(); }",
+        "{\n#include \"decl_e.inc\"\n return e.m(); }",
+        "{\n#define DECL_E B e\n return e.m(); }",
     ] {
         assert_catch_param_is_not_the_receiver(body);
     }
@@ -485,6 +488,20 @@ fn a_statement_that_declares_nothing_the_call_reads_keeps_the_type() {
         "{ return e.v + e.m(); }",
         "{ if (e.ok()) { return e.m(); } return 0; }",
         "{ return e.ok() && e.m(); }",
+        "{ g(e[0]); return e.m(); }",
+        "{ return LOG_IT(e.m()); }",
+        "{ { B DECL_E; } return e.m(); }",
+        "{ if (1) { B DECL_E; } return e.m(); }",
+        "{ while (1) { B DECL_E; break; } return e.m(); }",
+        "{ do { B DECL_E; } while (0); return e.m(); }",
+        "{ for (;;) { B DECL_E; break; } return e.m(); }",
+        "{ for (B x : ys) { B DECL_E; } return e.m(); }",
+        "{ switch (1) { case 1: B DECL_E; } return e.m(); }",
+        "{ try { B DECL_E; } catch (...) { } return e.m(); }",
+        "{ typedef B DECL_E; return e.m(); }",
+        "{ using DECL_E = B; return e.m(); }",
+        "{ static_assert(MAX_N > 1); return e.m(); }",
+        "{ namespace NS_ALIAS = ns; return e.m(); }",
     ] {
         assert_catch_param_keeps_its_type(body);
     }
