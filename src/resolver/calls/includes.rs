@@ -26,9 +26,15 @@ use crate::graph_store::GraphStore;
 
 /// Extensions of the files whose `#include` directives the graph records as
 /// `Import` nodes and that may be included in turn.
-const C_FAMILY_EXTENSIONS: [&str; 10] = [
-    "c", "h", "cc", "hh", "cpp", "hpp", "cxx", "hxx", "inc", "inl",
+const C_FAMILY_EXTENSIONS: [&str; 12] = [
+    "c", "h", "cc", "hh", "cpp", "hpp", "cxx", "c++", "hxx", "ipp", "inc", "inl",
 ];
+
+/// The extensions of the files that are a translation unit of their own. Each one is
+/// in `C_FAMILY_EXTENSIONS` and read by `Language::from_extension`: a source file
+/// whose `#include` lines are not read would make `share_a_unit` false for the
+/// files it includes.
+pub(super) const SOURCE_EXTENSIONS: [&str; 5] = ["cpp", "cc", "cxx", "c++", "c"];
 
 /// The files each C-family file includes, read once per resolution pass, and
 /// the closure of that relation asked for on demand.
@@ -37,6 +43,9 @@ pub(super) struct IncludeGraph {
     direct: HashMap<String, Vec<String>>,
     /// The reverse of `direct`: the files that include each file directly.
     includers: HashMap<String, Vec<String>>,
+    /// The files with an `#include` the graph cannot read (`#include UNIT`): they may
+    /// include any file.
+    opaque: HashSet<String>,
     reached: RefCell<HashMap<String, HashSet<String>>>,
 }
 
@@ -78,9 +87,15 @@ impl IncludeGraph {
             })
             .collect();
         let includers = reverse(&direct);
+        let opaque = file_imports
+            .iter()
+            .filter(|(file, paths)| is_c_family(file) && paths.iter().any(|p| is_computed(p)))
+            .map(|(file, _)| file.clone())
+            .collect();
         Self {
             direct,
             includers,
+            opaque,
             reached: RefCell::default(),
         }
     }
@@ -105,7 +120,7 @@ impl IncludeGraph {
     /// includes `b`. This holds when either includes the other and when a third
     /// file includes both.
     pub(super) fn share_a_unit(&self, a: &str, b: &str) -> bool {
-        if self.reaches(a, b) {
+        if self.reaches(a, b) || self.reaches_opaque(a) || self.reaches_opaque(b) {
             return true;
         }
         let mut seen: HashSet<&str> = HashSet::from([a]);
@@ -113,7 +128,7 @@ impl IncludeGraph {
         while let Some(file) = pending.pop() {
             for includer in self.includers.get(file).into_iter().flatten() {
                 if seen.insert(includer) {
-                    if self.reaches(includer, b) {
+                    if self.reaches(includer, b) || self.opaque.contains(includer.as_str()) {
                         return true;
                     }
                     pending.push(includer);
@@ -121,6 +136,13 @@ impl IncludeGraph {
             }
         }
         false
+    }
+
+    /// True when `file`, or a file it includes, has an include that is not read.
+    fn reaches_opaque(&self, file: &str) -> bool {
+        !self.opaque.is_empty()
+            && (self.opaque.contains(file)
+                || self.closure(file).iter().any(|f| self.opaque.contains(f)))
     }
 
     fn closure(&self, from: &str) -> HashSet<String> {
@@ -148,6 +170,16 @@ fn reverse(direct: &HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>
         }
     }
     includers
+}
+
+/// An include path that is a macro name (`#include UNIT`): no directory, no extension,
+/// upper case. A system header (`<vector>`) is lower case.
+fn is_computed(path: &str) -> bool {
+    path.len() > 1
+        && path.chars().any(|c| c.is_ascii_uppercase())
+        && path
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn is_c_family(file: &str) -> bool {

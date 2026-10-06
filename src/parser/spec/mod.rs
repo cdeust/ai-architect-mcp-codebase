@@ -18,6 +18,7 @@ mod cpp;
 mod cpp_declared;
 mod cpp_macro_mask;
 mod cpp_receiver;
+mod cpp_unreadable;
 mod declarative;
 mod declarative_rules;
 mod families;

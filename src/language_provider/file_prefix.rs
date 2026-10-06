@@ -11,7 +11,7 @@
 /// originating file. source: parser::Language::from_extension (authoritative).
 pub const ALL_EXTENSIONS: &[&str] = &[
     "rs", "py", "ts", "tsx", "java", "kt", "kts", "swift", "m", "mm", "c", "h", "cc", "cpp", "cxx",
-    "hh", "hpp", "hxx", "go", "js", "jsx", "mjs", "cjs", "rb",
+    "c++", "hh", "hpp", "hxx", "ipp", "go", "js", "jsx", "mjs", "cjs", "rb",
 ];
 
 /// Extract the file-path prefix from a node id or qualified name of the form
@@ -42,4 +42,22 @@ pub fn extract_file_prefix(id: &str) -> Option<String> {
 /// fallback cannot land on one and miss the others.
 pub fn extract_file_prefix_or_self(id: &str) -> String {
     extract_file_prefix(id).unwrap_or_else(|| id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::Language;
+
+    #[test]
+    fn every_extension_read_as_cpp_recovers_its_file_from_a_node_id() {
+        for ext in ["cc", "cpp", "cxx", "c++", "hh", "hpp", "hxx", "ipp"] {
+            assert_eq!(Language::from_extension(ext), Some(Language::Cpp), "{ext}");
+            assert_eq!(
+                extract_file_prefix(&format!("dir/a.{ext}::ns::f")),
+                Some(format!("dir/a.{ext}")),
+                "{ext}"
+            );
+        }
+    }
 }

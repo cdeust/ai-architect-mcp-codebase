@@ -136,6 +136,24 @@ const SPECIFIERS: [&str; 8] = [
     "const",
 ];
 
+/// Keywords that start a statement, never a type: a macro before one is a statement
+/// of its own (`DECL_E return e.m();`), not a specifier of a declaration, and
+/// blanking it would hide the statement from the reader of declarations.
+const STATEMENT_KEYWORDS: [&str; 12] = [
+    "return",
+    "throw",
+    "goto",
+    "break",
+    "continue",
+    "if",
+    "for",
+    "while",
+    "do",
+    "switch",
+    "co_return",
+    "co_yield",
+];
+
 /// True when a token after `prev` starts or continues a declaration head: after
 /// `;`, `{`, `}`, `>`, an access label's `:`, a preprocessor line, a specifier
 /// keyword, or at the start of the file.
@@ -183,6 +201,9 @@ pub(crate) fn mask_specifier_macros(source: &str) -> Option<String> {
         let trailing = prev == Some(Tok::Punct(b')')) || last_was_masked || after_if;
         let leading = opens_declaration(source, prev_tok)
             && next == Some(Tok::Ident)
+            && !toks
+                .get(i + 1)
+                .is_some_and(|n| STATEMENT_KEYWORDS.contains(&&source[n.start..n.end]))
             && matches!(
                 toks.get(i + 2).map(|n| n.tok),
                 Some(Tok::Ident)

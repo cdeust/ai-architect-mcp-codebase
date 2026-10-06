@@ -73,7 +73,7 @@ fn unit_sees(from: &str, declared: &str) -> bool {
     declared == from
         || !matches!(
             declared.rsplit_once('.').map(|(_, ext)| ext),
-            Some("cpp" | "cc" | "cxx" | "c++" | "cp" | "c" | "C")
+            Some(ext) if super::includes::SOURCE_EXTENSIONS.contains(&ext)
         )
 }
 

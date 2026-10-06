@@ -15,6 +15,8 @@ use tree_sitter::Node;
 use crate::parser::generic_args::strip_generic_groups;
 use crate::parser::node_text;
 
+use super::cpp_unreadable::scope_has_unreadable_statement;
+
 /// The type the innermost enclosing scope declares for `name`, read at `at`.
 /// The search stops at the enclosing function: a global or a field is not read.
 /// A name declared without a written type gives none, and hides the outer ones.
@@ -36,98 +38,6 @@ pub(super) fn declared_type(source: &str, at: Node, name: &str) -> Option<String
         scope = s.parent();
     }
     None
-}
-
-/// True when a child of `scope` before the call (the one that holds it excluded)
-/// is a statement `unreadable_statement` flags.
-fn scope_has_unreadable_statement(source: &str, of: (Node, Node), name: &str) -> bool {
-    let (scope, call) = of;
-    let mut cursor = scope.walk();
-    let found = scope
-        .named_children(&mut cursor)
-        .take_while(|c| c.end_byte() <= call.start_byte())
-        .any(|c| unreadable_statement(source, c, name));
-    found
-}
-
-/// Statements that declare no name of the enclosing block, or whose declarations the
-/// reader names (`Reader::block`). Any other statement that mentions the name could
-/// declare it in a form the reader does not know (a macro `DECLARE(B, e);`, a parse
-/// error): this list is of the kinds known not to, never of the kinds known to.
-const NO_DECLARATION: [&str; 22] = [
-    "comment",
-    "declaration",
-    "using_declaration",
-    "type_definition",
-    "alias_declaration",
-    "static_assert_declaration",
-    "namespace_alias_definition",
-    "return_statement",
-    "break_statement",
-    "continue_statement",
-    "goto_statement",
-    "throw_statement",
-    "if_statement",
-    "while_statement",
-    "do_statement",
-    "for_statement",
-    "for_range_loop",
-    "switch_statement",
-    "try_statement",
-    "compound_statement",
-    "co_return_statement",
-    "co_yield_statement",
-];
-
-/// True when `stmt` could declare `name` in a form the reader cannot name: a
-/// statement of a kind outside `NO_DECLARATION` that mentions the name. An expression
-/// statement counts only when the name is a bare argument of its call (the shape of
-/// `DECLARE(B, e);`). A label, a `case` and a preprocessor branch hold statements of
-/// their own.
-fn unreadable_statement(source: &str, stmt: Node, name: &str) -> bool {
-    match stmt.kind() {
-        "labeled_statement" | "case_statement" | "preproc_if" | "preproc_ifdef"
-        | "preproc_elif" | "preproc_elifdef" | "preproc_else" => {
-            let mut cursor = stmt.walk();
-            let found = stmt
-                .named_children(&mut cursor)
-                .any(|c| unreadable_statement(source, c, name));
-            found
-        }
-        kind if NO_DECLARATION.contains(&kind) => false,
-        "expression_statement" => has_bare_argument(source, stmt, name),
-        _ => mentions(source, stmt, name),
-    }
-}
-
-/// True when a call under `stmt` (its first expression) takes `name` as a bare argument.
-fn has_bare_argument(source: &str, stmt: Node, name: &str) -> bool {
-    let Some(call) = stmt
-        .named_child(0)
-        .filter(|c| c.kind() == "call_expression")
-    else {
-        return false;
-    };
-    let Some(arguments) = call.child_by_field_name("arguments") else {
-        return false;
-    };
-    let mut cursor = arguments.walk();
-    let found = arguments
-        .named_children(&mut cursor)
-        .any(|a| a.kind() == "identifier" && node_text(source, a) == name);
-    found
-}
-
-/// True when `name` is an identifier somewhere under `node`.
-fn mentions(source: &str, node: Node, name: &str) -> bool {
-    if matches!(node.kind(), "identifier" | "type_identifier") && node_text(source, node) == name {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let found = node
-        .children(&mut cursor)
-        .any(|c| mentions(source, c, name));
-    found
 }
 
 /// One declaration of the name looked for: `decl` is the node whose `type` field
@@ -318,9 +228,8 @@ impl Reader<'_> {
 
     /// Walks a declarator down to the names it declares: identifier, init_declarator,
     /// pointer / reference / array / parenthesized / attributed / variadic
-    /// declarators. A structured_binding_declarator declares names whatever type the
-    /// declaration writes: they get none. A function declarator names a function,
-    /// not a receiver.
+    /// declarators, and the function declarator of a declaration (`B e(y);`). A structured_binding_declarator declares names whatever type the
+    /// declaration writes: they get none.
     fn declarator<'t>(&self, node: Node<'t>, of: (Node<'t>, bool), out: &mut Vec<Binding<'t>>) {
         let (decl, typed) = of;
         match node.kind() {
@@ -340,6 +249,13 @@ impl Reader<'_> {
                         decl: None,
                         from: decl.start_byte(),
                     });
+                }
+            }
+            "function_declarator" if decl.kind() == "declaration" => {
+                // `B e(y);` is a function declarator to the grammar and a variable
+                // of type `B` to the compiler whenever `y` is not a type.
+                if let Some(inner) = node.child_by_field_name("declarator") {
+                    self.declarator(inner, of, out);
                 }
             }
             "init_declarator" | "pointer_declarator" | "array_declarator" => {

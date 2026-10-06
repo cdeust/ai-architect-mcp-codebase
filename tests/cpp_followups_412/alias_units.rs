@@ -112,3 +112,94 @@ fn an_alias_of_a_source_file_no_file_includes_with_the_caller_is_not_seen() {
     ]);
     assert_eq!(bound_methods(&store, "use"), ["m -> lib::String::m"]);
 }
+
+/// Glue files whose extension the language reads as C++ but the include table did not:
+/// the unit that includes both the alias and the caller must still be seen.
+fn glue_unit(glue: &str, body: &str) {
+    assert_use_stays_open(&[
+        ("s.h", LIB_STRING),
+        ("ab.h", A_AND_B),
+        ("u.cpp", "#include \"ab.h\"\nusing String = A;\n"),
+        (
+            "t.cpp",
+            "#include \"s.h\"\nint use(String& s) { return s.m(); }\n",
+        ),
+        (glue, body),
+    ]);
+}
+
+const GLUE: &str = "#include \"u.cpp\"\n#include \"t.cpp\"\n";
+
+#[test]
+fn a_c_plus_plus_extension_glue_file_makes_one_unit_of_the_alias_and_the_caller() {
+    glue_unit("all.c++", GLUE);
+}
+
+#[test]
+fn an_ipp_glue_file_makes_one_unit_of_the_alias_and_the_caller() {
+    glue_unit("all.ipp", GLUE);
+}
+
+#[test]
+fn a_computed_include_makes_the_alias_of_the_included_file_possibly_visible() {
+    // `#include UNIT` names no file the graph can read: the caller may include the
+    // alias's file, as on `main`, and the site stays open.
+    assert_use_stays_open(&[
+        ("s.h", LIB_STRING),
+        ("ab.h", A_AND_B),
+        ("u.cpp", "#include \"ab.h\"\nusing String = A;\n"),
+        (
+            "t.cpp",
+            "#include \"s.h\"\n#define UNIT \"u.cpp\"\n#include UNIT\nint use(String& s) { return s.m(); }\n",
+        ),
+    ]);
+}
+
+/// A computed include (`#include UNIT`) names no file the graph can read, so it may
+/// include any file. The alias stays possibly visible when the file that holds it is
+/// included by a file with a computed include, and when a header the caller includes
+/// holds one.
+#[test]
+fn a_computed_include_in_a_file_that_includes_the_alias_makes_it_possibly_visible() {
+    assert_use_stays_open(&[
+        ("s.h", LIB_STRING),
+        ("ab.h", A_AND_B),
+        ("u.cpp", "#include \"ab.h\"\nusing String = A;\n"),
+        (
+            "t.cpp",
+            "#include \"s.h\"\nint use(String& s) { return s.m(); }\n",
+        ),
+        (
+            "all.cpp",
+            "#include \"u.cpp\"\n#define UNIT \"t.cpp\"\n#include UNIT\n",
+        ),
+    ]);
+}
+
+#[test]
+fn a_computed_include_in_a_header_the_caller_includes_makes_the_alias_possibly_visible() {
+    assert_use_stays_open(&[
+        ("s.h", LIB_STRING),
+        ("ab.h", A_AND_B),
+        ("u.cpp", "#include \"ab.h\"\nusing String = A;\n"),
+        ("pick.h", "#define UNIT \"u.cpp\"\n#include UNIT\n"),
+        (
+            "t.cpp",
+            "#include \"s.h\"\n#include \"pick.h\"\nint use(String& s) { return s.m(); }\n",
+        ),
+    ]);
+}
+
+#[test]
+fn an_alias_of_a_c_plus_plus_source_file_no_file_includes_with_the_caller_is_not_seen() {
+    let (store, _tmp) = index_and_resolve(&[
+        ("s.h", LIB_STRING),
+        ("ab.h", A_AND_B),
+        ("u.c++", "#include \"ab.h\"\nusing String = A;\n"),
+        (
+            "t.cpp",
+            "#include \"s.h\"\nusing lib::String;\nint use(String& s) { return s.m(); }\n",
+        ),
+    ]);
+    assert_eq!(bound_methods(&store, "use"), ["m -> lib::String::m"]);
+}

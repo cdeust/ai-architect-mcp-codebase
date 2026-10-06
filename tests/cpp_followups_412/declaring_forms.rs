@@ -131,6 +131,10 @@ forms! {
         assert_receiver_is_a_b("{ B e{}; return e.m(); }")
     a_declaration_with_a_constructor_call_declares_its_name:
         assert_receiver_is_a_b("{ B e(1); return e.m(); }")
+    a_direct_initialisation_from_a_name_declares_its_name:
+        assert_receiver_is_a_b("{ int y = 0; B e(y); return e.m(); }")
+    a_direct_initialisation_from_a_call_declares_its_name:
+        assert_receiver_is_a_b("{ B e(g()); return e.m(); }")
     a_static_declaration_declares_its_name:
         assert_receiver_is_a_b("{ static B e; return e.m(); }")
     an_inner_block_declares_its_name:
@@ -200,6 +204,65 @@ fn a_labelled_or_conditional_statement_that_cannot_declare_the_name_keeps_its_ty
         "{ L: log(e.v); return e.m(); }",
         "switch (1) { case 1: log(e.v); break; default: return e.m(); }",
         "{\n#ifdef X\n log(e.v);\n#endif\n return e.m(); }",
+    ] {
+        let src = format!(
+            "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ {body} }} return 0; }}\n"
+        );
+        let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
+        assert_eq!(m_sites(&store, "c").0, ["A::m".to_string()], "{src}");
+    }
+}
+
+/// A macro statement that declares the name in a shape the reader cannot see: the
+/// argument is not the bare name (`VAR(B* e);`), the call has no argument at all
+/// (`DECLARE_ALL();`), or the declaration's declarator is a macro name.
+#[test]
+fn a_macro_statement_with_a_declaration_argument_may_declare_the_catch_parameter() {
+    assert_catch_param_is_not_the_receiver("{ VAR(B* e); return e->m(); }");
+    assert_catch_param_is_not_the_receiver("{ VAR(B& e = b); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ VAR(B, e = B()); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ VAR2(B, *e); return e->m(); }");
+    assert_catch_param_is_not_the_receiver("{ VAR3(B * e); return e->m(); }");
+    assert_catch_param_is_not_the_receiver("{ do { VAR(B* e); return e->m(); } while (0); }");
+}
+
+#[test]
+fn a_macro_statement_without_arguments_may_declare_the_catch_parameter() {
+    assert_catch_param_is_not_the_receiver("{ DECLARE_ALL(); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ DECL_E return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ L1: DECL_E return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ DECL_E if (1) { return e.m(); } }");
+    assert_catch_param_is_not_the_receiver("{ DECL_E; return e.m(); }");
+}
+
+/// A parse error beside the name hides what the statement declares: `B x e;` may be
+/// `B x EXPORT_e;` once the preprocessor has run, and what no grammar reads (`# B e;`,
+/// `x y z e;`, `@ B e 1;`, `DECL_E )`) is left to the compiler.
+#[test]
+fn a_parse_error_beside_the_catch_parameter_may_hide_its_declaration() {
+    assert_catch_param_is_not_the_receiver("{ B x e; return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B x(e; return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ # B e; return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ x y z e; return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ DECL_E ) return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ @ B e 1; return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ ) B e :: ; return e.m(); }");
+}
+
+#[test]
+fn a_declaration_with_a_macro_declarator_may_declare_the_catch_parameter() {
+    assert_catch_param_is_not_the_receiver("{ B NAMED(e); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B DECL_E; return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B e BRACES; return e.m(); }");
+}
+
+/// What the macro rule must not swallow: a call whose arguments only read the name.
+#[test]
+fn a_call_that_only_reads_a_member_of_the_catch_parameter_keeps_its_type() {
+    for body in [
+        "{ log(e.v); return e.m(); }",
+        "{ log(e.v, g()); return e.m(); }",
+        "{ g(); return e.m(); }",
     ] {
         let src = format!(
             "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ {body} }} return 0; }}\n"

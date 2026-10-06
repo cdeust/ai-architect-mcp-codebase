@@ -60,8 +60,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   attributed to `string_pad_direction` and there are now 0 (`left_n` is `etl::left_n`);
   the 18 `ETL_DECLARE_ENUM_TYPE` pseudo-methods of the corpus are gone too; 9 of the
   334 headers declaring `namespace etl` had no `etl` node, 3 have none now. A
-  `catch (const E& e)` parameter types `e` in its handler only (the 5 such calls of
-  the corpus had no receiver type). Every form the grammar has for declaring a name
+  `catch (const E& e)` parameter types `e` in its handler only (`main` never typed
+  one). Every form the grammar has for declaring a name
   (a parameter, a declaration, a structured binding, a range-for variable, the
   init-statement or the declaration of an `if` / `switch` / `while`, a declaration
   under a label or a `case`, a lambda parameter or init-capture, a `requires`
@@ -69,7 +69,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   a call reads it, with the type it writes or, when it writes none (a structured
   binding, an init-capture, a `using`, `#if`), with no type: the call then has no
   receiver type, where the walk used to reach an outer declaration of the same name (a
-  catch parameter, a local, a parameter) and bind its class. This is the declaration
+  catch parameter, a local, a parameter) and bind its class. A declaration
+  `T x(args);` declares `x` of type `T` (the grammar reads a function declarator, C++ a
+  variable whenever the arguments are not types). This is the declaration
   reader, not a rule about `catch`: a local `A e;` shadowed by `[e = B()]` bound
   `A::m` on `main` and is open now. A name a macro declares (`MAKE(e);`) or a
   statement `T (e);` (the grammar reads it as a call, C++ as a declaration) is not
@@ -77,9 +79,16 @@ adheres to [Semantic Versioning](https://semver.org/).
   reader goes further: its type is used only when every statement before the call,
   in the scopes between the handler and the call, is of a kind known not to declare
   a name (a `return`, a `break`, a nested `if`, a declaration the reader reads...);
-  a statement of any other kind that mentions the name, or a call that takes the
-  name as a bare argument (`DECLARE_VAR(B, e);`), leaves the call with no receiver
-  type. A template parameter gives no receiver type. A
+  a statement of any other kind that mentions the name, a declaration the reader
+  cannot fully read (a parse error that mentions the name, a macro as its type or as a
+  declarator: `B e BRACES;`, `DECL_E if (1) {`), a statement that is a macro name, a
+  call of a macro without argument (`DECLARE_ALL();`) and a call of a macro whose
+  argument mentions the name and is not a plain read (`DECLARE_VAR(B, e);`,
+  `VAR(B* e);`; `log(e.v)` is a read) leaves the call with no receiver type. A macro
+  before a statement keyword (`DECL_E return e.m();`) is not blanked as a specifier:
+  the statement is a parse error and its call is not extracted, where `main` blanks the
+  macro and records an open site (no site of the corpus is lost to it). A
+  template parameter gives no receiver type. A
   base class list is split at the commas outside generic arguments
   (`etl::iterator<tag, const T>` is one base, not two); the copies of the
   generic-argument stripping and splitting are one helper (`parser::generic_args`). A
@@ -87,7 +96,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   compiled with it in one translation unit: the file includes it, the file is
   included by it (`using String = A;` written before `#include "impl.h"`), or a third
   file includes both (the order of the includes is not read); a `typedef` or `using`
-  written in a header is seen by every file; no other file sees a `.cpp` alias. A typed
+  written in a header is seen by every file; no other file sees a `.cpp` alias. An
+  `#include` written with a macro (`#include UNIT`) may include any file: the file that
+  holds it, and every file that includes it or is included by it, may see any alias.
+  The extensions `c++` and `ipp` are read as C++ like the other C++ ones. A typed
   receiver is still read by path suffix, as on `main`: one class of that name binds,
   several leave the site open. Which declaration of a type name C++ reaches (a
   using-declaration, a member type, a local class, a declaring macro) is not read.
@@ -97,24 +109,38 @@ adheres to [Semantic Versioning](https://semver.org/).
   goes from `bitset_legacy.h::etl::ibitset::swap` on `main`, wrong, to
   `bitset_new.h::etl::bitset::swap`, right). 1,908 calls bound on main are open
   (1,283 `declined_by_scope`: `String` 1,110, `View` 132, `Observable` 17, `NDC` 12,
-  `ItemNDC` 11, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`), 1,500
-  calls open on main are bound (1,375 `declined_by_scope`, 121 `ambiguous_candidates`,
-  4 `no_receiver_type`; by
-  `receiver_hint_via`: `cpp-qualifier` 1,057, `cpp-declared` 443). Of the 443, 315 are
-  classes whose path was wrong on main because of the macros above and is right now
-  (`etl::bitset_ext` 170, `etl::bit_stream_reader` 58, `etl::bit_stream` 39,
+  `ItemNDC` 11, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`). 3,333
+  calls open on main are bound: 1,496 because a file sees an alias (1,375
+  `declined_by_scope`, 121 `ambiguous_candidates`; by `receiver_hint_via`:
+  `cpp-qualifier` 1,057, `cpp-declared` 439) and 1,837 because the reader names a
+  declaration (all `no_receiver_type` on main, all `cpp-declared`). Of the 439, 315
+  are classes whose path was wrong on main because of the macros above and is right
+  now (`etl::bitset_ext` 170, `etl::bit_stream_reader` 58, `etl::bit_stream` 39,
   `etl::to_arithmetic_result` 24, `etl::bit_stream_writer` 22,
   `bit_stream_writer::callback_parameter_type` 2); then `QueueInt` 110 (its base
-  `etl::queue_lockable<int, 4>` was cut at the comma), `test_variant_3a` 10, `Data` 4
-  (a `using` the calling file writes) and `etl::exception` 4 (the `catch` parameter).
-  The 241 member calls whose receiver type matches two classes that both hold the
-  callee are 125 resolved before and 125 after. The 44 `const_iterator` parameters of
-  `circular_buffer.h`, `deque.h` and the four `unordered_*` headers are open on both
-  sides. 7,703 calls open on both sides change their `unresolved_reason`: 5,728
-  `ambiguous_candidates` -> `declined_by_scope`, 1,074 `declined_by_scope` ->
-  `ambiguous_candidates`, 892 `declined_by_scope` -> `no_receiver_type`, 7
-  `declined_by_scope` -> `not_a_call`, 1 `unknown_callee` -> `no_receiver_type`, 1
-  `no_receiver_type` -> `declined_by_scope`; none of them becomes bound.
+  `etl::queue_lockable<int, 4>` was cut at the comma), `test_variant_3a` 10 and `Data`
+  4 (a `using` the calling file writes). Of the 1,837, 1,597 are 14 classes
+  (`Data` 254, `etl::bitset_ext` 254, `DataTransparentComparator` 208,
+  `etl::message_timer_locked` 154, `etl::callback_timer_locked` 146,
+  `etl::callback_timer_deferred_locked` 144, `etl::poly_span` 74,
+  `etl::queue_spsc_locked` 67, `etl::pool_ext` 66, `BresenhamLine` 63,
+  `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25); 40 of the
+  1,837, drawn at random and read by hand, are all calls on a name declared
+  `T x(args);` with the type the call is bound to. The 2 others are `etl::exception`, the catch parameter of `test_exception.cpp` (the
+  `what()` of its second handler) and of `test_expected.cpp`. The other two calls of
+  that handler, `file_name()` and `line_number()`, bound with a looser rule, are open:
+  the statement before them, `CHECK_EQUAL(..., std::string(c.what()));`, is a macro call
+  with an argument that mentions the name and is not a plain read (the price of the
+  rule above: 2 calls). The 241 member calls whose receiver type matches
+  two classes that both hold the callee are 125 resolved before and 125 after. The 44
+  `const_iterator` parameters of `circular_buffer.h`, `deque.h` and the four
+  `unordered_*` headers are open on both sides. 13,123 calls open on both sides change
+  their `unresolved_reason`: 5,728 `ambiguous_candidates` -> `declined_by_scope`, 3,749
+  `no_receiver_type` -> `declined_by_scope`, 1,626 `no_receiver_type` ->
+  `ambiguous_candidates`, 1,074 `declined_by_scope` -> `ambiguous_candidates`, 892
+  `declined_by_scope` -> `no_receiver_type`, 44 `no_receiver_type` -> `not_found`, 7
+  `declined_by_scope` -> `not_a_call`, 2 `no_receiver_type` -> `unknown_callee`, 1
+  `unknown_callee` -> `no_receiver_type`; none of them becomes bound.
 
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every

@@ -55,7 +55,7 @@ impl Language {
             "swift" => Some(Language::Swift),
             "m" | "mm" => Some(Language::ObjC),
             "c" | "h" => Some(Language::C),
-            "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" => Some(Language::Cpp),
+            "cc" | "cpp" | "cxx" | "c++" | "hh" | "hpp" | "hxx" | "ipp" => Some(Language::Cpp),
             "go" => Some(Language::Go),
             "rb" => Some(Language::Ruby),
             "js" | "jsx" | "mjs" | "cjs" => Some(Language::TypeScript),
