@@ -303,6 +303,12 @@ mod tests {
     }
 
     #[test]
+    fn a_computed_include_of_a_file_that_is_not_c_family_opens_nothing() {
+        let g = graph(&["a.rs", "b.rs"], &[("a.rs", &["UNIT"])]);
+        assert!(!g.share_a_unit("a.rs", "b.rs"));
+    }
+
+    #[test]
     fn a_file_that_is_not_c_family_records_no_includes() {
         let g = graph(&["a.rs", "b.h"], &[("a.rs", &["b.h"])]);
         assert!(!g.reaches("a.rs", "b.h"));

@@ -352,6 +352,15 @@ fn a_statement_that_declares_nothing_the_call_reads_keeps_the_type() {
         "{ return e.ok() && e.m(); }",
         "{\n#ifdef DEBUG_MODE\n log(1);\n return e.m();\n#endif\n }",
         "{\n#if DEBUG_LEVEL > 1\n return e.m();\n#endif\n }",
+        "{\n#if 0\n#elif DEBUG_LEVEL > 1\n return e.m();\n#endif\n }",
+        "{\n#ifdef OTHER_MODE\n#elifdef DEBUG_MODE\n return e.m();\n#endif\n }",
+        "{ return e.m(); LATE_MACRO; }",
+        "{ decltype(e) x = e; return e.m(); }",
+        "{ return DECL_E; return e.m(); }",
+        "{ throw DECL_E; return e.m(); }",
+        "{ goto DECL_L; return e.m(); }",
+        "{ co_return DECL_E; return e.m(); }",
+        "{ co_yield DECL_E; return e.m(); }",
         "{ g(e[0]); return e.m(); }",
         "{ return LOG_IT(e.m()); }",
         "{ { B DECL_E; } return e.m(); }",
@@ -390,6 +399,9 @@ fn a_directive_an_erased_token_or_a_macro_member_may_declare_the_catch_parameter
         "{\n#if X\n B x\n#else\n B DECL_E\n#endif\n ; return e.m(); }",
         "{ obj.FIELD_DECL_E; return e.m(); }",
         "{ p->FIELD_DECL_E; return e.m(); }",
+        "{\n#define mk(x) B e\nmk(1); return e.m(); }",
+        "{\n#undef DECL_E\n return e.m(); }",
+        "{\n#pragma once\n return e.m(); }",
     ] {
         assert_catch_param_is_not_the_receiver(body);
     }
