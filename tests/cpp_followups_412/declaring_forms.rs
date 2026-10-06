@@ -288,7 +288,7 @@ fn a_macro_declarator_under_a_wrapping_declarator_may_declare_the_catch_paramete
     assert_catch_param_is_not_the_receiver("{ B* NAMED(e); return e->m(); }");
     assert_catch_param_is_not_the_receiver("{ B* DECL_E = nullptr; return e->m(); }");
     assert_catch_param_is_not_the_receiver("{ B& DECL_E = b; return e.m(); }");
-    assert_catch_param_is_not_the_receiver("{ B DECL_E[2]; return e[0].m(); }");
+    assert_catch_param_is_not_the_receiver("{ B DECL_E[2]; return e->m(); }");
 }
 
 /// A macro call that starts an initialisation or an array: `#define DECLARE(T, n) T n`
@@ -296,7 +296,7 @@ fn a_macro_declarator_under_a_wrapping_declarator_may_declare_the_catch_paramete
 #[test]
 fn a_macro_call_that_starts_an_initialisation_may_declare_the_catch_parameter() {
     assert_catch_param_is_not_the_receiver("{ DECLARE(B, e) = B(); return e.m(); }");
-    assert_catch_param_is_not_the_receiver("{ DECLARE(B, e)[2]; return e[0].m(); }");
+    assert_catch_param_is_not_the_receiver("{ DECLARE(B, e)[2]; return e->m(); }");
     assert_catch_param_is_not_the_receiver("{ *DECLARE(B, e) = nullptr; return e->m(); }");
 }
 
