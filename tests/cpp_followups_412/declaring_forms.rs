@@ -323,6 +323,8 @@ fn a_macro_call_that_starts_an_initialisation_may_declare_the_catch_parameter() 
     assert_catch_param_is_not_the_receiver("{ B (DECL_E); return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ B (&DECL_E) = b; return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ B (*DECL_E); return e->m(); }");
+    assert_catch_param_is_not_the_receiver("{ B ((DECL_E)); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B (&(DECL_E)) = b; return e.m(); }");
 }
 
 /// The price of reading a call for a declaration, said in a test: any call that takes
