@@ -80,15 +80,21 @@ adheres to [Semantic Versioning](https://semver.org/).
   in the scopes between the handler and the call, is of a kind known not to declare
   a name (a `return`, a `break`, a nested `if`, a declaration the reader reads...);
   a statement of any other kind that mentions the name, a declaration the reader
-  cannot fully read (a parse error that mentions the name, a macro as its type or as a
-  declarator, also under an initialiser, a pointer, a reference or an array: `B e
-  BRACES;`, `B DECL_E = B();`, `B* DECL_E;`, `DECL_E if (1) {`), a statement that is a
-  macro name, a call of a macro without argument (`DECLARE_ALL();`) and a call of a
-  macro whose argument mentions the name and is not a plain read (`DECLARE_VAR(B, e);`,
-  `VAR(B* e);`, also when it starts an initialisation or an array: `DECLARE(B, e) =
-  B();`; `log(e.v)` is a read) leaves the call with no receiver type. A local whose
-  name is written in upper case (`const int MAX = 3;`) is read as a macro declarator:
-  the type of a catch parameter is declined past it. A macro
+  cannot fully read (a parse error that mentions the name, a macro as its type, or a
+  macro name written anywhere in a declarator, whatever wraps it: `B e BRACES;`,
+  `B DECL_E = B();`, `B* DECL_E;`, `B DECL_E [[maybe_unused]];`, `DECL_E if (1) {`), a
+  statement that is a macro name, a call of a macro without argument (`DECLARE_ALL();`)
+  and any call that takes the name without reading it or a macro name (`DECLARE(B,
+  e);`, `VAR(B* e);`, `B (&DECL_E) = b;`, `DECLARE(B, e) = B();`, `DECLARE(B, e)(B());`;
+  `log(e.v)` is a read) leaves the call with no receiver type, also when the statement
+  is the header of a `for`, `if`, `while` or `switch` that encloses the call
+  (`for (B DECL_E : ys)`). A declaration in a scope closed before the call, a `typedef`
+  and a `using` do not. The price is a catch type not read past such a statement, never
+  a wrong binding: a call that takes the catch parameter (`handle(e);`,
+  `log(e.what());`), a call with a macro name for argument (`close(FD);`) and a local
+  whose name is in upper case (`const int MAX = 3;`, `DWORD n;`) are in it. Not read,
+  so the type stays: `B (DECL_E) = B();`, `DECL_E = B();`, a macro before another
+  macro (`DECL_E LOG(1);`), a lower case macro. A macro
   before a statement keyword (`DECL_E return e.m();`) is not blanked as a specifier:
   the statement is a parse error and its call is not extracted, where `main` blanks the
   macro and records an open site (no site of the corpus is lost to it). A
@@ -130,14 +136,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   `etl::message_timer_locked` 154, `etl::callback_timer_locked` 146,
   `etl::callback_timer_deferred_locked` 144, `etl::poly_span` 74,
   `etl::queue_spsc_locked` 67, `etl::pool_ext` 66, `BresenhamLine` 63,
-  `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25); 40 of the
-  1,837, drawn at random and read by hand, are all calls on a name declared
-  `T x(args);` with the type the call is bound to. The 2 others are `etl::exception`, the catch parameter of `test_exception.cpp` (the
-  `what()` of its second handler) and of `test_expected.cpp`. The other two calls of
-  that handler, `file_name()` and `line_number()`, bound with a looser rule, are open:
-  the statement before them, `CHECK_EQUAL(..., std::string(c.what()));`, is a macro call
-  with an argument that mentions the name and is not a plain read (the price of the
-  rule above: 2 calls). The 241 member calls whose receiver type matches
+  `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25). Two calls
+  that 93f9fe7 bound are open here, `file_name()` and `line_number()` in the handler of
+  `test_exception.cpp` (`etl::exception`): the statement before them,
+  `CHECK_EQUAL(..., std::string(c.what()));`, is a call that takes the catch parameter
+  (the price of the rule above: 2 calls). The 241 member calls whose receiver type matches
   two classes that both hold the callee are 125 resolved before and 125 after. The 44
   `const_iterator` parameters of `circular_buffer.h`, `deque.h` and the four
   `unordered_*` headers are open on both sides. 13,123 calls open on both sides change

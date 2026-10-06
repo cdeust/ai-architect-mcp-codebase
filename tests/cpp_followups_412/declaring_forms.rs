@@ -291,13 +291,102 @@ fn a_macro_declarator_under_a_wrapping_declarator_may_declare_the_catch_paramete
     assert_catch_param_is_not_the_receiver("{ B DECL_E[2]; return e->m(); }");
 }
 
+/// No list of wrapping kinds: an attribute, a second declarator, a structured binding, a
+/// qualifier all wrap the macro name and none hides it.
+#[test]
+fn a_macro_name_anywhere_in_a_declarator_may_declare_the_catch_parameter() {
+    for body in [
+        "{ B DECL_E [[maybe_unused]]; return e.m(); }",
+        "{ B DECL_E [[maybe_unused]] = B(); return e.m(); }",
+        "{ B [[maybe_unused]] DECL_E; return e.m(); }",
+        "{ B DECL_E, y; return e.m(); }",
+        "{ B y, DECL_E; return e.m(); }",
+        "{ B y = B(), DECL_E = B(); return e.m(); }",
+        "{ B *const DECL_E = 0; return e->m(); }",
+        "{ auto [DECL_E, z] = pr; return e.m(); }",
+        "{ auto& DECL_E = b; return e.m(); }",
+    ] {
+        assert_catch_param_is_not_the_receiver(body);
+    }
+}
+
 /// A macro call that starts an initialisation or an array: `#define DECLARE(T, n) T n`
-/// makes `DECLARE(B, e) = B();` a declaration of `e`.
+/// makes `DECLARE(B, e) = B();` a declaration of `e`. A call of a call
+/// (`DECLARE(B, e)(B());`) and a call the grammar reads for a declaration whose only
+/// macro is an argument (`B (&DECL_E) = b;`) are read as well.
 #[test]
 fn a_macro_call_that_starts_an_initialisation_may_declare_the_catch_parameter() {
     assert_catch_param_is_not_the_receiver("{ DECLARE(B, e) = B(); return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ DECLARE(B, e)[2]; return e->m(); }");
     assert_catch_param_is_not_the_receiver("{ *DECLARE(B, e) = nullptr; return e->m(); }");
+    assert_catch_param_is_not_the_receiver("{ DECLARE(B, e)(B()); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B (DECL_E); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B (&DECL_E) = b; return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ B (*DECL_E); return e->m(); }");
+}
+
+/// The price of reading a call for a declaration, said in a test: any call that takes
+/// the catch parameter or a macro name stands for a declaration, so the type is not read
+/// past it: the site stays open, as on `main`.
+#[test]
+fn a_call_that_takes_the_catch_parameter_or_a_macro_name_declines_the_type() {
+    assert_catch_param_is_not_the_receiver("{ handle(e); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ log(e.what()); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ close(FD); return e.m(); }");
+}
+
+/// The header of a statement that encloses the call is read as a statement before it:
+/// a macro that declares there (`for (B DECL_E : ys)`, `if (B DECL_E = B(); 1)`,
+/// `while (B DECL_E = B())`, `for (DECL_E;;)`) names the variable the call reads.
+#[test]
+fn a_macro_in_the_header_of_a_statement_that_encloses_the_call_may_declare_the_catch_parameter() {
+    for body in [
+        "for (B DECL_E; ;) { return e->m(); }",
+        "for (B DECL_E = B(); ;) { return e->m(); }",
+        "for (B DECL_E : ys) { return e->m(); }",
+        "for (B* DECL_E : ys) { return e->m(); }",
+        "if (B DECL_E = B(); 1) { return e->m(); }",
+        "while (B DECL_E = B()) { return e->m(); }",
+        "switch (B DECL_E = B(); 1) { case 1: return e->m(); }",
+        "for (DECL_E; ;) { return e->m(); }",
+        "if (DECL_E; 1) { return e->m(); }",
+        "for (DECLARE(B, e); ;) { return e->m(); }",
+    ] {
+        assert_catch_param_is_not_the_receiver(&format!("{{ {body} }}"));
+    }
+}
+
+/// A macro name in the initial value, the size of an array or the parameters of a
+/// function declarator names nothing: the type is kept.
+#[test]
+fn a_macro_name_in_a_value_a_size_or_a_parameter_keeps_the_type() {
+    for stmt in ["int n = MAX_LEN;", "int a[SIZE_N];", "int h(int PARAM);"] {
+        let src = format!(
+            "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ {stmt} return e.m(); }} return 0; }}\n"
+        );
+        let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
+        assert_eq!(m_sites(&store, "c").0, ["A::m".to_string()], "{src}");
+    }
+}
+
+/// What the guard must not swallow: a macro that declares in a scope that is closed
+/// before the call, or a type (`using`, `typedef`), names no variable the call reads.
+#[test]
+fn a_macro_declaration_in_a_scope_closed_before_the_call_keeps_the_type() {
+    for stmt in [
+        "if (1) { B DECL_E; }",
+        "for (B DECL_E; ;) { break; }",
+        "for (B DECL_E : ys) { }",
+        "while (B DECL_E = B()) { break; }",
+        "typedef B DECL_E;",
+        "using DECL_E = B;",
+    ] {
+        let src = format!(
+            "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ {stmt} return e.m(); }} return 0; }}\n"
+        );
+        let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
+        assert_eq!(m_sites(&store, "c").0, ["A::m".to_string()], "{src}");
+    }
 }
 
 /// What the unwrapping must not swallow: an assignment to a plain name or a member, an
