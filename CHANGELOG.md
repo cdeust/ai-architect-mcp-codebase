@@ -76,25 +76,29 @@ adheres to [Semantic Versioning](https://semver.org/).
   `A::m` on `main` and is open now. A name a macro declares (`MAKE(e);`) or a
   statement `T (e);` (the grammar reads it as a call, C++ as a declaration) is not
   read, as on `main` for a local. For a catch parameter, which `main` never typed, the
-  reader goes further: its type is used only when every statement before the call,
-  in the scopes between the handler and the call, is of a kind known not to declare
-  a name (a `return`, a `break`, a nested `if`, a declaration the reader reads...);
-  a statement of any other kind that mentions the name, a declaration the reader
-  cannot fully read (a parse error that mentions the name, a macro as its type, or a
-  macro name written anywhere in a declarator, whatever wraps it: `B e BRACES;`,
-  `B DECL_E = B();`, `B* DECL_E;`, `B DECL_E [[maybe_unused]];`, `DECL_E if (1) {`), a
-  statement that is a macro name, a call of a macro without argument (`DECLARE_ALL();`)
-  and any call that takes the name without reading it or a macro name (`DECLARE(B,
-  e);`, `VAR(B* e);`, `B (&DECL_E) = b;`, `DECLARE(B, e) = B();`, `DECLARE(B, e)(B());`;
-  `log(e.v)` is a read) leaves the call with no receiver type, also when the statement
-  is the header of a `for`, `if`, `while` or `switch` that encloses the call
-  (`for (B DECL_E : ys)`). A declaration in a scope closed before the call, a `typedef`
-  and a `using` do not. The price is a catch type not read past such a statement, never
-  a wrong binding: a call that takes the catch parameter (`handle(e);`,
-  `log(e.what());`), a call with a macro name for argument (`close(FD);`) and a local
-  whose name is in upper case (`const int MAX = 3;`, `DWORD n;`) are in it. Not read,
-  so the type stays: `B (DECL_E) = B();`, `DECL_E = B();`, a macro before another
-  macro (`DECL_E LOG(1);`), a lower case macro. A macro
+  reader goes further: its type is used only when no statement before the call, in the
+  scopes between the handler and the call, is opaque (ADR-9847). A statement is opaque
+  when an identifier written in upper case (two characters or more: a macro name, also
+  as a type, a namespace, a label or a member) or the name itself, written where it is
+  not the object of `e.x`, `e->x` or `e[i]`, is anywhere in it: `B DECL_E = B();`,
+  `B DECL_E [[maybe_unused]];`, `DECLARE(B, e), g();`, a lambda or handler parameter
+  (`[](B DECL_E)`), a capture, `using ns::DECL_E;`, `for (B DECL_E : ys)`,
+  `if (B DECL_E = B(); 1)`, `handle(e);`, `close(FD);`. Skipped when the node parsed
+  whole: the initial value, the size of an array, the parameters of a declared
+  function, the test of an `#if`. A closed scope (an `if`, a loop, a `switch`, a `try`,
+  a block), a type (`typedef`, `using X = T`) and a jump do not make a statement
+  opaque; a clean declaration is read by the reader and only its macro names count.
+  Any directive (`#include`, `#define`, `#pragma`, `#undef`) is opaque, at any depth.
+  The macro the rewrite erased is seen: the text the walkers read marks the bytes it
+  blanked, and the guard declines when one lies between the handler and the call
+  (`DECL_E int s;`). The price is a catch type not read past such a statement, where
+  `main` is open too: a loop bound or a test written with a macro (`i < MAX_N`), a local
+  with an upper case name or type (`const int MAX = 3;`, `DWORD n;`), a call that takes
+  the catch parameter outside a read (`handle(e);`), `asm` that names it, and a closed
+  block under a `case` or a label. Not read, so the type stays: a macro whose expansion
+  ends the statement it is written in and opens another (`int x = DECL_REST;` with
+  `DECL_REST` = `0; B e`; `if (1) REDECL(e);`; `WRAP(e.m())`), a macro in lower case
+  or of one character (`B X;`), an `#include` written as a call (`#include PICK(x)`). A macro
   before a statement keyword (`DECL_E return e.m();`) is not blanked as a specifier:
   the statement is a parse error and its call is not extracted, where `main` blanks the
   macro and records an open site (no site of the corpus is lost to it). A
@@ -107,9 +111,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   included by it (`using String = A;` written before `#include "impl.h"`), or a third
   file includes both (the order of the includes is not read); a `typedef` or `using`
   written in a header is seen by every file; no other file sees a `.cpp` alias. An
-  `#include` written as a bare macro name (`#include UNIT`) may include any file: a file
-  that has one, or includes a file that has one, may include any file, so it shares a
-  translation unit with every other, and so does every file that includes it; one
+  `#include` written as a bare macro name (`#include UNIT`) may include any file, two at
+  once: when one exists anywhere, every pair of files may share a translation unit; one
   written as a call (`#include PICK(x)`) is not read as such.
   The extensions `c++` and `ipp` are read as C++ like the other C++ ones. A typed
   receiver is still read by path suffix, as on `main`: one class of that name binds,
