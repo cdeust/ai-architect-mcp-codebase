@@ -172,6 +172,15 @@ fn assert_catch_param_is_not_the_receiver(body: &str) {
     assert!(!bound.contains(&"A::m".to_string()), "{bound:?}: {src}");
 }
 
+/// The call reads the catch parameter, whose type nothing before it could change.
+fn assert_catch_param_keeps_its_type(body: &str) {
+    let src = format!(
+        "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ {body} }} return 0; }}\n"
+    );
+    let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
+    assert_eq!(m_sites(&store, "c").0, ["A::m".to_string()], "{src}");
+}
+
 /// The statements of these bodies are a parse error that costs the call its site, as
 /// the CHANGELOG says: nothing is bound, whatever the catch parameter is.
 fn assert_call_is_not_extracted(body: &str) {
@@ -206,7 +215,7 @@ fn a_statement_of_an_unknown_kind_naming_the_catch_parameter_may_declare_it() {
 #[test]
 fn a_statement_that_does_not_name_the_catch_parameter_keeps_its_type() {
     let src = format!(
-        "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ LOG(1, 2); return e.m(); }} return 0; }}\n"
+        "{PRELUDE}int c() {{ try {{ g(); }} catch (const A& e) {{ log(1, 2); return e.m(); }} return 0; }}\n"
     );
     let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
     assert_eq!(m_sites(&store, "c").0, ["A::m".to_string()]);
@@ -333,7 +342,8 @@ fn a_macro_call_that_starts_an_initialisation_may_declare_the_catch_parameter() 
 #[test]
 fn a_call_that_takes_the_catch_parameter_or_a_macro_name_declines_the_type() {
     assert_catch_param_is_not_the_receiver("{ handle(e); return e.m(); }");
-    assert_catch_param_is_not_the_receiver("{ log(e.what()); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ LOG(1, 2); return e.m(); }");
+    assert_catch_param_is_not_the_receiver("{ TABLE[2] = 1; return e.m(); }");
     assert_catch_param_is_not_the_receiver("{ close(FD); return e.m(); }");
 }
 
@@ -398,11 +408,11 @@ fn an_assignment_that_is_not_a_macro_declaration_keeps_the_type_of_the_catch_par
     for body in [
         "{ B other = B(); (void)other; return e.m(); }",
         "{ int n = 0; n = 1; return e.m(); }",
-        "{ TABLE[2] = 1; return e.m(); }",
+        "{ table[2] = 1; return e.m(); }",
         "{ p.c = 1; return e.m(); }",
     ] {
         let src = format!(
-            "{PRELUDE}int TABLE[3]; P p;\nint c() {{ try {{ g(); }} catch (const A& e) {{ {body} }} return 0; }}\n"
+            "{PRELUDE}int table[3]; P p;\nint c() {{ try {{ g(); }} catch (const A& e) {{ {body} }} return 0; }}\n"
         );
         let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
         assert_eq!(m_sites(&store, "c").0, ["A::m".to_string()], "{src}");
@@ -422,5 +432,60 @@ fn a_call_that_only_reads_a_member_of_the_catch_parameter_keeps_its_type() {
         );
         let (store, _tmp) = index_and_resolve(&[("c.cpp", &src)]);
         assert_eq!(m_sites(&store, "c").0, ["A::m".to_string()], "{src}");
+    }
+}
+
+/// Where a declaration hides that is not a `declaration`: the parameters of a lambda, of a
+/// nested handler or of a `requires` expression, a capture, a `using`, a comma expression,
+/// the initialiser of a `for`, an attribute in front of a statement. Two reviews of #438
+/// listed these; each was run against the indexer.
+#[test]
+fn a_macro_or_the_name_where_no_declaration_is_may_declare_the_catch_parameter() {
+    for body in [
+        "{ auto l = [DECL_E = B()]() { return e.m(); }; return l(); }",
+        "{ B o; auto l = [&DECL_E = o]() { return e.m(); }; return l(); }",
+        "{ auto l = [](B DECL_E) { return e.m(); }; return l(B()); }",
+        "{ auto l = [](B* DECL_E) { return e->m(); }; return l(nullptr); }",
+        "{ auto l = [](auto DECL_E) { return e.m(); }; return l(B()); }",
+        "{ auto l = [](B DECL_E = B()) { return e.m(); }; return l(); }",
+        "{ auto l = []<B DECL_E>() { return e.m(); }; return 0; }",
+        "{ try { g(); } catch (B DECL_E) { return e.m(); } }",
+        "{ try { g(); } catch (const B& DECL_E) { return e.m(); } }",
+        "{ bool ok = requires (B DECL_E) { e.m(); }; return ok; }",
+        "{ using ns::DECL_E; return e.m(); }",
+        "{ DECLARE(B, e), g(); return e.m(); }",
+        "{ for (DECLARE(B, DECL_E); ;) { return e.m(); } }",
+        "{ for (DECLARE_ALL(); ;) { return e.m(); } }",
+        "{ [[maybe_unused]] DECL_BE; return e.m(); }",
+        "{ [[maybe_unused]] DECLARE(B, DECL_E); return e.m(); }",
+        "{ DECL_E(1); return e.m(); }",
+        "{ DECLARE_E(B); return e.m(); }",
+        "{ [[maybe_unused]] DECL_E; return e.m(); }",
+        "{ DECL_E: return e.m(); }",
+        "{ for (DECL_E(1); ;) { return e.m(); } }",
+        "{ if (DECL_E(1); true) { return e.m(); } }",
+        "{ B (DECL_E) = B(); return e.m(); }",
+        "{ DECL_E[2]; return e->m(); }",
+        "{ DECL_E = B(); return e.m(); }",
+        "{ DECL_T DECL_E(1); return e.m(); }",
+        "{ DECL_E LOG(1); return e.m(); }",
+    ] {
+        assert_catch_param_is_not_the_receiver(body);
+    }
+}
+
+/// What the guard keeps typed: a declaration in a scope closed before the call, a `using`
+/// of a function, a reading of the catch parameter (`e.v`, `e.ok()`).
+#[test]
+fn a_statement_that_declares_nothing_the_call_reads_keeps_the_type() {
+    for body in [
+        "{ auto l = [](B DECL_E) { return 0; }; return e.m(); }",
+        "{ using ns::f; return e.m(); }",
+        "{ for (DECLARE_X(); ;) { break; } return e.m(); }",
+        "{ return e.v + e.m(); }",
+        "{ if (e.ok()) { return e.m(); } return 0; }",
+        "{ return e.ok() && e.m(); }",
+    ] {
+        assert_catch_param_keeps_its_type(body);
     }
 }

@@ -43,9 +43,10 @@ pub(super) struct IncludeGraph {
     direct: HashMap<String, Vec<String>>,
     /// The reverse of `direct`: the files that include each file directly.
     includers: HashMap<String, Vec<String>>,
-    /// The files with an `#include` the graph cannot read (`#include UNIT`): they may
-    /// include any file.
-    opaque: HashSet<String>,
+    /// The files that may be in one translation unit with any file: a file with an
+    /// `#include` the graph cannot read (`#include UNIT`) may include any file, so the files
+    /// that reach one, and everything those include, are in it.
+    in_opaque_unit: HashSet<String>,
     reached: RefCell<HashMap<String, HashSet<String>>>,
 }
 
@@ -90,12 +91,15 @@ impl IncludeGraph {
         let opaque = file_imports
             .iter()
             .filter(|(file, paths)| is_c_family(file) && paths.iter().any(|p| is_computed(p)))
-            .map(|(file, _)| file.clone())
+            .map(|(file, _)| file.as_str());
+        let in_opaque_unit = walk(&direct, walk(&includers, opaque))
+            .into_iter()
+            .map(str::to_string)
             .collect();
         Self {
             direct,
             includers,
-            opaque,
+            in_opaque_unit,
             reached: RefCell::default(),
         }
     }
@@ -106,42 +110,19 @@ impl IncludeGraph {
         from == to || self.with_closure(from, |set| set.contains(to))
     }
 
-    /// True when `a` and `b` can be compiled in one translation unit: a file (`a` or
-    /// `b` itself, or one that includes it, directly or through other files) is or
-    /// includes the other. This holds when either includes the other and when a third
-    /// file includes both. A file that reaches a computed include (`#include UNIT`)
-    /// may include any file, so it stands for all of them.
+    /// True when `a` and `b` can be compiled in one translation unit: a file is or
+    /// includes both. This holds when either includes the other and when a third file
+    /// includes both. A file that is in the unit of a computed include (`#include UNIT`)
+    /// shares one with every file.
     pub(super) fn share_a_unit(&self, a: &str, b: &str) -> bool {
-        self.some_includer_reaches(a, b) || self.some_includer_reaches(b, a)
+        self.in_opaque_unit.contains(a)
+            || self.in_opaque_unit.contains(b)
+            || !self.units_of(a).is_disjoint(&self.units_of(b))
     }
 
-    /// True when `from`, or a file that includes `from`, is or may be a file that
-    /// includes `to`.
-    fn some_includer_reaches(&self, from: &str, to: &str) -> bool {
-        let covers = |file: &str| self.reaches(file, to) || self.reaches_opaque(file);
-        if covers(from) {
-            return true;
-        }
-        let mut seen: HashSet<&str> = HashSet::from([from]);
-        let mut pending = vec![from];
-        while let Some(file) = pending.pop() {
-            for includer in self.includers.get(file).into_iter().flatten() {
-                if seen.insert(includer) {
-                    if covers(includer) {
-                        return true;
-                    }
-                    pending.push(includer);
-                }
-            }
-        }
-        false
-    }
-
-    /// True when `file`, or a file it includes, has an include that is not read.
-    fn reaches_opaque(&self, file: &str) -> bool {
-        !self.opaque.is_empty()
-            && (self.opaque.contains(file)
-                || self.with_closure(file, |set| set.iter().any(|f| self.opaque.contains(f))))
+    /// The files whose translation unit holds `file`: itself and the files that include it.
+    fn units_of<'a>(&'a self, file: &'a str) -> HashSet<&'a str> {
+        walk(&self.includers, [file])
     }
 
     /// Runs `read` on the closure of `from`, computed once per pass.
@@ -156,17 +137,28 @@ impl IncludeGraph {
     }
 
     fn closure(&self, from: &str) -> HashSet<String> {
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut pending: Vec<&str> = vec![from];
-        while let Some(file) = pending.pop() {
-            for next in self.direct.get(file).into_iter().flatten() {
-                if seen.insert(next.clone()) {
-                    pending.push(next);
-                }
+        walk(&self.direct, [from])
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+/// The files `start` reaches along `edges`, `start` included.
+fn walk<'a>(
+    edges: &'a HashMap<String, Vec<String>>,
+    start: impl IntoIterator<Item = &'a str>,
+) -> HashSet<&'a str> {
+    let mut pending: Vec<&str> = start.into_iter().collect();
+    let mut seen: HashSet<&str> = pending.iter().copied().collect();
+    while let Some(file) = pending.pop() {
+        for next in edges.get(file).into_iter().flatten() {
+            if seen.insert(next) {
+                pending.push(next);
             }
         }
-        seen
     }
+    seen
 }
 
 fn reverse(direct: &HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>> {

@@ -22,16 +22,19 @@ use super::cpp_unreadable::scope_has_unreadable_statement;
 /// A name declared without a written type gives none, and hides the outer ones.
 /// The type of a catch parameter, which `main` never read, is used only when no
 /// statement between the handler and the call could declare the name in a form this
-/// reader cannot name (`unreadable_statement`).
+/// reader cannot name (`scope_has_unreadable_statement`).
 pub(super) fn declared_type(source: &str, at: Node, name: &str) -> Option<String> {
-    let mut unreadable = false;
+    let mut between = Vec::new();
     let mut scope = at.parent();
     while let Some(s) = scope {
         if let Some(found) = binding_in(source, s, at, name) {
-            let untrusted = s.kind() == "catch_clause" && unreadable;
+            let untrusted = s.kind() == "catch_clause"
+                && between
+                    .iter()
+                    .any(|b| scope_has_unreadable_statement(source, (*b, at), name));
             return found.filter(|_| !untrusted);
         }
-        unreadable = unreadable || scope_has_unreadable_statement(source, (s, at), name);
+        between.push(s);
         if s.kind() == "function_definition" {
             return None;
         }
