@@ -379,6 +379,11 @@ fn a_statement_that_declares_nothing_the_call_reads_keeps_the_type() {
         "{ A e; for (;;) { DECL_E; return e.m(); } }",
         "{ if (1) {\n#ifdef X\n#endif\n} return e.m(); }",
         "{\n#if 0\n#else\n#endif\n} return e.m(); }",
+        // `ifndef` and `elifndef` are conditionals (tree-sitter-cpp 0.23.4 reads
+        // `#elifndef` as a `preproc_elifdef`); `__` has no upper case, so no macro name.
+        "{\n#ifndef X_MODE\n#endif\n return e.m(); }",
+        "{\n#if 0\n#elifndef Y_MODE\n#endif\n return e.m(); }",
+        "{ __ = 1; return e.m(); }",
     ] {
         assert_catch_param_keeps_its_type(body);
     }
@@ -421,6 +426,8 @@ fn a_directive_an_erased_token_or_a_macro_member_may_declare_the_catch_parameter
         "{\n#define mk(x) B e\nmk(1); return e.m(); }",
         "{\n#undef DECL_E\n return e.m(); }",
         "{\n#pragma once\n return e.m(); }",
+        // A macro name may hold digits: `E2` is one, and the declarator is not read.
+        "{ B E2; return e.m(); }",
     ] {
         assert_catch_param_is_not_the_receiver(body);
     }
