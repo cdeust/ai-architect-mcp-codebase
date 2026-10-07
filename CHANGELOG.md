@@ -124,30 +124,30 @@ adheres to [Semantic Versioning](https://semver.org/).
   goes from `bitset_legacy.h::etl::ibitset::swap` on `main`, wrong, to
   `bitset_new.h::etl::bitset::swap`, right). 1,908 calls bound on main are open
   (1,283 `declined_by_scope`: `String` 1,110, `View` 132, `Observable` 17, `NDC` 12,
-  `ItemNDC` 11, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`). 3,332
+  `ItemNDC` 11, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`). 3,333
   calls open on main are bound: 1,496 because a file sees an alias (1,375
   `declined_by_scope`, 121 `ambiguous_candidates`; by `receiver_hint_via`:
-  `cpp-qualifier` 1,057, `cpp-declared` 439) and 1,836 because the reader names a
+  `cpp-qualifier` 1,057, `cpp-declared` 439) and 1,837 because the reader names a
   declaration (all `no_receiver_type` on main, all `cpp-declared`). Of the 439, 315
   are classes whose path was wrong on main because of the macros above and is right
   now (`etl::bitset_ext` 170, `etl::bit_stream_reader` 58, `etl::bit_stream` 39,
   `etl::to_arithmetic_result` 24, `etl::bit_stream_writer` 22,
   `bit_stream_writer::callback_parameter_type` 2); then `QueueInt` 110 (its base
   `etl::queue_lockable<int, 4>` was cut at the comma), `test_variant_3a` 10 and `Data`
-  4 (a `using` the calling file writes). Of the 1,836, 1,557 are 14 classes
+  4 (a `using` the calling file writes). Of the 1,837, 1,557 are 14 classes
   (`Data` 254, `etl::bitset_ext` 254, `DataTransparentComparator` 208,
   `etl::message_timer_locked` 154, `etl::callback_timer_locked` 146,
   `etl::callback_timer_deferred_locked` 144, `etl::poly_span` 74,
   `etl::queue_spsc_locked` 67, `etl::pool_ext` 66, `BresenhamLine` 63,
-  `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25). Three calls
-  that 93f9fe7 bound are open here, all `etl::exception` in `test_exception.cpp` (the
-  `what()`, `file_name()` and `line_number()` of its handlers): a statement before each,
-  such as `CHECK_EQUAL(..., std::string(c.what()));`, is a call that takes the catch
-  parameter (the price of the rule above: 3 calls). The 241 member calls whose receiver type matches
+  `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25). Two calls
+  that 93f9fe7 bound are open here, `file_name()` and `line_number()` in the handler of
+  `test_exception.cpp` (`etl::exception`): the statement before them,
+  `CHECK_EQUAL(..., std::string(c.what()));`, is a call of a macro (the price of the rule
+  above: 2 calls). The 241 member calls whose receiver type matches
   two classes that both hold the callee are 125 resolved before and 125 after. The 44
   `const_iterator` parameters of `circular_buffer.h`, `deque.h` and the four
-  `unordered_*` headers are open on both sides. 13,122 calls open on both sides change
-  their `unresolved_reason`: 5,728 `ambiguous_candidates` -> `declined_by_scope`, 3,748
+  `unordered_*` headers are open on both sides. 13,123 calls open on both sides change
+  their `unresolved_reason`: 5,728 `ambiguous_candidates` -> `declined_by_scope`, 3,749
   `no_receiver_type` -> `declined_by_scope`, 1,626 `no_receiver_type` ->
   `ambiguous_candidates`, 1,074 `declined_by_scope` -> `ambiguous_candidates`, 892
   `declined_by_scope` -> `no_receiver_type`, 44 `no_receiver_type` -> `not_found`, 7
