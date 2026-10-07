@@ -375,6 +375,9 @@ fn a_statement_that_declares_nothing_the_call_reads_keeps_the_type() {
         "{ using DECL_E = B; return e.m(); }",
         "{ static_assert(MAX_N > 1); return e.m(); }",
         "{ namespace NS_ALIAS = ns; return e.m(); }",
+        "{ A e; if (1) { DECL_E; return e.m(); } }",
+        "{ A e; { DECL_E; return e.m(); } }",
+        "{ A e; for (;;) { DECL_E; return e.m(); } }",
     ] {
         assert_catch_param_keeps_its_type(body);
     }
