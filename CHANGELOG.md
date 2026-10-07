@@ -53,7 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 - C++ follow-ups of #406 (#412, points 1 and 2; point 3, the suffix matching of a
   declared type, stays open on #412). Measured on ETLCPP 7d604f2e, `origin/main`
-  f4f88ea against this branch, over all 262,724 / 262,985 call sites (260,095 in
+  f4f88ea against this branch, over all 262,724 / 263,091 call sites (260,219 in
   common). A macro that closes a brace the parser cannot see
   (`ETL_DECLARE_ENUM_TYPE`, `ETL_ENUM_TYPE`, `ETL_END_ENUM_TYPE`) no longer makes the
   class swallow the rest of the header: in `string_utilities.h`, 54 methods were
@@ -136,22 +136,25 @@ adheres to [Semantic Versioning](https://semver.org/).
   several leave the site open. Which declaration of a type name C++ reaches (a
   using-declaration, a member type, a local class, a declaring macro) is not read.
 
-  Measured on the corpus. None of the 260,095 common sites bound on both sides is
-  retargeted (0, by site id; by position, `bitset_new.h:2559:5` (`lhs.swap(rhs)`)
-  goes from `bitset_legacy.h::etl::ibitset::swap` on `main`, wrong, to
-  `bitset_new.h::etl::bitset::swap`, right). 1,908 calls bound on main are open
+  Measured on the corpus (`tasks/fix-438-r7/measure_numbers.py`). Sites are matched by
+  their id without the `#n` suffixes: a conversion function, named for the first time,
+  shifts the `#n` of the later definitions of its file. None of the 260,219 common
+  sites bound on both sides is retargeted (0; by position, `bitset_new.h:2559:5`
+  (`lhs.swap(rhs)`) goes from `bitset_legacy.h::etl::ibitset::swap` on `main`, wrong,
+  to `bitset_new.h::etl::bitset::swap`, right, and 115 more change their class path
+  inside the same file). 1,908 calls bound on main are open
   (1,283 `declined_by_scope`: `String` 1,110, `View` 132, `Observable` 17, `NDC` 12,
-  `ItemNDC` 11, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`). 3,333
-  calls open on main are bound: 1,496 because a file sees an alias (1,375
+  `ItemNDC` 11, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`). 3,348
+  calls open on main are bound: 1,507 because a file sees an alias (1,386
   `declined_by_scope`, 121 `ambiguous_candidates`; by `receiver_hint_via`:
-  `cpp-qualifier` 1,057, `cpp-declared` 439) and 1,837 because the reader names a
-  declaration (all `no_receiver_type` on main, all `cpp-declared`). Of the 439, 315
+  `cpp-qualifier` 1,057, `cpp-declared` 450) and 1,841 because the reader names a
+  declaration (all `no_receiver_type` on main, all `cpp-declared`). Of the 450, 326
   are classes whose path was wrong on main because of the macros above and is right
   now (`etl::bitset_ext` 170, `etl::bit_stream_reader` 58, `etl::bit_stream` 39,
-  `etl::to_arithmetic_result` 24, `etl::bit_stream_writer` 22,
+  `etl::to_arithmetic_result` 35, `etl::bit_stream_writer` 22,
   `bit_stream_writer::callback_parameter_type` 2); then `QueueInt` 110 (its base
   `etl::queue_lockable<int, 4>` was cut at the comma), `test_variant_3a` 10 and `Data`
-  4 (a `using` the calling file writes). Of the 1,837, 1,557 are 14 classes
+  4 (a `using` the calling file writes). Of the 1,841, 1,557 are 14 classes
   (`Data` 254, `etl::bitset_ext` 254, `DataTransparentComparator` 208,
   `etl::message_timer_locked` 154, `etl::callback_timer_locked` 146,
   `etl::callback_timer_deferred_locked` 144, `etl::poly_span` 74,
@@ -159,15 +162,16 @@ adheres to [Semantic Versioning](https://semver.org/).
   `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25). Two calls the
   reader could type (`file_name()` and `line_number()` in `test_exception.cpp`,
   `etl::exception`) are declined after a `CHECK_EQUAL(...)` statement; they are open on
-  `main` too. The 44
-  `const_iterator` parameters of `circular_buffer.h`, `deque.h` and the four
-  `unordered_*` headers are open on both sides. 13,123 calls open on both sides change
-  their `unresolved_reason`: 5,728 `ambiguous_candidates` -> `declined_by_scope`, 3,749
-  `no_receiver_type` -> `declined_by_scope`, 1,626 `no_receiver_type` ->
-  `ambiguous_candidates`, 1,074 `declined_by_scope` -> `ambiguous_candidates`, 892
-  `declined_by_scope` -> `no_receiver_type`, 44 `no_receiver_type` -> `not_found`, 7
-  `declined_by_scope` -> `not_a_call`, 2 `no_receiver_type` -> `unknown_callee`, 1
-  `unknown_callee` -> `no_receiver_type`; none of them becomes bound.
+  `main` too. 13,133 calls open on both sides change their `unresolved_reason`: 5,728
+  `ambiguous_candidates` -> `declined_by_scope`, 3,750 `no_receiver_type` ->
+  `declined_by_scope`, 1,626 `no_receiver_type` -> `ambiguous_candidates`, 1,074
+  `declined_by_scope` -> `ambiguous_candidates`, 892 `declined_by_scope` ->
+  `no_receiver_type`, 44 `no_receiver_type` -> `not_found`, 9 `ambiguous_candidates` ->
+  `not_a_call`, 7 `declined_by_scope` -> `not_a_call`, 2 `no_receiver_type` ->
+  `unknown_callee`, 1 `unknown_callee` -> `no_receiver_type`; none of them becomes
+  bound. The head has 106 sites that `main` and the earlier heads do not: the calls in
+  the bodies of conversion functions (`operator bool() const { return has_value(); }`),
+  in 30 files, 32 bound and 74 open.
 
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every
