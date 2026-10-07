@@ -302,8 +302,13 @@ fn owner_path(
     source: &str,
     declarator: Node,
 ) -> Option<String> {
-    // `S::operator int() const` is a qualified name with no function declarator.
+    // `S::operator int() const` is a qualified name with no function declarator. A
+    // bare qualified name that ends in anything else is a parse recovery (a class
+    // head with a macro and a `ns::Base`, PR #438), and owns nothing, as before.
     let mut node = if declarator.kind() == cf.qualified_declarator_kind {
+        if !names_conversion_function(cf, spec, declarator) {
+            return None;
+        }
         declarator
     } else {
         declarator.child_by_field_name(cf.naming.declarator_field)?
@@ -321,6 +326,19 @@ fn owner_path(
         return None;
     }
     Some(segments.join("::"))
+}
+
+/// Whether the innermost `name_field` of a `qualified_declarator_kind` chain is a
+/// conversion function (`operator_cast`; one of the `name` types of
+/// `qualified_identifier` in tree-sitter-cpp 0.23.4 node-types.json).
+fn names_conversion_function(cf: &CppFamilySpec, spec: &LangSpec, mut node: Node) -> bool {
+    while node.kind() == cf.qualified_declarator_kind {
+        match node.child_by_field_name(spec.name_field) {
+            Some(inner) => node = inner,
+            None => return false,
+        }
+    }
+    cf.naming.cast_operator_kind == Some(node.kind())
 }
 
 /// Emits a function definition: a `Function` + `Defines` at file/namespace

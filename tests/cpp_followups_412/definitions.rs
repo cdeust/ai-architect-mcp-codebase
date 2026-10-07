@@ -110,6 +110,55 @@ fn a_conversion_function_declared_in_its_class_is_a_method() {
     assert!(plain_names(&store, "Field").is_empty(), "{src}");
 }
 
+/// Every call site of the fixture as `callee <- caller` (plain names), sorted.
+fn call_sites(store: &GraphStore) -> Vec<String> {
+    let mut out: Vec<String> = store
+        .execute_query("MATCH (cs:CallSite) RETURN cs.callee_name, cs.id")
+        .expect("query sites")
+        .rows
+        .into_iter()
+        .map(|r| {
+            let caller = plain(r[1].rsplit_once("::call@").map_or(&r[1][..], |(c, _)| c));
+            format!("{} <- {caller}", r[0])
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// A class head the grammar cannot read (a macro beside the class name, a qualified
+/// base) is recovered as a definition whose declarator is the bare qualified base.
+/// It is no conversion function, so its last segment under the current scope stays
+/// the caller name, as before `S::operator int()` (ETLCPP: AssertException.h:15,
+/// RequiredCheckException.h:15, MemoryOutStream.h:17/23, circular_iterator.h:652).
+#[test]
+fn a_qualified_base_recovered_as_a_definition_keeps_its_unqualified_caller_name() {
+    for (src, expected) in [
+        (
+            "namespace UnitTest {\n\n   class UNITTEST_LINKAGE AssertException : public std::exception\n   {\n   public:\n      AssertException();\n      virtual ~AssertException() throw();\n   };\n\n}\n",
+            vec!["AssertException <- UnitTest::exception"],
+        ),
+        (
+            "namespace UnitTest {\n\n   class UNITTEST_LINKAGE RequiredCheckException : public std::exception\n   {\n   public:\n      RequiredCheckException();\n      virtual ~RequiredCheckException() throw();\n   };\n\n}\n",
+            vec!["RequiredCheckException <- UnitTest::exception"],
+        ),
+        (
+            "namespace UnitTest\n{\n\n   class UNITTEST_LINKAGE MemoryOutStream : public std::ostringstream\n   {\n   public:\n      MemoryOutStream() {}\n      ~MemoryOutStream() {}\n      void Clear();\n      char const* GetText() const;\n\n   private:\n      MemoryOutStream(MemoryOutStream const&);\n      void operator =(MemoryOutStream const&);\n\n      mutable std::string m_text;\n   };\n\n}\n",
+            vec![
+                "MemoryOutStream <- UnitTest::ostringstream",
+                "MemoryOutStream <- UnitTest::ostringstream",
+            ],
+        ),
+        (
+            "namespace etl\n{\n  namespace private_circular_iterator\n  {\n    template <typename TIterator, typename TTag>\n    class circular_iterator_impl\n    {\n    };\n  }\n\n  template <typename TIterator>\n  class circular_iterator ETL_FINAL\n    : public etl::private_circular_iterator::circular_iterator_impl< TIterator, typename etl::iterator_traits<TIterator>::iterator_category>\n  {\n  public:\n    ETL_CONSTEXPR14 circular_iterator& operator=(const circular_iterator& other)\n    {\n      impl_t::operator=(other);\n\n      return *this;\n    }\n  };\n}\n",
+            vec!["operator= <- etl::circular_iterator_impl"],
+        ),
+    ] {
+        let (store, _tmp) = index_and_resolve(&[("a.h", src)]);
+        assert_eq!(call_sites(&store), expected, "{src}");
+    }
+}
+
 /// `enum class` holds `class`, but its body is no class body: an enumerator alone in
 /// it is no macro statement, whatever its case.
 #[test]
