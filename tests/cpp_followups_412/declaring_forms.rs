@@ -145,6 +145,22 @@ forms! {
         assert_receiver_is_a_b("if (B* e = new B) { return e->m(); }")
     a_lambda_parameter_declares_its_name:
         assert_receiver_is_a_b("{ auto l = [](B& e) { return e.m(); }; return 0; }")
+    a_range_for_variable_is_visible_in_its_body:
+        assert_receiver_is_a_b("{ B bs[1]; for (B e : bs) { return e.m(); } }")
+}
+
+/// The range of a range-for is read in the enclosing scope, before its variable is
+/// visible: `e` in `for (B e : (e.m(), bs))` is the outer one. source: ISO C++ [stmt.ranged].
+#[test]
+fn a_range_for_variable_is_not_visible_in_its_own_range() {
+    for (caller, src) in sources("range", "{ B bs[1]; for (B e : (e.m(), bs)) { } }") {
+        let (store, _tmp) = index_and_resolve(&[(&format!("{caller}.cpp"), &src)]);
+        assert_eq!(
+            m_sites(&store, &caller).0,
+            ["A::m".to_string()],
+            "{caller}: {src}"
+        );
+    }
 }
 
 /// A name no scope between the handler and the call declares again is the catch

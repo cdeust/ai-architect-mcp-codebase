@@ -15,23 +15,26 @@ use tree_sitter::Node;
 use crate::parser::generic_args::strip_generic_groups;
 use crate::parser::node_text;
 
-use super::cpp_unreadable::scope_has_unreadable_statement;
+use super::cpp_unreadable::{scope_has_unreadable_statement, text_has_directive_or_erased};
 
 /// The type the innermost enclosing scope declares for `name`, read at `at`.
 /// The search stops at the enclosing function: a global or a field is not read.
 /// A name declared without a written type gives none, and hides the outer ones.
 /// The type of a catch parameter, which `main` never read, is used only when no
 /// statement between the handler and the call could declare the name in a form this
-/// reader cannot name (`scope_has_unreadable_statement`).
+/// reader cannot name (`scope_has_unreadable_statement`), and no directive or erased
+/// byte lies between the handler's body and the call (`text_has_directive_or_erased`).
 pub(super) fn declared_type(source: &str, at: Node, name: &str) -> Option<String> {
     let mut between = Vec::new();
     let mut scope = at.parent();
     while let Some(s) = scope {
         if let Some(found) = binding_in(source, s, at, name) {
+            let body = between.last().map_or(at.start_byte(), Node::start_byte);
             let untrusted = s.kind() == "catch_clause"
-                && between
-                    .iter()
-                    .any(|b| scope_has_unreadable_statement(source, (*b, at), name));
+                && (text_has_directive_or_erased(source, body, at.start_byte())
+                    || between
+                        .iter()
+                        .any(|b| scope_has_unreadable_statement(source, (*b, at), name)));
             return found.filter(|_| !untrusted);
         }
         between.push(s);
@@ -91,7 +94,16 @@ impl Reader<'_> {
             }
             "for_range_loop" => {
                 let mut out = self.init_statement(scope.child_by_field_name("initializer"));
-                out.extend(self.declaration(scope, true));
+                // The range is read in the enclosing scope: the loop variable is visible
+                // from the body. source: ISO C++ [stmt.ranged].
+                let from = scope
+                    .child_by_field_name("body")
+                    .map_or(scope.end_byte(), |b| b.start_byte());
+                out.extend(
+                    self.declaration(scope, true)
+                        .into_iter()
+                        .map(|b| Binding { from, ..b }),
+                );
                 out
             }
             "if_statement" | "while_statement" | "switch_statement" => {

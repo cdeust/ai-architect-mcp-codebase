@@ -360,7 +360,6 @@ fn a_statement_that_declares_nothing_the_call_reads_keeps_the_type() {
         "{ throw DECL_E; return e.m(); }",
         "{ goto DECL_L; return e.m(); }",
         "{ co_return DECL_E; return e.m(); }",
-        "{ co_yield DECL_E; return e.m(); }",
         "{ g(e[0]); return e.m(); }",
         "{ return LOG_IT(e.m()); }",
         "{ { B DECL_E; } return e.m(); }",
@@ -378,16 +377,33 @@ fn a_statement_that_declares_nothing_the_call_reads_keeps_the_type() {
         "{ A e; if (1) { DECL_E; return e.m(); } }",
         "{ A e; { DECL_E; return e.m(); } }",
         "{ A e; for (;;) { DECL_E; return e.m(); } }",
+        "{ if (1) {\n#ifdef X\n#endif\n} return e.m(); }",
+        "{\n#if 0\n#else\n#endif\n} return e.m(); }",
     ] {
         assert_catch_param_keeps_its_type(body);
     }
 }
 
 /// Where the preprocessor or the mask hides a declaration: a directive under `#if`, a token
-/// the mask erased (a macro in front of a type), a macro written as a member name.
+/// the mask erased (a macro in front of a type), a macro written as a member name, a
+/// directive in a scope closed before the call (a `#define` leaks out of it), a `co_yield`
+/// of a macro (not a jump: what follows it runs).
 #[test]
 fn a_directive_an_erased_token_or_a_macro_member_may_declare_the_catch_parameter() {
     for body in [
+        "{ if (1) {\n#define e b\n} return e.m(); }",
+        "{ {\n#define e b\n} return e.m(); }",
+        "{ do {\n#define e b\n} while (0); return e.m(); }",
+        "{ for (;;) {\n#define e b\n break; } return e.m(); }",
+        "{ while (0) {\n#define e b\n} return e.m(); }",
+        "{ switch (0) { default:\n#define e b\n break; } return e.m(); }",
+        "{ try {\n#define e b\n} catch (...) {} return e.m(); }",
+        "{ for (B x : bs) {\n#define e b\n} return e.m(); }",
+        "{ if (1) {} else {\n#define e b\n} return e.m(); }",
+        "{ int x = [] {\n#define e b\n return 0; }(); return e.m(); }",
+        "{ {\n#include \"redefine_e.h\"\n} return e.m(); }",
+        "{ {\n#pragma pop_macro(\"e\")\n} return e.m(); }",
+        "{ co_yield DECL_E; return e.m(); }",
         "{\n#if 1\n#define mk B e\n#endif\nmk; return e.m(); }",
         "{\n#ifdef cfg\n#include \"decl_e.inc\"\n#endif\n return e.m(); }",
         "{\n#ifdef cfg\n#define decl_e B e\n#endif\n return e.m(); }",

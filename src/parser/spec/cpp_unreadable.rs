@@ -18,14 +18,37 @@ pub(super) fn mark_erased(original: &str, blanked: &str) -> String {
     String::from_utf8(bytes).unwrap_or_else(|_| blanked.to_string())
 }
 
+/// True when `source[from..to]` holds a byte the mask erased, or a line that is a
+/// directive other than a conditional one: a `#define` leaks out of the scope that holds
+/// it, wherever the tree puts it. source: ADR-9847.
+pub(super) fn text_has_directive_or_erased(source: &str, from: usize, to: usize) -> bool {
+    let text = &source[from..to];
+    text.contains(char::from(ERASED)) || text.lines().any(is_unconditional_directive)
+}
+
+/// A line whose first non blank character is `#`, with a directive that is not `if`,
+/// `ifdef`, `ifndef`, `elif`, `elifdef`, `elifndef`, `else` or `endif` (a bare `#` counts).
+fn is_unconditional_directive(line: &str) -> bool {
+    let Some(rest) = line.trim_start().strip_prefix('#') else {
+        return false;
+    };
+    let word: String = rest
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_alphabetic)
+        .collect();
+    !matches!(
+        word.as_str(),
+        "if" | "ifdef" | "ifndef" | "elif" | "elifdef" | "elifndef" | "else" | "endif"
+    )
+}
+
 /// True when a child of `scope` before the call (the one that holds it excluded) is
-/// opaque, or when the mask erased a token there. The callee of a call that holds the
-/// call in its arguments, and the fields that name nothing, are skipped.
+/// opaque. The callee of a call that holds the call in its arguments, and the fields
+/// that name nothing, are skipped. The type and the variable of a well formed range-for,
+/// which the reader reads, are checked for macro names only.
 pub(super) fn scope_has_unreadable_statement(source: &str, of: (Node, Node), name: &str) -> bool {
     let (scope, call) = of;
-    if source[scope.start_byte()..call.start_byte()].contains(char::from(ERASED)) {
-        return true;
-    }
     let mut cursor = scope.walk();
     if !cursor.goto_first_child() {
         return false;
@@ -37,10 +60,13 @@ pub(super) fn scope_has_unreadable_statement(source: &str, of: (Node, Node), nam
         }
         let field = cursor.field_name();
         let callee = scope.kind() == "call_expression" && field == Some("function");
+        let read = scope.kind() == "for_range_loop"
+            && !scope.has_error()
+            && matches!(field, Some("type" | "declarator"));
         if child.is_named()
             && !callee
             && !names_nothing(scope, field)
-            && is_opaque(source, child, name)
+            && is_opaque(source, child, if read { "" } else { name })
         {
             return true;
         }
@@ -66,7 +92,7 @@ fn names_nothing(node: Node, field: Option<&str>) -> bool {
 
 /// Statements that declare nothing the call can read: a scope closed before it, a type, a
 /// jump.
-const CLOSED: [&str; 20] = [
+const CLOSED: [&str; 19] = [
     "comment",
     "type_definition",
     "alias_declaration",
@@ -78,7 +104,6 @@ const CLOSED: [&str; 20] = [
     "goto_statement",
     "throw_statement",
     "co_return_statement",
-    "co_yield_statement",
     "if_statement",
     "while_statement",
     "do_statement",
@@ -100,14 +125,9 @@ fn is_opaque(source: &str, node: Node, name: &str) -> bool {
     }
 }
 
-/// True when `node` holds a hit; a directive is one. The fields `names_nothing` lists are
-/// skipped.
+/// True when `node` holds a hit. The fields `names_nothing` lists are skipped.
 fn hits(source: &str, node: Node, name: &str) -> bool {
-    if matches!(
-        node.kind(),
-        "preproc_include" | "preproc_def" | "preproc_function_def" | "preproc_call"
-    ) || is_hit(source, node, name)
-    {
+    if is_hit(source, node, name) {
         return true;
     }
     let mut cursor = node.walk();
