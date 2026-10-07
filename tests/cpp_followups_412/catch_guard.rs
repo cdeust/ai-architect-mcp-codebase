@@ -428,6 +428,10 @@ fn a_directive_an_erased_token_or_a_macro_member_may_declare_the_catch_parameter
         "{\n#pragma once\n return e.m(); }",
         // A macro name may hold digits: `E2` is one, and the declarator is not read.
         "{ B E2; return e.m(); }",
+        // A range-for in a parse error, whose declarator the reader skips (`ns::e`):
+        // the name is looked for there, not macros only (tree: `for_range_loop` + ERROR).
+        "{ for (B ns::e : bs) ) { return e.m(); } }",
+        "{ for (B ns::e : ) { return e.m(); } }",
     ] {
         assert_catch_param_is_not_the_receiver(body);
     }
