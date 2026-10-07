@@ -147,6 +147,8 @@ forms! {
         assert_receiver_is_a_b("{ auto l = [](B& e) { return e.m(); }; return 0; }")
     a_range_for_variable_is_visible_in_its_body:
         assert_receiver_is_a_b("{ B bs[1]; for (B e : bs) { return e.m(); } }")
+    a_range_for_variable_is_visible_in_a_body_without_braces:
+        assert_receiver_is_a_b("{ B bs[1]; for (B e : bs) e.m(); }")
 }
 
 /// The range of a range-for is read in the enclosing scope, before its variable is

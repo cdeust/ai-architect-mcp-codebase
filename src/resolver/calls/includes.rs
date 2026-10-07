@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::graph_store::GraphStore;
+use crate::language_provider::extract_file_prefix_or_self;
 
 /// Extensions of the files whose `#include` directives the graph records as
 /// `Import` nodes and that may be included in turn.
@@ -49,36 +50,53 @@ pub(super) struct IncludeGraph {
     reached: RefCell<HashMap<String, HashSet<String>>>,
 }
 
+/// One import of a file: its path, and whether the path is computed (a macro: the
+/// parser read no `"…"` or `<…>` path).
+pub(super) struct Include {
+    pub(super) path: String,
+    pub(super) computed: bool,
+}
+
 impl IncludeGraph {
-    /// Reads every file id of the graph, then builds from `file_imports`
-    /// (issue #404: which files each C-family file includes).
-    pub(super) fn load(
-        store: &GraphStore,
-        file_imports: &HashMap<String, Vec<String>>,
-    ) -> Result<Self, String> {
+    /// Reads every file id and every `Import` of the graph (its path, and `is_glob`,
+    /// set on a computed include by `c_family::include_entry`), then builds.
+    pub(super) fn load(store: &GraphStore) -> Result<Self, String> {
         let file_ids: HashSet<String> = store
             .execute_query("MATCH (f:File) RETURN f.id")?
             .rows
             .into_iter()
             .filter_map(|r| r.into_iter().next())
             .collect();
-        Ok(Self::build(file_imports, &file_ids))
+        let mut includes: HashMap<String, Vec<Include>> = HashMap::new();
+        let rows = store.execute_query("MATCH (i:Import) RETURN i.id, i.path, i.is_glob")?;
+        for r in rows.rows.iter().filter(|r| r.len() >= 3) {
+            includes
+                .entry(extract_file_prefix_or_self(&r[0]))
+                .or_default()
+                .push(Include {
+                    path: r[1].clone(),
+                    computed: r[2] == "true",
+                });
+        }
+        Ok(Self::build(&includes, &file_ids))
     }
 
-    /// `file_imports` maps a file id to the import paths written in it;
-    /// `file_ids` is every file of the graph.
+    /// `includes` maps a file id to the imports written in it; `file_ids` is every
+    /// file of the graph. Only the C-family files count: a Rust `use x::*` has
+    /// `is_glob` too.
     pub(super) fn build(
-        file_imports: &HashMap<String, Vec<String>>,
+        includes: &HashMap<String, Vec<Include>>,
         file_ids: &HashSet<String>,
     ) -> Self {
         let by_basename = by_basename(file_ids);
-        let direct = file_imports
+        let direct = includes
             .iter()
             .filter(|(file, _)| is_c_family(file))
             .map(|(file, paths)| {
                 let mut targets: Vec<String> = paths
                     .iter()
-                    .flat_map(|p| resolve_include(file, p, file_ids, &by_basename))
+                    .filter(|p| !p.computed)
+                    .flat_map(|p| resolve_include(file, &p.path, file_ids, &by_basename))
                     .filter(|t| t != file)
                     .collect();
                 targets.sort_unstable();
@@ -87,9 +105,9 @@ impl IncludeGraph {
             })
             .collect();
         let includers = reverse(&direct);
-        let has_opaque = file_imports
+        let has_opaque = includes
             .iter()
-            .any(|(file, paths)| is_c_family(file) && paths.iter().any(|p| is_computed(p)));
+            .any(|(file, paths)| is_c_family(file) && paths.iter().any(|p| p.computed));
         Self {
             direct,
             includers,
@@ -165,16 +183,6 @@ fn reverse(direct: &HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>
     includers
 }
 
-/// An include path that is a macro name (`#include UNIT`): no directory, no extension,
-/// upper case. A system header (`<vector>`) is lower case.
-fn is_computed(path: &str) -> bool {
-    path.len() > 1
-        && path.chars().any(|c| c.is_ascii_uppercase())
-        && path
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-}
-
 fn is_c_family(file: &str) -> bool {
     file.rsplit_once('.')
         .is_some_and(|(_, ext)| C_FAMILY_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
@@ -238,16 +246,31 @@ mod tests {
     use super::*;
 
     fn graph(files: &[&str], imports: &[(&str, &[&str])]) -> IncludeGraph {
+        graph_with(files, imports, &[])
+    }
+
+    /// `computed` lists `(file, path)` pairs the parser read as computed includes.
+    fn graph_with(
+        files: &[&str],
+        imports: &[(&str, &[&str])],
+        computed: &[(&str, &str)],
+    ) -> IncludeGraph {
         let ids: HashSet<String> = files.iter().map(|f| (*f).to_string()).collect();
-        let map = imports
-            .iter()
-            .map(|(f, ps)| {
-                (
-                    (*f).to_string(),
-                    ps.iter().map(|p| (*p).to_string()).collect(),
-                )
-            })
-            .collect();
+        let mut map: HashMap<String, Vec<Include>> = HashMap::new();
+        for (f, ps) in imports {
+            map.entry((*f).to_string())
+                .or_default()
+                .extend(ps.iter().map(|p| Include {
+                    path: (*p).to_string(),
+                    computed: false,
+                }));
+        }
+        for (f, p) in computed {
+            map.entry((*f).to_string()).or_default().push(Include {
+                path: (*p).to_string(),
+                computed: true,
+            });
+        }
         IncludeGraph::build(&map, &ids)
     }
 
@@ -304,8 +327,19 @@ mod tests {
 
     #[test]
     fn a_computed_include_of_a_file_that_is_not_c_family_opens_nothing() {
-        let g = graph(&["a.rs", "b.rs"], &[("a.rs", &["UNIT"])]);
+        let g = graph_with(&["a.rs", "b.rs"], &[], &[("a.rs", "x::*")]);
         assert!(!g.share_a_unit("a.rs", "b.rs"));
+    }
+
+    /// The flag the parser sets, not the form of the path, makes an include computed:
+    /// `#include unit_u` (a lower case macro) opens every pair, `#include "UNIT"` (a
+    /// file named `UNIT`) does not.
+    #[test]
+    fn a_computed_include_is_the_one_the_parser_flags() {
+        let files = ["glue.c", "UNIT", "x.c", "y.c"];
+        assert!(graph_with(&files, &[], &[("glue.c", "unit_u")]).share_a_unit("x.c", "y.c"));
+        let g = graph(&files, &[("glue.c", &["UNIT"])]);
+        assert!(!g.share_a_unit("x.c", "y.c") && g.reaches("glue.c", "UNIT"));
     }
 
     #[test]

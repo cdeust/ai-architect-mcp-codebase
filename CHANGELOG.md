@@ -87,18 +87,24 @@ adheres to [Semantic Versioning](https://semver.org/).
   whole: the initial value, the size of an array, the parameters of a declared
   function, the test of an `#if`. A closed scope (an `if`, a loop, a `switch`, a `try`,
   a block), a type (`typedef`, `using X = T`) and a jump do not make a statement
-  opaque; a clean declaration is read by the reader and only its macro names count.
-  Any directive (`#include`, `#define`, `#pragma`, `#undef`) is opaque, at any depth.
-  The macro the rewrite erased is seen: the text the walkers read marks the bytes it
-  blanked, and the guard declines when one lies between the handler and the call
-  (`DECL_E int s;`). The price is a catch type not read past such a statement, where
+  opaque (`co_yield` is no jump: what follows it runs); a declaration the parser read
+  whole, and the type and variable of a range-for, are read by the reader and only
+  their macro names count. The variable of a range-for is visible after its range, in
+  the body (ISO C++ [stmt.ranged]). Directives are read from the text, not the tree: the
+  guard declines when the text between the start of the handler's body and the call
+  holds a directive that is not a conditional one (`#include`, `#define`, `#undef`,
+  `#pragma`, `#error`, `#line`, ...; `#if`, `#ifdef`, `#else`, `#endif` and their kin
+  are not) or a byte the rewrite erased: the text the walkers read marks the bytes it
+  blanked (`DECL_E int s;`). The price is a catch type not read past such a statement, where
   `main` is open too: a loop bound or a test written with a macro (`i < MAX_N`), a local
   with an upper case name or type (`const int MAX = 3;`, `DWORD n;`), a call that takes
   the catch parameter outside a read (`handle(e);`), `asm` that names it, and a closed
   block under a `case` or a label. Not read, so the type stays: a macro whose expansion
   ends the statement it is written in and opens another (`int x = DECL_REST;` with
   `DECL_REST` = `0; B e`; `if (1) REDECL(e);`; `WRAP(e.m())`), a macro in lower case
-  or of one character (`B X;`), an `#include` written as a call (`#include PICK(x)`). A macro
+  or mixed case, or of one character (`B X;`; mixed case: `Py_DECL_E`, `Q_DeclE`,
+  `DeclE(B)`, `MyDecl`, `B Decl_E;`: they look like CamelCase type and function names,
+  and declining them would cut the typing of most handlers). A macro
   before a statement keyword (`DECL_E return e.m();`) is not blanked as a specifier:
   the statement is a parse error and its call is not extracted, where `main` blanks the
   macro and records an open site (no site of the corpus is lost to it). A
@@ -110,11 +116,22 @@ adheres to [Semantic Versioning](https://semver.org/).
   compiled with it in one translation unit: the file includes it, the file is
   included by it (`using String = A;` written before `#include "impl.h"`), or a third
   file includes both (the order of the includes is not read); a `typedef` or `using`
-  written in a header is seen by every file; no other file sees a `.cpp` alias. An
-  `#include` written as a bare macro name (`#include UNIT`) may include any file, two at
-  once: when one exists anywhere, every pair of files may share a translation unit; one
-  written as a call (`#include PICK(x)`) is not read as such.
-  The extensions `c++` and `ipp` are read as C++ like the other C++ ones. A typed
+  written in a header is seen by every file; no other file sees a `.cpp` alias. The
+  path of an `#include` is read from the directive's `path` node, not from its text:
+  a comment or blanks after the path, or blanks after `#`, leave the include read. An
+  `#include` whose path is not a `"..."` or `<...>` path (a macro, `#include UNIT` or
+  `#include unit_u`, or a call, `#include PICK(x)`) is computed: it may include any
+  file, two at once, so when one exists anywhere, every pair of files may share a
+  translation unit. A unit the build makes without an `#include` (a unity or jumbo
+  build: CMake `UNITY_BUILD`, `-include` or `/FI`), where files that do not include
+  each other share a unit, is not read.
+  The extensions `c++` and `ipp` are read as C++ like the other C++ ones. A conversion
+  function (`operator int() const`, defined in its class or out of it) is a Method
+  named `operator` and its type up to the parameter list (`operator int`,
+  `operator const char*`), the caller of the calls of its body; `main` emitted no node
+  for it. The mask that blanks the macro statements of a class leaves the body of an
+  `enum class` alone (an enumerator alone in it, `enum class E { B_Y };`, was blanked).
+  A typed
   receiver is still read by path suffix, as on `main`: one class of that name binds,
   several leave the site open. Which declaration of a type name C++ reaches (a
   using-declaration, a member type, a local class, a declaring macro) is not read.
@@ -139,12 +156,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   `etl::message_timer_locked` 154, `etl::callback_timer_locked` 146,
   `etl::callback_timer_deferred_locked` 144, `etl::poly_span` 74,
   `etl::queue_spsc_locked` 67, `etl::pool_ext` 66, `BresenhamLine` 63,
-  `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25). Two calls
-  that 93f9fe7 bound are open here, `file_name()` and `line_number()` in the handler of
-  `test_exception.cpp` (`etl::exception`): the statement before them,
-  `CHECK_EQUAL(..., std::string(c.what()));`, is a call of a macro (the price of the rule
-  above: 2 calls). The 241 member calls whose receiver type matches
-  two classes that both hold the callee are 125 resolved before and 125 after. The 44
+  `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25). Two calls the
+  reader could type (`file_name()` and `line_number()` in `test_exception.cpp`,
+  `etl::exception`) are declined after a `CHECK_EQUAL(...)` statement; they are open on
+  `main` too. The 44
   `const_iterator` parameters of `circular_buffer.h`, `deque.h` and the four
   `unordered_*` headers are open on both sides. 13,123 calls open on both sides change
   their `unresolved_reason`: 5,728 `ambiguous_candidates` -> `declined_by_scope`, 3,749

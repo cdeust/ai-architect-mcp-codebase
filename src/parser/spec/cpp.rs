@@ -117,7 +117,7 @@ impl LanguageConventions for CppConventions {
             // the walker only routes these two kinds here, so the arm is the
             // shared C-family include path (matching the hand-written
             // `extract_include`).
-            _ => c_family::include_entry(source, import_stmt, scope, &["#include"], "include:"),
+            _ => c_family::include_entry(source, import_stmt, scope, "include:"),
         }
     }
 }
@@ -173,6 +173,9 @@ static CPP_NAMING: DeclaratorNaming = DeclaratorNaming {
     // C++ has both pointer and reference declarators; a `(*cb)` or `(&cb)` below
     // an outer `function_declarator` makes the member a function-pointer (#135).
     indirection_declarator_kinds: &["pointer_declarator", "reference_declarator"],
+    // `operator T() const` (a conversion function): its declarator is an
+    // `operator_cast`, whose `type` field is `T`. source: node-types.json above.
+    cast_operator_kind: Some("operator_cast"),
 };
 
 /// The hybrid C-family class-model structural sub-table (ADR-0055 phase 7). All

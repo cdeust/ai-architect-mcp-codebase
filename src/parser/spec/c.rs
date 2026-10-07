@@ -85,10 +85,9 @@ impl LanguageConventions for CConventions {
         import_stmt: Node,
         scope: &str,
     ) -> Vec<ImportEntry> {
-        // One `#include` → one import. Strip the directive and the `<>`/`""`
-        // delimiters; the display name is the path's last segment. Reproduces
-        // the hand-written `extract_include`.
-        c_family::include_entry(source, import_stmt, scope, &["#include"], "include:")
+        // One `#include` → one import, read from its `path` field; the display
+        // name is the path's last segment.
+        c_family::include_entry(source, import_stmt, scope, "include:")
     }
 }
 
@@ -108,6 +107,7 @@ static C_NAMING: DeclaratorNaming = DeclaratorNaming {
     parameters_field: "parameters",
     // C has `pointer_declarator` but no reference declarator.
     indirection_declarator_kinds: &["pointer_declarator"],
+    cast_operator_kind: None,
 };
 
 /// The C-family structural sub-table (ADR-0055 phase 6). All node kinds:

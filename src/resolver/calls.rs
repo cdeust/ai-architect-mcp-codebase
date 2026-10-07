@@ -62,7 +62,7 @@ pub(super) fn resolve_calls(
     let imports = super::receiver::ModuleImports::load(store, &evidence);
     // Issue #400: prototypes, macros and `static` functions.
     let callables = store.callable_facts();
-    let includes = IncludeGraph::load(store, file_imports)?;
+    let includes = IncludeGraph::load(store)?;
     let cpp = member_calls::CppClasses::load(store, includes.clone());
 
     for row in &qr.rows {

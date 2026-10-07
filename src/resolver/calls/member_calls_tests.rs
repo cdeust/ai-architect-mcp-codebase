@@ -1,4 +1,5 @@
 use super::*;
+use crate::resolver::calls::includes::Include;
 
 #[test]
 fn a_method_belongs_to_the_class_of_its_qualified_name() {
@@ -122,12 +123,15 @@ fn including(pairs: &[(&str, &str)]) -> IncludeGraph {
         .iter()
         .map(|f| (*f).to_string())
         .collect();
-    let mut imports: HashMap<String, Vec<String>> = HashMap::new();
+    let mut imports: HashMap<String, Vec<Include>> = HashMap::new();
     for (file, included) in pairs {
         imports
             .entry((*file).to_string())
             .or_default()
-            .push((*included).to_string());
+            .push(Include {
+                path: (*included).to_string(),
+                computed: false,
+            });
     }
     IncludeGraph::build(&imports, &ids)
 }

@@ -95,10 +95,11 @@ impl Reader<'_> {
             "for_range_loop" => {
                 let mut out = self.init_statement(scope.child_by_field_name("initializer"));
                 // The range is read in the enclosing scope: the loop variable is visible
-                // from the body. source: ISO C++ [stmt.ranged].
+                // after it, in the body (`for (B e : bs) e.m();` starts its body at `e`).
+                // source: ISO C++ [stmt.ranged].
                 let from = scope
-                    .child_by_field_name("body")
-                    .map_or(scope.end_byte(), |b| b.start_byte());
+                    .child_by_field_name("right")
+                    .map_or(scope.end_byte(), |r| r.end_byte());
                 out.extend(
                     self.declaration(scope, true)
                         .into_iter()

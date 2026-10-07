@@ -256,3 +256,20 @@ fn an_alias_of_a_c_plus_plus_source_file_no_file_includes_with_the_caller_is_not
     ]);
     assert_eq!(bound_methods(&store, "use"), ["m -> lib::String::m"]);
 }
+
+/// The include path is read from the directive's `path` node, not from its text: a
+/// comment, a blank after `#`, or a macro in lower case leaves the glue file's unit
+/// (or its computed include) seen, and the site open.
+#[test]
+fn a_glue_file_is_read_whatever_blanks_comments_or_macro_case_its_includes_carry() {
+    for glue in [
+        "#include \"u.cpp\" // alias\n#include \"t.cpp\"\n",
+        "# include \"u.cpp\"\n#include \"t.cpp\"\n",
+        "#include /* a */ \"u.cpp\"\n#include \"t.cpp\"\n",
+        "#define UNIT_U \"u.cpp\"\n#include UNIT_U // c\n#include \"t.cpp\"\n",
+        "#define UNIT_U \"u.cpp\"\n#  include UNIT_U\n#include \"t.cpp\"\n",
+        "#define unit_u \"u.cpp\"\n#include unit_u\n#include \"t.cpp\"\n",
+    ] {
+        glue_unit("glue.cpp", glue);
+    }
+}

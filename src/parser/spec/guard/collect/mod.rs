@@ -38,6 +38,9 @@ pub(super) fn naming_node_kinds(
     for k in naming.indirection_declarator_kinds {
         out.push((prefix, (*k).to_string()));
     }
+    if let Some(k) = naming.cast_operator_kind {
+        out.push((prefix, k.to_string()));
+    }
     out
 }
 

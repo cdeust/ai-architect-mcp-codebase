@@ -85,6 +85,9 @@ pub(super) fn first_identifier(naming: &DeclaratorNaming, source: &str, node: No
 /// required field, so the two cases partition the grammar and neither needs a
 /// fallback into the other.
 pub(super) fn declarator_name(naming: &DeclaratorNaming, source: &str, node: Node) -> String {
+    if naming.cast_operator_kind == Some(node.kind()) {
+        return cast_operator_name(naming, source, node);
+    }
     if kind_in(naming.name_text_kinds, node.kind()) {
         return node_text(source, node);
     }
@@ -120,6 +123,40 @@ pub(super) fn declarator_name(naming: &DeclaratorNaming, source: &str, node: Nod
         }
     }
     String::new()
+}
+
+/// The name of a conversion function: its text up to the parameter list, blanks
+/// kept only between two words (`operator int`, `operator const char*`,
+/// `operator std::string`). The `*`/`&` of the abstract declarator are part of it:
+/// `operator T` and `operator T*` are two functions.
+fn cast_operator_name(naming: &DeclaratorNaming, source: &str, cast: Node) -> String {
+    let mut end = cast.end_byte();
+    let mut declarator = cast.child_by_field_name(naming.declarator_field);
+    while let Some(d) = declarator {
+        if let Some(parameters) = d.child_by_field_name(naming.parameters_field) {
+            end = parameters.start_byte();
+            break;
+        }
+        // An abstract reference declarator holds its inner one without a field.
+        declarator = d
+            .child_by_field_name(naming.declarator_field)
+            .or_else(|| d.named_child(u32::try_from(d.named_child_count().checked_sub(1)?).ok()?));
+    }
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut name = String::new();
+    let mut gap = false;
+    for c in source[cast.start_byte()..end].chars() {
+        if c.is_whitespace() {
+            gap = true;
+            continue;
+        }
+        if gap && name.ends_with(is_word) && is_word(c) {
+            name.push(' ');
+        }
+        gap = false;
+        name.push(c);
+    }
+    name
 }
 
 /// Whether a member/declaration declarator binds a real function PROTOTYPE
@@ -171,6 +208,10 @@ fn classify_prototype(
     let k = node.kind();
     let ptr_after = ptr_after || (seen_func && kind_in(naming.indirection_declarator_kinds, k));
     let seen_func = seen_func || k == func_declarator_kind;
+    // A conversion function (`operator int() const;`) is a callable.
+    if naming.cast_operator_kind == Some(k) {
+        return Some(!ptr_after);
+    }
     if kind_in(naming.name_text_kinds, k) || kind_in(naming.identifier_kinds, k) {
         return Some(seen_func && !ptr_after);
     }

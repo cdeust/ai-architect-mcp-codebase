@@ -19,6 +19,7 @@ mod alias_units;
 mod body_receivers;
 mod catch_guard;
 mod declaring_forms;
+mod definitions;
 
 fn index_and_resolve(files: &[(&str, &str)]) -> (GraphStore, common::TestTempDir) {
     let tmp = tempfile::Builder::new()

@@ -402,9 +402,13 @@ fn blank_scope_macro_calls(source: &str) -> Option<String> {
     blank_out(source, blank)
 }
 
-/// Whether a `{` after `intro` opens a class, struct, union or namespace body.
+/// Whether a `{` after `intro` opens a class, struct, union or namespace body (not
+/// the body of an `enum class`, whose enumerators are no macro statements).
 fn opens_scope(source: &str, intro: &[Lexed]) -> bool {
     !intro.iter().any(|x| x.tok == Tok::Punct(b'('))
+        && !intro
+            .iter()
+            .any(|x| x.tok == Tok::Ident && &source[x.start..x.end] == "enum")
         && intro.iter().any(|x| {
             x.tok == Tok::Ident
                 && matches!(
