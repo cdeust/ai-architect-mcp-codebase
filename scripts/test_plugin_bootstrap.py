@@ -212,7 +212,19 @@ def require_not_installed(plugin: Path, result: subprocess.CompletedProcess[str]
     require("COLD_BUILD_STARTED" not in result.stderr, f"{label}: invoked Cargo in marketplace mode")
 
 
-def case_success(tmp: Path) -> tuple[Path, Path, Path, Path, ReleaseFixture, Path]:
+@dataclass(frozen=True)
+class Installed:
+    """What case_success leaves behind for case_cache to tamper with."""
+
+    plugin: Path
+    fake_bin: Path
+    curl_calls: Path
+    gh_calls: Path
+    release: ReleaseFixture
+    binary: Path
+
+
+def case_success(tmp: Path) -> Installed:
     # Positive control: exact URLs, fixed signer identity, valid SHA/bundle.
     plugin, fake_bin, curl_calls, gh_calls = fixture(tmp / "success")
     release = make_release(tmp / "success")
@@ -233,11 +245,13 @@ def case_success(tmp: Path) -> tuple[Path, Path, Path, Path, ReleaseFixture, Pat
         "gh verification lacks the pinned release tag",
     )
     require("--bundle " in gh_args, "gh verification lacks the attached bundle")
-    return plugin, fake_bin, curl_calls, gh_calls, release, binary
+    return Installed(plugin, fake_bin, curl_calls, gh_calls, release, binary)
 
 
-def case_cache(tmp: Path, state: tuple[Path, Path, Path, Path, ReleaseFixture, Path]) -> None:
-    plugin, fake_bin, curl_calls, gh_calls, release, binary = state
+def case_cache(tmp: Path, state: Installed) -> None:
+    plugin, fake_bin, curl_calls, gh_calls, release, binary = (
+        state.plugin, state.fake_bin, state.curl_calls, state.gh_calls, state.release, state.binary,
+    )
     # Cached control: digest is rechecked; no network. Tampering fails closed.
     curl_calls.unlink()
     gh_calls.unlink()
