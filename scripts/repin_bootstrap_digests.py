@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Re-pin the bootstrap manifest digests in bin/ensure-binary.sh.
 
-`bin/ensure-binary.sh` pins the SHA-256 of `.claude-plugin/plugin.json` and
-`Cargo.toml` so a marketplace install can detect a tampered package.
+`bin/ensure-binary.sh` pins the SHA-256 of `.claude-plugin/plugin.json` and of
+the `[package]` table of `Cargo.toml` (what is hashed is defined in
+`bootstrap_pins.py`) so a marketplace install can detect a tampered package.
 `scripts/check_distribution_identity.py` enforces the pins in CI.
 
-Consequence nobody automated: **every dependency bump changes `Cargo.toml`, so
-every Dependabot pull request fails CI on "bootstrap Cargo manifest digest
-drifted"** until a human re-pins by hand. Six such pull requests were open and
-red at once on 2026-08-09, all on this single cause. This script makes the fix
-one command, and the pre-commit hook applies it automatically.
+The Cargo pin covers the `[package]` table only, not the dependency tables: a
+dependency bump (Dependabot's whole job) leaves the pin valid, so such a pull
+request is green without a re-pin. A release (version bump, edited package
+metadata) changes the table and needs this script.
 
 Recomputing from the repository's own manifests is not a security bypass: on a
 branch, the repository IS the source of truth for what the release will contain.
@@ -20,19 +20,14 @@ Usage:
     python3 scripts/repin_bootstrap_digests.py          # rewrite the pins
     python3 scripts/repin_bootstrap_digests.py --check  # exit 1 if they drifted
 """
-import hashlib
 import re
 import sys
 from pathlib import Path
 
+from bootstrap_pins import PINS, digest
+
 ROOT = Path(__file__).resolve().parent.parent
 BOOTSTRAP = ROOT / "bin" / "ensure-binary.sh"
-
-# (manifest path, the shell variable pinning its digest)
-PINS = (
-    (".claude-plugin/plugin.json", "EXPECTED_PLUGIN_MANIFEST_SHA256"),
-    ("Cargo.toml", "EXPECTED_CARGO_MANIFEST_SHA256"),
-)
 
 
 def main() -> int:
@@ -40,8 +35,8 @@ def main() -> int:
     text = BOOTSTRAP.read_text(encoding="utf-8")
     drifted = []
 
-    for path, variable in PINS:
-        actual = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+    for path, variable, scope in PINS:
+        actual = digest(ROOT, path, scope)
         pattern = rf'^{variable}="[0-9a-f]{{64}}"$'
         match = re.search(pattern, text, re.MULTILINE)
         if match is None:

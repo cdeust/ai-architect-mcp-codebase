@@ -51,6 +51,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The bootstrap's `Cargo.toml` pin (`EXPECTED_CARGO_PACKAGE_SHA256`, renamed
+  from `EXPECTED_CARGO_MANIFEST_SHA256`) hashes the `[package]` table, not the
+  whole file. The whole-file pin made every Dependabot dependency bump fail CI on
+  "bootstrap Cargo manifest digest drifted" (#439 is the open case; the merged
+  bumps #306, #307 and #308 carry a hand-made edit to `bin/ensure-binary.sh`),
+  though nothing in marketplace mode builds from the dependency tables: the
+  launcher installs the attested release asset and only reads `Cargo.toml` in a
+  source checkout, where the pin is not checked. The
+  table still binds package name, version and metadata to the reviewed release;
+  a release re-pins with `scripts/repin_bootstrap_digests.py` as before.
+  `scripts/bootstrap_pins.py` is now the one definition the shell launcher, the
+  identity gate and the re-pin script share (the script's claim that a
+  pre-commit hook applies the re-pin automatically named a hook this repository
+  does not carry; the claim is removed).
+
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every
   unresolved call site by the bare method name, so `io::BufWriter::new` and
