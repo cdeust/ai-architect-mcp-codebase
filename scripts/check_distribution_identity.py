@@ -109,8 +109,12 @@ def check_pins() -> None:
     bootstrap = (ROOT / "bin/ensure-binary.sh").read_text(encoding="utf-8")
     for path, variable, scope in PINS:
         pinned = re.search(rf'^{variable}="([0-9a-f]{{64}})"$', bootstrap, re.MULTILINE)
+        try:
+            actual = digest(ROOT, path, scope)
+        except ValueError as refused:
+            raise SystemExit(f"bootstrap pin {variable} has nothing to pin: {refused}") from None
         require(
-            pinned is not None and pinned.group(1) == digest(ROOT, path, scope),
+            pinned is not None and pinned.group(1) == actual,
             f"bootstrap pin {variable} drifted from {path} ({scope})",
         )
 

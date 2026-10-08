@@ -64,7 +64,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   `scripts/bootstrap_pins.py` is now the one definition the shell launcher, the
   identity gate and the re-pin script share (the script's claim that a
   pre-commit hook applies the re-pin automatically named a hook this repository
-  does not carry; the claim is removed).
+  does not carry; the claim is removed). The launcher extracts the table with
+  `LC_ALL=C` awk and treats a failed extraction as fatal rather than comparing
+  its output: in a UTF-8 locale macOS `/usr/bin/awk` aborts on a byte that is
+  not UTF-8 after printing the lines before it, so a tampered table whose
+  tampering followed such a byte hashed to the pinned digest. A manifest holding
+  a NUL byte (BSD awk drops the rest of the line) and a manifest with no
+  `[package]` table are refused on both sides; the gate and the re-pin script
+  never pin `sha256("")`.
 
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every

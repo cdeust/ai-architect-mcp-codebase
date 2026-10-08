@@ -92,6 +92,7 @@ def run(
     gh_mode: str = "success",
     source_checkout: bool = False,
     path: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(plugin / "bin/ensure-binary.sh")],
@@ -101,8 +102,10 @@ def run(
             "PATH": path or f"{fake_bin}:{os.environ['PATH']}",
             "TEST_GH_MODE": gh_mode,
             "AI_ARCHITECT_SOURCE_CHECKOUT": "1" if source_checkout else "0",
+            **(env or {}),
         },
         text=True,
+        errors="replace",
         capture_output=True,
         timeout=40,
         check=False,
@@ -387,6 +390,32 @@ def case_cargo_pin_scope(tmp: Path) -> None:
     require(not curl_calls.exists(), "[package] table edit reached download path")
 
 
+def case_cargo_pin_hostile_bytes(tmp: Path) -> None:
+    # Two byte sequences made BSD awk (macOS /usr/bin/awk) hash fewer bytes than
+    # the file holds, so a tampered table hashed to the pin: in a UTF-8 locale it
+    # aborts on a byte that is not UTF-8 after printing the lines before it; after
+    # a NUL it drops the rest of the line. Each is built so the dropped bytes are
+    # exactly the tampering. Under LC_ALL=C the launcher now hashes the first
+    # whole, as bootstrap_pins does, and refuses the second before hashing.
+    package_name = f'name = "{PLUGIN["name"]}"'.encode()
+    for label, anchor, tampered, env, refusal in (
+        ("not-utf8", b"\n\n", b'\n\nevil = "\xff"\nversion = "9.9.9"\n', {"LC_ALL": "C.UTF-8"}, "does not match"),
+        ("nul", package_name, package_name + b'\x00version = "9.9.9"', {}, "could not be extracted"),
+    ):
+        plugin, fake_bin, curl_calls, _ = fixture(tmp / f"pin-{label}")
+        cargo_path = plugin / "Cargo.toml"
+        original = cargo_path.read_bytes()
+        table_start = original.index(b"[package]\n")
+        hostile = original[:table_start] + original[table_start:].replace(anchor, tampered, 1)
+        require(hostile != original, f"{label}: fixture has no {anchor!r} in its [package] table")
+        cargo_path.write_bytes(hostile)
+        install_curl(fake_bin, curl_calls, make_release(tmp / f"pin-{label}-release"))
+        result = run(plugin, fake_bin, env=env)
+        require_not_installed(plugin, result, f"[package] {label}")
+        require(f"Cargo package table {refusal}" in result.stderr, f"{label}: wrong refusal: {result.stderr}")
+        require(not curl_calls.exists(), f"{label}: tampered [package] table reached download path")
+
+
 def case_invalid_versions(tmp: Path) -> None:
     for label, malicious_version in (
         ("downgrade", "0.8.4"),
@@ -419,7 +448,8 @@ def case_old_gh(tmp: Path) -> None:
 def case_missing_gh(tmp: Path) -> None:
     plugin, fake_bin, curl_calls, _ = fixture(tmp / "nogh")
     (fake_bin / "gh").unlink()
-    for tool in ("bash", "awk"):
+    # Every tool the launcher needs before the gh gate: tr and wc for the NUL check.
+    for tool in ("bash", "awk", "tr", "wc"):
         executable = shutil.which(tool)
         require(executable is not None, f"{tool} is required by the bootstrap test")
         (fake_bin / tool).symlink_to(executable)
@@ -552,6 +582,7 @@ def main() -> None:
         case_hostile_repository(tmp)
         case_plugin_cargo_mismatch(tmp)
         case_cargo_pin_scope(tmp)
+        case_cargo_pin_hostile_bytes(tmp)
         case_invalid_versions(tmp)
         case_old_gh(tmp)
         case_missing_gh(tmp)

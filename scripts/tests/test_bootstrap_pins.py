@@ -1,12 +1,14 @@
 """The Cargo bootstrap pin hashes the [package] table and nothing else."""
 
+import hashlib
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bootstrap_pins import package_table  # noqa: E402
+from bootstrap_pins import digest, package_table  # noqa: E402
 
 MANIFEST = b"""[workspace]
 members = ["."]
@@ -44,6 +46,38 @@ class PackageTable(unittest.TestCase):
 
     def test_header_with_trailing_blanks_is_found(self) -> None:
         self.assertEqual(package_table(b"[package] \t\nname = 'x'\n"), b"[package] \t\nname = 'x'\n")
+
+    def test_a_nul_byte_is_refused(self) -> None:
+        # BSD awk drops the rest of a line after a NUL, so the shell side cannot
+        # hash such a manifest as this function would; both refuse it instead.
+        with self.assertRaises(ValueError):
+            package_table(MANIFEST.replace(b'name = "x"', b'name = "x"\x00version = "9.9.9"'))
+
+    def test_a_byte_that_is_not_utf8_is_hashed_like_any_other(self) -> None:
+        self.assertIn(b'evil = "\xff"\n', package_table(MANIFEST.replace(b'name = "x"\n', b'evil = "\xff"\nname = "x"\n')))
+
+
+class Digest(unittest.TestCase):
+    def manifest(self, data: bytes) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="bootstrap-pins-"))
+        self.addCleanup(lambda: [(root / "Cargo.toml").unlink(), root.rmdir()])
+        (root / "Cargo.toml").write_bytes(data)
+        return root
+
+    def test_package_scope_hashes_the_table(self) -> None:
+        root = self.manifest(MANIFEST)
+        self.assertEqual(digest(root, "Cargo.toml", "package"), hashlib.sha256(package_table(MANIFEST)).hexdigest())
+
+    def test_whole_scope_hashes_the_file(self) -> None:
+        root = self.manifest(MANIFEST)
+        self.assertEqual(digest(root, "Cargo.toml", "whole"), hashlib.sha256(MANIFEST).hexdigest())
+
+    def test_an_empty_package_table_is_refused(self) -> None:
+        # "[package] # comment" is not the header either side looks for; a pin of
+        # sha256("") would pass the gate while binding nothing.
+        for data in (b"[workspace]\nmembers = []\n", b"[package] # comment\nname = 'x'\n"):
+            with self.assertRaises(ValueError):
+                digest(self.manifest(data), "Cargo.toml", "package")
 
 
 if __name__ == "__main__":

@@ -36,7 +36,11 @@ def main() -> int:
     drifted = []
 
     for path, variable, scope in PINS:
-        actual = digest(ROOT, path, scope)
+        try:
+            actual = digest(ROOT, path, scope)
+        except ValueError as refused:
+            print(f"repin: {variable} has nothing to pin: {refused}", file=sys.stderr)
+            return 2
         pattern = rf'^{variable}="[0-9a-f]{{64}}"$'
         match = re.search(pattern, text, re.MULTILINE)
         if match is None:
