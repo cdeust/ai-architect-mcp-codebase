@@ -65,7 +65,7 @@ jobs:
             libzstd-dev pkg-config cmake
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           # Required input: `@stable` carried the version in the REF, so
           # pinning the action to a SHA drops it and the action hard-fails
@@ -180,7 +180,7 @@ jobs:
             libzstd-dev pkg-config cmake
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: "1.95.0"
           components: clippy
@@ -229,11 +229,15 @@ jobs:
       # is worse than no gate, and finding that out after a 90-minute
       # instrumented build wastes the run. Stdlib-only, so it needs no setup.
       - name: Unit tests (doc-claims gate logic, all arms)
+        # pipefail: without it the step's status is tail's, and a failing test
+        # cannot fail the job.
         run: |
+          set -o pipefail
           python3 -m unittest \
             scripts/tests/test_check_doc_claims.py \
             scripts/tests/test_doc_claim_sources.py \
-            scripts/tests/test_check_moved_fn_bodies.py -v 2>&1 | tail -5
+            scripts/tests/test_check_moved_fn_bodies.py \
+            scripts/tests/test_bootstrap_pins.py -v 2>&1 | tail -5
 
       # The move proof of #352 run on a real before/after pair kept in the
       # repository, both ways (issue #362): a pure move must pass, and a copy
@@ -256,7 +260,7 @@ jobs:
             libzstd-dev pkg-config cmake
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: "1.95.0"
           # llvm-tools ships llvm-profdata/llvm-cov, which cargo-llvm-cov

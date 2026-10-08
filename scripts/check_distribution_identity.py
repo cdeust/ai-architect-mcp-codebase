@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from pathlib import Path
+
+from bootstrap_pins import PINS, digest
 
 ROOT = Path(__file__).resolve().parent.parent
 CANONICAL = "ai-architect-mcp-codebase"
@@ -29,7 +30,9 @@ def require(condition: bool, message: str) -> None:
         raise SystemExit(message)
 
 
-def main() -> None:
+def check_public_identity() -> tuple[dict, str, int]:
+    """Post: the public names, contract and MCP launcher agree; returns the plugin manifest,
+    the derived tool prefix and the number of name declarations checked."""
     contract = load("mcp-contract.json")
     claude_plugin = load(".claude-plugin/plugin.json")
     claude_marketplace = load(".claude-plugin/marketplace.json")
@@ -71,6 +74,13 @@ def main() -> None:
     require(contract["claude_tool_prefix"] == derived_prefix, "contract tool prefix drifted")
     require(contract["revoked_claude_tool_prefixes"] == REVOKED_PREFIXES, "revoked prefixes drifted")
     require(derived_prefix not in REVOKED_PREFIXES, "canonical prefix is marked revoked")
+    return claude_plugin, derived_prefix, len(assertions)
+
+
+def check_versions(claude_plugin: dict) -> None:
+    """Post: Cargo, the plugin and every public manifest carry one stable version, and the
+    bootstrap's release pin names it."""
+    claude_marketplace = load(".claude-plugin/marketplace.json")
     cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     require(f'name = "{CANONICAL}"' in cargo, "Cargo package identity drifted")
     cargo_version = re.search(r'^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"', cargo, re.MULTILINE)
@@ -92,17 +102,28 @@ def main() -> None:
     bootstrap = (ROOT / "bin/ensure-binary.sh").read_text(encoding="utf-8")
     expected = re.search(r'^EXPECTED_VERSION="([^"]+)"$', bootstrap, re.MULTILINE)
     require(expected is not None and expected.group(1) == plugin_version, "bootstrap release pin drifted")
-    for label, path, variable in (
-        ("plugin", ".claude-plugin/plugin.json", "EXPECTED_PLUGIN_MANIFEST_SHA256"),
-        ("Cargo", "Cargo.toml", "EXPECTED_CARGO_MANIFEST_SHA256"),
-    ):
+
+
+def check_pins() -> None:
+    """Post: each bootstrap digest pin equals the digest of what it pins."""
+    bootstrap = (ROOT / "bin/ensure-binary.sh").read_text(encoding="utf-8")
+    for path, variable, scope in PINS:
         pinned = re.search(rf'^{variable}="([0-9a-f]{{64}})"$', bootstrap, re.MULTILINE)
-        actual = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-        require(pinned is not None and pinned.group(1) == actual, f"bootstrap {label} manifest digest drifted")
-    print(
-        f"DISTRIBUTION IDENTITY OK: {CANONICAL} across "
-        f"{len(assertions) + 2} declarations; Claude prefix {derived_prefix}"
-    )
+        try:
+            actual = digest(ROOT, path, scope)
+        except ValueError as refused:
+            raise SystemExit(f"bootstrap pin {variable} has nothing to pin: {refused}") from None
+        require(
+            pinned is not None and pinned.group(1) == actual,
+            f"bootstrap pin {variable} drifted from {path} ({scope})",
+        )
+
+
+def main() -> None:
+    claude_plugin, derived_prefix, declared = check_public_identity()
+    check_versions(claude_plugin)
+    check_pins()
+    print(f"DISTRIBUTION IDENTITY OK: {CANONICAL} across {declared + 2} declarations; Claude prefix {derived_prefix}")
 
 
 if __name__ == "__main__":
