@@ -71,7 +71,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   tampering followed such a byte hashed to the pinned digest. A manifest holding
   a NUL byte (BSD awk drops the rest of the line) and a manifest with no
   `[package]` table are refused on both sides; the gate and the re-pin script
-  never pin `sha256("")`.
+  never pin `sha256("")`. The unit-test step of the coverage job ran under
+  `bash -e` with a `| tail -5` and no `pipefail`, so a failing unit test could
+  not fail the job; it now can.
 
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every

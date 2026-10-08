@@ -229,7 +229,10 @@ jobs:
       # is worse than no gate, and finding that out after a 90-minute
       # instrumented build wastes the run. Stdlib-only, so it needs no setup.
       - name: Unit tests (doc-claims gate logic, all arms)
+        # pipefail: without it the step's status is tail's, and a failing test
+        # cannot fail the job.
         run: |
+          set -o pipefail
           python3 -m unittest \
             scripts/tests/test_check_doc_claims.py \
             scripts/tests/test_doc_claim_sources.py \
