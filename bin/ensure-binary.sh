@@ -29,7 +29,13 @@ EXPECTED_SIGNER_WORKFLOW="${EXPECTED_REPO}/.github/workflows/release.yml"
 # requires it to match Cargo.toml and every public manifest before merge.
 EXPECTED_VERSION="0.14.0"
 EXPECTED_PLUGIN_MANIFEST_SHA256="365ac94297e4d7ec5fcc79127db26c0665328fee766afa5e85ce55094e488db1"
-EXPECTED_CARGO_MANIFEST_SHA256="175aeea73945ecfdd7ce618f37f308861b091a293ea831c4fa342144c058a972"
+# The Cargo pin hashes the [package] table only (see cargo_package_table), never
+# the dependency tables: those are what Dependabot rewrites, and in marketplace
+# mode nothing builds from them - the binary is the attested release asset. The
+# table still binds the package name, version and metadata to the reviewed
+# release. scripts/bootstrap_pins.py defines the same bytes: both refuse a
+# manifest holding a NUL byte or no [package] table, and agree on every other.
+EXPECTED_CARGO_PACKAGE_SHA256="ae3f636e76eb32beac829a846cfbc625c7f7bc780e1051cce0db15328a100a43"
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BIN="$ROOT/target/release/ai-architect-mcp-codebase"
@@ -59,6 +65,37 @@ sha256_file() {
         sha256sum "$1" | awk '{print $1}'
     elif command -v shasum >/dev/null 2>&1; then
         shasum -a 256 "$1" | awk '{print $1}'
+    else
+        fatal "neither sha256sum nor shasum is available"
+    fi
+}
+
+# Pre: $MANIFEST exists.
+# Post: prints the [package] table of $MANIFEST - from its header up to, not
+# including, the next line that opens a table - one "\n"-terminated line each;
+# exits nonzero when the manifest holds a NUL byte (BSD awk drops the rest of
+# such a line, so the bytes after it would go unhashed) or no [package] table
+# (an empty table would pin nothing). LC_ALL=C: in a UTF-8 locale BSD awk
+# aborts on a byte that is not UTF-8, after printing the lines before it.
+cargo_package_table() {
+    [ "$(LC_ALL=C tr -d '\000' < "$MANIFEST" | wc -c)" -eq "$(wc -c < "$MANIFEST")" ] \
+        || return 1
+    LC_ALL=C awk '
+        /^\[package\][ \t]*$/ { inside = 1 }
+        inside && /^\[/ && !/^\[package\][ \t]*$/ { exit }
+        inside { print }
+        END { if (!inside) exit 3 }
+    ' "$MANIFEST"
+}
+
+# Post: prints the SHA-256 of the [package] table of $MANIFEST; exits nonzero
+# when cargo_package_table does (pipefail is set), so a caller must not compare
+# a digest it did not get.
+cargo_package_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        cargo_package_table | sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        cargo_package_table | shasum -a 256 | awk '{print $1}'
     else
         fatal "neither sha256sum nor shasum is available"
     fi
@@ -197,8 +234,10 @@ fi
 if [ "$marketplace_install" = "yes" ]; then
     [ "$(sha256_file "$PLUGIN_MANIFEST")" = "$EXPECTED_PLUGIN_MANIFEST_SHA256" ] \
         || fatal "plugin manifest does not match the reviewed release identity"
-    [ "$(sha256_file "$MANIFEST")" = "$EXPECTED_CARGO_MANIFEST_SHA256" ] \
-        || fatal "Cargo manifest does not match the reviewed release identity"
+    cargo_package_digest=$(cargo_package_sha256) \
+        || fatal "Cargo package table could not be extracted (NUL byte or no [package] table)"
+    [ "$cargo_package_digest" = "$EXPECTED_CARGO_PACKAGE_SHA256" ] \
+        || fatal "Cargo package table does not match the reviewed release identity"
     version="$EXPECTED_VERSION"
 
     # An obsolete or unreadable cache record falls through to the stricter

@@ -13,7 +13,7 @@ See @CONTRIBUTING.md for the layer rules and coding standards.
 
 - **This clone is live-mounted as the installed plugin.** `~/.claude/plugins/cache/.../0.9.x/target/release/ai-architect-mcp-codebase` symlinks here. Never `checkout`, `pull`, `stash` or build a different branch in it — the running MCP server dies. Work in a worktree: `git worktree add .claude/worktrees/<topic> -b <branch> origin/main`.
 - The launcher verifies the release binary's SHA-256 against a pin. A dev rebuild breaks it unless `AI_ARCHITECT_SOURCE_CHECKOUT=1` is exported (it is, in `~/.zshenv`). A dead server shows only as `MCP error -32000: Connection closed`; the real message appears when running `bin/launch-plugin.sh` manually **with `CLAUDE_PLUGIN_ROOT` set**.
-- `bin/ensure-binary.sh` pins the SHA-256 of `Cargo.toml` and `.claude-plugin/plugin.json`. Both drift whenever dependencies or version change — update them or CI fails.
+- `bin/ensure-binary.sh` pins the SHA-256 of `.claude-plugin/plugin.json` and of the `[package]` table of `Cargo.toml` (not the dependency tables, so a dependency bump leaves it valid). Both drift on a version bump or any `[package]` edit — run `python3 scripts/repin_bootstrap_digests.py` or CI fails.
 
 ## Commands
 

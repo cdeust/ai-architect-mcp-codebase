@@ -51,6 +51,30 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The bootstrap's `Cargo.toml` pin (`EXPECTED_CARGO_PACKAGE_SHA256`, renamed
+  from `EXPECTED_CARGO_MANIFEST_SHA256`) hashes the `[package]` table, not the
+  whole file. The whole-file pin made every Dependabot dependency bump fail CI on
+  "bootstrap Cargo manifest digest drifted" (#439 is the open case; the merged
+  bumps #306, #307 and #308 carry a hand-made edit to `bin/ensure-binary.sh`),
+  though nothing in marketplace mode builds from the dependency tables: the
+  launcher installs the attested release asset and only reads `Cargo.toml` in a
+  source checkout, where the pin is not checked. The
+  table still binds package name, version and metadata to the reviewed release;
+  a release re-pins with `scripts/repin_bootstrap_digests.py` as before.
+  `scripts/bootstrap_pins.py` is now the one definition the shell launcher, the
+  identity gate and the re-pin script share (the script's claim that a
+  pre-commit hook applies the re-pin automatically named a hook this repository
+  does not carry; the claim is removed). The launcher extracts the table with
+  `LC_ALL=C` awk and treats a failed extraction as fatal rather than comparing
+  its output: in a UTF-8 locale macOS `/usr/bin/awk` aborts on a byte that is
+  not UTF-8 after printing the lines before it, so a tampered table whose
+  tampering followed such a byte hashed to the pinned digest. A manifest holding
+  a NUL byte (BSD awk drops the rest of the line) and a manifest with no
+  `[package]` table are refused on both sides; the gate and the re-pin script
+  never pin `sha256("")`. The unit-test step of the coverage job ran under
+  `bash -e` with a `| tail -5` and no `pipefail`, so a failing unit test could
+  not fail the job; it now can.
+
 - `get_impact` no longer counts, as open call sites naming the target, the
   sites whose spelling names another owner (#392). The count took every
   unresolved call site by the bare method name, so `io::BufWriter::new` and
