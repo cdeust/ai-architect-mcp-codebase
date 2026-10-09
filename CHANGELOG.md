@@ -51,6 +51,128 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- C++ follow-ups of #406 (#412, points 1 and 2; point 3, the suffix matching of a
+  declared type, stays open on #412). Measured on ETLCPP 7d604f2e, `origin/main`
+  f4f88ea against this branch, over all 262,724 / 263,091 call sites (260,219 in
+  common). A macro that closes a brace the parser cannot see
+  (`ETL_DECLARE_ENUM_TYPE`, `ETL_ENUM_TYPE`, `ETL_END_ENUM_TYPE`) no longer makes the
+  class swallow the rest of the header: in `string_utilities.h`, 54 methods were
+  attributed to `string_pad_direction` and there are now 0 (`left_n` is `etl::left_n`);
+  the 18 `ETL_DECLARE_ENUM_TYPE` pseudo-methods of the corpus are gone too; 9 of the
+  334 headers declaring `namespace etl` had no `etl` node, 3 have none now. A
+  `catch (const E& e)` parameter types `e` in its handler only (`main` never typed
+  one). Every form the grammar has for declaring a name
+  (a parameter, a declaration, a structured binding, a range-for variable, the
+  init-statement or the declaration of an `if` / `switch` / `while`, a declaration
+  under a label or a `case`, a lambda parameter or init-capture, a `requires`
+  parameter, a `using ns::e;`, a declaration under `#if`) now declares its name where
+  a call reads it, with the type it writes or, when it writes none (a structured
+  binding, an init-capture, a `using`, `#if`), with no type: the call then has no
+  receiver type, where the walk used to reach an outer declaration of the same name (a
+  catch parameter, a local, a parameter) and bind its class. A declaration
+  `T x(args);` declares `x` of type `T` (the grammar reads a function declarator, C++ a
+  variable whenever the arguments are not types). This is the declaration
+  reader, not a rule about `catch`: a local `A e;` shadowed by `[e = B()]` bound
+  `A::m` on `main` and is open now. A name a macro declares (`MAKE(e);`) or a
+  statement `T (e);` (the grammar reads it as a call, C++ as a declaration) is not
+  read, as on `main` for a local. For a catch parameter, which `main` never typed, the
+  reader goes further: its type is used only when no statement before the call, in the
+  scopes between the handler and the call, is opaque (ADR-9847). A statement is opaque
+  when an identifier written in upper case (two characters or more: a macro name, also
+  as a type, a namespace, a label or a member) or the name itself, written where it is
+  not the object of `e.x`, `e->x` or `e[i]`, is anywhere in it: `B DECL_E = B();`,
+  `B DECL_E [[maybe_unused]];`, `DECLARE(B, e), g();`, a lambda or handler parameter
+  (`[](B DECL_E)`), a capture, `using ns::DECL_E;`, `for (B DECL_E : ys)`,
+  `if (B DECL_E = B(); 1)`, `handle(e);`, `close(FD);`. Skipped when the node parsed
+  whole: the initial value, the size of an array, the parameters of a declared
+  function, the test of an `#if`. A closed scope (an `if`, a loop, a `switch`, a `try`,
+  a block), a type (`typedef`, `using X = T`) and a jump do not make a statement
+  opaque (`co_yield` is no jump: what follows it runs); a declaration the parser read
+  whole, and the type and variable of a range-for, are read by the reader and only
+  their macro names count. The variable of a range-for is visible after its range, in
+  the body (ISO C++ [stmt.ranged]). Directives are read from the text, not the tree: the
+  guard declines when the text between the start of the handler's body and the call
+  holds a directive that is not a conditional one (`#include`, `#define`, `#undef`,
+  `#pragma`, `#error`, `#line`, ...; `#if`, `#ifdef`, `#else`, `#endif` and their kin
+  are not) or a byte the rewrite erased: the text the walkers read marks the bytes it
+  blanked (`DECL_E int s;`). The price is a catch type not read past such a statement, where
+  `main` is open too: a loop bound or a test written with a macro (`i < MAX_N`), a local
+  with an upper case name or type (`const int MAX = 3;`, `DWORD n;`), a call that takes
+  the catch parameter outside a read (`handle(e);`), `asm` that names it, and a closed
+  block under a `case` or a label. Not read, so the type stays: a macro whose expansion
+  ends the statement it is written in and opens another (`int x = DECL_REST;` with
+  `DECL_REST` = `0; B e`; `if (1) REDECL(e);`; `WRAP(e.m())`), a macro in lower case
+  or mixed case, or of one character (`B X;`; mixed case: `Py_DECL_E`, `Q_DeclE`,
+  `DeclE(B)`, `MyDecl`, `B Decl_E;`: they look like CamelCase type and function names,
+  and declining them would cut the typing of most handlers). A macro
+  before a statement keyword (`DECL_E return e.m();`) is not blanked as a specifier:
+  the statement is a parse error and its call is not extracted, where `main` blanks the
+  macro and records an open site (no site of the corpus is lost to it). A
+  template parameter gives no receiver type. A
+  base class list is split at the commas outside generic arguments
+  (`etl::iterator<tag, const T>` is one base, not two); the copies of the
+  generic-argument stripping and splitting are one helper (`parser::generic_args`). A
+  `typedef` or `using` a source file (`.cpp`) writes is seen by a file that can be
+  compiled with it in one translation unit: the file includes it, the file is
+  included by it (`using String = A;` written before `#include "impl.h"`), or a third
+  file includes both (the order of the includes is not read); a `typedef` or `using`
+  written in a header is seen by every file; no other file sees a `.cpp` alias. The
+  path of an `#include` is read from the directive's `path` node, not from its text:
+  a comment or blanks after the path, or blanks after `#`, leave the include read. An
+  `#include` whose path is not a `"..."` or `<...>` path (a macro, `#include UNIT` or
+  `#include unit_u`, or a call, `#include PICK(x)`) is computed: it may include any
+  file, two at once, so when one exists anywhere, every pair of files may share a
+  translation unit. A unit the build makes without an `#include` (a unity or jumbo
+  build: CMake `UNITY_BUILD`, `-include` or `/FI`), where files that do not include
+  each other share a unit, is not read.
+  The extensions `c++` and `ipp` are read as C++ like the other C++ ones. A conversion
+  function (`operator int() const`, defined in its class or out of it) is a Method
+  named `operator` and its type up to the parameter list (`operator int`,
+  `operator const char*`), the caller of the calls of its body; `main` emitted no node
+  for it. The mask that blanks the macro statements of a class leaves the body of an
+  `enum class` alone (an enumerator alone in it, `enum class E { B_Y };`, was blanked).
+  A typed
+  receiver is still read by path suffix, as on `main`: one class of that name binds,
+  several leave the site open. Which declaration of a type name C++ reaches (a
+  using-declaration, a member type, a local class, a declaring macro) is not read.
+
+  Measured on the corpus (`tasks/fix-438-r7/measure_numbers.py`). Sites are matched by
+  their id without the `#n` suffixes: a conversion function, named for the first time,
+  shifts the `#n` of the later definitions of its file. None of the 260,219 common
+  sites bound on both sides is retargeted (0; by position, `bitset_new.h:2559:5`
+  (`lhs.swap(rhs)`) goes from `bitset_legacy.h::etl::ibitset::swap` on `main`, wrong,
+  to `bitset_new.h::etl::bitset::swap`, right, and 115 more change their class path
+  inside the same file). 1,908 calls bound on main are open
+  (1,283 `declined_by_scope`: `String` 1,110, `View` 132, `Observable` 17, `NDC` 12,
+  `ItemNDC` 11, `Data` 1; and 625 `ambiguous_candidates`, all `etl::bitset`). 3,348
+  calls open on main are bound: 1,507 because a file sees an alias (1,386
+  `declined_by_scope`, 121 `ambiguous_candidates`; by `receiver_hint_via`:
+  `cpp-qualifier` 1,057, `cpp-declared` 450) and 1,841 because the reader names a
+  declaration (all `no_receiver_type` on main, all `cpp-declared`). Of the 450, 326
+  are classes whose path was wrong on main because of the macros above and is right
+  now (`etl::bitset_ext` 170, `etl::bit_stream_reader` 58, `etl::bit_stream` 39,
+  `etl::to_arithmetic_result` 35, `etl::bit_stream_writer` 22,
+  `bit_stream_writer::callback_parameter_type` 2); then `QueueInt` 110 (its base
+  `etl::queue_lockable<int, 4>` was cut at the comma), `test_variant_3a` 10 and `Data`
+  4 (a `using` the calling file writes). Of the 1,841, 1,557 are 14 classes
+  (`Data` 254, `etl::bitset_ext` 254, `DataTransparentComparator` 208,
+  `etl::message_timer_locked` 154, `etl::callback_timer_locked` 146,
+  `etl::callback_timer_deferred_locked` 144, `etl::poly_span` 74,
+  `etl::queue_spsc_locked` 67, `etl::pool_ext` 66, `BresenhamLine` 63,
+  `codec_larger_buffer` 36, `codec` 36, `QueueInt` 30, `etl::span` 25). Two calls the
+  reader could type (`file_name()` and `line_number()` in `test_exception.cpp`,
+  `etl::exception`) are declined after a `CHECK_EQUAL(...)` statement; they are open on
+  `main` too. 13,133 calls open on both sides change their `unresolved_reason`: 5,728
+  `ambiguous_candidates` -> `declined_by_scope`, 3,750 `no_receiver_type` ->
+  `declined_by_scope`, 1,626 `no_receiver_type` -> `ambiguous_candidates`, 1,074
+  `declined_by_scope` -> `ambiguous_candidates`, 892 `declined_by_scope` ->
+  `no_receiver_type`, 44 `no_receiver_type` -> `not_found`, 9 `ambiguous_candidates` ->
+  `not_a_call`, 7 `declined_by_scope` -> `not_a_call`, 2 `no_receiver_type` ->
+  `unknown_callee`, 1 `unknown_callee` -> `no_receiver_type`; none of them becomes
+  bound. The head has 106 sites that `main` and the earlier heads do not: the calls in
+  the bodies of conversion functions (`operator bool() const { return has_value(); }`),
+  in 30 files, 32 bound and 74 open.
+
 - The bootstrap's `Cargo.toml` pin (`EXPECTED_CARGO_PACKAGE_SHA256`, renamed
   from `EXPECTED_CARGO_MANIFEST_SHA256`) hashes the `[package]` table, not the
   whole file. The whole-file pin made every Dependabot dependency bump fail CI on

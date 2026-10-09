@@ -87,6 +87,10 @@ pub(crate) struct DeclaratorNaming {
     /// pointer/reference ABOVE the function_declarator is a pointer/reference
     /// RETURN type (`int *f()`), which stays a prototype.
     pub indirection_declarator_kinds: &'static [&'static str],
+    /// The kind that declares a conversion function (C++ `operator_cast`: `operator
+    /// int() const`), named `operator` and its type up to the parameter list. `None`
+    /// for C, which has none.
+    pub cast_operator_kind: Option<&'static str>,
 }
 
 pub(crate) struct CFamilySpec {

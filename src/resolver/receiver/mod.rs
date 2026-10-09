@@ -164,14 +164,7 @@ pub(super) fn impl_qn_of(caller_qn: &str) -> Option<&str> {
     caller_qn.rsplit_once("::").map(|(impl_qn, _)| impl_qn)
 }
 
-/// Strips a trailing generic-parameter list: `Wrapper<T>` -> `Wrapper`.
-/// postcondition: returns `s` unchanged when it has no `<`.
-pub(super) fn strip_generics(s: &str) -> &str {
-    match s.find('<') {
-        Some(i) => &s[..i],
-        None => s,
-    }
-}
+pub(super) use crate::parser::generic_args::strip_generics;
 
 /// Resolves a same-class receiver call (`self.`/`Self::`/`this.`) against
 /// the caller's enclosing type, per plan §2.2 paliers 1-2 (issues #283,
@@ -353,12 +346,6 @@ mod tests {
     #[test]
     fn impl_qn_of_none_without_separator() {
         assert_eq!(impl_qn_of("total"), None);
-    }
-
-    #[test]
-    fn strip_generics_removes_trailing_params() {
-        assert_eq!(strip_generics("Wrapper<T>"), "Wrapper");
-        assert_eq!(strip_generics("TaskSet"), "TaskSet");
     }
 
     // --- resolve_receiver_bound: palier 1 ----------------------------------

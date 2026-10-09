@@ -121,13 +121,7 @@ impl LanguageConventions for ObjcConventions {
         if import_stmt.kind() == "module_import" {
             module_import_entry(source, import_stmt, scope)
         } else {
-            c_family::include_entry(
-                source,
-                import_stmt,
-                scope,
-                &["#import", "#include"],
-                "import:",
-            )
+            c_family::include_entry(source, import_stmt, scope, "import:")
         }
     }
 }

@@ -40,6 +40,7 @@ use super::imports::{caller_scope, scope_module_path, ModuleImports};
 use super::reexport;
 use super::*;
 use crate::graph_store::import_roots::CrateEvidence;
+use crate::parser::generic_args::strip_generic_groups;
 
 /// The read-only facts a path is read with.
 pub(in crate::resolver) struct PathFacts<'e> {
@@ -283,16 +284,10 @@ pub(super) fn library_owns(evidence: &CrateEvidence, lib: &str, file: &str) -> b
 /// The segments of a path, generic arguments removed from each (`Gen<T>` is
 /// `Gen`); leading and trailing `::` are dropped.
 pub(super) fn path_segments(path: &str) -> Vec<String> {
-    let mut depth = 0usize;
-    let mut plain = String::with_capacity(path.len());
-    for ch in path.chars() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            _ if depth == 0 && !ch.is_whitespace() => plain.push(ch),
-            _ => {}
-        }
-    }
+    let plain: String = strip_generic_groups(path)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     plain
         .split("::")
         .filter(|s| !s.is_empty())

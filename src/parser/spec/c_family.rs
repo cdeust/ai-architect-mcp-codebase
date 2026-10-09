@@ -8,8 +8,7 @@
 // dedup is needed), a call site is keyed `{caller}::call@{line}:{col}#{seq}`
 // with a `callee_name` property (C and C++ add `callee_shape`, issue #401), and
 // a `#include`/`#import` directive is
-// shaped into one `Import` by stripping the directive and the `<>`/`""`
-// delimiters. These were duplicated VERBATIM in `CConventions` (c.rs) and
+// shaped into one `Import` from its `path` field. These were duplicated VERBATIM in `CConventions` (c.rs) and
 // `CppConventions` (cpp.rs); Objective-C is the third use, which crosses §3.3
 // ("three concrete uses before extracting"), so the shared parts move here.
 //
@@ -355,46 +354,99 @@ pub(super) fn call_entry(call_node: Node, caller_qn: &str, callee: &str, seq: u6
     }
 }
 
-/// One `#include` / `#import` directive → one `Import`. Strips the directive
-/// keyword (`directives`, tried in order) and the `<>`/`""` delimiters; the
-/// display name is the path's last `/`-segment, the QN is
-/// `{scope}::include:{path}` (prefix supplied by the caller), and the edge
-/// target is the full cleaned path. Reproduces the hand-written C / C++
-/// `extract_include`.
-///
-/// `qn_prefix` is the QN discriminator each language uses (`include:` for
-/// C/C++, `import:` for Objective-C's `#import`), so the shared shaping does not
-/// force a single QN scheme on the family.
+/// One `#include` / `#import` directive → one `Import`, read from the directive's
+/// `path` field: a `"…"` or `<…>` path without its delimiters, or the text of a
+/// computed path (`#include UNIT`, any other kind of node), which also gets
+/// `is_glob = true`: it may paste any file. The display name is the path's last
+/// `/`-segment, the QN `{scope}::{qn_prefix}{path}`, the edge target the path.
+/// `qn_prefix` is `include:` for C/C++, `import:` for Objective-C's `#import`.
+/// source: tree-sitter-c/-cpp 0.23.4, -objc 3.0.2 node-types.json (`path` field).
 pub(super) fn include_entry(
     source: &str,
     node: Node,
     scope: &str,
-    directives: &[&str],
     qn_prefix: &str,
 ) -> Vec<ImportEntry> {
-    let mut text = node_text(source, node);
-    text = text.trim().to_string();
-    for d in directives {
-        text = text.trim_start_matches(d).to_string();
-    }
-    let cleaned = text
-        .trim()
-        .trim_matches('<')
-        .trim_matches('>')
-        .trim_matches('"')
-        .trim()
-        .to_string();
-    if cleaned.is_empty() {
+    let Some((cleaned, computed)) = include_path(source, node) else {
         return Vec::new();
-    }
+    };
     let display_name = cleaned.rsplit('/').next().unwrap_or(&cleaned).to_string();
+    let mut properties = vec![("path".to_string(), cleaned.clone())];
+    if computed {
+        properties.push(("is_glob".to_string(), "true".to_string()));
+    }
     vec![ImportEntry {
         display_name,
         qualified_name: qual(scope, &format!("{qn_prefix}{cleaned}")),
-        ref_to: cleaned.clone(),
-        properties: vec![("path".to_string(), cleaned)],
+        ref_to: cleaned,
+        properties,
         visibility: public_visibility(),
         start_line: node.start_position().row as u64 + 1,
         end_line: node.end_position().row as u64 + 1,
     }]
+}
+
+/// The path an include directive names and whether it is computed (a macro, not a
+/// `string_literal` or a `system_lib_string`); `None` when the path is empty.
+fn include_path(source: &str, node: Node) -> Option<(String, bool)> {
+    let path = node.child_by_field_name("path")?;
+    let text = node_text(source, path);
+    let (cleaned, computed) = match path.kind() {
+        "string_literal" => (text.trim_matches('"').to_string(), false),
+        "system_lib_string" => (
+            text.trim_start_matches('<')
+                .trim_end_matches('>')
+                .to_string(),
+            false,
+        ),
+        _ => (text, true),
+    };
+    let cleaned = cleaned.trim().to_string();
+    (!cleaned.is_empty()).then_some((cleaned, computed))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parser::{parse_file, Language};
+
+    /// `(path, properties)` of every `Import` the C++ parser reads in `src`.
+    fn imports(src: &str) -> Vec<(String, Vec<(String, String)>)> {
+        let r = parse_file(src, "a.cpp", Language::Cpp).expect("cpp parse");
+        r.nodes
+            .into_iter()
+            .filter(|n| n.label == "Import")
+            .map(|n| (n.name, n.properties))
+            .collect()
+    }
+
+    fn path(p: &str) -> (String, String) {
+        ("path".to_string(), p.to_string())
+    }
+
+    fn glob() -> (String, String) {
+        ("is_glob".to_string(), "true".to_string())
+    }
+
+    /// A `"…"` or `<…>` path is read without its delimiters and is not computed; a
+    /// macro, upper or lower case, is computed. A comment or blanks around the path,
+    /// and blanks after `#`, leave the path as written. source: tree-sitter-cpp 0.23.4
+    /// node-types.json (`preproc_include.path`).
+    #[test]
+    fn an_include_path_is_read_from_its_node_and_a_macro_path_is_computed() {
+        for (src, expected) in [
+            ("#include <vector>\n", vec![path("vector")]),
+            ("#include \"a/b.h\"\n", vec![path("a/b.h")]),
+            ("#include \"u.cpp\" // alias\n", vec![path("u.cpp")]),
+            ("# include \"u.cpp\"\n", vec![path("u.cpp")]),
+            ("#include /* a */ \"u.cpp\"\n", vec![path("u.cpp")]),
+            ("#include UNIT\n", vec![path("UNIT"), glob()]),
+            ("#include unit_u\n", vec![path("unit_u"), glob()]),
+            ("#include UNIT_U // c\n", vec![path("UNIT_U"), glob()]),
+            ("#  include UNIT_U\n", vec![path("UNIT_U"), glob()]),
+        ] {
+            let found = imports(src);
+            assert_eq!(found.len(), 1, "{src}: {found:?}");
+            assert_eq!(found[0].1, expected, "{src}");
+        }
+    }
 }

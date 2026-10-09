@@ -40,9 +40,10 @@ mod typescript;
 pub(crate) use defs::walk_defs;
 pub(super) use types::collect_bases;
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Tree};
 
 use super::lang_spec::LangSpec;
 use crate::parser::{
@@ -169,30 +170,9 @@ fn parse_with_spec_twins(
     parser
         .set_language(&lang)
         .map_err(|e| format!("failed to set {:?} language: {e}", spec.language))?;
-    let mut tree = parse_with_timeout(&mut parser, source)?;
-    // Issue #410: unknown specifier macros turn a C++ header into ERROR nodes. A
-    // retry with them blanked (same length) replaces the parse only when it has
-    // fewer errors, so a file that parses cleanly is never touched.
-    let mut rewritten: Option<String> = None;
-    if spec.language == Language::Cpp {
-        let mut best = count_parse_errors(tree.root_node());
-        if best > 0 {
-            let defined = count_type_definitions(tree.root_node());
-            for variant in super::cpp_macro_mask::variants(source) {
-                let Ok(retry) = parse_with_timeout(&mut parser, &variant) else {
-                    continue;
-                };
-                let errors = count_parse_errors(retry.root_node());
-                let kept = count_type_definitions(retry.root_node());
-                if keeps_rewrite((best, defined), (errors, kept)) {
-                    best = errors;
-                    rewritten = Some(variant);
-                    tree = retry;
-                }
-            }
-        }
-    }
-    let source = rewritten.as_deref().unwrap_or(source);
+    let tree = parse_with_timeout(&mut parser, source)?;
+    let (tree, rewritten) = cpp_rewrite(spec.language, &mut parser, source, tree);
+    let source: &str = &walker_text(source, rewritten.as_deref());
     // Depth guard (issue #148): the definition walkers recurse one frame per tree
     // level, so a pathologically deep error-recovery tree would overflow the
     // stack or exhaust the heap. Reject before walking — a clean `Err` the
@@ -202,7 +182,6 @@ fn parse_with_spec_twins(
             "parse_tree_too_deep: exceeds {MAX_TREE_DEPTH} levels (adversarial or generated nesting)"
         ));
     }
-
     let track_gates = twin_identity && spec.rust_family.is_some() && source.contains("cfg");
     let mut ctx = WalkCtx::new(
         source,
@@ -223,6 +202,50 @@ fn parse_with_spec_twins(
         parse_errors: count_parse_errors(tree.root_node()),
         error_ranges: collect_error_ranges(tree.root_node()),
     })
+}
+
+/// Issue #410: unknown specifier macros turn a C++ header into ERROR nodes. A retry
+/// with them blanked (same length) replaces the parse only when it has fewer errors,
+/// so a file that parses cleanly, or that is not C++, keeps its parse. Returns the
+/// tree kept and, when a retry won, the rewritten text it parsed.
+fn cpp_rewrite(
+    language: Language,
+    parser: &mut Parser,
+    source: &str,
+    tree: Tree,
+) -> (Tree, Option<String>) {
+    if language != Language::Cpp {
+        return (tree, None);
+    }
+    let mut best = count_parse_errors(tree.root_node());
+    if best == 0 {
+        return (tree, None);
+    }
+    let defined = count_type_definitions(tree.root_node());
+    let (mut tree, mut rewritten) = (tree, None);
+    for variant in super::cpp_macro_mask::variants(source) {
+        let Ok(retry) = parse_with_timeout(parser, &variant) else {
+            continue;
+        };
+        let errors = count_parse_errors(retry.root_node());
+        let kept = count_type_definitions(retry.root_node());
+        if keeps_rewrite((best, defined), (errors, kept)) {
+            best = errors;
+            rewritten = Some(variant);
+            tree = retry;
+        }
+    }
+    (tree, rewritten)
+}
+
+/// The text the walkers read: `source`, or the rewritten text with the bytes the
+/// rewrite erased marked (same length, same offsets as the tree). The guard of a
+/// catch parameter looks for the mark: an erased macro may have declared the name.
+fn walker_text<'a>(source: &'a str, rewritten: Option<&str>) -> Cow<'a, str> {
+    match rewritten {
+        Some(blanked) => Cow::Owned(super::cpp_unreadable::mark_erased(source, blanked)),
+        None => Cow::Borrowed(source),
+    }
 }
 
 /// The (label, qualified name) pairs of `ctx`'s nodes that more than one item
