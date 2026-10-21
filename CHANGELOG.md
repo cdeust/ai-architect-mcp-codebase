@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- The Claude Code PR review no longer checks out PR code in a privileged workflow (CodeQL `actions/untrusted-checkout/high`, `actions/untrusted-checkout-toctou/high`): the review job moves to `.github/workflows/claude-review.yml`, triggered by `pull_request` only, and `.github/workflows/claude.yml` keeps only the `@claude` job on its comment, review and issue triggers, with no PR head checkout.
+
 ### Added
 
 - `.github/workflows/claude.yml`: every push to a PR runs a Claude Code review (`/code-review` then `/security-review`, one cycle), applies the findings and arms squash auto-merge; `@claude` in a comment or issue runs Claude on that request. Action pinned by SHA (anthropics/claude-code-action v1.0.256).
