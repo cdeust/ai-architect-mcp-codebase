@@ -1,0 +1,21 @@
+name: Claude bot
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+  checks: read
+  statuses: write
+jobs:
+  claude:
+    uses: cdeust/Cortex/.github/workflows/shared-claude.yml@4f2e993b026ebb4d2e4de171f51cc422ebf26aef
+    with:
+      engine-ref: 4f2e993b026ebb4d2e4de171f51cc422ebf26aef
+      auto-merge: ${{ vars.CLAUDE_AUTOMERGE == 'true' }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

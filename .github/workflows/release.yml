@@ -38,7 +38,7 @@ on:
           for that tag must already be public (not draft) with the .mcpb
           asset attached — this path does not rebuild or re-release
           anything, it only (re)publishes server.json to the registry.
-          Required for workflow_dispatch; the workflow refuses to guess.
+          Leave empty only when dispatching on an existing v* tag to build the full release.
         required: false
         type: string
 
@@ -65,7 +65,7 @@ jobs:
   # release, leaving Cortex's installer with no darwin asset.
   create_release:
     name: create release (${{ github.ref_name }})
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag == ''))
     runs-on: ubuntu-latest
     # Creates the release and uploads notes; no attestation here.
     permissions:
@@ -101,7 +101,7 @@ jobs:
   build:
     name: build (${{ matrix.target_tag }})
     needs: create_release
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag == ''))
     strategy:
       fail-fast: false
       matrix:
@@ -190,7 +190,7 @@ jobs:
       # install ships libssl.lib / libcrypto.lib either way, so the shim
       # copies both name pairs rather than betting on whichever convention
       # the pinned lbug version currently wants. Kept byte-identical with the
-      # same step in windows-build.yml, which is what proves it works before
+      # same shim in .github/ci/windows-openssl.sh, which exercises it before
       # a tag exists.
       - name: Provide ssl.lib/crypto.lib and libssl.lib/libcrypto.lib to the MSVC linker (windows)
         if: startsWith(matrix.runner, 'windows')
@@ -320,7 +320,7 @@ jobs:
   sbom:
     name: SBOM (CycloneDX)
     needs: create_release
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag == ''))
     runs-on: ubuntu-latest
     # Uploads the SBOM asset and records signed provenance for it.
     permissions:
@@ -382,7 +382,7 @@ jobs:
   package_mcpb:
     name: package .mcpb bundle
     needs: build
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag == ''))
     runs-on: ubuntu-latest
     # Uploads the .mcpb asset and records signed provenance for it.
     permissions:
@@ -495,7 +495,7 @@ jobs:
   verify_staged_assets:
     name: verify staged release contract
     needs: [build, sbom, package_mcpb]
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag == ''))
     outputs:
       checksums: ${{ steps.verify.outputs.checksums }}
       inventory_sha: ${{ steps.verify.outputs.inventory_sha }}
@@ -600,7 +600,7 @@ jobs:
   publish_verified_release:
     name: publish verified release
     needs: verify_staged_assets
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag == ''))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -687,7 +687,7 @@ jobs:
       ]
     if: |
       always() &&
-      (github.event_name == 'workflow_dispatch' || needs.publish_verified_release.result == 'success')
+      ((github.event_name == 'workflow_dispatch' && inputs.tag != '') || needs.publish_verified_release.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -701,7 +701,7 @@ jobs:
         id: resolve
         run: |
           set -euxo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
             TAG="${{ inputs.tag }}"
             if [ -z "$TAG" ]; then
               echo "::error::workflow_dispatch requires a 'tag' input (e.g. v0.9.1) — refusing to guess which release to publish."

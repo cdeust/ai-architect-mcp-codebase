@@ -1,0 +1,32 @@
+{
+  "python_version": "3.12",
+  "rust_toolchain": "1.95.0",
+  "rust_components": [
+    "llvm-tools-preview"
+  ],
+  "linux_packages": [
+    "libzstd-dev",
+    "pkg-config",
+    "cmake"
+  ],
+  "environment_runners": [
+    "windows-latest"
+  ],
+  "version_source": "Cargo.toml:package.version",
+  "tag_prefix": "v",
+  "coverage_tool": "cargo-llvm-cov@0.8.7",
+  "schema_version": 1,
+  "source_sha": "5c2e138f950f4cde34b0bd10c4c5b7ba6be89d34",
+  "postgres": false,
+  "runner": "ubuntu-latest",
+  "categories": {
+    "unit": "bash .github/ci/run.sh unit",
+    "regression": "bash .github/ci/run.sh regression",
+    "e2e": "bash .github/ci/run.sh e2e",
+    "environment": "bash .github/ci/run.sh environment",
+    "installation": "bash .github/ci/run.sh installation"
+  },
+  "release_workflows": [
+    "release.yml"
+  ]
+}
