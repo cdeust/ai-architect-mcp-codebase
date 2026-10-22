@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
   runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov
   --cobertura`), regression (`graph_accuracy`), e2e (the shipped Claude
