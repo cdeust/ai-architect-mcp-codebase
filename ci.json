@@ -1,0 +1,7 @@
+{
+  "unit": "sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libzstd-dev pkg-config cmake && rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked --version '^0.8' && cargo llvm-cov --workspace --locked --cobertura --output-path coverage.xml",
+  "regression": "sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libzstd-dev pkg-config cmake && cargo test --locked --test graph_accuracy",
+  "e2e": "sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libzstd-dev pkg-config cmake && cargo build --release --locked --bin ai-architect-mcp-codebase && CLAUDE_PLUGIN_ROOT=\"$PWD\" python3 scripts/smoke_claude_plugin.py",
+  "environment": "cargo run --release --locked --bin ai-architect-mcp-codebase -- install --dry-run",
+  "install": "claude plugin marketplace add \"$PWD\" && claude plugin install ai-architect-mcp-codebase@ai-architect-mcp-codebase-marketplace && root=\"$(claude plugin list --json | jq -r '.[] | select(.id | startswith(\"ai-architect-mcp-codebase@\")) | .installPath')\" && test -n \"$root\" && python3 \"$root/scripts/smoke_claude_plugin.py\""
+}
