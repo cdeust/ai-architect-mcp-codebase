@@ -8,6 +8,20 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
+  runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov
+  --cobertura`), regression (`graph_accuracy`), e2e (the shipped Claude
+  launcher smoke), environment (`install --dry-run` built from source on
+  ubuntu, macOS and Windows, bare runner plus the pinned Claude Code CLI) and
+  install (`claude plugin install` from the checkout into a fresh `HOME`, then
+  the installed copy's own smoke), then the bot's review and fix, then the
+  squash auto-merge; a release tag on push to main. The commands live in
+  `ci.json`. The existing workflows are untouched. Red on day one: the
+  released v0.14.0 binary lists 26 tools where HEAD's smoke expects 27, so
+  `install` is red until the next release; Windows is refused by
+  `bin/ensure-binary.sh`; line coverage is under 90 % (the previous CI floor
+  is 80 %, ci.yml).
+
 - `check_doc_claims`, a read-only tool that checks what a document says about
   the code against the graph, one claim at a time (part 1 of 3 of the
   claim-to-evidence matrix). The caller supplies each claim with the exact text
