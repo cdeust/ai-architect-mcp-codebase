@@ -1,0 +1,5 @@
+# Keep the exact reviewed bytes used by bootstrap identity pins on every host.
+/Cargo.toml text eol=lf
+/.claude-plugin/plugin.json text eol=lf
+# Bash scripts must retain LF endings after a Windows checkout.
+*.sh text eol=lf
