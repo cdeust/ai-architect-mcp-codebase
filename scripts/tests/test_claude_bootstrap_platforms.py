@@ -59,7 +59,15 @@ exit "$PROVENANCE_STATUS"
 
 class BootstrapPlatforms(unittest.TestCase):
     def exercise(
-        self, system, machine, target, *, checksum_ok=True, provenance_ok=True
+        self,
+        system,
+        machine,
+        target,
+        *,
+        checksum_ok=True,
+        provenance_ok=True,
+        windows_checkout=False,
+        manifest_edit=None,
     ):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -73,6 +81,31 @@ class BootstrapPlatforms(unittest.TestCase):
                 ".claude-plugin/plugin.json",
             ):
                 shutil.copy2(ROOT / name, plugin / name)
+            if windows_checkout:
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(ROOT),
+                        "-c",
+                        "core.autocrlf=true",
+                        "checkout-index",
+                        "--force",
+                        f"--prefix={plugin.as_posix()}/",
+                        "--",
+                        "Cargo.toml",
+                        ".claude-plugin/plugin.json",
+                        "bin/ensure-binary.sh",
+                        "bin/launch-plugin.sh",
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+            if manifest_edit:
+                manifest = plugin / manifest_edit
+                manifest.write_bytes(
+                    manifest.read_bytes().replace(b"0.14.0", b"0.14.1")
+                )
             windows = system.startswith(("MINGW", "MSYS", "CYGWIN"))
             name = "ai-architect-mcp-codebase" + (".exe" if windows else "")
             assets, asset, payload = make_archive(base, name, target, checksum_ok)
@@ -95,7 +128,12 @@ class BootstrapPlatforms(unittest.TestCase):
             result = subprocess.run(
                 command, env=environment, capture_output=True, text=True
             )
-            if target == "unsupported" or not checksum_ok or not provenance_ok:
+            if (
+                target == "unsupported"
+                or not checksum_ok
+                or not provenance_ok
+                or manifest_edit
+            ):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((plugin / "target/release" / name).exists())
                 return result.stderr
@@ -137,6 +175,29 @@ class BootstrapPlatforms(unittest.TestCase):
         for system, machine, target in cases:
             with self.subTest(system=system, machine=machine):
                 self.exercise(system, machine, target)
+
+    def test_windows_checkout_preserves_reviewed_release_identity(self):
+        # PR461: checkout with CRLF defaults changed pinned manifest bytes.
+        self.exercise(
+            "MINGW64_NT-10.0", "x86_64", "windows-x86_64", windows_checkout=True
+        )
+
+    def test_windows_checkout_still_rejects_modified_release_identity(self):
+        for manifest, message in (
+            (".claude-plugin/plugin.json", "plugin manifest does not match"),
+            ("Cargo.toml", "Cargo package table does not match"),
+        ):
+            with self.subTest(manifest=manifest):
+                self.assertIn(
+                    message,
+                    self.exercise(
+                        "MINGW64_NT-10.0",
+                        "x86_64",
+                        "windows-x86_64",
+                        windows_checkout=True,
+                        manifest_edit=manifest,
+                    ),
+                )
 
     def test_windows_checksum_and_provenance_remain_required(self):
         self.assertIn(
