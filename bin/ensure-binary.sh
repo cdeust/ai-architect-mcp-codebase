@@ -38,7 +38,11 @@ EXPECTED_PLUGIN_MANIFEST_SHA256="365ac94297e4d7ec5fcc79127db26c0665328fee766afa5
 EXPECTED_CARGO_PACKAGE_SHA256="ae3f636e76eb32beac829a846cfbc625c7f7bc780e1051cce0db15328a100a43"
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-BIN="$ROOT/target/release/ai-architect-mcp-codebase"
+BINARY_NAME="ai-architect-mcp-codebase"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) BINARY_NAME="$BINARY_NAME.exe" ;;
+esac
+BIN="$ROOT/target/release/$BINARY_NAME"
 DIGEST_FILE="$BIN.sha256"
 MANIFEST="$ROOT/Cargo.toml"
 PLUGIN_MANIFEST="$ROOT/.claude-plugin/plugin.json"
@@ -277,8 +281,9 @@ if [ "$marketplace_install" = "yes" ]; then
         Darwin-arm64) release_target="macos-aarch64" ;;
         Linux-x86_64) release_target="linux-x86_64" ;;
         Linux-aarch64) release_target="linux-aarch64" ;;
+        MINGW*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64) release_target="windows-x86_64" ;;
         *)
-            fatal "unsupported plugin platform $(uname -s)/$(uname -m); supported: macOS arm64, Linux x86_64, Linux aarch64"
+            fatal "unsupported plugin platform $(uname -s)/$(uname -m); supported: macOS arm64, Linux x86_64, Linux aarch64, Windows x86_64 (Git Bash)"
             ;;
     esac
 
@@ -307,7 +312,7 @@ if [ "$marketplace_install" = "yes" ]; then
     # symlinks, hardlinks, devices, ownership and permission metadata from
     # reaching the plugin cache. mv publishes the verified binary atomically.
     staged_bin="$download_dir/ai-architect-mcp-codebase.verified"
-    tar -xzOf "$download_dir/$asset" ai-architect-mcp-codebase > "$staged_bin" \
+    tar -xzOf "$download_dir/$asset" "$BINARY_NAME" > "$staged_bin" \
         || fatal "release archive does not contain the expected binary"
     [ -s "$staged_bin" ] || fatal "release binary is empty"
     chmod 0755 "$staged_bin"
