@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,64 @@ SPEC = importlib.util.spec_from_file_location(
 )
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
+
+with patch.object(sys, "path", [str(smoke.ROOT / "scripts"), *sys.path]):
+    import check_distribution_identity as identity
+
+
+class DistributionIdentityTests(unittest.TestCase):
+    """The shipped Bash entrypoint retains the distribution trust boundaries."""
+
+    def check_with_manifest(self, path, value):
+        original = identity.load
+        with patch.object(
+            identity,
+            "load",
+            side_effect=lambda name: value if name == path else original(name),
+        ):
+            identity.main()
+
+    def test_shipped_manifest_and_release_pins_pass_full_identity_check(self):
+        identity.main()
+
+    def test_launcher_rejects_alternate_commands_paths_and_extra_arguments(self):
+        launcher = "${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh"
+        configurations = (
+            {"command": launcher, "args": []},
+            {"command": "sh", "args": [launcher]},
+            {"command": "bash", "args": []},
+            {"command": "bash", "args": [launcher, "--profile", "core"]},
+            {"command": "bash", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/other.sh"]},
+            {"command": "bash", "args": ["-c", launcher]},
+        )
+        for configuration in configurations:
+            with (
+                self.subTest(configuration=configuration),
+                self.assertRaisesRegex(
+                    SystemExit, "Claude MCP launcher contract drifted"
+                ),
+            ):
+                self.check_with_manifest(
+                    ".mcp.json", {"mcpServers": {"ai-architect": configuration}}
+                )
+
+    def test_launcher_rejects_additional_configuration_fields(self):
+        manifest = identity.load(".mcp.json")
+        manifest["mcpServers"]["ai-architect"]["env"] = {"AP_PROFILE": "core"}
+        with self.assertRaisesRegex(SystemExit, "configuration keys"):
+            self.check_with_manifest(".mcp.json", manifest)
+
+    def test_repository_trust_anchor_remains_required(self):
+        manifest = identity.load(".claude-plugin/plugin.json")
+        manifest["repository"] = "https://github.com/untrusted/package"
+        with self.assertRaisesRegex(SystemExit, "repository trust anchor drifted"):
+            self.check_with_manifest(".claude-plugin/plugin.json", manifest)
+
+    def test_release_package_version_remains_bound_to_plugin(self):
+        manifest = identity.load("server.json")
+        manifest["packages"][0]["version"] = "0.0.0"
+        with self.assertRaisesRegex(SystemExit, "public version declarations drifted"):
+            self.check_with_manifest("server.json", manifest)
 
 
 class SmokeTests(unittest.TestCase):

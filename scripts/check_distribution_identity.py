@@ -47,9 +47,11 @@ def check_public_identity() -> tuple[dict, str, int]:
         set(server_config) == {"command", "args"},
         f"unexpected Claude MCP server configuration keys: {sorted(server_config)}",
     )
+    # Source: .mcp.json, commit 265a62e: Bash runs the shipped launcher on
+    # Windows as well as POSIX; the script itself receives no arguments.
     require(
-        server_config["command"] == "${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh"
-        and server_config["args"] == [],
+        server_config["command"] == "bash"
+        and server_config["args"] == ["${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh"],
         "Claude MCP launcher contract drifted",
     )
     derived_prefix = f"mcp__plugin_{plugin_name}_{server_key}__"
