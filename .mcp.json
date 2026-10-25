@@ -1,8 +1,10 @@
 {
   "mcpServers": {
     "ai-architect": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh",
-      "args": []
+      "command": "bash",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh"
+      ]
     }
   }
 }

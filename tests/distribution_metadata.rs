@@ -94,15 +94,15 @@ fn claude_project_manifest_keeps_the_existing_full_profile_default() {
     let claude_project_mcp = read_json(".mcp.json");
     let server = &claude_project_mcp["mcpServers"]["ai-architect"];
 
-    assert_eq!(
-        server["command"],
-        "${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh"
-    );
+    assert_eq!(server["command"], "bash");
     assert!(
         !server.to_string().contains("--profile"),
         "the Claude project manifest must retain the server's full default"
     );
-    assert_eq!(server["args"], json!([]));
+    assert_eq!(
+        server["args"],
+        json!(["${CLAUDE_PLUGIN_ROOT}/bin/launch-plugin.sh"])
+    );
 }
 
 #[test]

@@ -6,4 +6,8 @@ set -euo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 "$PLUGIN_ROOT/bin/ensure-binary.sh" >&2
-exec "$PLUGIN_ROOT/target/release/ai-architect-mcp-codebase" "$@"
+BINARY_NAME="ai-architect-mcp-codebase"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) BINARY_NAME="$BINARY_NAME.exe" ;;
+esac
+exec "$PLUGIN_ROOT/target/release/$BINARY_NAME" "$@"
