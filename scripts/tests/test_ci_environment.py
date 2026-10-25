@@ -1,5 +1,6 @@
 """Exercise environment setup without compiling Rust or claiming native OS proof."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -92,6 +93,44 @@ class EnvironmentTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("UNREACHABLE", result.stdout)
+
+
+class UnitCommandTests(unittest.TestCase):
+    def run_unit(self, inherited_incremental, coverage_exit=0):
+        environment = os.environ.copy()
+        environment["CARGO_INCREMENTAL"] = inherited_incremental
+        environment["COVERAGE_EXIT"] = str(coverage_exit)
+        command = json.loads((SCRIPT.parents[1] / "ci.json").read_text())["unit"]
+        # Probe the actual adapter's environment and failure propagation without
+        # installing packages or compiling the workspace in a Python unit test.
+        probes = """
+        sudo() { :; }
+        rustup() { :; }
+        cargo() {
+            printf '%s:%s\\n' "$CARGO_INCREMENTAL" "$*"
+            if [ "$1" = llvm-cov ]; then return "$COVERAGE_EXIT"; fi
+        }
+        """
+        return subprocess.run(
+            ["bash", "-eo", "pipefail", "-c", probes + command],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def test_coverage_receives_nonincremental_build_without_losing_suite_scope(self):
+        result = self.run_unit("1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = result.stdout.splitlines()
+        self.assertTrue(calls[0].startswith("0:install cargo-llvm-cov "), calls)
+        self.assertEqual(
+            calls[1:],
+            ["0:llvm-cov --workspace --locked --cobertura --output-path coverage.xml"],
+        )
+
+    def test_coverage_failure_is_not_hidden_by_the_adapter(self):
+        result = self.run_unit("0", coverage_exit=42)
+        self.assertEqual(result.returncode, 42, result.stderr)
 
 
 if __name__ == "__main__":
