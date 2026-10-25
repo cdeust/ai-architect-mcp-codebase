@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 
 from bootstrap_pins import PINS, digest
@@ -121,10 +122,26 @@ def check_pins() -> None:
         )
 
 
+def check_native_engine_pin() -> None:
+    """Post: the native release selected by Cargo equals its locked Rust crate."""
+    lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))
+    versions = [
+        entry["version"] for entry in lock["package"] if entry["name"] == "lbug"
+    ]
+    require(len(versions) == 1, "Cargo.lock must identify one lbug version")
+    config = tomllib.loads((ROOT / ".cargo/config.toml").read_text(encoding="utf-8"))
+    pinned = config.get("env", {}).get("LBUG_VERSION")
+    require(
+        pinned == versions[0],
+        f"LBUG_VERSION must pin Cargo.lock lbug {versions[0]}, got {pinned!r}",
+    )
+
+
 def main() -> None:
     claude_plugin, derived_prefix, declared = check_public_identity()
     check_versions(claude_plugin)
     check_pins()
+    check_native_engine_pin()
     print(f"DISTRIBUTION IDENTITY OK: {CANONICAL} across {declared + 2} declarations; Claude prefix {derived_prefix}")
 
 

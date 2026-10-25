@@ -42,3 +42,9 @@
 # exact number) while staying a small fraction of the 8 TiB lbug reserves by
 # default.
 AP_LBUG_TEST_MAX_DB_SIZE = "4294967296"
+
+# Source: Cargo.lock lbug 0.21.2 and LadybugDB/ladybug release v0.21.2.
+# The crate's build.rs otherwise downloads releases/latest, outside Cargo.lock.
+# LBUG_VERSION changes its native cache namespace and triggers a rebuild.
+# check_distribution_identity.py requires this value to match Cargo.lock.
+LBUG_VERSION = "0.21.2"
