@@ -8,11 +8,11 @@
   },
   "checks": {
     "before": "old-pin assertion RED:12 existing pins",
-    "after": "GREEN:12 replacements across7 files; exact pin/comment-only content equivalence",
-    "actionlint": "7 changed workflows exit0",
-    "diff_check": "exit0",
-    "source_gate": "0 errors0 warnings",
-    "craft_gate": "0 errors0 warnings"
+    "after": "GREEN:12 replacements across 7 files; exact pin/comment-only content equivalence",
+    "actionlint": "7 changed workflows exit 0",
+    "diff_check": "exit 0",
+    "source_gate": "0 errors, 0 warnings",
+    "craft_gate": "0 errors, 0 warnings"
   },
   "rechecked_after_464_merge": true,
   "scope": "Twelve action pins/comments across seven workflows; no Rust source changes."
