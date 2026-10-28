@@ -1,0 +1,19 @@
+{
+  "base": "dbe0fe8d6bfce251634b7139ef6ea8ccf4208eef",
+  "source_pr": 463,
+  "verified_official_tag_commits": {
+    "dtolnay/rust-toolchain v1": "683b588c487a69d01f6c6ddf40f036ff682cc2c8",
+    "github/codeql-action v4.39.1": "9b3254085494b55a0f7c4c2b3d2d52cc712ce370",
+    "ossf/scorecard-action v2.5.0": "fa7117db83c52d787ae5a89f350999701505d78e"
+  },
+  "checks": {
+    "before": "old-pin assertion RED:12 existing pins",
+    "after": "GREEN:12 replacements across 7 files; exact pin/comment-only content equivalence",
+    "actionlint": "7 changed workflows exit 0",
+    "diff_check": "exit 0",
+    "source_gate": "0 errors, 0 warnings",
+    "craft_gate": "0 errors, 0 warnings"
+  },
+  "rechecked_after_464_merge": true,
+  "scope": "Twelve action pins/comments across seven workflows; no Rust source changes."
+}

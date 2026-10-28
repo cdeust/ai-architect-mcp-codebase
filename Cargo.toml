@@ -92,13 +92,17 @@ tree-sitter-go = "0.25"
 tree-sitter-ruby = "0.23"
 # source: stages/stage-3-research.md §2 — Tantivy for BM25 full-text search.
 # In-process search engine, MIT licensed (quickwit-oss).
-tantivy = "0.26"
+# source: Tantivy 0.27 updates lru>=0.18.2 and sstable to zstd 0.14;
+# https://rustsec.org/advisories/RUSTSEC-2026-0253.html
+# https://rustsec.org/advisories/RUSTSEC-2026-0391.html
+tantivy = "0.27"
 # source: issue #55 (team-shared graph artifact) — the reference implementation
 # DeusData/codebase-memory-mcp src/pipeline/artifact.c compresses the graph
 # snapshot with zstd (two tiers: best/9 on explicit index, fast/3 for the
 # watcher). Rust bindings for zstd 1.5.7 (facebook/zstd, BSD-licensed); already
 # in the tree transitively via tantivy, promoted to a direct dep here.
-zstd = "0.14"
+# source: RUSTSEC-2026-0391 fixes context-reuse leakage in 0.14.3.
+zstd = "0.14.3"
 # source: issue #55 — AP's graph store is a directory (lbug 0.15 database
 # layout), so the snapshot is a tar archive before zstd (the C reference used
 # SQLite's single-file VACUUM INTO; we archive the dir instead). tar-rs

@@ -19,26 +19,9 @@ yanked = "deny"
 #                                                   advisory is patched >= 0.16.3
 # Their entries are removed rather than left behind: an ignore for an advisory
 # the tree no longer raises is dead config that hides the live one.
-ignore = [
-    # RUSTSEC-2026-0202 — cxx 1.0.138, `let_cxx_string!` uses an uninitialized
-    # value. `unsound`, not a vulnerability, and NOT reachable from our code:
-    # cxx arrives only under lbug (the graph store), which is a C++ FFI
-    # boundary we do not hand-write bindings against.
-    #
-    # BLOCKED UPSTREAM, with evidence rather than assertion. The advisory is
-    # patched in cxx >= 1.0.195 and 1.0.198 is published, but lbug pins cxx
-    # with an EXACT requirement, so no `cargo update` can move it:
-    #
-    #   $ curl .../crates/lbug/0.18.3/dependencies
-    #     cxx        req="=1.0.138"  kind=normal
-    #     cxx-build  req="=1.0.138"  kind=build
-    #
-    # and every published lbug carries the same exact pin (checked 0.18.3,
-    # 0.18.2, 0.18.1, 0.18.0, 0.17.1; 0.18.3 is the latest release). There is
-    # no lbug version that permits a patched cxx, so this cannot be resolved
-    # from this repo. Re-check when lbug publishes a release that relaxes it.
-    "RUSTSEC-2026-0202",
-]
+# RUSTSEC-2026-0202 is now fixed by cxx 1.0.205 under lbug 0.21.2.
+# Its old exact-pin exception is removed; no advisory is ignored.
+ignore = []
 
 [licenses]
 # Permissive licenses only. This ships as a redistributable binary, so a
