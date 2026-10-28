@@ -9,6 +9,7 @@ import unittest
 
 # unittest discovers imported TestCases through the existing CI entry point.
 from ci_codex_current_findings_contract import CurrentFindingResolutionTests  # noqa: F401
+from ci_codex_editor_contract import SummaryEditorTests, SummaryGraphQLTests  # noqa: F401
 
 SCRIPT = Path(__file__).resolve().parents[1] / "ci_environment.sh"
 
