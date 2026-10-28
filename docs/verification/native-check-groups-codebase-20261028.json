@@ -1,0 +1,16 @@
+{
+  "canonical_commit": "3ba69e01c5a04c128ab7c49e89beb7e2bf48048a",
+  "change": "Preserve CheckRun duplicates and distinguish StatusContext objects before authenticated full proof.",
+  "helper_sha256": "a1e484a9e674f51971ecbaca87d99ca6dda94da2aa69569c513efedfa0077d16",
+  "tests": {
+    "actual_ci_json_codex_glob": 114,
+    "all_test_ci_glob": 121
+  },
+  "checks": [
+    "Cortex Ruff check/format",
+    "actual Cortex craftsmanship",
+    "diff whitespace"
+  ],
+  "ci_json_sha256": "f9b108f56bc5301933f490e2d097ff1a045c145da095fbc055c2267b01dfcbde",
+  "scope": "The helper hash in native-proof-first-codebase-20261028.json is superseded here. Runtime, official Claude/Codex workflows and rendered pipelines remain byte-identical to that receipt. Hosted validation of this final head remains pending."
+}
