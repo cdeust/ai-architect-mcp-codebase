@@ -1,0 +1,41 @@
+{
+  "source_head": "366e8964991263764d5a87dd180e2df148dfe6d1",
+  "advisory_db": "99670cfc0bc574433034b75876a4b791ccaa2efb",
+  "audit_before": {
+    "vulnerabilities": 7,
+    "unsound_warnings": 22
+  },
+  "audit_after": {
+    "vulnerabilities": 0,
+    "warnings": {}
+  },
+  "cargo_deny": "advisories ok, bans ok, licenses ok, sources ok; duplicate-version warnings retained by unchanged policy",
+  "zera_tests": 19,
+  "query_fixture": {
+    "queries": 3,
+    "top1_before": 3,
+    "top1_after": 3,
+    "mrr_before": 1.0,
+    "mrr_after": 1.0,
+    "score_representation": "f32::to_bits, exact equality without tolerance",
+    "before_after_old_and_new_index": "handle_tool_call|src/server.rs::handle_tool_call:1090184219,README.md:1067423604\nGraphStore|src/store.rs::GraphStore:1085100065,README.md:1067423604\nnative tool requests|src/server.rs::handle_tool_call:1084418770,README.md:1053740342\n"
+  },
+  "index_format": {
+    "before": 7,
+    "after": 7,
+    "oldest_supported_before": 4,
+    "oldest_supported_after": 4
+  },
+  "streaming_archive": "actual write_archive plus real decoder/tar roundtrip at existing levels3 and9, before and after",
+  "limits": "Focused standalone Tantivy/ZERA/stream archive consumers only; complete workspace/native Ladybug validation remains hosted CI.",
+  "sha256": {
+    "Cargo.toml": "108e945262d45745ffc82f126f841d42e31cd51999b476ade6ba90afbcbfbe74",
+    "Cargo.lock": "d05c7da3873bdc3f18258fd596a5d8b0b0feeecee0524b5435095ded40cb62be",
+    "crates/zera/Cargo.toml": "d089c213794cdb005006cc99c180815b531d89397b76785bc5b7d57db205f2d3",
+    "deny.toml": "bb4c4b68a35a25370dbe4e9129b6126187d32a86e625e092b88e8f8c2daacb4e",
+    "scripts/verify_security_consumer.py": "c899a502b704f412dd70ef8379f3174e9b4d0dfe8eff14c70a23e6877542fabb",
+    "scripts/tests/bm25_security_fixture.rs": "e669fdfb32f7e4941506dcb6e5516327de15e6950eed821bc9455ea41737faf6",
+    ".github/workflows/Codex.yml": "dc9e1ff6042b94853605b0e28a577f5024ebb06154eeb3bc7fbf4bc1e1843d3c"
+  },
+  "checks_permission": "Explicit checks: read on discovery only; exact canonical bytes independently approved by root."
+}
