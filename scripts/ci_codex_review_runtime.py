@@ -107,6 +107,8 @@ def _outputs(result: Record) -> None:
     text = (
         f"ready={str(result['state'] == 'success').lower()}\n"
         f"state={result['state']}\nsha={result['sha']}\ncomment_id={result['comment_id']}\n"
+        # Fixed identifiers only: the merge job names why a head cannot merge yet.
+        f"reason={result['reason']}\ncauses={','.join(result.get('causes', [result['reason']]))}\n"
     )
     try:
         with Path(path).open("a", encoding="utf-8") as output:
@@ -226,18 +228,28 @@ def _thread_states(pages: Any, sha: str, owner: str) -> dict[int, bool]:
 
 
 def resolve_security(target, body, review, metadata):
-    """Reconcile one unknown verdict with positive, authenticated finding proof.
+    """Prove findings resolved by the trusted owner, thread by thread.
 
-    Raw flags remain unchanged. Running/stale reviews and explicit verdicts
-    never use this path. No findings, incomplete pages or missing identities
-    cannot establish a resolved review.
+    Two verdicts come here: an unknown one (null flags), and an explicit clean
+    one over findings (has_any_findings true, has_unresolved_findings false).
+    Only resolvedBy attributes a resolution, never the summary flag (PR87
+    discussion_r4412261213): an explicit clean verdict without that proof is
+    unresolved, while an unknown one without it stays None for the receipt.
     """
+    proof = _owner_proof(target, body, review, metadata)
+    if proof is None and review.get("has_unresolved_findings") is False:
+        return {"state": "unresolved", "source": "owner_resolution_unproven"}
+    return proof
+
+
+def _owner_proof(target, body, review, metadata):
+    """Raw flags remain unchanged; incomplete pages or identities prove nothing."""
     repo, pr, sha = target
     if (
         review.get("status") != "completed"
         or review.get("commit_sha") != sha
         or review.get("has_any_findings") is not True
-        or review.get("has_unresolved_findings") is not None
+        or review.get("has_unresolved_findings") not in (None, False)
         or not isinstance(metadata, dict)
         or metadata.get("repository") != repo
         or metadata.get("pullRequestNumber") != pr
