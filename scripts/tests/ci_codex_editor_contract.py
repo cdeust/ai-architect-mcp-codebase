@@ -14,6 +14,23 @@ READER = Path(__file__).resolve().parents[1] / "ci_codex_reviews.py"
 SHA, REPO, PR = "a" * 40, "owner/project", 464
 BOT_ID = "BOT_kgDOC98s_g"
 
+CLAUDE_ID = "BOT_kgDODIGtWg"
+
+
+def claude_row(sha, merge=True):
+    """The native Claude review's final comment, ending with its verdict marker."""
+    marker = json.dumps({"head": sha, "merge": merge}, separators=(",", ":"))
+    body = "I found no correctness or security problems.\n\n"
+    body += "<!-- claude-review-verdict:v1 " + marker + " -->\n"
+    return dict(
+        id=900001,
+        updated_at="2026-10-29T08:10:00Z",
+        body=body,
+        editor=None,
+        lastEditedAt=None,
+        user=dict(login="claude[bot]", type="Bot", node_id=CLAUDE_ID),
+    )
+
 
 def reader():
     spec = importlib.util.spec_from_file_location("codex_editor_reader", READER)
@@ -56,7 +73,7 @@ def page(rows, more=False, cursor=None):
             body=row["body"],
             updatedAt=row["updated_at"],
             author=dict(
-                login="chatgpt-codex-connector",
+                login=row["user"]["login"].removesuffix("[bot]"),
                 __typename="Bot",
                 id=row["user"]["node_id"],
             ),
@@ -86,7 +103,8 @@ def page(rows, more=False, cursor=None):
 
 class SummaryEditorTests(unittest.TestCase):
     def evaluate(self, rows):
-        return reader().review_evidence(rows, SHA, REPO, PR)
+        # Owner rule 2026-10-29: a mergeable head also carries Claude's verdict.
+        return reader().review_evidence([*rows, claude_row(SHA)], SHA, REPO, PR)
 
     def test_pristine_and_native_bot_edits_are_accepted(self):
         for editor, stamp in ((None, None), (bot_editor(), "2026-10-28T00:11:17Z")):
@@ -183,7 +201,7 @@ class SummaryGraphQLTests(unittest.TestCase):
             head=dict(sha=SHA, repo=dict(full_name=REPO)),
             base=dict(ref="main", repo=dict(full_name=REPO)),
         )
-        replies = [pull, [page([comment()])], pull]
+        replies = [pull, [page([comment(), claude_row(SHA)])], pull]
         with patch.object(module, "_api", side_effect=replies) as request:
             result = module._fetch(SimpleNamespace(repo=REPO, pr=PR, sha=SHA))
         self.assertEqual(result["state"], "success")
