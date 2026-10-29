@@ -23,7 +23,14 @@ version: 2
 
 updates:
   - package-ecosystem: cargo
-    directory: "/"
+    # fuzz/ is a separate Cargo workspace (see fuzz/Cargo.toml) with its own
+    # lockfile. Watching only "/" let fuzz/Cargo.lock drift until the fuzz jobs
+    # re-locked 35 packages per run and fuzzed tree-sitter-swift 0.7.3 while
+    # the product shipped 0.7.4 (PR #467, Codex finding; fuzz run 40642626071).
+    # Listing both directories makes Dependabot maintain both lockfiles.
+    directories:
+      - "/"
+      - "/fuzz"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
