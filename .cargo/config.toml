@@ -48,3 +48,31 @@ AP_LBUG_TEST_MAX_DB_SIZE = "4294967296"
 # LBUG_VERSION changes its native cache namespace and triggers a rebuild.
 # check_distribution_identity.py requires this value to match Cargo.lock.
 LBUG_VERSION = "0.21.2"
+
+# The C++ glue that lbug compiles on this machine has to come from the same GCC
+# major as the prebuilt liblbug.a it is linked with. That archive (release
+# v0.21.2, "compat" variant) is built with "GCC: (GNU) 13.3.1 20240611 (Red Hat
+# 13.3.1-2)" (readelf -p .comment). lbug's build.rs compiles its glue
+# (ffi.rs.cc, lbug_rs.cpp, lbug_partition_routing.cpp) with the system g++.
+# Both sides emit the inline std::format machinery as weak symbols, for example
+# std::__format::_Sink<char>::_M_write, and the linker keeps one copy. When the
+# system g++ is 15, the kept copy comes from GCC 15's <format>, but the code in
+# the archive was compiled against GCC 13's. Measured on ubuntu-26.04 (g++ 15.2):
+# Binder::bindCopyToClause -> _Sink<char>::_M_write (/usr/include/c++/15/format)
+# fails the assertion "__offset <= size()" in span::subspan. The heap is then
+# corrupt: SIGABRT on arm64, SIGSEGV on the x86_64 runner. CI runs
+# 40818203993, 40824923232 and 40826628851 crashed this way. Commit 7212c25 was
+# green on ubuntu-24.04 (run 40642626065, attempt 1) and hit SIGSEGV on
+# ubuntu-26.04 (attempt 2): ubuntu-latest moved from 24.04 to 26.04.
+# With only the glue compiler switched to g++ 13.4, the same image runs the
+# crashing test green.
+#
+# Only CXX is pinned. The conflict is between C++ template instantiations; the
+# C objects share no inline templates. Both runner images ship g++-13: 24.04
+# ships 12.4/13.3/14.2, 26.04 ships 13.4/14.3/15.2 (actions/runner-images
+# readmes). The target-specific names apply on Linux only and leave macOS and
+# Windows on their default compilers. An exported variable of the same name
+# still overrides these values. Revisit this pin when LBUG_VERSION moves:
+# scripts/check_lbug_glue_toolchain.py fails CI when the two sides diverge.
+CXX_x86_64_unknown_linux_gnu = "g++-13"
+CXX_aarch64_unknown_linux_gnu = "g++-13"
