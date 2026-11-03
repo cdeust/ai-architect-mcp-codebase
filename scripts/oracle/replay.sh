@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # replay.sh - replays the dy-wcet oracle (static pass) against THIS worktree's release binary and
-# compares it with expected.json. Called by `gate.sh push` when the diff touches src/**/*.rs.
+# compares it with expected.json. Run it by hand when a change touches src/**/*.rs.
 # Local only, never in CI. Env: GATE_ORACLE_CORPUS (required: checkout of DYResearch/dy-wcet at the
 # commit pinned in expected.json), GATE_CARGO (default cargo), GATE_PYTHON (default python3).
 # Exit: 0 identical; 1 deviation/measure failure; 2 refusal (no corpus, wrong corpus/oracle bytes,

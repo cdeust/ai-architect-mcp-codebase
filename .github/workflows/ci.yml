@@ -228,6 +228,9 @@ jobs:
       # First, and before anything expensive: a gate whose own logic is broken
       # is worse than no gate, and finding that out after a 90-minute
       # instrumented build wastes the run. Stdlib-only, so it needs no setup.
+      - name: Local tree-SHA proof gate must stay removed
+        run: test ! -e scripts/gate.sh && test ! -e scripts/gate.d
+
       - name: Unit tests (doc-claims gate logic, all arms)
         # pipefail: without it the step's status is tail's, and a failing test
         # cannot fail the job.
