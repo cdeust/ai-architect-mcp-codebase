@@ -61,7 +61,8 @@ jobs:
     # LBUG_LOCALIZE_BUNDLED_SYMBOLS=1 on the prebuilt did not change it (#473
     # run 41623081637). Building from source compiles lbug with the runner's
     # own compiler and libstdc++; actions/cache keeps the cost to one cold
-    # run per Cargo.lock (two lbug builds in this job, one in the others).
+    # run per Cargo.lock (one lbug build per job; dev and release are separate
+    # jobs and caches).
     # ZSTD_SYS_USE_PKG_CONFIG=1 stays: zstd-sys (tantivy)
     # and lbug both carry a zstd and rust-lld refused the duplicate symbols
     # (run 26411205432); the system libzstd is the one copy zstd-sys links.
@@ -126,8 +127,8 @@ jobs:
       - name: Validate canonical distribution identity
         # Claude's CLI is not installed on GitHub's runner. The actual CLI
         # validation is performed before publishing; CI deterministically
-        # validates the same public identity fields and then executes the
-        # shipped Claude launcher in the following smoke step.
+        # validates the same public identity fields; the release-smoke job
+        # executes the shipped Claude launcher.
         run: |
           python3 scripts/check_distribution_identity.py
           python3 scripts/test_plugin_bootstrap.py
@@ -146,7 +147,8 @@ jobs:
     runs-on: ubuntu-latest
     # Split out of the test job on run 41680032712: a cold release build of
     # lbug plus every dependency at opt-level 3 took 25 min after the 54 min
-    # of dev-profile compile and tests, 84 min in one job. Its own cache key
+    # of dev-profile compile and tests (84 min in one job with setup, the
+    # smoke scripts and the validators). Its own cache key
     # (release segment) so a slow release build never stops the test job's
     # cache from being saved. 60 min: measured 25 cold, the cache saved.
     timeout-minutes: 60
