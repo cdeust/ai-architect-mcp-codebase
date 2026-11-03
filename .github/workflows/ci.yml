@@ -39,9 +39,15 @@ jobs:
     # compile + run the full suite. Worse, a timeout is a *cancellation*,
     # and actions/cache skips its save step when cancelled — so every
     # timed-out run failed to warm the cache, guaranteeing the next run was
-    # cold too (a self-perpetuating deadlock). 60 min lets one cold build
-    # finish and populate the cache; warm-cache runs complete in ~6 min.
-    timeout-minutes: 60
+    # cold too (a self-perpetuating deadlock). 60 min let one cold build
+    # finish with the prebuilt lbug; warm-cache runs completed in ~6 min.
+    # With lbug compiled from source (below) this job compiles it twice, for
+    # `cargo test` (dev) and the release build of the shipped commands: run
+    # 41662205171 was cancelled at 60 min on that second build, after the
+    # graph-accuracy gate and the full suite had passed (14:30 to 14:55 on
+    # run 41650852323). 90 min, the same budget as the coverage job, which
+    # finished its own cold source build in 59 min on run 41662205171.
+    timeout-minutes: 90
 
     # lbug is built from source on Linux. The crates.io prebuilt liblbug.a was
     # compiled against an older libstdc++; ubuntu-latest moved from 24.04 (last
