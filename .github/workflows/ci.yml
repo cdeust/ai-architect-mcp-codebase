@@ -39,20 +39,35 @@ jobs:
     # compile + run the full suite. Worse, a timeout is a *cancellation*,
     # and actions/cache skips its save step when cancelled — so every
     # timed-out run failed to warm the cache, guaranteeing the next run was
-    # cold too (a self-perpetuating deadlock). 60 min lets one cold build
-    # finish and populate the cache; warm-cache runs complete in ~6 min.
-    timeout-minutes: 60
+    # cold too (a self-perpetuating deadlock). 60 min let one cold build
+    # finish with the prebuilt lbug; warm-cache runs completed in ~6 min.
+    # With lbug compiled from source (below), run 41680032712 (cold cache, 26.04)
+    # measured 24 min to the gate and 30 min for the full suite, 54 min of
+    # compile-and-test before the release build. The release build of the
+    # shipped commands lives in its own job (release-smoke) with its own cache:
+    # cargo keys OUT_DIR by profile, so the two lbug builds cannot share work
+    # and in one job they summed to 84 min of a 90 min budget on that run.
+    # 90 min keeps a 36 min margin over the measured 54 for the cold case.
+    timeout-minutes: 90
 
-    # zstd-sys (pulled transitively via tantivy → tantivy-columnar →
-    # tantivy-sstable → zstd → zstd-safe → zstd-sys) and lbug both
-    # statically link libzstd, producing duplicate symbols on Linux
-    # (rust-lld is strict about this; macOS ld64 silently dedupes,
-    # which is why release.yml only needed this on its ubuntu matrix
-    # legs). ZSTD_SYS_USE_PKG_CONFIG=1 makes zstd-sys link the system
-    # libzstd dynamically instead of compiling its own static copy,
-    # eliminating the conflict. See the duplicate-symbol failure on
-    # run 26411205432 for the unfixed signature.
+    # lbug is built from source on Linux. The crates.io prebuilt liblbug.a was
+    # compiled against an older libstdc++; ubuntu-latest moved from 24.04 (last
+    # green run on f3b51d3, 2026-10-22) to 26.04 (GCC 15 libstdc++) on
+    # 2026-10-25 and the lib tests have died with SIGSEGV after
+    # graph_store::read_only_tests on every run since 911c6c2 (runs
+    # 40977146156, 41179897129), with no change to Cargo.lock or this file.
+    # Same signature as lbug 0.17.1 on 26.04 in rysweet/Simard#3171
+    # (std::vformat in Database::initBufferManager, libstdc++ std::format ABI).
+    # LBUG_LOCALIZE_BUNDLED_SYMBOLS=1 on the prebuilt did not change it (#473
+    # run 41623081637). Building from source compiles lbug with the runner's
+    # own compiler and libstdc++; actions/cache keeps the cost to one cold
+    # run per Cargo.lock (one lbug build per job; dev and release are separate
+    # jobs and caches).
+    # ZSTD_SYS_USE_PKG_CONFIG=1 stays: zstd-sys (tantivy)
+    # and lbug both carry a zstd and rust-lld refused the duplicate symbols
+    # (run 26411205432); the system libzstd is the one copy zstd-sys links.
     env:
+      LBUG_BUILD_FROM_SOURCE: "1"
       ZSTD_SYS_USE_PKG_CONFIG: "1"
 
     steps:
@@ -76,13 +91,10 @@ jobs:
       # Cache the cargo target dir keyed on Cargo.lock. Saves ~minutes per
       # run because tree-sitter + tantivy + lbug are heavy to recompile.
       #
-      # The "zstd-pkgconfig-v1" segment is part of the key on purpose:
-      # the previous build environment baked a static libzstd.a into
-      # target/ that collides with lbug's vendored zstd at link time
-      # (see job-level env comment). When that env changes, the cache
-      # must NOT be restored — otherwise the conflicting artifact comes
-      # back and the link error reappears. Bump this segment whenever
-      # the build env changes in a way that touches target/.
+      # The "lbug-source-v2" segment is part of the key on purpose: a
+      # target/ holding the prebuilt liblbug.a must NOT be restored, or
+      # the libstdc++ ABI crash comes back. Bump this segment whenever the
+      # build env changes in a way that touches target/.
       - name: Cache cargo build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -90,9 +102,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-zstd-pkgconfig-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-lbug-source-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-zstd-pkgconfig-v1-
+            ${{ runner.os }}-cargo-lbug-source-v2-
 
       # The graph_accuracy test is the Spike B' gate. Its asserts ratchet
       # forward as fixes land — current floor is nodes/Defines ≥ 0.96 on
@@ -115,14 +127,58 @@ jobs:
       - name: Validate canonical distribution identity
         # Claude's CLI is not installed on GitHub's runner. The actual CLI
         # validation is performed before publishing; CI deterministically
-        # validates the same public identity fields and then executes the
-        # shipped Claude launcher in the following smoke step.
+        # validates the same public identity fields; the release-smoke job
+        # executes the shipped Claude launcher.
         run: |
           python3 scripts/check_distribution_identity.py
           python3 scripts/test_plugin_bootstrap.py
 
       - name: Check distribution launchers with ShellCheck
         run: shellcheck -S warning bin/ensure-binary.sh bin/launch-plugin.sh launch.sh
+
+      # Static claims (tool names and counts, language count, layout tree) need
+      # no run and are checked here too, so a stale README fails the fastest
+      # required job rather than waiting on the coverage build.
+      - name: Check README claims against the suite and the tool registry
+        run: python3 scripts/check_doc_claims.py --test-log test-output.log
+
+  release-smoke:
+    name: cargo build --release (shipped command smoke)
+    runs-on: ubuntu-latest
+    # Split out of the test job on run 41680032712: a cold release build of
+    # lbug plus every dependency at opt-level 3 took 25 min after the 54 min
+    # of dev-profile compile and tests (84 min in one job with setup, the
+    # smoke scripts and the validators). Its own cache key
+    # (release segment) so a slow release build never stops the test job's
+    # cache from being saved. 60 min: measured 25 cold, the cache saved.
+    timeout-minutes: 60
+    env:
+      LBUG_BUILD_FROM_SOURCE: "1"
+      ZSTD_SYS_USE_PKG_CONFIG: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libzstd-dev pkg-config cmake
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-lbug-source-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-lbug-source-v2-
 
       - name: Build and start the shipped Codex and Gemini commands
         # cargo install builds this release target for end users. The smoke
@@ -147,11 +203,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      # Static claims (tool names and counts, language count, layout tree) need
-      # no run and are checked here too, so a stale README fails the fastest
-      # required job rather than waiting on the coverage build.
-      - name: Check README claims against the suite and the tool registry
-        run: python3 scripts/check_doc_claims.py --test-log test-output.log
 
   clippy:
     name: cargo clippy (-D warnings, workspace-wide)
@@ -165,9 +216,10 @@ jobs:
     # failure always reproduces here.
     timeout-minutes: 60
 
-    # Same zstd/lbug static-link conflict as the test job — see its env
+    # Same lbug source build and zstd linkage as the test job — see its env
     # comment above for the root cause.
     env:
+      LBUG_BUILD_FROM_SOURCE: "1"
       ZSTD_SYS_USE_PKG_CONFIG: "1"
 
     steps:
@@ -192,9 +244,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-clippy-zstd-pkgconfig-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-clippy-lbug-source-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-clippy-zstd-pkgconfig-v1-
+            ${{ runner.os }}-cargo-clippy-lbug-source-v2-
 
       - name: Run clippy (workspace, all targets, deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -217,9 +269,10 @@ jobs:
     # The floor is what the badge answer is allowed to assert, not a target.
     timeout-minutes: 90
 
-    # Same zstd/lbug static-link conflict as the test job — see its env
+    # Same lbug source build and zstd linkage as the test job — see its env
     # comment above for the root cause.
     env:
+      LBUG_BUILD_FROM_SOURCE: "1"
       ZSTD_SYS_USE_PKG_CONFIG: "1"
 
     steps:
@@ -282,9 +335,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin
             target
-          key: ${{ runner.os }}-cargo-llvmcov-zstd-pkgconfig-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-llvmcov-lbug-source-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-llvmcov-zstd-pkgconfig-v1-
+            ${{ runner.os }}-cargo-llvmcov-lbug-source-v2-
 
       # Idempotent by necessity. The cargo cache restores ~/.cargo/bin, so on
       # every run after the first this binary is ALREADY there, and plain
