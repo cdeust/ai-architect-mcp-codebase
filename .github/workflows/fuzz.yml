@@ -42,9 +42,9 @@ jobs:
       matrix:
         target: [parse_file, parse_file_utf8]
 
-    # Same zstd/lbug static-link conflict the other jobs hit — see ci.yml.
+    # Same zstd/lbug conflict as ci.yml: one zstd per binary, lbug's copy local.
     env:
-      ZSTD_SYS_USE_PKG_CONFIG: "1"
+      LBUG_LOCALIZE_BUNDLED_SYMBOLS: "1"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -53,7 +53,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libzstd-dev pkg-config cmake
+            pkg-config cmake
 
       # libFuzzer requires nightly. The `fuzz` crate is deliberately EXCLUDED
       # from the workspace (see the root Cargo.toml) so this nightly requirement

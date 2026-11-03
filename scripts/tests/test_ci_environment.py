@@ -17,7 +17,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "ci_environment.sh"
 class EnvironmentTests(unittest.TestCase):
     def run_shell(self, command, *arguments):
         environment = os.environ.copy()
-        environment.pop("ZSTD_SYS_USE_PKG_CONFIG", None)
+        environment.pop("LBUG_LOCALIZE_BUNDLED_SYMBOLS", None)
         return subprocess.run(
             [
                 "bash",
@@ -70,10 +70,10 @@ class EnvironmentTests(unittest.TestCase):
             self.assertIn("no libssl.lib/libcrypto.lib", result.stderr)
             self.assertNotIn("UNREACHABLE", result.stdout)
 
-    def test_linux_exports_zstd_to_the_exact_cargo_probe(self):
+    def test_linux_localizes_lbug_symbols_for_the_exact_cargo_probe(self):
         result = self.run_shell(
             "CI_OS=linux; CI_WORK=/unused; "
-            'cargo() { printf "%s\\n" "$ZSTD_SYS_USE_PKG_CONFIG" "$*"; }; main'
+            'cargo() { printf "%s\\n" "$LBUG_LOCALIZE_BUNDLED_SYMBOLS" "$*"; }; main'
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
@@ -87,7 +87,7 @@ class EnvironmentTests(unittest.TestCase):
     def test_macos_preserves_the_cargo_failure(self):
         result = self.run_shell(
             "CI_OS=macos; CI_WORK=/unused; "
-            'cargo() { test -z "${ZSTD_SYS_USE_PKG_CONFIG:-}"; return 42; }; main'
+            'cargo() { test -z "${LBUG_LOCALIZE_BUNDLED_SYMBOLS:-}"; return 42; }; main'
         )
         self.assertEqual(result.returncode, 42)
 

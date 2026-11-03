@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **One zstd per binary on Linux.** `liblbug.a` bundles a zstd and `zstd-sys`
+  (tantivy) builds another. Since the duplicate-symbol link error (run
+  26411205432) every Linux build set `ZSTD_SYS_USE_PKG_CONFIG=1`, which linked
+  the system `libzstd.so` dynamically: two zstd copies in one process, each
+  `ZSTD_*` call bound to whichever the linker met first. That held while the
+  runner's libzstd matched lbug's bundled version; `ubuntu-latest` moved from
+  24.04 (libzstd 1.5.5, last green run on f3b51d3) to 26.04 (1.5.7) on
+  2026-10-25 and the lib tests have crashed with SIGSEGV after
+  `graph_store::read_only_tests` on every run since 911c6c2 (runs 40977146156,
+  41179897129), on `main` and on every PR. The CI, fuzz and release workflows,
+  `ci.json` and `scripts/ci_environment.sh` now set
+  `LBUG_LOCALIZE_BUNDLED_SYMBOLS=1` instead (lbug 0.21.2 `build.rs`: the
+  bundled zstd/lz4/brotli symbols become local to lbug's object), so
+  `zstd-sys` links its own static zstd and no system libzstd is read or
+  installed; the shipped Linux binary no longer depends on the user's
+  `libzstd.so.1`. Measured: `cargo test --locked --lib` with the new
+  environment, 1113 passed, 0 failed, 2 ignored (2026-11-03, Ubuntu 24.04,
+  rustc 1.95.0). The cache key segment moves to `lbug-localized-v1`.
+
 ### Added
 
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
