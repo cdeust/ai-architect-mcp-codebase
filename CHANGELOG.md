@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **lbug is built from source on Linux CI and releases.** The crates.io
+  prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
+  `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
+  26.04 (GCC 15 libstdc++) on 2026-10-25, and the lib tests have died with
+  SIGSEGV after `graph_store::read_only_tests` on every run since 911c6c2
+  (runs 40977146156, 41179897129), on `main` and every PR, with no change to
+  `Cargo.lock` or the workflows. The same signature is documented for lbug
+  0.17.1 on 26.04 (rysweet/Simard#3171: `std::vformat` in
+  `Database::initBufferManager`, libstdc++ `std::format` ABI). Localizing the
+  prebuilt's bundled symbols (`LBUG_LOCALIZE_BUNDLED_SYMBOLS=1`) did not change
+  it (PR #473, run 41623081637). `LBUG_BUILD_FROM_SOURCE=1` compiles lbug with
+  the runner's own compiler and libstdc++ in `ci.yml`, `fuzz.yml`,
+  `release.yml`, `ci.json` and `scripts/ci_environment.sh` (tests updated);
+  `actions/cache` keeps the cost to one cold run per `Cargo.lock`
+  (`lbug-source-v2` key segment); the `cargo test` job builds lbug twice (dev
+  and release) and its timeout moves from 60 to 90 minutes. The Linux
+  environment probe installs `libzstd-dev`, `pkg-config` and `cmake` itself
+  (the same list as `ci.json` and `ci.yml`), since the ubuntu-latest 26.04
+  image carries no `libzstd-dev`. `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
+  and lbug both carry a zstd and rust-lld refuses the duplicate symbols (run
+  26411205432). A Linux release binary carrying the prebuilt would crash the
+  same way on GCC 15 hosts. `[profile.dev.package.lbug]` sets `opt-level = 3`,
+  `debug = false`, so the `cmake` crate builds lbug as Release even for the dev
+  and test profiles: a Debug `liblbug.a`, linked into every integration test
+  binary, filled the runner disk ("No space left on device", PR #473 run
+  41644233337); the prebuilt it replaces was a Release build.
+
 ### Added
 
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.

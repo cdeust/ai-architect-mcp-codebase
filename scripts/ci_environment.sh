@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bare-runner environment probe. Sources: windows-build.yml at f3b51d3
-# (OpenSSL import-library names/search paths), ci.yml at f3b51d3 (Linux ZSTD).
+# (OpenSSL import-library names/search paths), ci.yml (Linux lbug source build and zstd).
 set -euo pipefail
 
 prepare_windows_openssl() {
@@ -26,7 +26,18 @@ prepare_windows_openssl() {
 main() {
   : "${CI_OS:?CI_OS is unset}" "${CI_WORK:?CI_WORK is unset}"
   case "$CI_OS" in
-    linux) export ZSTD_SYS_USE_PKG_CONFIG=1 ;;
+    # lbug built from source against the runner's libstdc++ (see ci.yml); zstd-sys
+    # links the system libzstd so its copy does not collide with lbug's. The
+    # ubuntu-latest image (26.04, image 20260810.99.1) ships pkg-config and
+    # CMake but no libzstd-dev, so the probe installs the build deps itself:
+    # the one exception to the bare-runner rule (pipeline.yml decision 6), and
+    # the same apt list as ci.json and ci.yml, kept identical on purpose.
+    # source: actions/runner-images images/ubuntu/Ubuntu2604-Readme.md
+    linux)
+      sudo apt-get update -qq
+      sudo apt-get install -y --no-install-recommends libzstd-dev pkg-config cmake
+      export LBUG_BUILD_FROM_SOURCE=1 ZSTD_SYS_USE_PKG_CONFIG=1
+      ;;
     macos) ;;
     windows)
       prepare_windows_openssl "$CI_WORK/openssl-shim" \
