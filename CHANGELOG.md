@@ -22,7 +22,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   the runner's own compiler and libstdc++ in `ci.yml`, `fuzz.yml`,
   `release.yml`, `ci.json` and `scripts/ci_environment.sh` (tests updated);
   `actions/cache` keeps the cost to one cold build per `Cargo.lock`
-  (`lbug-source-v1` key segment). `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
+  (`lbug-source-v2` key segment). `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
   and lbug both carry a zstd and rust-lld refuses the duplicate symbols (run
   26411205432). A Linux release binary carrying the prebuilt would crash the
   same way on GCC 15 hosts. `[profile.dev.package.lbug]` sets `opt-level = 3`,
