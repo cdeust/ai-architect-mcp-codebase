@@ -21,8 +21,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   it (PR #473, run 41623081637). `LBUG_BUILD_FROM_SOURCE=1` compiles lbug with
   the runner's own compiler and libstdc++ in `ci.yml`, `fuzz.yml`,
   `release.yml`, `ci.json` and `scripts/ci_environment.sh` (tests updated);
-  `actions/cache` keeps the cost to one cold build per `Cargo.lock`
-  (`lbug-source-v2` key segment). `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
+  `actions/cache` keeps the cost to one cold run per `Cargo.lock`
+  (`lbug-source-v2` key segment); the `cargo test` job builds lbug twice (dev
+  and release) and its timeout moves from 60 to 90 minutes. The Linux
+  environment probe installs `libzstd-dev`, `pkg-config` and `cmake` itself,
+  since the ubuntu-24.04 runner image carries no `libzstd-dev`. `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
   and lbug both carry a zstd and rust-lld refuses the duplicate symbols (run
   26411205432). A Linux release binary carrying the prebuilt would crash the
   same way on GCC 15 hosts. `[profile.dev.package.lbug]` sets `opt-level = 3`,

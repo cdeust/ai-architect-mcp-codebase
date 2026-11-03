@@ -41,12 +41,14 @@ jobs:
     # timed-out run failed to warm the cache, guaranteeing the next run was
     # cold too (a self-perpetuating deadlock). 60 min let one cold build
     # finish with the prebuilt lbug; warm-cache runs completed in ~6 min.
-    # With lbug compiled from source (below) this job compiles it twice, for
-    # `cargo test` (dev) and the release build of the shipped commands: run
-    # 41662205171 was cancelled at 60 min on that second build, after the
-    # graph-accuracy gate and the full suite had passed (14:30 to 14:55 on
-    # run 41650852323). 90 min, the same budget as the coverage job, which
-    # finished its own cold source build in 59 min on run 41662205171.
+    # With lbug compiled from source (below) this job compiles it twice, once
+    # for `cargo test` (dev profile) and once for the release build of the
+    # shipped commands; cargo keys OUT_DIR by profile, so the second build
+    # cannot reuse the first. Run 41662205171 passed the gate and the full
+    # suite on 26.04, then was cancelled at 60 min on the release build. The
+    # budget is 90 min: the coverage job, which builds lbug once, finished its
+    # cold source build plus the instrumented suite in 59 min on the same run.
+    # Replace this estimate with the measured duration of the first green run.
     timeout-minutes: 90
 
     # lbug is built from source on Linux. The crates.io prebuilt liblbug.a was
@@ -54,12 +56,14 @@ jobs:
     # green run on f3b51d3, 2026-10-22) to 26.04 (GCC 15 libstdc++) on
     # 2026-10-25 and the lib tests have died with SIGSEGV after
     # graph_store::read_only_tests on every run since 911c6c2 (runs
-    # 40977146156, 41179897129), with no change to Cargo.lock or this file. Same signature as lbug 0.17.1 on 26.04 in rysweet/Simard#3171
+    # 40977146156, 41179897129), with no change to Cargo.lock or this file.
+    # Same signature as lbug 0.17.1 on 26.04 in rysweet/Simard#3171
     # (std::vformat in Database::initBufferManager, libstdc++ std::format ABI).
     # LBUG_LOCALIZE_BUNDLED_SYMBOLS=1 on the prebuilt did not change it (#473
     # run 41623081637). Building from source compiles lbug with the runner's
     # own compiler and libstdc++; actions/cache keeps the cost to one cold
-    # build per Cargo.lock. ZSTD_SYS_USE_PKG_CONFIG=1 stays: zstd-sys (tantivy)
+    # run per Cargo.lock (two lbug builds in this job, one in the others).
+    # ZSTD_SYS_USE_PKG_CONFIG=1 stays: zstd-sys (tantivy)
     # and lbug both carry a zstd and rust-lld refused the duplicate symbols
     # (run 26411205432); the system libzstd is the one copy zstd-sys links.
     env:

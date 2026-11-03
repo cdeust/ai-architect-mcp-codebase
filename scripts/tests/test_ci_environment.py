@@ -74,16 +74,27 @@ class EnvironmentTests(unittest.TestCase):
     def test_linux_builds_lbug_from_source_for_the_exact_cargo_probe(self):
         result = self.run_shell(
             "CI_OS=linux; CI_WORK=/unused; "
+            'sudo() { printf "%s\\n" "$*"; }; '
             'cargo() { printf "%s\\n" "$LBUG_BUILD_FROM_SOURCE$ZSTD_SYS_USE_PKG_CONFIG" "$*"; }; main'
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines(),
             [
+                "apt-get update -qq",
+                "apt-get install -y --no-install-recommends libzstd-dev pkg-config cmake",
                 "11",
                 "run --release --locked --bin ai-architect-mcp-codebase -- install --dry-run",
             ],
         )
+
+    def test_linux_apt_failure_stops_before_cargo(self):
+        result = self.run_shell(
+            "CI_OS=linux; CI_WORK=/unused; "
+            "sudo() { return 100; }; cargo() { echo UNREACHABLE; }; main"
+        )
+        self.assertEqual(result.returncode, 100)
+        self.assertNotIn("UNREACHABLE", result.stdout)
 
     def test_macos_preserves_the_cargo_failure(self):
         result = self.run_shell(
