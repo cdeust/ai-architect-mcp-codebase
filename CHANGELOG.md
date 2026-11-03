@@ -25,7 +25,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   (`lbug-source-v1` key segment). `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
   and lbug both carry a zstd and rust-lld refuses the duplicate symbols (run
   26411205432). A Linux release binary carrying the prebuilt would crash the
-  same way on GCC 15 hosts.
+  same way on GCC 15 hosts. `[profile.dev.package.lbug]` sets `opt-level = 3`,
+  `debug = false`, so the `cmake` crate builds lbug as Release even for the dev
+  and test profiles: a Debug `liblbug.a`, linked into every integration test
+  binary, filled the runner disk ("No space left on device", PR #473 run
+  41644233337); the prebuilt it replaces was a Release build.
 
 ### Added
 
