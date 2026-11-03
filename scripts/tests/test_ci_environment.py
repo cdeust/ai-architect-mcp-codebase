@@ -72,11 +72,20 @@ class EnvironmentTests(unittest.TestCase):
             self.assertNotIn("UNREACHABLE", result.stdout)
 
     def test_linux_builds_lbug_from_source_for_the_exact_cargo_probe(self):
-        result = self.run_shell(
-            "CI_OS=linux; CI_WORK=/unused; "
-            'sudo() { printf "%s\\n" "$*"; }; '
-            'cargo() { printf "%s\\n" "$LBUG_BUILD_FROM_SOURCE$ZSTD_SYS_USE_PKG_CONFIG" "$*"; }; main'
-        )
+        # The cargo stub is a separate process, not a shell function: only an
+        # exported variable reaches it, so a dropped `export` fails this test.
+        with tempfile.TemporaryDirectory() as directory:
+            stub = Path(directory) / "cargo"
+            stub.write_text(
+                '#!/usr/bin/env bash\nprintf "%s\\n" '
+                '"${LBUG_BUILD_FROM_SOURCE:-}${ZSTD_SYS_USE_PKG_CONFIG:-}" "$*"\n'
+            )
+            stub.chmod(0o755)
+            result = self.run_shell(
+                'PATH="$1:$PATH"; CI_OS=linux; CI_WORK=/unused; '
+                'sudo() { printf "%s\\n" "$*"; }; main',
+                directory,
+            )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines(),

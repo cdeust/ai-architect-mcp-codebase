@@ -28,9 +28,11 @@ main() {
   case "$CI_OS" in
     # lbug built from source against the runner's libstdc++ (see ci.yml); zstd-sys
     # links the system libzstd so its copy does not collide with lbug's. The
-    # ubuntu-24.04 runner image (20261026) ships pkg-config and CMake but no
-    # libzstd-dev, so the probe installs what the build needs, as ci.yml does.
-    # source: actions/runner-images images/ubuntu/Ubuntu2404-Readme.md
+    # ubuntu-latest image (26.04, image 20260810.99.1) ships pkg-config and
+    # CMake but no libzstd-dev, so the probe installs the build deps itself:
+    # the one exception to the bare-runner rule (pipeline.yml decision 6), and
+    # the same apt list as ci.json and ci.yml, kept identical on purpose.
+    # source: actions/runner-images images/ubuntu/Ubuntu2604-Readme.md
     linux)
       sudo apt-get update -qq
       sudo apt-get install -y --no-install-recommends libzstd-dev pkg-config cmake
