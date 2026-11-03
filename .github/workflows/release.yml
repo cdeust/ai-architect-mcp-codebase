@@ -155,7 +155,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake
+            libzstd-dev pkg-config cmake
 
       # `@stable` was a BRANCH ref: the compiler that built a release was
       # whatever that branch pointed at on the day, so two runs of the same tag
@@ -221,19 +221,19 @@ jobs:
           find "/c/Program Files/OpenSSL" -name '*.lib' 2>/dev/null | head -20 || true
           exit 1
 
-      # zstd-sys + lbug both carry a zstd; rust-lld refused the duplicate
-      # symbols on Linux (macOS ld64 and MSVC dedupe silently). The earlier
-      # answer, ZSTD_SYS_USE_PKG_CONFIG=1 (system libzstd.so, dynamic), bound
-      # each ZSTD_* call to whichever copy the linker met first and made the
-      # shipped Linux binary depend on the user's libzstd.so.1 version; it
-      # broke when ubuntu-latest moved to 26.04 (libzstd 1.5.7) on 2026-10-25
-      # (see ci.yml). LBUG_LOCALIZE_BUNDLED_SYMBOLS=1 keeps lbug's bundled
-      # zstd private; zstd-sys links its own static copy; no system libzstd.
-      # Linux-only: the localization is an ELF partial link (GNU binutils).
-      - name: Build (linux — lbug symbols localized, static zstd)
+      # lbug is built from source on Linux: the crates.io prebuilt liblbug.a
+      # SIGSEGVs under the GCC 15 libstdc++ of ubuntu-latest 26.04 (see ci.yml),
+      # and a release binary carrying it would do the same on such hosts.
+      # zstd-sys + lbug both carry a zstd; rust-lld refused the duplicate symbols
+      # on Linux (macOS ld64 and MSVC dedupe silently). ZSTD_SYS_USE_PKG_CONFIG=1
+      # makes zstd-sys link the system libzstd dynamically. Linux-only: with the
+      # variable set zstd-sys REQUIRES pkg-config (build.rs panics without it)
+      # and windows-latest ships none (v0.8.0 run 29975233898).
+      - name: Build (linux — lbug from source, dynamic system libzstd)
         if: startsWith(matrix.runner, 'ubuntu')
         env:
-          LBUG_LOCALIZE_BUNDLED_SYMBOLS: "1"
+          LBUG_BUILD_FROM_SOURCE: "1"
+          ZSTD_SYS_USE_PKG_CONFIG: "1"
         run: cargo build --release --bin ai-architect-mcp-codebase --target ${{ matrix.rust_target }}
 
       - name: Build (macos/windows — vendored static zstd)

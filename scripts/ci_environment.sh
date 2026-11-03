@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bare-runner environment probe. Sources: windows-build.yml at f3b51d3
-# (OpenSSL import-library names/search paths), ci.yml (Linux zstd: one copy per binary).
+# (OpenSSL import-library names/search paths), ci.yml (Linux lbug source build and zstd).
 set -euo pipefail
 
 prepare_windows_openssl() {
@@ -26,9 +26,9 @@ prepare_windows_openssl() {
 main() {
   : "${CI_OS:?CI_OS is unset}" "${CI_WORK:?CI_WORK is unset}"
   case "$CI_OS" in
-    # One zstd per binary: lbug's bundled copy stays private, zstd-sys links its own
-    # (see ci.yml). No system libzstd is read.
-    linux) export LBUG_LOCALIZE_BUNDLED_SYMBOLS=1 ;;
+    # lbug built from source against the runner's libstdc++ (see ci.yml); zstd-sys
+    # links the system libzstd so its copy does not collide with lbug's.
+    linux) export LBUG_BUILD_FROM_SOURCE=1 ZSTD_SYS_USE_PKG_CONFIG=1 ;;
     macos) ;;
     windows)
       prepare_windows_openssl "$CI_WORK/openssl-shim" \

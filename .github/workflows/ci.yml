@@ -43,20 +43,23 @@ jobs:
     # finish and populate the cache; warm-cache runs complete in ~6 min.
     timeout-minutes: 60
 
-    # zstd-sys (tantivy → tantivy-sstable → zstd → zstd-sys) and lbug both carry
-    # a zstd; rust-lld refused the duplicate symbols (run 26411205432). The
-    # earlier answer, ZSTD_SYS_USE_PKG_CONFIG=1 (system libzstd.so, dynamic),
-    # left two copies in one process and bound each ZSTD_* call to whichever
-    # the linker met first, which only worked while the system version matched
-    # lbug's bundled one. ubuntu-latest moved from 24.04 (libzstd 1.5.5, last
-    # green run on f3b51d3) to 26.04 (1.5.7, red since 911c6c2, 2026-10-25):
-    # the lib tests SIGSEGV after graph_store::read_only_tests on every run
-    # (runs 40977146156, 41179897129). LBUG_LOCALIZE_BUNDLED_SYMBOLS=1 (lbug
-    # 0.21.2 build.rs) makes lbug's bundled zstd/lz4/brotli symbols local, so
-    # zstd-sys links its own static zstd and no system libzstd is read:
-    # 1113 lib tests pass with it (2026-11-03).
+    # lbug is built from source on Linux. The crates.io prebuilt liblbug.a was
+    # compiled against an older libstdc++; ubuntu-latest moved from 24.04 (last
+    # green run on f3b51d3, 2026-10-22) to 26.04 (GCC 15 libstdc++) on
+    # 2026-10-25 and the lib tests have died with SIGSEGV after
+    # graph_store::read_only_tests on every run since 911c6c2 (runs
+    # 40977146156, 41179897129, 41623081637), with no change to Cargo.lock or
+    # this file. Same signature as lbug 0.17.1 on 26.04 in rysweet/Simard#3171
+    # (std::vformat in Database::initBufferManager, libstdc++ std::format ABI).
+    # LBUG_LOCALIZE_BUNDLED_SYMBOLS=1 on the prebuilt did not change it (#473
+    # run 41623081637). Building from source compiles lbug with the runner's
+    # own compiler and libstdc++; actions/cache keeps the cost to one cold
+    # build per Cargo.lock. ZSTD_SYS_USE_PKG_CONFIG=1 stays: zstd-sys (tantivy)
+    # and lbug both carry a zstd and rust-lld refused the duplicate symbols
+    # (run 26411205432); the system libzstd is the one copy zstd-sys links.
     env:
-      LBUG_LOCALIZE_BUNDLED_SYMBOLS: "1"
+      LBUG_BUILD_FROM_SOURCE: "1"
+      ZSTD_SYS_USE_PKG_CONFIG: "1"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -65,7 +68,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake
+            libzstd-dev pkg-config cmake
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -79,10 +82,9 @@ jobs:
       # Cache the cargo target dir keyed on Cargo.lock. Saves ~minutes per
       # run because tree-sitter + tantivy + lbug are heavy to recompile.
       #
-      # The "lbug-localized-v1" segment is part of the key on purpose: a
-      # target/ built with another zstd linkage (the earlier pkg-config
-      # one, or an unlocalized liblbug.a) must NOT be restored, or the
-      # mixed-copy artifact comes back. Bump this segment whenever the
+      # The "lbug-source-v1" segment is part of the key on purpose: a
+      # target/ holding the prebuilt liblbug.a must NOT be restored, or
+      # the libstdc++ ABI crash comes back. Bump this segment whenever the
       # build env changes in a way that touches target/.
       - name: Cache cargo build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -91,9 +93,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-lbug-localized-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-lbug-source-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-lbug-localized-v1-
+            ${{ runner.os }}-cargo-lbug-source-v1-
 
       # The graph_accuracy test is the Spike B' gate. Its asserts ratchet
       # forward as fixes land — current floor is nodes/Defines ≥ 0.96 on
@@ -166,10 +168,11 @@ jobs:
     # failure always reproduces here.
     timeout-minutes: 60
 
-    # Same zstd/lbug conflict as the test job — see its env
+    # Same lbug source build and zstd linkage as the test job — see its env
     # comment above for the root cause.
     env:
-      LBUG_LOCALIZE_BUNDLED_SYMBOLS: "1"
+      LBUG_BUILD_FROM_SOURCE: "1"
+      ZSTD_SYS_USE_PKG_CONFIG: "1"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -178,7 +181,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake
+            libzstd-dev pkg-config cmake
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -193,9 +196,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-clippy-lbug-localized-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-clippy-lbug-source-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-clippy-lbug-localized-v1-
+            ${{ runner.os }}-cargo-clippy-lbug-source-v1-
 
       - name: Run clippy (workspace, all targets, deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -218,10 +221,11 @@ jobs:
     # The floor is what the badge answer is allowed to assert, not a target.
     timeout-minutes: 90
 
-    # Same zstd/lbug conflict as the test job — see its env
+    # Same lbug source build and zstd linkage as the test job — see its env
     # comment above for the root cause.
     env:
-      LBUG_LOCALIZE_BUNDLED_SYMBOLS: "1"
+      LBUG_BUILD_FROM_SOURCE: "1"
+      ZSTD_SYS_USE_PKG_CONFIG: "1"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -261,7 +265,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            pkg-config cmake
+            libzstd-dev pkg-config cmake
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -283,9 +287,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin
             target
-          key: ${{ runner.os }}-cargo-llvmcov-lbug-localized-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-llvmcov-lbug-source-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-llvmcov-lbug-localized-v1-
+            ${{ runner.os }}-cargo-llvmcov-lbug-source-v1-
 
       # Idempotent by necessity. The cargo cache restores ~/.cargo/bin, so on
       # every run after the first this binary is ALREADY there, and plain

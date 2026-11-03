@@ -8,24 +8,24 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **One zstd per binary on Linux.** `liblbug.a` bundles a zstd and `zstd-sys`
-  (tantivy) builds another. Since the duplicate-symbol link error (run
-  26411205432) every Linux build set `ZSTD_SYS_USE_PKG_CONFIG=1`, which linked
-  the system `libzstd.so` dynamically: two zstd copies in one process, each
-  `ZSTD_*` call bound to whichever the linker met first. That held while the
-  runner's libzstd matched lbug's bundled version; `ubuntu-latest` moved from
-  24.04 (libzstd 1.5.5, last green run on f3b51d3) to 26.04 (1.5.7) on
-  2026-10-25 and the lib tests have crashed with SIGSEGV after
-  `graph_store::read_only_tests` on every run since 911c6c2 (runs 40977146156,
-  41179897129), on `main` and on every PR. The CI, fuzz and release workflows,
-  `ci.json` and `scripts/ci_environment.sh` now set
-  `LBUG_LOCALIZE_BUNDLED_SYMBOLS=1` instead (lbug 0.21.2 `build.rs`: the
-  bundled zstd/lz4/brotli symbols become local to lbug's object), so
-  `zstd-sys` links its own static zstd and no system libzstd is read or
-  installed; the shipped Linux binary no longer depends on the user's
-  `libzstd.so.1`. Measured: `cargo test --locked --lib` with the new
-  environment, 1113 passed, 0 failed, 2 ignored (2026-11-03, Ubuntu 24.04,
-  rustc 1.95.0). The cache key segment moves to `lbug-localized-v1`.
+- **lbug is built from source on Linux CI and releases.** The crates.io
+  prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
+  `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
+  26.04 (GCC 15 libstdc++) on 2026-10-25, and the lib tests have died with
+  SIGSEGV after `graph_store::read_only_tests` on every run since 911c6c2
+  (runs 40977146156, 41179897129), on `main` and every PR, with no change to
+  `Cargo.lock` or the workflows. The same signature is documented for lbug
+  0.17.1 on 26.04 (rysweet/Simard#3171: `std::vformat` in
+  `Database::initBufferManager`, libstdc++ `std::format` ABI). Localizing the
+  prebuilt's bundled symbols (`LBUG_LOCALIZE_BUNDLED_SYMBOLS=1`) did not change
+  it (PR #473, run 41623081637). `LBUG_BUILD_FROM_SOURCE=1` compiles lbug with
+  the runner's own compiler and libstdc++ in `ci.yml`, `fuzz.yml`,
+  `release.yml`, `ci.json` and `scripts/ci_environment.sh` (tests updated);
+  `actions/cache` keeps the cost to one cold build per `Cargo.lock`
+  (`lbug-source-v1` key segment). `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
+  and lbug both carry a zstd and rust-lld refuses the duplicate symbols (run
+  26411205432). A Linux release binary carrying the prebuilt would crash the
+  same way on GCC 15 hosts.
 
 ### Added
 
