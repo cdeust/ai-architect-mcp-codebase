@@ -20,13 +20,18 @@ adheres to [Semantic Versioning](https://semver.org/).
   prebuilt's bundled symbols (`LBUG_LOCALIZE_BUNDLED_SYMBOLS=1`) did not change
   it (PR #473, run 41623081637). `LBUG_BUILD_FROM_SOURCE=1` compiles lbug with
   the runner's own compiler and libstdc++ in `ci.yml`, `fuzz.yml`,
-  `release.yml`, `ci.json` and `scripts/ci_environment.sh` (tests updated);
+  `release.yml`, `ci.json`, `scripts/ci_environment.sh` (tests updated) and the
+  Linux source fallback of `bin/ensure-binary.sh`, which now needs `cmake`,
+  `pkg-config` and `libzstd-dev` on the host;
   `actions/cache` keeps the cost to one cold run per `Cargo.lock`
   (`lbug-source-v2` key segment); the `cargo test` job builds lbug twice (dev
-  and release) and its timeout moves from 60 to 90 minutes. The Linux
-  environment probe installs `libzstd-dev`, `pkg-config` and `cmake` itself
-  (the same list as `ci.json` and `ci.yml`), since the ubuntu-latest 26.04
-  image carries no `libzstd-dev`. `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
+  and release): measured cold on run 41680032712, 24 min to the gate, 30 min
+  for the suite, 25 min for the release build, 84 min in one job. The release
+  build and the shipped-command smoke move to their own `release-smoke` job
+  with its own cache key; the `cargo test` job keeps a 90 minute budget over
+  its measured 54. The Linux environment probe installs `libzstd-dev`,
+  `pkg-config` and `cmake` itself (the list every other Linux build path
+  uses), since the ubuntu-latest 26.04 image carries no `libzstd-dev`. `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
   and lbug both carry a zstd and rust-lld refuses the duplicate symbols (run
   26411205432). A Linux release binary carrying the prebuilt would crash the
   same way on GCC 15 hosts. `[profile.dev.package.lbug]` sets `opt-level = 3`,
