@@ -71,9 +71,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             fuzz/target
-          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-lbug-source-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-fuzz-${{ matrix.target }}-
+            ${{ runner.os }}-fuzz-${{ matrix.target }}-lbug-source-v1-
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked

@@ -175,9 +175,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ matrix.target_tag }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.target_tag }}-cargo-lbug-source-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ matrix.target_tag }}-cargo-
+            ${{ matrix.target_tag }}-cargo-lbug-source-v1-
 
       # lbug's build.rs has asked for OpenSSL under two different names on
       # Windows, and switched once already: lbug 0.15 (v0.8.2's build) did not
