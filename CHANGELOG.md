@@ -24,9 +24,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   Linux source fallback of `bin/ensure-binary.sh`, which now needs `cmake`,
   `pkg-config` and `libzstd-dev` on the host;
   `actions/cache` keeps the cost to one cold run per `Cargo.lock`
-  (`lbug-source-v2` key segment); the `cargo test` job builds lbug twice (dev
+  (`lbug-source-v2` key segment); the `cargo test` job built lbug twice (dev
   and release): measured cold on run 41680032712, 24 min to the gate, 30 min
-  for the suite, 25 min for the release build, 84 min in one job. The release
+  for the suite, 25 min for the release build, 84 min in one job with setup,
+  the smoke scripts and the validators. The `cargo test` job built lbug twice
+  before this change. The release
   build and the shipped-command smoke move to their own `release-smoke` job
   with its own cache key; the `cargo test` job keeps a 90 minute budget over
   its measured 54. The Linux environment probe installs `libzstd-dev`,
