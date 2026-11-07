@@ -95,6 +95,17 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`analyze_codebase` is incremental, as documented (#443).** It removed the
+  graph and re-indexed every file on every call (ripgrep 62 s then 60 s,
+  django 480 s then 486 s in the 2026-10-10 audit). A second call on the same
+  `output_dir` now re-parses only the changed files through the `index_codebase`
+  incremental path, then resolves, clusters and rebuilds the search index over
+  the whole graph; `index.mode` says which path ran. The file manifest now
+  records the `language`, `dependency_scope` and `exclude_dirs` the graph was
+  built with; a different or unrecorded value, a new `full: true`, or a failed
+  incremental pass rebuilds from scratch, so changing a setting never leaves a
+  graph built under the old one.
+
 - C++ follow-ups of #406 (#412, points 1 and 2; point 3, the suffix matching of a
   declared type, stays open on #412). Measured on ETLCPP 7d604f2e, `origin/main`
   f4f88ea against this branch, over all 262,724 / 263,091 call sites (260,219 in

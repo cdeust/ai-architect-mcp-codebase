@@ -181,7 +181,13 @@ pub fn index_incremental(
         exclude_dirs: options.exclude_dirs.clone(),
     };
     let (current, walk_gaps, walk_pruned) = discover(codebase, walk_opts)?;
-    let plan = classify(prior, &current);
+    let mut plan = classify(prior, &current);
+    // Issue #443: the refreshed manifest vouches for the settings only when
+    // the graph it extends was built with these same settings. A pass run with
+    // different ones leaves files the new settings would add or drop, so the
+    // scope becomes unknown and the next scope-checking caller rebuilds.
+    let scope = options.scope();
+    plan.next_manifest.scope = (prior.scope.as_ref() == Some(&scope)).then_some(scope);
 
     let (reparsed, reparsed_gaps) =
         apply_changes(&store, codebase, &plan.change_set, &current, policy)?;
@@ -414,6 +420,8 @@ pub fn write_full_manifest(
     };
     let (current, _walk_gaps, _walk_pruned) = discover(codebase, walk_opts)?;
     let mut m = FileManifest::new();
+    // A full index's manifest describes a graph built with exactly `options`.
+    m.scope = Some(options.scope());
     for d in &current {
         m.files.insert(
             d.rel.clone(),
