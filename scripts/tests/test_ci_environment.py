@@ -17,6 +17,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "ci_environment.sh"
 class EnvironmentTests(unittest.TestCase):
     def run_shell(self, command, *arguments):
         environment = os.environ.copy()
+        environment.pop("LBUG_BUILD_FROM_SOURCE", None)
         environment.pop("ZSTD_SYS_USE_PKG_CONFIG", None)
         return subprocess.run(
             [
@@ -70,24 +71,44 @@ class EnvironmentTests(unittest.TestCase):
             self.assertIn("no libssl.lib/libcrypto.lib", result.stderr)
             self.assertNotIn("UNREACHABLE", result.stdout)
 
-    def test_linux_exports_zstd_to_the_exact_cargo_probe(self):
-        result = self.run_shell(
-            "CI_OS=linux; CI_WORK=/unused; "
-            'cargo() { printf "%s\\n" "$ZSTD_SYS_USE_PKG_CONFIG" "$*"; }; main'
-        )
+    def test_linux_builds_lbug_from_source_for_the_exact_cargo_probe(self):
+        # The cargo stub is a separate process, not a shell function: only an
+        # exported variable reaches it, so a dropped `export` fails this test.
+        with tempfile.TemporaryDirectory() as directory:
+            stub = Path(directory) / "cargo"
+            stub.write_text(
+                '#!/usr/bin/env bash\nprintf "%s\\n" '
+                '"${LBUG_BUILD_FROM_SOURCE:-}${ZSTD_SYS_USE_PKG_CONFIG:-}" "$*"\n'
+            )
+            stub.chmod(0o755)
+            result = self.run_shell(
+                'PATH="$1:$PATH"; CI_OS=linux; CI_WORK=/unused; '
+                'sudo() { printf "%s\\n" "$*"; }; main',
+                directory,
+            )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines(),
             [
-                "1",
+                "apt-get update -qq",
+                "apt-get install -y --no-install-recommends libzstd-dev pkg-config cmake",
+                "11",
                 "run --release --locked --bin ai-architect-mcp-codebase -- install --dry-run",
             ],
         )
 
+    def test_linux_apt_failure_stops_before_cargo(self):
+        result = self.run_shell(
+            "CI_OS=linux; CI_WORK=/unused; "
+            "sudo() { return 100; }; cargo() { echo UNREACHABLE; }; main"
+        )
+        self.assertEqual(result.returncode, 100)
+        self.assertNotIn("UNREACHABLE", result.stdout)
+
     def test_macos_preserves_the_cargo_failure(self):
         result = self.run_shell(
             "CI_OS=macos; CI_WORK=/unused; "
-            'cargo() { test -z "${ZSTD_SYS_USE_PKG_CONFIG:-}"; return 42; }; main'
+            'cargo() { test -z "${LBUG_BUILD_FROM_SOURCE:-}${ZSTD_SYS_USE_PKG_CONFIG:-}"; return 42; }; main'
         )
         self.assertEqual(result.returncode, 42)
 

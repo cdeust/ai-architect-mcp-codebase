@@ -344,9 +344,16 @@ fi
 command -v cargo >/dev/null 2>&1 \
     || fatal "cargo not found; install Rust from https://rustup.rs"
 err "building from source (reason: $needs_build; first build can take several minutes)"
+if [ "$(uname -s)" = "Linux" ]; then
+    # Same linkage as .github/workflows/ci.yml: the crates.io prebuilt liblbug.a
+    # SIGSEGVs under GCC 15's libstdc++ (Ubuntu 26.04, PR #473), so lbug is
+    # compiled here; zstd-sys links the system libzstd so its copy does not
+    # collide with lbug's. Needs cmake, pkg-config and libzstd-dev.
+    export LBUG_BUILD_FROM_SOURCE=1 ZSTD_SYS_USE_PKG_CONFIG=1
+fi
 if cargo build --release --quiet --manifest-path "$MANIFEST" >&2; then
     [ -x "$BIN" ] || fatal "cargo succeeded but $BIN is not executable"
     err "source build complete"
 else
-    fatal "cargo build failed; rerun without --quiet for full output"
+    fatal "cargo build failed; rerun without --quiet for full output (Linux needs cmake, pkg-config and libzstd-dev)"
 fi

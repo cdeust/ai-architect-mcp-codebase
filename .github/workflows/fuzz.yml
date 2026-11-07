@@ -35,15 +35,18 @@ jobs:
   fuzz:
     name: fuzz ${{ matrix.target }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60: lbug is compiled from source here too (see ci.yml); a cold C++ build
+    # plus the fuzz run does not fit 30.
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
       matrix:
         target: [parse_file, parse_file_utf8]
 
-    # Same zstd/lbug static-link conflict the other jobs hit — see ci.yml.
+    # Same lbug source build and zstd linkage as ci.yml (libstdc++ ABI of the prebuilt).
     env:
+      LBUG_BUILD_FROM_SOURCE: "1"
       ZSTD_SYS_USE_PKG_CONFIG: "1"
 
     steps:
@@ -70,9 +73,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             fuzz/target
-          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-lbug-source-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-fuzz-${{ matrix.target }}-
+            ${{ runner.os }}-fuzz-${{ matrix.target }}-lbug-source-v2-
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
