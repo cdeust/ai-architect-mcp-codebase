@@ -287,6 +287,45 @@ fn a_read_source_files_that_disagrees_or_is_missing_is_refused() {
     );
 }
 
+/// claude[bot] review on #475: the read check covers every page, not only
+/// the first community page with members.
+#[test]
+fn a_stale_source_files_on_a_memberless_non_community_page_is_refused() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let claimed = golden.replacen(
+        r#""source_files": []"#,
+        r#""source_files": ["src/a.rs"]"#,
+        1,
+    );
+    assert_ne!(
+        claimed, golden,
+        "the fixture must contain the replaced text"
+    );
+    let expected = SkeletonError::StaleSourceFiles {
+        kind: PageKind::GodNode,
+        page: "g1".into(),
+    };
+    assert_eq!(WikiSkeleton::from_json(&claimed), Err(expected));
+}
+
+/// claude[bot] review on #475: a key repeated in `cross_community_edges` is
+/// refused instead of letting the last value win.
+#[test]
+fn a_repeated_cross_community_key_is_refused() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let repeated = golden.replacen(r#""c2": 5"#, r#""c2": 5, "c2": 999999"#, 1);
+    assert_ne!(
+        repeated, golden,
+        "the fixture must contain the replaced text"
+    );
+    let err = WikiSkeleton::from_json(&repeated).unwrap_err();
+    assert!(
+        matches!(&err, SkeletonError::Json(m) if m.contains("repeats key")),
+        "{err:?}"
+    );
+    assert!(serde_json::from_str::<WikiSkeleton>(&repeated).is_err());
+}
+
 /// The read copy is canonicalised like every other list: the same set of
 /// files in another order or with a repeat is accepted.
 #[test]
@@ -909,10 +948,12 @@ fn the_wiki_module_names_no_network_or_model_client_api() {
     );
     let wiki = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wiki");
     sources.retain(|p| *p != wiki.join("skeleton_tests.rs"));
-    assert!(
-        sources.len() >= 2,
-        "the tripwire must scan the wiki sources: {sources:?}"
-    );
+    for name in ["mod.rs", "error.rs", "skeleton.rs"] {
+        assert!(
+            sources.contains(&wiki.join(name)),
+            "the tripwire must scan {name}: {sources:?}"
+        );
+    }
     for path in &sources {
         let text = std::fs::read_to_string(path).unwrap();
         for pattern in FORBIDDEN {

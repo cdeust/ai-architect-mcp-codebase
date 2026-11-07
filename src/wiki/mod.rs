@@ -12,6 +12,7 @@
 // from a `GraphStore` and the MCP tool that exports them are later slices of
 // #196.
 
+mod checks;
 mod error;
 pub mod skeleton;
 

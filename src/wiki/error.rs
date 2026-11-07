@@ -47,7 +47,7 @@ impl fmt::Display for SkeletonError {
             Self::StaleSourceFiles { kind, page } => {
                 write!(
                     f,
-                    "{kind:?} page {page:?} lists source_files that are not exactly its members' files"
+                    "{kind:?} page {page:?} has source_files that do not match its members' files"
                 )
             }
             Self::EmptyId(what) => write!(f, "{what} must not be empty"),
@@ -68,7 +68,10 @@ impl fmt::Display for SkeletonError {
                 "page {page:?} tags edge {source:?} -{relation:?}-> {target:?} twice"
             ),
             Self::SelfCrossCommunity { page } => {
-                write!(f, "page {page:?} counts cross-community edges to itself")
+                write!(
+                    f,
+                    "community page {page:?} counts cross-community edges to itself"
+                )
             }
             Self::SchemaVersion { found } => {
                 write!(f, "schema version {found:?} is not {SCHEMA_VERSION:?}")

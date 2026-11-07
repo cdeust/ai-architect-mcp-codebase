@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
+use super::checks::{repo_relative, unique_keys};
 use super::error::SkeletonError;
 
 /// Embedded in every artifact. Bump on any change to the serialised shape.
@@ -69,32 +70,6 @@ impl TryFrom<RawLocation> for Location {
     fn try_from(raw: RawLocation) -> Result<Self, Self::Error> {
         Location::new(raw.file, raw.line)
     }
-}
-
-/// Refuse anything a later slice could turn into a path outside the repo
-/// (CWE-22): an empty path, an absolute or drive/UNC-prefixed one, a `..`
-/// component, a backslash or a control character. Empty and `.` components
-/// are refused too, so one file has one spelling (`src/a.rs`, never
-/// `./src/a.rs` or `src//a.rs`) and `source_files` cannot list it twice.
-/// Callers that open a file must still join it to the repo root and check
-/// the canonical prefix.
-fn repo_relative(file: &str) -> Result<(), SkeletonError> {
-    if file.is_empty() {
-        return Err(SkeletonError::EmptyFile);
-    }
-    let bytes = file.as_bytes();
-    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-    let unsafe_path = file.starts_with('/')
-        || drive
-        || file.contains('\\')
-        || file.chars().any(char::is_control)
-        || file
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..");
-    if unsafe_path {
-        return Err(SkeletonError::UnsafePath(file.to_owned()));
-    }
-    Ok(())
 }
 
 impl Location {
@@ -206,7 +181,10 @@ pub struct Page {
     pub title: String,
     pub members: Vec<Symbol>,
     pub edges: Vec<Edge>,
-    /// Edge count from this page to each other community, keyed by its id.
+    /// Edge count from this page to each community, keyed by community id (a
+    /// community page cannot list itself). A key repeated in the JSON is
+    /// refused, not merged.
+    #[serde(deserialize_with = "unique_keys")]
     pub cross_community_edges: BTreeMap<String, u64>,
     /// Required on read and compared there (an explicit `[]` included).
     source_files: Vec<String>,
