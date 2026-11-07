@@ -16,7 +16,7 @@ mod reason;
 mod settle;
 mod variant_guard;
 use candidate_scope::qualified_path_gate;
-use gates::{rust_local_receiver_gate, same_class_receiver_gate};
+use gates::{rust_local_receiver_gate, same_class_receiver_gate, ts_constructed_receiver_gate};
 use includes::IncludeGraph;
 use reason::{Failure, Gated};
 use settle::{record_reason, settle, CallTally, Located};
@@ -349,6 +349,9 @@ fn resolve_single_call(ctx: &ResolveContext, site: &CallSite, file_id: &str) -> 
         return gated;
     }
     if let Some(gated) = rust_local_receiver_gate(ctx, site, file_id) {
+        return gated;
+    }
+    if let Some(gated) = ts_constructed_receiver_gate(ctx, site, file_id) {
         return gated;
     }
     // A path into std or a foreign crate names no repository item (issue #393).

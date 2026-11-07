@@ -8,6 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **TypeScript/JavaScript: a call on a local built by `new` binds to the
+  constructed class** (issue #444, first slice). `const w = new Worker();
+  w.run()` reached the resolver as the bare name `w.run`: the local-receiver
+  type (`CallSite.receiver_hint`) was produced for Rust and C++ only, so with
+  two classes owning `run` the call stayed unresolved. The TS call walker now
+  attaches `receiver_hint = Worker` (`receiver_hint_via = constructed`) when the
+  call's enclosing function declares the receiver exactly once, by
+  `const`/`let`/`var x = new T(..)` written before the call in a block that
+  contains it, and nothing else in the function binds or writes `x`
+  (`parser::spec::ts_receiver`). The resolver binds it to `T::<m>` when the
+  caller's file defines the class `T` with that method, and otherwise keeps the
+  by-name path it took before, so no previous edge is removed. Reassigned,
+  shadowed, destructured, parameter and module-scope receivers carry no hint.
+  Tests: `tests/ts_constructed_local_receiver_444.rs` (fails on `main` with no
+  edge for `useConst`), four unit tests in `ts_receiver`.
+
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
