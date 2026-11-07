@@ -434,6 +434,23 @@ fn pages_are_ordered_by_kind_then_id_and_duplicates_are_refused() {
             id: "p".into()
         }
     );
+    // The kind in the error is the duplicated page's, not a constant.
+    let twice = vec![
+        Page::new(PageKind::Community, "c", "a"),
+        Page::new(PageKind::Community, "c", "b"),
+    ];
+    let err = WikiSkeleton::new(twice).unwrap_err();
+    let expected = SkeletonError::DuplicatePage {
+        kind: PageKind::Community,
+        id: "c".into(),
+    };
+    assert_eq!(err, expected);
+    assert_eq!(err.to_string(), "duplicate community page \"c\"");
+    let god = SkeletonError::StaleSourceFiles {
+        kind: PageKind::GodNode,
+        page: "g1".into(),
+    };
+    assert!(god.to_string().starts_with("god_node page"), "{god}");
 }
 
 #[test]
@@ -550,8 +567,9 @@ fn another_schema_version_is_refused_on_read() {
 }
 
 /// claude[bot] review on #475: the version is checked before `new` and the
-/// `source_files` comparison, so a broken v1-shaped `/0` document is still a
-/// `SchemaVersion` error on both read paths.
+/// `source_files` comparison, so a broken v1-shaped `/0` document is still
+/// `SchemaVersion` from `from_json`, and a serde error naming the schema
+/// version from plain serde.
 #[test]
 fn the_version_is_checked_before_page_validation() {
     let golden = include_str!("testdata/skeleton_v1.json");
@@ -797,7 +815,8 @@ fn edge_fields_are_readable() {
 }
 
 /// Every level refuses an unknown field, and the gap enum refuses an unknown
-/// kind. Removing any one `deny_unknown_fields` fails exactly its row.
+/// kind. Each struct-level `deny_unknown_fields` has at least one row (the
+/// `CoverageGap` attribute covers both gap rows).
 #[test]
 fn an_unknown_field_is_refused_at_every_level() {
     let golden = include_str!("testdata/skeleton_v1.json");

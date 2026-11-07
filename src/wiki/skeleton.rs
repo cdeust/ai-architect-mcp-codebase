@@ -169,6 +169,18 @@ pub enum PageKind {
     GodNode,
 }
 
+/// The serde name (`god_node`), so an error message can be grepped for in
+/// the artifact.
+impl std::fmt::Display for PageKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Community => "community",
+            Self::Process => "process",
+            Self::GodNode => "god_node",
+        })
+    }
+}
+
 /// One page stub. `source_files` is private and derived from `members` by
 /// `WikiSkeleton::new`, which overwrites it; on read it is required and a
 /// value whose *set* of files differs from the members' (order and repeats

@@ -49,14 +49,14 @@ impl fmt::Display for SkeletonError {
             Self::StaleSourceFiles { kind, page } => {
                 write!(
                     f,
-                    "{kind:?} page {page:?} has source_files that do not match its members' files"
+                    "{kind} page {page:?} has source_files that do not match its members' files"
                 )
             }
             Self::EmptyId(what) => write!(f, "{what} must not be empty"),
-            Self::DuplicatePage { kind, id } => write!(f, "duplicate {kind:?} page {id:?}"),
+            Self::DuplicatePage { kind, id } => write!(f, "duplicate {kind} page {id:?}"),
             Self::DuplicateSymbol { kind, page, id } => write!(
                 f,
-                "{kind:?} page {page:?} lists member {id:?} twice with different fields"
+                "{kind} page {page:?} lists member {id:?} twice with different fields"
             ),
             Self::DuplicateEdge {
                 kind,
@@ -66,7 +66,7 @@ impl fmt::Display for SkeletonError {
                 relation,
             } => write!(
                 f,
-                "{kind:?} page {page:?} tags edge {source:?} -{relation:?}-> {target:?} twice"
+                "{kind} page {page:?} tags edge {source:?} -{relation:?}-> {target:?} twice"
             ),
             Self::SelfCrossCommunity { page } => {
                 write!(
