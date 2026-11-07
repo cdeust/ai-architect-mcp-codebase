@@ -19,10 +19,14 @@ fn community_page(gaps: Vec<CoverageGap>) -> Page {
     let mut page = Page::new(PageKind::Community, "c1", "parser");
     page.members = vec![symbol("b", "src/b.rs", 7), symbol("a", "src/a.rs", 3)];
     page.edges = vec![
-        Edge::new("a", "b", "Calls", Provenance::Inferred, loc("src/a.rs", 4)),
         Edge::new(
-            "a",
-            "b",
+            ("a", "b"),
+            "Calls",
+            Provenance::Inferred,
+            loc("src/a.rs", 4),
+        ),
+        Edge::new(
+            ("a", "b"),
             "Defines",
             Provenance::Extracted,
             loc("src/a.rs", 3),

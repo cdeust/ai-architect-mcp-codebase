@@ -127,16 +127,16 @@ pub struct Edge {
 }
 
 impl Edge {
+    /// `ends` is `(source id, target id)`.
     pub fn new(
-        source: impl Into<String>,
-        target: impl Into<String>,
+        ends: (impl Into<String>, impl Into<String>),
         relation: impl Into<String>,
         provenance: Provenance,
         location: Location,
     ) -> Self {
         Self {
-            source: source.into(),
-            target: target.into(),
+            source: ends.0.into(),
+            target: ends.1.into(),
             relation: relation.into(),
             provenance,
             location,
