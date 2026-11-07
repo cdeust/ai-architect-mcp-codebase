@@ -162,7 +162,10 @@ query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep
 ```
 
-Re-run `analyze_codebase` after edits; indexing is incremental by default.
+Re-run `analyze_codebase` after edits: on the same `output_dir` it re-parses only
+the files that changed, then re-resolves and re-clusters the whole graph. A change
+of `language`, `dependency_scope` or `exclude_dirs`, or `full: true`, rebuilds
+from scratch.
 
 ## 27 MCP Tools
 

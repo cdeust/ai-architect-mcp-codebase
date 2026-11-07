@@ -48,12 +48,33 @@ pub struct FileState {
     pub content_hash: String,
 }
 
+/// The walk and parse settings a graph was built with (issue #443).
+///
+/// The per-file states say WHICH files changed; they cannot say whether the
+/// caller now asks for a different language filter, dependency tier or set of
+/// excluded directories, any of which changes which files belong in the graph
+/// at all. A pass that wants to reuse the graph incrementally compares this
+/// value with its own settings and rebuilds in full on any difference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexScope {
+    /// `None` for per-file auto-detection, else the forced language.
+    pub language: Option<String>,
+    pub dependency_scope: String,
+    /// `ExcludeSet::canonical_entries`: sorted, kind-tagged.
+    pub exclude_dirs: Vec<String>,
+}
+
 /// The whole sidecar: schema tag + rel_path → state map. `BTreeMap` keeps the
 /// serialized order stable so the JSON diffs cleanly across re-indexes.
+///
+/// `scope` is optional so a manifest written before issue #443 still loads; an
+/// absent scope means "settings unknown", never "settings match".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileManifest {
     pub schema_version: u32,
     pub files: BTreeMap<String, FileState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<IndexScope>,
 }
 
 impl FileManifest {
@@ -62,6 +83,7 @@ impl FileManifest {
         FileManifest {
             schema_version: MANIFEST_SCHEMA_VERSION,
             files: BTreeMap::new(),
+            scope: None,
         }
     }
 }

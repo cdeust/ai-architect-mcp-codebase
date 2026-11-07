@@ -18,6 +18,7 @@ use crate::lsp_resolver;
 use crate::query_handlers::*;
 use crate::resolver;
 
+mod index_phase;
 mod lsp_coverage;
 mod lsp_durability;
 mod lsp_outcome;
@@ -57,6 +58,9 @@ struct AnalyzeRequest {
     lang_filter: Option<crate::parser::Language>,
     gamma: f64,
     enable_lsp: bool,
+    /// Issue #443: rebuild from scratch even when the previous graph could be
+    /// reused incrementally.
+    want_full: bool,
 }
 
 impl AnalyzeRequest {
@@ -96,6 +100,7 @@ impl AnalyzeRequest {
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1.0),
             enable_lsp: args.get("lsp").and_then(|v| v.as_bool()).unwrap_or(false),
+            want_full: parse_bool_arg(args, "full", false)?,
         })
     }
 }
@@ -162,7 +167,7 @@ fn graph_totals(graph_dir: &std::path::Path) -> Value {
 
 /// The four phases' counts, as one response.
 fn analyze_envelope(
-    index_result: &indexer::IndexResult,
+    index: &index_phase::IndexPhase,
     resolve_result: &resolver::ResolutionResult,
     cluster_result: &clustering::ClusteringResult,
     search_index_result: &search::SearchIndexResult,
@@ -173,13 +178,9 @@ fn analyze_envelope(
         "stage": 3,
         "status": "ok",
         "tool": "analyze_codebase",
-        "graph_path": index_result.graph_path.to_string_lossy(),
-        "index": {
-            "node_count": index_result.node_count,
-            "edge_count": index_result.edge_count,
-            "files_indexed": index_result.files_indexed,
-        },
-        "graph": graph_totals(&index_result.graph_path),
+        "graph_path": index.graph_path.to_string_lossy(),
+        "index": index.summary,
+        "graph": graph_totals(&index.graph_path),
         "resolve": {
             "phase": "static",
             "total_edges": resolve_result.total_edges,
@@ -208,16 +209,12 @@ fn analyze_envelope(
 pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let args = arguments.as_object().ok_or("arguments must be an object")?;
     let req = AnalyzeRequest::prepare(args)?;
-    if req.graph_dir.exists() {
-        // Prior run may have left a dir OR a single-file Kuzu db; remove either.
-        remove_stale_graph_artifact(&req.graph_dir)?;
-    }
     let total_start = std::time::Instant::now();
 
-    // Phase 1: index, then coverage + manifest before the metadata commit point.
-    let mut index_result =
-        indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
-    let sidecar_err = persist_analyze_sidecars(&req, &index_result.coverage)?;
+    // Phase 1: index (incrementally when the previous graph allows it, issue
+    // #443), with coverage + manifest written before the metadata commit point.
+    let mut index_result = index_phase::run(&req)?;
+    let sidecar_err = index_result.sidecar_err.take();
     // Phase 2: resolve, then optionally refine with an LSP.
     let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
     let resolve_result = resolver::resolve_graph(&store)?;

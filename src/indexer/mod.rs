@@ -98,6 +98,21 @@ pub struct IndexOptions {
     pub exclude_dirs: ExcludeSet,
 }
 
+impl IndexOptions {
+    /// These options as the manifest records them (issue #443): two values are
+    /// equal exactly when a walk under either would select the same files and
+    /// parse them the same way. The enums' `Debug` names are unit-variant
+    /// identifiers, stable within a build; a rename across builds only makes
+    /// the comparison fail, which costs a full rebuild, never a stale graph.
+    pub fn scope(&self) -> manifest::IndexScope {
+        manifest::IndexScope {
+            language: self.language_filter.map(|l| format!("{l:?}")),
+            dependency_scope: format!("{:?}", self.dependency_scope),
+            exclude_dirs: self.exclude_dirs.canonical_entries(),
+        }
+    }
+}
+
 pub struct IndexResult {
     pub graph_path: PathBuf,
     pub node_count: u64,
