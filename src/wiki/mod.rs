@@ -6,7 +6,9 @@
 //
 // This first slice is the artifact itself: the versioned schema, the
 // type-level provenance tag on every edge, the mandatory `file:line` on every
-// structural claim, the always-present coverage block, and the canonical
+// member, edge and missed-graph gap (a `parse_incomplete` gap is file-level
+// and a cross-community count has no line), the always-present coverage
+// block, and the canonical
 // (byte-identical) serialisation. Building pages from a `GraphStore` and the
 // MCP tool that exports them are later slices of #196.
 

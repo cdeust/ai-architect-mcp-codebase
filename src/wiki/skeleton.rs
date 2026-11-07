@@ -7,6 +7,10 @@
 //   enum has exactly the two values `extracted` / `inferred`. Deserialising
 //   an edge with a missing or unknown tag is an error, so an untagged edge is
 //   unrepresentable on both sides of the wire.
+// * edges, members, missed-graph names and cross-community keys refuse empty
+//   ids; two members sharing an id are refused. An edge's ends are NOT
+//   required to be members of its page: a page lists the edges that leave it
+//   too, and their targets live on other pages.
 // * criterion 4 — `Symbol`, `Edge` and a missed-graph gap each hold a
 //   `Location`, whose `line` is a `NonZeroU32` and whose `file` is non-empty.
 // * criterion 5 — `Page::coverage` is serialised unconditionally: an empty
@@ -15,7 +19,7 @@
 //   derives `source_files` from the members, so the same input in any order
 //   produces byte-identical JSON. Maps are `BTreeMap`s.
 // * criterion 7 — `SCHEMA_VERSION` is embedded in the artifact, and
-//   `from_json` refuses any other version.
+//   every deserialisation path refuses any other version, whatever its shape.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,6 +36,8 @@ pub enum SkeletonError {
     ZeroLine,
     EmptyId(&'static str),
     DuplicatePage { kind: PageKind, id: String },
+    DuplicateSymbol { page: String, id: String },
+    SelfCrossCommunity { page: String },
     SchemaVersion { found: String },
     Json(String),
 }
@@ -43,6 +49,15 @@ impl fmt::Display for SkeletonError {
             Self::ZeroLine => write!(f, "a location line is 1-based; 0 is not a line"),
             Self::EmptyId(what) => write!(f, "{what} needs a non-empty id"),
             Self::DuplicatePage { kind, id } => write!(f, "duplicate {kind:?} page {id:?}"),
+            Self::DuplicateSymbol { page, id } => {
+                write!(
+                    f,
+                    "page {page:?} lists member {id:?} twice with different fields"
+                )
+            }
+            Self::SelfCrossCommunity { page } => {
+                write!(f, "page {page:?} counts cross-community edges to itself")
+            }
             Self::SchemaVersion { found } => {
                 write!(f, "schema version {found:?} is not {SCHEMA_VERSION:?}")
             }
@@ -204,20 +219,45 @@ impl Page {
     }
 
     fn validate(&self) -> Result<(), SkeletonError> {
-        if self.id.is_empty() {
-            return Err(SkeletonError::EmptyId("page"));
+        non_empty(&self.id, "page")?;
+        for symbol in &self.members {
+            non_empty(&symbol.id, "member symbol")?;
         }
-        if self.members.iter().any(|s| s.id.is_empty()) {
-            return Err(SkeletonError::EmptyId("member symbol"));
+        for edge in &self.edges {
+            non_empty(&edge.source, "edge source")?;
+            non_empty(&edge.target, "edge target")?;
+            non_empty(&edge.relation, "edge relation")?;
         }
-        let empty_gap_file = self
-            .coverage
-            .iter()
-            .any(|g| matches!(g, CoverageGap::ParseIncomplete { file } if file.is_empty()));
-        if empty_gap_file {
-            return Err(SkeletonError::EmptyFile);
+        for key in self.cross_community_edges.keys() {
+            non_empty(key, "cross-community key")?;
+            if *key == self.id {
+                return Err(SkeletonError::SelfCrossCommunity {
+                    page: self.id.clone(),
+                });
+            }
+        }
+        for gap in &self.coverage {
+            match gap {
+                CoverageGap::Missed { name, .. } => non_empty(name, "missed-graph entry")?,
+                CoverageGap::ParseIncomplete { file } if file.is_empty() => {
+                    return Err(SkeletonError::EmptyFile)
+                }
+                CoverageGap::ParseIncomplete { .. } => {}
+            }
         }
         Ok(())
+    }
+
+    /// After `normalize`, members are sorted by id first, so two members that
+    /// share an id but differ elsewhere are adjacent.
+    fn check_unique_members(&self) -> Result<(), SkeletonError> {
+        match self.members.windows(2).find(|w| w[0].id == w[1].id) {
+            Some(pair) => Err(SkeletonError::DuplicateSymbol {
+                page: self.id.clone(),
+                id: pair[0].id.clone(),
+            }),
+            None => Ok(()),
+        }
     }
 
     /// Put every list in its canonical order and derive `source_files`.
@@ -230,8 +270,15 @@ impl Page {
     }
 }
 
+fn non_empty(value: &str, what: &'static str) -> Result<(), SkeletonError> {
+    if value.is_empty() {
+        return Err(SkeletonError::EmptyId(what));
+    }
+    Ok(())
+}
+
 fn sort_dedup<T: Ord>(items: &mut Vec<T>) {
-    items.sort();
+    items.sort_unstable();
     items.dedup();
 }
 
@@ -245,11 +292,17 @@ pub struct WikiSkeleton {
     pages: Vec<Page>,
 }
 
+/// Permissive on purpose: only `schema_version` is required to parse, so an
+/// artifact of another version is refused as `SchemaVersion` even when its
+/// shape differs from v1. The v1 shape (no unknown field, typed pages) is
+/// enforced only after the version matches.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct RawSkeleton {
     schema_version: String,
-    pages: Vec<Page>,
+    #[serde(default)]
+    pages: Option<serde_json::Value>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
 }
 
 impl TryFrom<RawSkeleton> for WikiSkeleton {
@@ -260,7 +313,15 @@ impl TryFrom<RawSkeleton> for WikiSkeleton {
                 found: raw.schema_version,
             });
         }
-        Self::new(raw.pages)
+        if let Some(field) = raw.unknown.keys().next() {
+            return Err(SkeletonError::Json(format!("unknown field `{field}`")));
+        }
+        let pages = raw
+            .pages
+            .ok_or_else(|| SkeletonError::Json("missing field `pages`".to_owned()))?;
+        let pages =
+            serde_json::from_value(pages).map_err(|e| SkeletonError::Json(e.to_string()))?;
+        Self::new(pages)
     }
 }
 
@@ -270,6 +331,7 @@ impl WikiSkeleton {
         for page in &mut pages {
             page.validate()?;
             page.normalize();
+            page.check_unique_members()?;
         }
         pages.sort_by(|a, b| (a.kind, &a.id).cmp(&(b.kind, &b.id)));
         if let Some(pair) = pages

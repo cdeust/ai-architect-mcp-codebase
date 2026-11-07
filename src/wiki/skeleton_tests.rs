@@ -147,6 +147,8 @@ fn the_same_graph_in_any_order_gives_byte_identical_json() {
     reversed.edges.reverse();
     reversed.coverage.reverse();
     reversed.members.push(reversed.members[0].clone());
+    reversed.edges.push(reversed.edges[0].clone());
+    reversed.coverage.push(reversed.coverage[0].clone());
     let process = Page::new(PageKind::Process, "p1", "main flow");
     let god = Page::new(PageKind::GodNode, "g1", "GraphStore");
     let first = WikiSkeleton::new(vec![community_page(gaps()), process.clone(), god.clone()]);
@@ -154,6 +156,50 @@ fn the_same_graph_in_any_order_gives_byte_identical_json() {
     assert_eq!(
         first.unwrap().to_json().unwrap(),
         second.unwrap().to_json().unwrap()
+    );
+}
+
+#[test]
+fn cross_community_counts_serialise_in_key_order_whatever_the_insertion_order() {
+    let keys = ["c9", "c2", "c5", "c3"];
+    let mut forward = Page::new(PageKind::Community, "c1", "x");
+    let mut backward = Page::new(PageKind::Community, "c1", "x");
+    for (n, key) in keys.iter().enumerate() {
+        forward
+            .cross_community_edges
+            .insert((*key).to_owned(), n as u64);
+    }
+    for (n, key) in keys.iter().enumerate().rev() {
+        backward
+            .cross_community_edges
+            .insert((*key).to_owned(), n as u64);
+    }
+    let a = WikiSkeleton::new(vec![forward]).unwrap().to_json().unwrap();
+    let b = WikiSkeleton::new(vec![backward])
+        .unwrap()
+        .to_json()
+        .unwrap();
+    assert_eq!(a, b);
+    let positions: Vec<usize> = ["c2", "c3", "c5", "c9"]
+        .iter()
+        .map(|k| a.find(&format!("\"{k}\"")).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|w| w[0] < w[1]), "{a}");
+}
+
+/// Pins the v1 bytes: a field rename, a field reorder or a formatting change
+/// must come with a `SCHEMA_VERSION` bump and a new fixture.
+#[test]
+fn the_v1_output_matches_the_golden_fixture_byte_for_byte() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let built = WikiSkeleton::new(vec![
+        community_page(gaps()),
+        Page::new(PageKind::GodNode, "g1", "GraphStore"),
+    ]);
+    assert_eq!(built.unwrap().to_json().unwrap(), golden);
+    assert_eq!(
+        WikiSkeleton::from_json(golden).unwrap().to_json().unwrap(),
+        golden
     );
 }
 
@@ -213,6 +259,62 @@ fn empty_ids_and_empty_gap_files_are_refused() {
 }
 
 #[test]
+fn empty_edge_fields_cross_keys_and_missed_names_are_refused() {
+    let edge = |ends: (&str, &str), relation: &str| {
+        let mut page = Page::new(PageKind::Community, "c", "x");
+        page.edges = vec![Edge::new(ends, relation, Provenance::Inferred, loc("f", 1))];
+        WikiSkeleton::new(vec![page])
+    };
+    assert_eq!(
+        edge(("", "b"), "Calls"),
+        Err(SkeletonError::EmptyId("edge source"))
+    );
+    assert_eq!(
+        edge(("a", ""), "Calls"),
+        Err(SkeletonError::EmptyId("edge target"))
+    );
+    assert_eq!(
+        edge(("a", "b"), ""),
+        Err(SkeletonError::EmptyId("edge relation"))
+    );
+    let mut key = Page::new(PageKind::Community, "c", "x");
+    key.cross_community_edges.insert(String::new(), 1);
+    assert_eq!(
+        WikiSkeleton::new(vec![key]),
+        Err(SkeletonError::EmptyId("cross-community key"))
+    );
+    let mut own = Page::new(PageKind::Community, "c", "x");
+    own.cross_community_edges.insert("c".to_owned(), 1);
+    let err = WikiSkeleton::new(vec![own]).unwrap_err();
+    assert_eq!(err, SkeletonError::SelfCrossCommunity { page: "c".into() });
+    let mut missed = Page::new(PageKind::Community, "c", "x");
+    missed.coverage = vec![CoverageGap::Missed {
+        name: String::new(),
+        location: loc("f", 2),
+    }];
+    let err = WikiSkeleton::new(vec![missed]).unwrap_err();
+    assert_eq!(err, SkeletonError::EmptyId("missed-graph entry"));
+}
+
+#[test]
+fn two_members_sharing_an_id_are_refused_even_when_other_fields_differ() {
+    let mut page = Page::new(PageKind::Community, "c", "x");
+    page.members = vec![
+        symbol("a", "src/a.rs", 1),
+        symbol("b", "src/b.rs", 1),
+        symbol("a", "src/z.rs", 9),
+    ];
+    let err = WikiSkeleton::new(vec![page]).unwrap_err();
+    assert_eq!(
+        err,
+        SkeletonError::DuplicateSymbol {
+            page: "c".into(),
+            id: "a".into()
+        }
+    );
+}
+
+#[test]
 fn the_schema_version_is_embedded_and_round_trips() {
     let skeleton = WikiSkeleton::new(vec![community_page(gaps())]).unwrap();
     let json = skeleton.to_json().unwrap();
@@ -236,6 +338,32 @@ fn another_schema_version_is_refused_on_read() {
         WikiSkeleton::from_json("{"),
         Err(SkeletonError::Json(_))
     ));
+}
+
+/// claude[bot] review on #475: another version is refused as `SchemaVersion`
+/// even when its shape is not v1's, and the v1 shape is still strict.
+#[test]
+fn another_version_with_another_shape_is_still_a_schema_version_error() {
+    let v2 = r#"{"schema_version":"ai-architect.wiki-skeleton/2","pages":"renamed","extra":1}"#;
+    let err = WikiSkeleton::from_json(v2).unwrap_err();
+    let found = "ai-architect.wiki-skeleton/2".to_owned();
+    assert_eq!(err, SkeletonError::SchemaVersion { found });
+    let serde_err = serde_json::from_str::<WikiSkeleton>(v2)
+        .unwrap_err()
+        .to_string();
+    assert!(serde_err.contains("schema version"), "{serde_err}");
+    let extra = format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[],"extra":1}}"#);
+    assert!(
+        matches!(WikiSkeleton::from_json(&extra), Err(SkeletonError::Json(m)) if m.contains("extra"))
+    );
+    let missing = format!(r#"{{"schema_version":"{SCHEMA_VERSION}"}}"#);
+    assert!(
+        matches!(WikiSkeleton::from_json(&missing), Err(SkeletonError::Json(m)) if m.contains("pages"))
+    );
+    let unknown_page_field = format!(
+        r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{{"kind":"process","id":"p","title":"t","members":[],"edges":[],"cross_community_edges":{{}},"coverage":[],"x":1}}]}}"#
+    );
+    assert!(WikiSkeleton::from_json(&unknown_page_field).is_err());
 }
 
 /// Codex review on #475: the derived `Deserialize` must not bypass `new`.
@@ -274,6 +402,11 @@ fn every_error_has_a_message() {
             kind: PageKind::Community,
             id: "c".into(),
         },
+        SkeletonError::DuplicateSymbol {
+            page: "c".into(),
+            id: "a".into(),
+        },
+        SkeletonError::SelfCrossCommunity { page: "c".into() },
         SkeletonError::SchemaVersion { found: "x".into() },
         SkeletonError::Json("bad".into()),
     ];
@@ -282,39 +415,99 @@ fn every_error_has_a_message() {
     }
 }
 
-/// Criteria 1 and 2, mechanically, for the code that exists today: nothing
-/// under `src/wiki/` may name a network or model-client API. The export path
-/// added by later slices of #196 lands under the same directory and is held
-/// to the same guard.
+/// Words that name a network or model-client API, matched case-insensitively
+/// and on identifier boundaries, so `hyperlink`, `philanthropic` and
+/// `network` do not trip it while `OpenAI` and `{net::TcpListener}` do.
+const FORBIDDEN: [&str; 12] = [
+    "tcpstream",
+    "tcplistener",
+    "udpsocket",
+    "reqwest",
+    "ureq",
+    "hyper",
+    "anthropic",
+    "openai",
+    "net::",
+    "::net",
+    "process::command",
+    "command::new",
+];
+
+fn is_ident(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// `pattern` occurs in `text` with no identifier character glued to an
+/// identifier end of the pattern.
+fn names_on_a_boundary(text: &str, pattern: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let glued_before = pattern.starts_with(is_ident);
+    let glued_after = pattern.ends_with(is_ident);
+    lower.match_indices(pattern).any(|(i, _)| {
+        let before = lower[..i].chars().next_back();
+        let after = lower[i + pattern.len()..].chars().next();
+        let glued_left = glued_before && before.is_some_and(is_ident);
+        let glued_right = glued_after && after.is_some_and(is_ident);
+        !glued_left && !glued_right
+    })
+}
+
+fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            rust_sources(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+#[test]
+fn the_boundary_matcher_catches_disguised_names_and_spares_innocent_words() {
+    let hits = |text: &str| FORBIDDEN.iter().any(|p| names_on_a_boundary(text, p));
+    for bad in [
+        "use std::{net::TcpListener};",
+        "OpenAI client",
+        "std::process::Command",
+        "Anthropic",
+    ] {
+        assert!(hits(bad), "missed {bad:?}");
+    }
+    for fine in [
+        "a hyperlink",
+        "philanthropic",
+        "no network at index time",
+        "magnet",
+    ] {
+        assert!(!hits(fine), "false positive on {fine:?}");
+    }
+}
+
+/// A tripwire for criteria 1 and 2, not their enforcement: nothing under
+/// `src/wiki/` (recursively, `*.rs`) may name a network or model-client API.
+/// The real enforcement is the runtime no-egress test that lands with the
+/// export path in a later slice of #196.
 #[test]
 fn the_wiki_module_names_no_network_or_model_client_api() {
-    const FORBIDDEN: [&str; 9] = [
-        "std::net",
-        "TcpStream",
-        "UdpSocket",
-        "reqwest",
-        "ureq",
-        "hyper",
-        "tokio::net",
-        "anthropic",
-        "openai",
-    ];
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wiki");
-    let this_file = "skeleton_tests.rs";
-    let mut scanned = 0;
-    for entry in std::fs::read_dir(&dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.file_name().is_some_and(|n| n == this_file) {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        for token in FORBIDDEN {
-            assert!(!text.contains(token), "{} names {token}", path.display());
-        }
-        scanned += 1;
-    }
-    assert!(
-        scanned >= 2,
-        "the guard must scan the wiki sources, scanned {scanned}"
+    let mut sources = Vec::new();
+    rust_sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wiki"),
+        &mut sources,
     );
+    sources.retain(|p| !p.ends_with("skeleton_tests.rs"));
+    assert!(
+        sources.len() >= 2,
+        "the tripwire must scan the wiki sources: {sources:?}"
+    );
+    for path in &sources {
+        let text = std::fs::read_to_string(path).unwrap();
+        for pattern in FORBIDDEN {
+            assert!(
+                !names_on_a_boundary(&text, pattern),
+                "{} names {pattern}",
+                path.display()
+            );
+        }
+    }
 }
