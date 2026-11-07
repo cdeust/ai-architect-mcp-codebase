@@ -1,4 +1,5 @@
-// Tests for wiki::skeleton — issue #196, criteria 3 to 7 (artifact slice).
+// Tests for wiki::skeleton — issue #196, criteria 3 to 7, plus the criteria
+// 1–2 tripwire (artifact slice).
 
 use super::*;
 
@@ -111,6 +112,19 @@ fn every_structural_claim_carries_file_and_line() {
             "edge without file:line: {edge}"
         );
     }
+    let missed: Vec<_> = page["coverage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["kind"] == "missed")
+        .collect();
+    assert!(
+        !missed.is_empty(),
+        "the fixture page has a missed-graph gap"
+    );
+    for gap in missed {
+        assert!(anchored(&gap["location"]), "gap without file:line: {gap}");
+    }
 }
 
 #[test]
@@ -205,10 +219,20 @@ fn the_v1_output_matches_the_golden_fixture_byte_for_byte() {
 
 #[test]
 fn source_files_are_derived_from_the_members() {
-    let mut page = community_page(vec![]);
-    page.source_files = vec!["stale.rs".to_owned()];
-    let skeleton = WikiSkeleton::new(vec![page]).unwrap();
-    assert_eq!(skeleton.pages()[0].source_files, ["src/a.rs", "src/b.rs"]);
+    let skeleton = WikiSkeleton::new(vec![community_page(vec![])]).unwrap();
+    assert_eq!(skeleton.pages()[0].source_files(), ["src/a.rs", "src/b.rs"]);
+    let mut stale = community_page(vec![]);
+    stale.source_files = vec!["stale.rs".to_owned()];
+    let err = WikiSkeleton::new(vec![stale]).unwrap_err();
+    assert_eq!(err, SkeletonError::StaleSourceFiles { page: "c1".into() });
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let tampered = golden.replacen("\"src/b.rs\"\n      ]", "\"src/c.rs\"\n      ]", 1);
+    assert_ne!(
+        tampered, golden,
+        "the fixture must contain the replaced text"
+    );
+    let err = WikiSkeleton::from_json(&tampered).unwrap_err();
+    assert_eq!(err, SkeletonError::StaleSourceFiles { page: "c1".into() });
 }
 
 #[test]
@@ -221,6 +245,18 @@ fn pages_are_ordered_by_kind_then_id_and_duplicates_are_refused() {
     let skeleton = WikiSkeleton::new(pages).unwrap();
     let order: Vec<&str> = skeleton.pages().iter().map(|p| p.id.as_str()).collect();
     assert_eq!(order, ["c1", "c2", "g1"]);
+    // All three kinds, and one id under two kinds: both pages coexist.
+    let mixed = vec![
+        Page::new(PageKind::GodNode, "x", "x"),
+        Page::new(PageKind::Process, "x", "x"),
+        Page::new(PageKind::Community, "x", "x"),
+    ];
+    let skeleton = WikiSkeleton::new(mixed).unwrap();
+    let kinds: Vec<PageKind> = skeleton.pages().iter().map(|p| p.kind).collect();
+    assert_eq!(
+        kinds,
+        [PageKind::Community, PageKind::Process, PageKind::GodNode]
+    );
     let twice = vec![
         Page::new(PageKind::Process, "p", "a"),
         Page::new(PageKind::Process, "p", "b"),
@@ -348,10 +384,19 @@ fn another_version_with_another_shape_is_still_a_schema_version_error() {
     let err = WikiSkeleton::from_json(v2).unwrap_err();
     let found = "ai-architect.wiki-skeleton/2".to_owned();
     assert_eq!(err, SkeletonError::SchemaVersion { found });
-    let serde_err = serde_json::from_str::<WikiSkeleton>(v2)
+    // Plain serde refuses it too (strict shape first, then the version).
+    assert!(serde_json::from_str::<WikiSkeleton>(v2).is_err());
+    let v2_v1_shape = r#"{"schema_version":"ai-architect.wiki-skeleton/2","pages":[]}"#;
+    let serde_err = serde_json::from_str::<WikiSkeleton>(v2_v1_shape)
         .unwrap_err()
         .to_string();
     assert!(serde_err.contains("schema version"), "{serde_err}");
+    let null_pages = format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":null}}"#);
+    let err = WikiSkeleton::from_json(&null_pages).unwrap_err();
+    assert!(
+        matches!(&err, SkeletonError::Json(m) if !m.contains("missing")),
+        "{err:?}"
+    );
     let extra = format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[],"extra":1}}"#);
     assert!(
         matches!(WikiSkeleton::from_json(&extra), Err(SkeletonError::Json(m)) if m.contains("extra"))
@@ -402,6 +447,14 @@ fn every_error_has_a_message() {
             kind: PageKind::Community,
             id: "c".into(),
         },
+        SkeletonError::UnsafePath("/x".into()),
+        SkeletonError::DuplicateEdge {
+            page: "c".into(),
+            source: "a".into(),
+            target: "b".into(),
+            relation: "Calls".into(),
+        },
+        SkeletonError::StaleSourceFiles { page: "c".into() },
         SkeletonError::DuplicateSymbol {
             page: "c".into(),
             id: "a".into(),
@@ -415,10 +468,174 @@ fn every_error_has_a_message() {
     }
 }
 
+#[test]
+fn a_path_that_could_leave_the_repo_is_refused() {
+    for bad in [
+        "/etc/passwd",
+        "../x",
+        "src/../../x",
+        "C:\\x",
+        "src\\a.rs",
+        "a\u{0}b",
+        "a\nb",
+    ] {
+        let err = Location::new(bad, 1).unwrap_err();
+        assert_eq!(err, SkeletonError::UnsafePath(bad.to_owned()), "{bad:?}");
+    }
+    for fine in ["src/a.rs", "a..b/c.rs", "./src/a.rs", ".hidden/x"] {
+        assert!(Location::new(fine, 1).is_ok(), "{fine:?}");
+    }
+    let mut page = Page::new(PageKind::Community, "c", "x");
+    page.coverage = vec![CoverageGap::ParseIncomplete {
+        file: "/abs.rs".into(),
+    }];
+    let err = WikiSkeleton::new(vec![page]).unwrap_err();
+    assert_eq!(err, SkeletonError::UnsafePath("/abs.rs".into()));
+}
+
+#[test]
+fn one_edge_with_two_provenance_tags_is_refused_but_two_call_sites_stay() {
+    let mut page = Page::new(PageKind::Community, "c", "x");
+    page.edges = vec![
+        Edge::new(
+            ("a", "b"),
+            "Calls",
+            Provenance::Extracted,
+            loc("src/a.rs", 4),
+        ),
+        Edge::new(
+            ("a", "b"),
+            "Calls",
+            Provenance::Inferred,
+            loc("src/a.rs", 4),
+        ),
+    ];
+    let err = WikiSkeleton::new(vec![page.clone()]).unwrap_err();
+    let expected = SkeletonError::DuplicateEdge {
+        page: "c".into(),
+        source: "a".into(),
+        target: "b".into(),
+        relation: "Calls".into(),
+    };
+    assert_eq!(err, expected);
+    page.edges[1] = Edge::new(
+        ("a", "b"),
+        "Calls",
+        Provenance::Inferred,
+        loc("src/a.rs", 5),
+    );
+    assert_eq!(
+        WikiSkeleton::new(vec![page]).unwrap().pages()[0]
+            .edges
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn edge_fields_are_readable() {
+    let edge = Edge::new(
+        ("a", "b"),
+        "Calls",
+        Provenance::Inferred,
+        loc("src/a.rs", 4),
+    );
+    assert_eq!(
+        (edge.source(), edge.target(), edge.relation()),
+        ("a", "b", "Calls")
+    );
+    assert_eq!(
+        (edge.provenance(), edge.location().line()),
+        (Provenance::Inferred, 4)
+    );
+}
+
+/// Every level refuses an unknown field, and the gap enum refuses an unknown
+/// kind. Removing any one `deny_unknown_fields` fails exactly its row.
+#[test]
+fn an_unknown_field_is_refused_at_every_level() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let rows = [
+        ("location", r#""line": 3"#, r#""line": 3, "x": 1"#),
+        (
+            "symbol",
+            r#""kind": "Function","#,
+            r#""kind": "Function", "x": 1,"#,
+        ),
+        (
+            "edge",
+            r#""relation": "Calls","#,
+            r#""relation": "Calls", "x": 1,"#,
+        ),
+        (
+            "gap",
+            r#""kind": "parse_incomplete","#,
+            r#""kind": "parse_incomplete", "x": 1,"#,
+        ),
+        (
+            "gap kind",
+            r#""kind": "parse_incomplete""#,
+            r#""kind": "unparsed""#,
+        ),
+        (
+            "missed gap",
+            r#""name": "unknown_fn","#,
+            r#""name": "unknown_fn", "x": 1,"#,
+        ),
+        (
+            "page",
+            r#""title": "parser","#,
+            r#""title": "parser", "x": 1,"#,
+        ),
+    ];
+    for (level, from, to) in rows {
+        let tampered = golden.replacen(from, to, 1);
+        assert_ne!(tampered, golden, "{level}: the fixture must contain {from}");
+        assert!(
+            WikiSkeleton::from_json(&tampered).is_err(),
+            "{level} accepted an unknown field"
+        );
+    }
+}
+
+#[test]
+fn errors_from_new_stay_typed_on_the_read_path_and_location_errors_are_json() {
+    let doc = |pages: &str| format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{pages}]}}"#);
+    let page = |kind: &str, id: &str, members: &str| {
+        format!(
+            r#"{{"kind":"{kind}","id":"{id}","title":"t","members":[{members}],"edges":[],"cross_community_edges":{{}},"coverage":[]}}"#
+        )
+    };
+    let two = doc(&format!(
+        "{},{}",
+        page("process", "p", ""),
+        page("process", "p", "")
+    ));
+    let err = WikiSkeleton::from_json(&two).unwrap_err();
+    assert_eq!(
+        err,
+        SkeletonError::DuplicatePage {
+            kind: PageKind::Process,
+            id: "p".into()
+        }
+    );
+    let empty = doc(&page("process", "", ""));
+    assert_eq!(
+        WikiSkeleton::from_json(&empty),
+        Err(SkeletonError::EmptyId("page"))
+    );
+    let zero = r#"{"id":"a","name":"a","kind":"Function","location":{"file":"src/a.rs","line":0}}"#;
+    let err = WikiSkeleton::from_json(&doc(&page("process", "p", zero))).unwrap_err();
+    assert!(
+        matches!(&err, SkeletonError::Json(m) if m.contains("1-based")),
+        "{err:?}"
+    );
+}
+
 /// Words that name a network or model-client API, matched case-insensitively
 /// and on identifier boundaries, so `hyperlink`, `philanthropic` and
 /// `network` do not trip it while `OpenAI` and `{net::TcpListener}` do.
-const FORBIDDEN: [&str; 12] = [
+const FORBIDDEN: [&str; 14] = [
     "tcpstream",
     "tcplistener",
     "udpsocket",
@@ -431,10 +648,14 @@ const FORBIDDEN: [&str; 12] = [
     "::net",
     "process::command",
     "command::new",
+    "std::process",
+    "tokio::process",
 ];
 
+/// Only alphanumerics glue: `_` is a boundary, so crate names such as
+/// `hyper_util` or `async_openai` still match.
 fn is_ident(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
+    c.is_ascii_alphanumeric()
 }
 
 /// `pattern` occurs in `text` with no identifier character glued to an
@@ -467,6 +688,11 @@ fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 fn the_boundary_matcher_catches_disguised_names_and_spares_innocent_words() {
     let hits = |text: &str| FORBIDDEN.iter().any(|p| names_on_a_boundary(text, p));
     for bad in [
+        "use hyper_util::client;",
+        "async_openai::Client",
+        "reqwest_middleware",
+        "anthropic_sdk",
+        "use std::process::{Command as C};",
         "use std::{net::TcpListener};",
         "OpenAI client",
         "std::process::Command",
@@ -495,7 +721,8 @@ fn the_wiki_module_names_no_network_or_model_client_api() {
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wiki"),
         &mut sources,
     );
-    sources.retain(|p| !p.ends_with("skeleton_tests.rs"));
+    let wiki = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wiki");
+    sources.retain(|p| *p != wiki.join("skeleton_tests.rs"));
     assert!(
         sources.len() >= 2,
         "the tripwire must scan the wiki sources: {sources:?}"

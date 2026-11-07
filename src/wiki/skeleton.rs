@@ -12,14 +12,19 @@
 //   required to be members of its page: a page lists the edges that leave it
 //   too, and their targets live on other pages.
 // * criterion 4 — `Symbol`, `Edge` and a missed-graph gap each hold a
-//   `Location`, whose `line` is a `NonZeroU32` and whose `file` is non-empty.
+//   `Location`, whose `line` is a `NonZeroU32` and whose `file` is a
+//   non-empty repo-relative path (no absolute path, drive or UNC prefix, `..`
+//   component, backslash or control character). `ParseIncomplete.file`
+//   follows the same path rule.
 // * criterion 5 — `Page::coverage` is serialised unconditionally: an empty
 //   block is `"coverage": []`, present, never absent.
 // * criterion 6 — `WikiSkeleton::new` sorts and deduplicates every list and
-//   derives `source_files` from the members, so the same input in any order
+//   derives `source_files` from the members (a read `source_files` that
+//   disagrees is refused, not rewritten), so the same input in any order
 //   produces byte-identical JSON. Maps are `BTreeMap`s.
-// * criterion 7 — `SCHEMA_VERSION` is embedded in the artifact, and
-//   every deserialisation path refuses any other version, whatever its shape.
+// * criterion 7 — `SCHEMA_VERSION` is embedded in the artifact; every
+//   deserialisation path refuses any other version, and `from_json` reports
+//   it as `SchemaVersion` whatever the document's shape.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,11 +39,31 @@ pub const SCHEMA_VERSION: &str = "ai-architect.wiki-skeleton/1";
 pub enum SkeletonError {
     EmptyFile,
     ZeroLine,
+    UnsafePath(String),
+    StaleSourceFiles {
+        page: String,
+    },
     EmptyId(&'static str),
-    DuplicatePage { kind: PageKind, id: String },
-    DuplicateSymbol { page: String, id: String },
-    SelfCrossCommunity { page: String },
-    SchemaVersion { found: String },
+    DuplicatePage {
+        kind: PageKind,
+        id: String,
+    },
+    DuplicateSymbol {
+        page: String,
+        id: String,
+    },
+    DuplicateEdge {
+        page: String,
+        source: String,
+        target: String,
+        relation: String,
+    },
+    SelfCrossCommunity {
+        page: String,
+    },
+    SchemaVersion {
+        found: String,
+    },
     Json(String),
 }
 
@@ -47,6 +72,13 @@ impl fmt::Display for SkeletonError {
         match self {
             Self::EmptyFile => write!(f, "a location needs a non-empty file path"),
             Self::ZeroLine => write!(f, "a location line is 1-based; 0 is not a line"),
+            Self::UnsafePath(path) => write!(f, "{path:?} is not a repo-relative path"),
+            Self::StaleSourceFiles { page } => {
+                write!(
+                    f,
+                    "page {page:?} lists source_files that are not its members' files"
+                )
+            }
             Self::EmptyId(what) => write!(f, "{what} needs a non-empty id"),
             Self::DuplicatePage { kind, id } => write!(f, "duplicate {kind:?} page {id:?}"),
             Self::DuplicateSymbol { page, id } => {
@@ -55,6 +87,15 @@ impl fmt::Display for SkeletonError {
                     "page {page:?} lists member {id:?} twice with different fields"
                 )
             }
+            Self::DuplicateEdge {
+                page,
+                source,
+                target,
+                relation,
+            } => write!(
+                f,
+                "page {page:?} tags edge {source:?} -{relation:?}-> {target:?} twice"
+            ),
             Self::SelfCrossCommunity { page } => {
                 write!(f, "page {page:?} counts cross-community edges to itself")
             }
@@ -100,12 +141,30 @@ impl TryFrom<RawLocation> for Location {
     }
 }
 
+/// Refuse anything a later slice could turn into a path outside the repo
+/// (CWE-22): an empty path, an absolute or drive/UNC-prefixed one, a `..`
+/// component, a backslash or a control character. Callers that open a file
+/// must still join it to the repo root and check the canonical prefix.
+fn repo_relative(file: &str) -> Result<(), SkeletonError> {
+    if file.is_empty() {
+        return Err(SkeletonError::EmptyFile);
+    }
+    let drive = file.as_bytes().get(1) == Some(&b':');
+    let unsafe_path = file.starts_with('/')
+        || drive
+        || file.contains('\\')
+        || file.chars().any(char::is_control)
+        || file.split('/').any(|part| part == "..");
+    if unsafe_path {
+        return Err(SkeletonError::UnsafePath(file.to_owned()));
+    }
+    Ok(())
+}
+
 impl Location {
     pub fn new(file: impl Into<String>, line: u32) -> Result<Self, SkeletonError> {
         let file = file.into();
-        if file.is_empty() {
-            return Err(SkeletonError::EmptyFile);
-        }
+        repo_relative(&file)?;
         let line = NonZeroU32::new(line).ok_or(SkeletonError::ZeroLine)?;
         Ok(Self { file, line })
     }
@@ -129,8 +188,9 @@ pub struct Symbol {
     pub location: Location,
 }
 
-/// An edge between two symbols. Fields are private so `Edge::new` is the only
-/// way in, and it takes the provenance as a required argument.
+/// An edge between two symbols. Its fields are private: an `Edge` is built
+/// only by `Edge::new` or by deserialisation, and both require a provenance
+/// (`provenance` has no `#[serde(default)]`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Edge {
@@ -156,6 +216,18 @@ impl Edge {
             provenance,
             location,
         }
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    pub fn relation(&self) -> &str {
+        &self.relation
     }
 
     pub fn provenance(&self) -> Provenance {
@@ -186,8 +258,9 @@ pub enum PageKind {
     GodNode,
 }
 
-/// One page stub. `source_files` is derived from `members` by
-/// `WikiSkeleton::new`, so the two can never disagree.
+/// One page stub. `source_files` is private and derived from `members` by
+/// `WikiSkeleton::new`; on read, a non-empty value that disagrees with the
+/// members' files is refused, so inside a `WikiSkeleton` the two agree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Page {
@@ -199,7 +272,7 @@ pub struct Page {
     /// Edge count from this page to each other community, keyed by its id.
     pub cross_community_edges: BTreeMap<String, u64>,
     #[serde(default)]
-    pub source_files: Vec<String>,
+    source_files: Vec<String>,
     /// Always serialised: empty means "no known gap", never "not computed".
     pub coverage: Vec<CoverageGap>,
 }
@@ -216,6 +289,10 @@ impl Page {
             source_files: Vec::new(),
             coverage: Vec::new(),
         }
+    }
+
+    pub fn source_files(&self) -> &[String] {
+        &self.source_files
     }
 
     fn validate(&self) -> Result<(), SkeletonError> {
@@ -239,10 +316,7 @@ impl Page {
         for gap in &self.coverage {
             match gap {
                 CoverageGap::Missed { name, .. } => non_empty(name, "missed-graph entry")?,
-                CoverageGap::ParseIncomplete { file } if file.is_empty() => {
-                    return Err(SkeletonError::EmptyFile)
-                }
-                CoverageGap::ParseIncomplete { .. } => {}
+                CoverageGap::ParseIncomplete { file } => repo_relative(file)?,
             }
         }
         Ok(())
@@ -260,13 +334,40 @@ impl Page {
         }
     }
 
-    /// Put every list in its canonical order and derive `source_files`.
-    fn normalize(&mut self) {
+    /// One edge, one provenance: two edges with the same ends, relation and
+    /// location but different tags are refused. Edges that differ only by
+    /// location are two call sites and stay.
+    fn check_unique_edges(&self) -> Result<(), SkeletonError> {
+        let mut seen = BTreeSet::new();
+        for edge in &self.edges {
+            let key = (&edge.source, &edge.target, &edge.relation, &edge.location);
+            if !seen.insert(key) {
+                return Err(SkeletonError::DuplicateEdge {
+                    page: self.id.clone(),
+                    source: edge.source.clone(),
+                    target: edge.target.clone(),
+                    relation: edge.relation.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Put every list in its canonical order and derive `source_files`. A
+    /// value already present (read from JSON) must equal the derived one.
+    fn normalize(&mut self) -> Result<(), SkeletonError> {
         sort_dedup(&mut self.members);
         sort_dedup(&mut self.edges);
         sort_dedup(&mut self.coverage);
         let files: BTreeSet<&str> = self.members.iter().map(|s| s.location.file()).collect();
-        self.source_files = files.into_iter().map(str::to_owned).collect();
+        let derived: Vec<String> = files.into_iter().map(str::to_owned).collect();
+        if !self.source_files.is_empty() && self.source_files != derived {
+            return Err(SkeletonError::StaleSourceFiles {
+                page: self.id.clone(),
+            });
+        }
+        self.source_files = derived;
+        Ok(())
     }
 }
 
@@ -292,36 +393,37 @@ pub struct WikiSkeleton {
     pages: Vec<Page>,
 }
 
-/// Permissive on purpose: only `schema_version` is required to parse, so an
-/// artifact of another version is refused as `SchemaVersion` even when its
-/// shape differs from v1. The v1 shape (no unknown field, typed pages) is
-/// enforced only after the version matches.
+/// Strict v1 shape: the `Deserialize` of `WikiSkeleton` goes through it, so
+/// plain serde never accepts another version, an unknown field or an
+/// unvalidated page. A document of another version whose shape also differs
+/// may be refused for its shape first; `from_json` probes the version before
+/// parsing, so it reports `SchemaVersion` whatever the shape.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawSkeleton {
     schema_version: String,
-    #[serde(default)]
-    pages: Option<serde_json::Value>,
-    #[serde(flatten)]
-    unknown: BTreeMap<String, serde_json::Value>,
+    pages: Vec<Page>,
+}
+
+/// Reads only `schema_version`; every other key is skipped without being
+/// buffered (`IgnoredAny`).
+#[derive(Deserialize)]
+struct VersionProbe {
+    schema_version: String,
+}
+
+fn check_version(found: String) -> Result<(), SkeletonError> {
+    if found != SCHEMA_VERSION {
+        return Err(SkeletonError::SchemaVersion { found });
+    }
+    Ok(())
 }
 
 impl TryFrom<RawSkeleton> for WikiSkeleton {
     type Error = SkeletonError;
     fn try_from(raw: RawSkeleton) -> Result<Self, Self::Error> {
-        if raw.schema_version != SCHEMA_VERSION {
-            return Err(SkeletonError::SchemaVersion {
-                found: raw.schema_version,
-            });
-        }
-        if let Some(field) = raw.unknown.keys().next() {
-            return Err(SkeletonError::Json(format!("unknown field `{field}`")));
-        }
-        let pages = raw
-            .pages
-            .ok_or_else(|| SkeletonError::Json("missing field `pages`".to_owned()))?;
-        let pages =
-            serde_json::from_value(pages).map_err(|e| SkeletonError::Json(e.to_string()))?;
-        Self::new(pages)
+        check_version(raw.schema_version)?;
+        Self::new(raw.pages)
     }
 }
 
@@ -330,8 +432,9 @@ impl WikiSkeleton {
     pub fn new(mut pages: Vec<Page>) -> Result<Self, SkeletonError> {
         for page in &mut pages {
             page.validate()?;
-            page.normalize();
+            page.normalize()?;
             page.check_unique_members()?;
+            page.check_unique_edges()?;
         }
         pages.sort_by(|a, b| (a.kind, &a.id).cmp(&(b.kind, &b.id)));
         if let Some(pair) = pages
@@ -364,12 +467,21 @@ impl WikiSkeleton {
     }
 
     /// Read an artifact back. Refuses another schema version, then re-runs
-    /// the same validation and canonicalisation as `new`. Unlike
-    /// `serde_json::from_str::<WikiSkeleton>`, which applies the same checks,
-    /// this keeps the typed `SkeletonError` variant.
+    /// the same validation and canonicalisation as `new`.
+    ///
+    /// Typed on this path: `SchemaVersion` and every error `new` returns
+    /// (`EmptyId`, `DuplicatePage`, `DuplicateSymbol`, `DuplicateEdge`,
+    /// `SelfCrossCommunity`,
+    /// `StaleSourceFiles`, and `EmptyFile`/`UnsafePath` for a
+    /// `ParseIncomplete` file). A `Location` is validated while serde parses
+    /// it, so its errors (line 0, empty or unsafe path) arrive as `Json` with
+    /// the same message. `serde_json::from_str::<WikiSkeleton>` applies the
+    /// same checks but reports every error as a serde error.
     pub fn from_json(text: &str) -> Result<Self, SkeletonError> {
-        let raw: RawSkeleton =
-            serde_json::from_str(text).map_err(|e| SkeletonError::Json(e.to_string()))?;
+        let json = |e: serde_json::Error| SkeletonError::Json(e.to_string());
+        let probe: VersionProbe = serde_json::from_str(text).map_err(json)?;
+        check_version(probe.schema_version)?;
+        let raw: RawSkeleton = serde_json::from_str(text).map_err(json)?;
         Self::try_from(raw)
     }
 }
