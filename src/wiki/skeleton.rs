@@ -234,7 +234,13 @@ impl Page {
             non_empty(&edge.target, "edge target")?;
             non_empty(&edge.relation, "edge relation")?;
         }
-        for key in self.cross_community_edges.keys() {
+        for (key, count) in &self.cross_community_edges {
+            // A zero count is the absent key (`normalize` drops it), so it is
+            // not validated: `{"c1": 0}` on community `c1` is `{}`, not a
+            // self-count.
+            if *count == 0 {
+                continue;
+            }
             non_empty(key, "cross-community key")?;
             // Keys name communities: only a community page can count itself.
             // Ids are scoped by kind, so process `x` -> community `x` is fine.

@@ -321,6 +321,22 @@ fn a_zero_cross_community_count_is_the_absent_key() {
     let b = WikiSkeleton::new(vec![absent]).unwrap().to_json().unwrap();
     assert_eq!(a, b);
     assert!(!a.contains("\"c2\""), "{a}");
+    // Zero counts are dropped before any key rule applies: a zero self-count
+    // or a zero under an empty key is the absent key too.
+    for key in ["c1", ""] {
+        let mut page = Page::new(PageKind::Community, "c1", "x");
+        page.cross_community_edges.insert(key.to_owned(), 0);
+        let built = WikiSkeleton::new(vec![page]).unwrap();
+        assert!(built.pages()[0].cross_community_edges.is_empty(), "{key:?}");
+    }
+    // Same on read: the fixture's `"c2": 5` read as 0 is accepted and dropped.
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let zeroed = golden.replacen(r#""c2": 5"#, r#""c2": 0"#, 1);
+    assert_ne!(zeroed, golden, "the fixture must contain the replaced text");
+    let read = WikiSkeleton::from_json(&zeroed).unwrap();
+    assert!(read.pages()[0].cross_community_edges.is_empty());
+    let self_zero = golden.replacen(r#""c2": 5"#, r#""c1": 0"#, 1);
+    assert!(WikiSkeleton::from_json(&self_zero).is_ok());
 }
 
 /// claude[bot] review on #475: a key repeated in `cross_community_edges` is
