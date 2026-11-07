@@ -14,9 +14,9 @@
 //   too, and their targets live on other pages.
 // * criterion 4 — `Symbol`, `Edge` and a missed-graph gap each hold a
 //   `Location`, whose `line` is a `NonZeroU32` and whose `file` is a
-//   non-empty repo-relative path (no absolute path, drive or UNC prefix, `..`
-//   component, backslash or control character). `ParseIncomplete.file`
-//   follows the same path rule.
+//   non-empty repo-relative path in one spelling only (no absolute path,
+//   drive or UNC prefix, empty, `.` or `..` component, backslash or control
+//   character). `ParseIncomplete.file` follows the same path rule.
 // * criterion 5 — `Page::coverage` is serialised unconditionally: an empty
 //   block is `"coverage": []`, present, never absent.
 // * criterion 6 — `WikiSkeleton::new` sorts and deduplicates every list and
@@ -71,8 +71,11 @@ impl TryFrom<RawLocation> for Location {
 
 /// Refuse anything a later slice could turn into a path outside the repo
 /// (CWE-22): an empty path, an absolute or drive/UNC-prefixed one, a `..`
-/// component, a backslash or a control character. Callers that open a file
-/// must still join it to the repo root and check the canonical prefix.
+/// component, a backslash or a control character. Empty and `.` components
+/// are refused too, so one file has one spelling (`src/a.rs`, never
+/// `./src/a.rs` or `src//a.rs`) and `source_files` cannot list it twice.
+/// Callers that open a file must still join it to the repo root and check
+/// the canonical prefix.
 fn repo_relative(file: &str) -> Result<(), SkeletonError> {
     if file.is_empty() {
         return Err(SkeletonError::EmptyFile);
@@ -83,7 +86,9 @@ fn repo_relative(file: &str) -> Result<(), SkeletonError> {
         || drive
         || file.contains('\\')
         || file.chars().any(char::is_control)
-        || file.split('/').any(|part| part == "..");
+        || file
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..");
     if unsafe_path {
         return Err(SkeletonError::UnsafePath(file.to_owned()));
     }

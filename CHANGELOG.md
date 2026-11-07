@@ -14,7 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   `provenance` of `extracted` or `inferred` (an untagged edge cannot be built
   or deserialised); every member, edge and missed-graph gap carries
   `file:line` (line 0 is refused, and paths must be repo-relative: no
-  absolute, drive or UNC prefix, `..`, backslash or control character); one
+  absolute, drive or UNC prefix, empty, `.` or `..` component, backslash or
+  control character); one
   edge cannot carry two provenance tags, a page cannot list one member id
   twice, and a read `source_files` must match the members; the per-page
   `coverage` block is always written, `[]` when empty; the same pages in any

@@ -496,6 +496,31 @@ fn another_schema_version_is_refused_on_read() {
 
 /// claude[bot] review on #475: another version is refused as `SchemaVersion`
 /// even when its shape is not v1's, and the v1 shape is still strict.
+/// claude[bot] review on #475: the version is checked before `new` and the
+/// `source_files` comparison, so a broken v1-shaped `/0` document is still a
+/// `SchemaVersion` error on both read paths.
+#[test]
+fn the_version_is_checked_before_page_validation() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let old = "ai-architect.wiki-skeleton/0";
+    let stale = golden
+        .replacen("\"src/b.rs\"\n      ]", "\"src/c.rs\"\n      ]", 1)
+        .replace(SCHEMA_VERSION, old);
+    let page = r#"{"kind":"process","id":"p","title":"t","members":[],"edges":[],"cross_community_edges":{},"source_files":[],"coverage":[]}"#;
+    let twice = format!(r#"{{"schema_version":"{old}","pages":[{page},{page}]}}"#);
+    for (case, text) in [
+        ("stale", stale.as_str()),
+        ("duplicate pages", twice.as_str()),
+    ] {
+        let expected = SkeletonError::SchemaVersion { found: old.into() };
+        assert_eq!(WikiSkeleton::from_json(text), Err(expected), "{case}");
+        let serde_err = serde_json::from_str::<WikiSkeleton>(text)
+            .unwrap_err()
+            .to_string();
+        assert!(serde_err.contains("schema version"), "{case}: {serde_err}");
+    }
+}
+
 #[test]
 fn another_version_with_another_shape_is_still_a_schema_version_error() {
     let v2 = r#"{"schema_version":"ai-architect.wiki-skeleton/2","pages":"renamed","extra":1}"#;
@@ -610,6 +635,12 @@ fn a_path_that_could_leave_the_repo_is_refused() {
         "C:/x",
         "C:x.rs",
         "//server/share",
+        "c:/x",
+        "C:",
+        "./src/a.rs",
+        "src/./a.rs",
+        "src//a.rs",
+        "src/",
         "src\\a.rs",
         "a\u{0}b",
         "a\nb",
@@ -617,7 +648,7 @@ fn a_path_that_could_leave_the_repo_is_refused() {
         let err = Location::new(bad, 1).unwrap_err();
         assert_eq!(err, SkeletonError::UnsafePath(bad.to_owned()), "{bad:?}");
     }
-    for fine in ["src/a.rs", "a..b/c.rs", "./src/a.rs", ".hidden/x", "1:x.rs"] {
+    for fine in ["src/a.rs", "a..b/c.rs", ".hidden/x", "1:x.rs", "a.b/c"] {
         assert!(Location::new(fine, 1).is_ok(), "{fine:?}");
     }
     let mut page = Page::new(PageKind::Community, "c", "x");
@@ -666,10 +697,16 @@ fn one_edge_with_two_provenance_tags_is_refused_but_two_call_sites_stay() {
     page.edges = vec![
         Edge::new(("a", "foo"), "Calls", Provenance::Inferred, line.clone()),
         Edge::new(("a", "bar"), "Calls", Provenance::Extracted, line.clone()),
-        Edge::new(("a", "foo"), "References", Provenance::Extracted, line),
+        Edge::new(
+            ("a", "foo"),
+            "References",
+            Provenance::Extracted,
+            line.clone(),
+        ),
+        Edge::new(("b", "foo"), "Calls", Provenance::Extracted, line),
     ];
     let kept = WikiSkeleton::new(vec![page]).unwrap();
-    assert_eq!(kept.pages()[0].edges.len(), 3);
+    assert_eq!(kept.pages()[0].edges.len(), 4);
 }
 
 #[test]
