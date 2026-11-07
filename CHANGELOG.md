@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Wiki skeleton artifact, first slice of #196.** `src/wiki/skeleton.rs`
+  defines the versioned (`ai-architect.wiki-skeleton/1`) skeleton: page stubs
+  for communities, processes and god nodes; every edge carries a
+  `provenance` of `extracted` or `inferred` (an untagged edge cannot be built
+  or deserialised); every member, edge and missed-graph gap carries
+  `file:line` (line 0 and an empty path are refused); the per-page `coverage`
+  block is always written, `[]` when empty; the same pages in any order give
+  byte-identical JSON. Library only: no tool yet, and nothing builds pages
+  from a graph yet (later slices of #196).
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
   runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov
