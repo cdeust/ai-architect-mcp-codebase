@@ -518,11 +518,11 @@ fn a_unit_enum_written_as_an_object_is_refused() {
     );
 }
 
-/// The gap `kind` tag and the page `kind` take only their known names. An
-/// unknown name is refused for either tag. The number and object rows for
-/// the gap tag hold today because serde_json reads a tag as an identifier;
-/// they are there for a future wrapper (`flatten`, `untagged`) that would
-/// buffer `coverage` through serde's `Content`, where `0` reads as `Missed`.
+/// The gap `kind` tag and the page `kind` field take only their known names;
+/// an unknown name is refused for either. The number row for the gap tag
+/// guards a future wrapper (`flatten`, `untagged`) that would buffer
+/// `coverage` through serde's `Content`, where `0` reads as `Missed`; today
+/// serde_json reads the tag as an identifier, which also refuses the object row.
 #[test]
 fn a_kind_tag_that_is_not_a_known_string_is_refused() {
     let golden = include_str!("testdata/skeleton_v1.json");
