@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
-use super::checks::{repo_relative, unique_community_keys};
+use super::checks::{object, objects, repo_relative, unique_community_keys, MapOnly};
 use super::error::SkeletonError;
 
 /// Embedded in every artifact. Bump on any change to the serialised shape.
@@ -99,6 +99,7 @@ pub struct Symbol {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[serde(deserialize_with = "object")]
     pub location: Location,
 }
 
@@ -112,6 +113,7 @@ pub struct Edge {
     target: String,
     relation: String,
     provenance: Provenance,
+    #[serde(deserialize_with = "object")]
     location: Location,
 }
 
@@ -159,7 +161,11 @@ impl Edge {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CoverageGap {
     /// A missed-graph entry: a reference that was seen but not resolved.
-    Missed { name: String, location: Location },
+    Missed {
+        name: String,
+        #[serde(deserialize_with = "object")]
+        location: Location,
+    },
     /// A file whose parse was incomplete (`parse_incomplete`).
     ParseIncomplete { file: String },
 }
@@ -194,7 +200,9 @@ pub struct Page {
     pub kind: PageKind,
     pub id: String,
     pub title: String,
+    #[serde(deserialize_with = "objects")]
     pub members: Vec<Symbol>,
+    #[serde(deserialize_with = "objects")]
     pub edges: Vec<Edge>,
     /// Edge count from this page to each community, keyed by community id (a
     /// community page cannot list itself). A key repeated in the JSON is
@@ -204,6 +212,7 @@ pub struct Page {
     /// Required on read and compared there (an explicit `[]` included).
     source_files: Vec<String>,
     /// Always serialised: empty means "no known gap", never "not computed".
+    #[serde(deserialize_with = "objects")]
     pub coverage: Vec<CoverageGap>,
 }
 
@@ -322,16 +331,23 @@ fn sort_dedup<T: Ord>(items: &mut Vec<T>) {
 /// The whole artifact. Every deserialisation path goes through
 /// `RawSkeleton` and `TryFrom`, so serde cannot build a skeleton that skips
 /// the version check, the validation or the canonical ordering of `new`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "RawSkeleton")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WikiSkeleton {
     schema_version: String,
     pages: Vec<Page>,
 }
 
+impl<'de> Deserialize<'de> for WikiSkeleton {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = MapOnly::<RawSkeleton>::deserialize(deserializer)?.0;
+        Self::try_from(raw).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Strict v1 shape: the `Deserialize` of `WikiSkeleton` goes through it, so
-/// plain serde never accepts another version, an unknown field or an
-/// unvalidated page. A document of another version whose shape also differs
+/// plain serde never accepts another version, an unknown field, a JSON array
+/// in place of an object (`MapOnly`, `object`, `objects`) or an unvalidated
+/// page. A document of another version whose shape also differs
 /// may be refused for its shape first; when the strict parse fails,
 /// `from_json` probes the version, so it reports `SchemaVersion` for any
 /// well-formed JSON object whose `schema_version` is a top-level string.
@@ -339,6 +355,7 @@ pub struct WikiSkeleton {
 #[serde(deny_unknown_fields)]
 struct RawSkeleton {
     schema_version: String,
+    #[serde(deserialize_with = "objects")]
     pages: Vec<Page>,
 }
 
@@ -439,14 +456,14 @@ impl WikiSkeleton {
     /// reports every error as a serde error.
     pub fn from_json(text: &str) -> Result<Self, SkeletonError> {
         let json = |e: serde_json::Error| SkeletonError::Json(e.to_string());
-        match serde_json::from_str::<RawSkeleton>(text) {
+        match serde_json::from_str::<MapOnly<RawSkeleton>>(text) {
             // `try_from` checks the version itself: a valid read parses once.
-            Ok(raw) => Self::try_from(raw),
+            Ok(raw) => Self::try_from(raw.0),
             // Only a broken document pays for the probe, to tell another
             // version apart from a bad v1.
             Err(strict) => {
                 // If the probe fails too, the strict error says more.
-                let Ok(probe) = serde_json::from_str::<VersionProbe>(text) else {
+                let Ok(MapOnly(probe)) = serde_json::from_str::<MapOnly<VersionProbe>>(text) else {
                     return Err(json(strict));
                 };
                 check_version(probe.schema_version)?;

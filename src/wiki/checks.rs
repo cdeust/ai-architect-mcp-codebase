@@ -70,3 +70,45 @@ where
     }
     deserializer.deserialize_map(Unique)
 }
+
+/// A value read only from a JSON object. serde's derived `Deserialize` also
+/// accepts a JSON array (`visit_seq`), which would give every struct a second
+/// spelling (`["src/a.rs", 3]` for a location); this wrapper refuses it.
+pub(super) struct MapOnly<T>(pub(super) T);
+
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for MapOnly<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Object<T>(std::marker::PhantomData<T>);
+        impl<'de, T: serde::Deserialize<'de>> serde::de::Visitor<'de> for Object<T> {
+            type Value = T;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+                T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+            }
+        }
+        deserializer
+            .deserialize_map(Object(std::marker::PhantomData))
+            .map(MapOnly)
+    }
+}
+
+/// `deserialize_with` for a struct field that must be a JSON object.
+pub(super) fn object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <MapOnly<T> as serde::Deserialize>::deserialize(deserializer).map(|m| m.0)
+}
+
+/// `deserialize_with` for a list whose every item must be a JSON object.
+pub(super) fn objects<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    let items: Vec<MapOnly<T>> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(items.into_iter().map(|m| m.0).collect())
+}

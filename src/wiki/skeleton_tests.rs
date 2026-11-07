@@ -363,6 +363,94 @@ fn a_repeated_cross_community_key_is_refused() {
     );
 }
 
+/// claude[bot] review on #475: serde's derived `Deserialize` also accepts a
+/// JSON array for a struct. Every level of the skeleton refuses one, so the
+/// v1 shape has one spelling.
+#[test]
+fn a_json_array_in_place_of_an_object_is_refused_at_every_level() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let member_loc = "\"location\": {\n            \"file\": \"src/a.rs\",\n            \"line\": 3\n          }";
+    let god_page = "{\n      \"kind\": \"god_node\",\n      \"id\": \"g1\",\n      \"title\": \"GraphStore\",\n      \"members\": [],\n      \"edges\": [],\n      \"cross_community_edges\": {},\n      \"source_files\": [],\n      \"coverage\": []\n    }";
+    let rows = [
+        ("location", member_loc, r#""location": ["src/a.rs", 3]"#),
+        (
+            "page",
+            god_page,
+            r#"["god_node","g1","GraphStore",[],[],{},[],[]]"#,
+        ),
+    ];
+    for (level, from, to) in rows {
+        let tampered = golden.replacen(from, to, 1);
+        assert_ne!(
+            tampered, golden,
+            "{level}: the fixture must contain the replaced text"
+        );
+        let err = WikiSkeleton::from_json(&tampered).unwrap_err();
+        assert!(
+            matches!(&err, SkeletonError::Json(m) if m.contains("JSON object")),
+            "{level}: {err:?}"
+        );
+        assert!(
+            serde_json::from_str::<WikiSkeleton>(&tampered).is_err(),
+            "{level}"
+        );
+    }
+    let page = r#"{"kind":"process","id":"p","title":"t","members":[MEMBER],"edges":[EDGE],"cross_community_edges":{},"source_files":["f"],"coverage":[GAP]}"#;
+    let member = r#"{"id":"a","name":"a","kind":"Function","location":{"file":"f","line":1}}"#;
+    let edge = r#"{"source":"a","target":"b","relation":"Calls","provenance":"inferred","location":{"file":"f","line":1}}"#;
+    let gap = r#"{"kind":"missed","name":"x","location":{"file":"f","line":2}}"#;
+    let doc = |m: &str, e: &str, g: &str| {
+        let p = page
+            .replace("MEMBER", m)
+            .replace("EDGE", e)
+            .replace("GAP", g);
+        format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{p}]}}"#)
+    };
+    assert!(
+        WikiSkeleton::from_json(&doc(member, edge, gap)).is_ok(),
+        "the object form reads"
+    );
+    let cases = [
+        (
+            "member",
+            doc(r#"["a","a","Function",{"file":"f","line":1}]"#, edge, gap),
+        ),
+        (
+            "edge",
+            doc(
+                member,
+                r#"["a","b","Calls","inferred",{"file":"f","line":1}]"#,
+                gap,
+            ),
+        ),
+        (
+            "edge location",
+            doc(
+                member,
+                &edge.replace(r#"{"file":"f","line":1}"#, r#"["f",1]"#),
+                gap,
+            ),
+        ),
+        (
+            "gap location",
+            doc(
+                member,
+                edge,
+                &gap.replace(r#"{"file":"f","line":2}"#, r#"["f",2]"#),
+            ),
+        ),
+        ("document", format!(r#"["{SCHEMA_VERSION}",[]]"#)),
+    ];
+    for (level, text) in cases {
+        let err = WikiSkeleton::from_json(&text).unwrap_err();
+        assert!(matches!(&err, SkeletonError::Json(_)), "{level}: {err:?}");
+    }
+    // The version probe reads objects only too: an array is not "another
+    // version", it is not a skeleton.
+    let probe = WikiSkeleton::from_json(r#"["ai-architect.wiki-skeleton/2"]"#).unwrap_err();
+    assert!(matches!(probe, SkeletonError::Json(_)), "{probe:?}");
+}
+
 /// The read copy is canonicalised like every other list: the same set of
 /// files in another order or with a repeat is accepted.
 #[test]
