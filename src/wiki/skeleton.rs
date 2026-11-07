@@ -31,8 +31,8 @@
 //   in any order produces byte-identical JSON. Maps are `BTreeMap`s.
 // * criterion 7 — `SCHEMA_VERSION` is embedded in the artifact; every
 //   deserialisation path refuses any other version, and `from_json` reports
-//   it as `SchemaVersion` for any well-formed JSON object whose
-//   `schema_version` is a top-level string (otherwise `Json`).
+//   it as `SchemaVersion` for any well-formed JSON object with exactly one
+//   top-level `schema_version`, a string (otherwise `Json`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -351,7 +351,8 @@ impl<'de> Deserialize<'de> for WikiSkeleton {
 /// page. A document of another version whose shape also differs
 /// may be refused for its shape first; when the strict parse fails,
 /// `from_json` probes the version, so it reports `SchemaVersion` for any
-/// well-formed JSON object whose `schema_version` is a top-level string.
+/// well-formed JSON object with exactly one top-level `schema_version`, a
+/// string.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSkeleton {

@@ -395,6 +395,12 @@ fn a_json_array_in_place_of_an_object_is_refused_at_every_level() {
             "{level}"
         );
     }
+}
+
+/// Same rule for every level built inline: member, edge, gap (both kinds),
+/// each location, and the whole document on both read paths.
+#[test]
+fn a_json_array_is_refused_for_members_edges_gaps_and_the_document() {
     let page = r#"{"kind":"process","id":"p","title":"t","members":[MEMBER],"edges":[EDGE],"cross_community_edges":{},"source_files":["f"],"coverage":[GAP]}"#;
     let member = r#"{"id":"a","name":"a","kind":"Function","location":{"file":"f","line":1}}"#;
     let edge = r#"{"source":"a","target":"b","relation":"Calls","provenance":"inferred","location":{"file":"f","line":1}}"#;
@@ -439,11 +445,26 @@ fn a_json_array_in_place_of_an_object_is_refused_at_every_level() {
                 &gap.replace(r#"{"file":"f","line":2}"#, r#"["f",2]"#),
             ),
         ),
+        // An internally tagged enum also reads a sequence whose first
+        // element is the tag: `objects` on `coverage` is what refuses these.
+        (
+            "gap",
+            doc(member, edge, r#"["missed","x",{"file":"f","line":2}]"#),
+        ),
+        (
+            "parse_incomplete gap",
+            doc(member, edge, r#"["parse_incomplete","f"]"#),
+        ),
         ("document", format!(r#"["{SCHEMA_VERSION}",[]]"#)),
     ];
     for (level, text) in cases {
         let err = WikiSkeleton::from_json(&text).unwrap_err();
         assert!(matches!(&err, SkeletonError::Json(_)), "{level}: {err:?}");
+        // The plain-serde path has its own guard (`impl Deserialize`).
+        assert!(
+            serde_json::from_str::<WikiSkeleton>(&text).is_err(),
+            "{level}"
+        );
     }
     // The version probe reads objects only too: an array is not "another
     // version", it is not a skeleton.
@@ -544,7 +565,12 @@ fn pages_are_ordered_by_kind_then_id_and_duplicates_are_refused() {
             id: "p".into()
         }
     );
-    // The kind in the error is the duplicated page's, not a constant.
+}
+
+/// The kind in a duplicate-page error is the duplicated page's, not a
+/// constant, and it prints with its serde name.
+#[test]
+fn a_duplicate_page_error_names_the_duplicated_kind() {
     let twice = vec![
         Page::new(PageKind::Community, "c", "a"),
         Page::new(PageKind::Community, "c", "b"),
