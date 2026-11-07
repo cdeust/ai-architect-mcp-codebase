@@ -164,3 +164,102 @@ def summary_comments(repo: str, pr: int, sha: str, request) -> list[Record]:
     owner, name = repo.split("/")
     fields = dict(query=COMMENTS_QUERY, owner=owner, name=name, number=pr)
     return _comment_pages(request("graphql", paginate=True, fields=fields), sha, pr)
+
+
+# Ported from cdeust/ai-architect-mcp-spec .github/workflows/pipeline.yml
+# (security_receipt, main 5c3749b), not re-rendered. A clean Codex security
+# review leaves both summary flags null; its native receipt carries the verdict.
+# Source: receipt6624079289 on PR473 (2026-11-04) and spec PR172/PR173, merged
+# through this receipt with security flags null/null.
+RECEIPT = "<!-- codex-review-receipt:v1 -->\n"
+SECURITY_HEADING = re.compile(
+    r"\n### 🛡️ Codex Security Review(?: · _Automatically triggered_)?\n"
+)
+RECEIPT_COMMIT = re.compile(r"\n\*\*Reviewed commit:\*\* `([0-9a-f]{10,40})`\n")
+# The verdict is the whole receipt text, never a sentence found somewhere in it.
+NO_ISSUES_RECEIPT = re.compile(
+    re.escape(RECEIPT)
+    + r"\n### 🛡️ Codex Security Review(?: · _Automatically triggered_)?\n\n"
+    r"Security review completed\. No security issues were found in this pull request\.\n\n"
+    r"\*\*Reviewed commit:\*\* `[0-9a-f]{10,40}`\n\n"
+    r"\[View security finding report\]"
+    r"\(https://chatgpt\.com/codex/cloud/tasks/task_e_[0-9a-f]+\)\n\n"
+    r"_Only the user who started this review can view the report in Codex\._\n\n"
+    + re.escape(
+        "<details> <summary>ℹ️ About Codex security reviews in GitHub</summary>\n<br/>\n\n"
+        "This is an experimental Codex feature. Security reviews are triggered when:\n"
+        '- You comment "@codex security review"\n'
+        '- A regular code review gets triggered (for example, "@codex review" or when a'
+        " PR is opened), and you’re opted in so security review runs alongside code review\n\n"
+        "Once complete, Codex will leave suggestions, or a comment if no findings are found.\n\n\n"
+        "</details>"
+    )
+)
+# A receipt whose wording no observed receipt has blocks under its own name.
+UNRECOGNIZED = "receipt_unrecognized"
+
+
+def _receipt_head(repo: str, named: str) -> str | None:
+    """The full commit a receipt names, never a prefix match on the head.
+
+    A short prefix counts only when the repository resolves it to one commit;
+    a 404, an ambiguous prefix (422) or any API failure proves nothing.
+    https://docs.github.com/en/rest/commits/commits#get-a-commit
+    """
+    if len(named) == 40:
+        return named
+    import ci_codex_review_runtime as runtime  # noqa: PLC0415 - runtime imports this module lazily
+
+    try:
+        commit = runtime._api(f"repos/{repo}/commits/{named}")
+    except EvidenceError:
+        return None
+    full = commit.get("sha") if isinstance(commit, dict) else None
+    if not isinstance(full, str) or re.fullmatch(r"[0-9a-f]{40}", full) is None:
+        return None
+    return full if full.startswith(named) else None
+
+
+def security_receipt(comments, target, review, metadata):
+    """Native verdict for a completed security review whose flags stayed null.
+
+    Every Bot security receipt for this head must be the exact no-issues text.
+    No receipt yet returns None: the review stays pending until the receipt
+    comment arrives (its issue_comment event resumes the gate).
+    """
+    repo, pr, sha = target
+    if (
+        review.get("status") != "completed"
+        or review.get("commit_sha") != sha
+        or review.get("has_any_findings") is not None
+        or review.get("has_unresolved_findings") is not None
+        or not isinstance(metadata, dict)
+        or (metadata.get("repository"), metadata.get("pullRequestNumber")) != (repo, pr)
+        or (metadata.get("headSha"), metadata.get("status")) != (sha, "completed")
+    ):
+        return None
+    receipts = []
+    for comment in comments:
+        body = comment.get("body")
+        if not (_bot_author(comment) and isinstance(body, str)):
+            continue
+        if not body.startswith(RECEIPT) or len(SECURITY_HEADING.findall(body)) != 1:
+            continue
+        commits = RECEIPT_COMMIT.findall(body)
+        if len(commits) != 1 or _receipt_head(repo, commits[0]) != sha:
+            continue
+        _authenticate_editor(comment)
+        if NO_ISSUES_RECEIPT.fullmatch(body) is None:
+            return {
+                "state": UNRECOGNIZED,
+                "source": "codex_security_receipt",
+                "receipt_ids": [comment["id"]],
+            }
+        receipts.append(comment["id"])
+    if not receipts:
+        return None
+    return {
+        "state": "success",
+        "source": "codex_security_receipt",
+        "receipt_ids": sorted(receipts),
+    }
