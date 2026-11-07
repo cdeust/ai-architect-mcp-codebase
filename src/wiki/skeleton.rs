@@ -244,6 +244,7 @@ impl Page {
     fn check_unique_members(&self) -> Result<(), SkeletonError> {
         match self.members.windows(2).find(|w| w[0].id == w[1].id) {
             Some(pair) => Err(SkeletonError::DuplicateSymbol {
+                kind: self.kind,
                 page: self.id.clone(),
                 id: pair[0].id.clone(),
             }),
@@ -260,6 +261,7 @@ impl Page {
             let key = (&edge.source, &edge.target, &edge.relation, &edge.location);
             if !seen.insert(key) {
                 return Err(SkeletonError::DuplicateEdge {
+                    kind: self.kind,
                     page: self.id.clone(),
                     source: edge.source.clone(),
                     target: edge.target.clone(),
@@ -277,6 +279,8 @@ impl Page {
         sort_dedup(&mut self.members);
         sort_dedup(&mut self.edges);
         sort_dedup(&mut self.coverage);
+        // "No edges to c2" has one spelling: a zero count is the absent key.
+        self.cross_community_edges.retain(|_, count| *count > 0);
         let files: BTreeSet<&str> = self.members.iter().map(|s| s.location.file()).collect();
         self.source_files = files.into_iter().map(str::to_owned).collect();
     }
@@ -408,7 +412,7 @@ impl WikiSkeleton {
     /// `DuplicateSymbol`, `DuplicateEdge`, `SelfCrossCommunity`, and
     /// `EmptyFile`/`UnsafePath` for a `ParseIncomplete` file). A `Location` is
     /// validated while serde parses it, so its errors (line 0, empty or
-    /// unsafe path) arrive as `Json` with the same message.
+    /// unsafe path) arrive as `Json`, whose message contains the same text.
     /// `serde_json::from_str::<WikiSkeleton>` applies the same checks but
     /// reports every error as a serde error.
     pub fn from_json(text: &str) -> Result<Self, SkeletonError> {

@@ -181,12 +181,12 @@ fn cross_community_counts_serialise_in_key_order_whatever_the_insertion_order() 
     for (n, key) in keys.iter().enumerate() {
         forward
             .cross_community_edges
-            .insert((*key).to_owned(), n as u64);
+            .insert((*key).to_owned(), n as u64 + 1);
     }
     for (n, key) in keys.iter().enumerate().rev() {
         backward
             .cross_community_edges
-            .insert((*key).to_owned(), n as u64);
+            .insert((*key).to_owned(), n as u64 + 1);
     }
     let a = WikiSkeleton::new(vec![forward]).unwrap().to_json().unwrap();
     let b = WikiSkeleton::new(vec![backward])
@@ -306,6 +306,21 @@ fn a_stale_source_files_on_a_memberless_non_community_page_is_refused() {
         page: "g1".into(),
     };
     assert_eq!(WikiSkeleton::from_json(&claimed), Err(expected));
+}
+
+/// claude[bot] review on #475: a zero count and an absent key are one
+/// graph, so they give one byte sequence.
+#[test]
+fn a_zero_cross_community_count_is_the_absent_key() {
+    let mut zero = Page::new(PageKind::Community, "c1", "x");
+    zero.cross_community_edges.insert("c2".to_owned(), 0);
+    zero.cross_community_edges.insert("c3".to_owned(), 4);
+    let mut absent = Page::new(PageKind::Community, "c1", "x");
+    absent.cross_community_edges.insert("c3".to_owned(), 4);
+    let a = WikiSkeleton::new(vec![zero]).unwrap().to_json().unwrap();
+    let b = WikiSkeleton::new(vec![absent]).unwrap().to_json().unwrap();
+    assert_eq!(a, b);
+    assert!(!a.contains("\"c2\""), "{a}");
 }
 
 /// claude[bot] review on #475: a key repeated in `cross_community_edges` is
@@ -501,6 +516,7 @@ fn two_members_sharing_an_id_are_refused_even_when_other_fields_differ() {
     assert_eq!(
         err,
         SkeletonError::DuplicateSymbol {
+            kind: PageKind::Community,
             page: "c".into(),
             id: "a".into()
         }
@@ -533,8 +549,6 @@ fn another_schema_version_is_refused_on_read() {
     ));
 }
 
-/// claude[bot] review on #475: another version is refused as `SchemaVersion`
-/// even when its shape is not v1's, and the v1 shape is still strict.
 /// claude[bot] review on #475: the version is checked before `new` and the
 /// `source_files` comparison, so a broken v1-shaped `/0` document is still a
 /// `SchemaVersion` error on both read paths.
@@ -545,6 +559,10 @@ fn the_version_is_checked_before_page_validation() {
     let stale = golden
         .replacen("\"src/b.rs\"\n      ]", "\"src/c.rs\"\n      ]", 1)
         .replace(SCHEMA_VERSION, old);
+    assert!(
+        stale.contains("src/c.rs"),
+        "the fixture must contain the replaced text"
+    );
     let page = r#"{"kind":"process","id":"p","title":"t","members":[],"edges":[],"cross_community_edges":{},"source_files":[],"coverage":[]}"#;
     let twice = format!(r#"{{"schema_version":"{old}","pages":[{page},{page}]}}"#);
     for (case, text) in [
@@ -560,6 +578,8 @@ fn the_version_is_checked_before_page_validation() {
     }
 }
 
+/// claude[bot] review on #475: another version is refused as `SchemaVersion`
+/// even when its shape is not v1's, and the v1 shape is still strict.
 #[test]
 fn another_version_with_another_shape_is_still_a_schema_version_error() {
     let v2 = r#"{"schema_version":"ai-architect.wiki-skeleton/2","pages":"renamed","extra":1}"#;
@@ -649,6 +669,7 @@ fn every_error_has_a_message() {
         },
         SkeletonError::UnsafePath("/x".into()),
         SkeletonError::DuplicateEdge {
+            kind: PageKind::Community,
             page: "c".into(),
             source: "a".into(),
             target: "b".into(),
@@ -659,6 +680,7 @@ fn every_error_has_a_message() {
             page: "c".into(),
         },
         SkeletonError::DuplicateSymbol {
+            kind: PageKind::Community,
             page: "c".into(),
             id: "a".into(),
         },
@@ -724,6 +746,7 @@ fn one_edge_with_two_provenance_tags_is_refused_but_two_call_sites_stay() {
     ];
     let err = WikiSkeleton::new(vec![page.clone()]).unwrap_err();
     let expected = SkeletonError::DuplicateEdge {
+        kind: PageKind::Community,
         page: "c".into(),
         source: "a".into(),
         target: "b".into(),

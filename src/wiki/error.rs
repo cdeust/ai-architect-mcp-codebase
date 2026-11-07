@@ -20,10 +20,12 @@ pub enum SkeletonError {
         id: String,
     },
     DuplicateSymbol {
+        kind: PageKind,
         page: String,
         id: String,
     },
     DuplicateEdge {
+        kind: PageKind,
         page: String,
         source: String,
         target: String,
@@ -52,20 +54,19 @@ impl fmt::Display for SkeletonError {
             }
             Self::EmptyId(what) => write!(f, "{what} must not be empty"),
             Self::DuplicatePage { kind, id } => write!(f, "duplicate {kind:?} page {id:?}"),
-            Self::DuplicateSymbol { page, id } => {
-                write!(
-                    f,
-                    "page {page:?} lists member {id:?} twice with different fields"
-                )
-            }
+            Self::DuplicateSymbol { kind, page, id } => write!(
+                f,
+                "{kind:?} page {page:?} lists member {id:?} twice with different fields"
+            ),
             Self::DuplicateEdge {
+                kind,
                 page,
                 source,
                 target,
                 relation,
             } => write!(
                 f,
-                "page {page:?} tags edge {source:?} -{relation:?}-> {target:?} twice"
+                "{kind:?} page {page:?} tags edge {source:?} -{relation:?}-> {target:?} twice"
             ),
             Self::SelfCrossCommunity { page } => {
                 write!(

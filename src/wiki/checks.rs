@@ -18,6 +18,8 @@ pub(super) fn repo_relative(file: &str) -> Result<(), SkeletonError> {
     }
     let bytes = file.as_bytes();
     let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    // `starts_with('/')` is also caught by the empty first segment below; it
+    // stays as defence in depth, so the absolute-path rule is explicit.
     let unsafe_path = file.starts_with('/')
         || drive
         || file.contains('\\')
