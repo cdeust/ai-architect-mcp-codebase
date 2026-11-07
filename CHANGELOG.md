@@ -12,7 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   registers `SessionStart` (startup, resume, clear, compact) and `SubagentStart`
   hooks. They name the graph tools for structural questions and point at
   `query_graph(graph="missed")` before a negative conclusion. Both are
-  registered in the plugin manifest, never in the user's settings. Both are
+  registered in the plugin's `hooks/hooks.json`, never in the user's settings
+  (`plugin.json` is unchanged). Both are
   fail-open: exit 0 with no output on every failure path, asserted by
   `scripts/tests/test_discovery_nudge_hooks.py` (wired into `ci.json`
   regression). The text is 711 bytes per injection. There is no `PreToolUse`

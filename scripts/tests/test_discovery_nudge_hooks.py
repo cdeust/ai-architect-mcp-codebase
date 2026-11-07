@@ -7,6 +7,7 @@ of 0 with no output on every failure path, under every POSIX shell present.
 """
 
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -22,6 +23,10 @@ TOOL_PROFILE = ROOT / "src" / "tool_profile.rs"
 # more sentence; growing past it should be a deliberate, re-measured choice.
 MAX_NUDGE_BYTES = 900
 
+# hooks.json always runs `sh`, so it must be present; dash and bash are extra
+# coverage where installed.
+if not shutil.which("sh"):
+    raise RuntimeError("these tests need `sh` on PATH, as hooks/hooks.json does")
 SHELLS = [shell for shell in ("sh", "dash", "bash") if shutil.which(shell)]
 
 
@@ -39,6 +44,8 @@ def run(shell, *arguments, env=None, stdout=subprocess.PIPE):
 def core_tool_names():
     source = TOOL_PROFILE.read_text(encoding="utf-8")
     block = re.search(r"CORE_TOOL_NAMES: \[&str; \d+\] = \[(.*?)\];", source, re.S)
+    if block is None:
+        raise AssertionError("CORE_TOOL_NAMES declaration not found in src/tool_profile.rs")
     return set(re.findall(r'"([a-z_]+)"', block.group(1)))
 
 
@@ -174,19 +181,34 @@ class FailOpenTests(unittest.TestCase):
         for shell in SHELLS:
             for mode in ("session", "subagent"):
                 with self.subTest(shell=shell, mode=mode):
+                    path = shutil.which(shell)
                     result = subprocess.run(
-                        [shutil.which(shell), "-c", 'sh "$0" "$1" >&-', str(SCRIPT), mode],
+                        [path, "-c", '"$0" "$1" "$2" >&-', path, str(SCRIPT), mode],
                         capture_output=True,
                         stdin=subprocess.DEVNULL,
                         check=False,
                     )
                     self.assert_silent_success(result)
 
-    def test_final_status_is_zero_when_the_write_fails(self):
-        # The last printf's status must never become the hook's exit status.
-        source = SCRIPT.read_text(encoding="utf-8")
-        self.assertTrue(source.rstrip().endswith("exit 0"))
+    def test_failed_write(self):
+        # /dev/full accepts the open and fails every write with ENOSPC.
+        for shell in SHELLS:
+            for mode in ("session", "subagent"):
+                with self.subTest(shell=shell, mode=mode), open("/dev/full", "wb") as full:
+                    self.assert_silent_success(run(shell, mode, stdout=full))
 
+    def test_reader_gone_away(self):
+        # A pipe with no reader: without `trap '' PIPE` the shell dies of SIGPIPE.
+        for shell in SHELLS:
+            for mode in ("session", "subagent"):
+                with self.subTest(shell=shell, mode=mode):
+                    reader, writer = os.pipe()
+                    os.close(reader)
+                    try:
+                        result = run(shell, mode, stdout=writer)
+                    finally:
+                        os.close(writer)
+                    self.assert_silent_success(result)
 
 if __name__ == "__main__":
     unittest.main()
