@@ -8,13 +8,13 @@
 //   an edge with a missing or unknown tag is an error, so an untagged edge is
 //   unrepresentable on both sides of the wire.
 // * page ids, member ids, edge ends and relations, missed-graph names and
-//   cross-community keys (unless the count is 0) must not be empty. Refused: two pages of the same
-//   kind and id, two members with the same id but different fields, and one
-//   edge carrying two provenance tags (exact repeats are merged); a key
-//   repeated in `cross_community_edges` and a community page counting edges
-//   to itself are refused too. An edge's
-//   ends are NOT required to be members of its page: a page lists the edges
-//   that leave it too, and their targets live on other pages.
+//   cross-community keys (unless the count is 0) must not be empty.
+//   Refused: two pages of the same kind and id, two members with the same
+//   id but different fields, and one edge carrying two provenance tags
+//   (exact repeats are merged); a key repeated in `cross_community_edges`
+//   and a community page counting edges to itself are refused too. An
+//   edge's ends are NOT required to be members of its page: a page lists
+//   the edges that leave it too, and their targets live on other pages.
 // * criterion 4 — `Symbol`, `Edge` and a missed-graph gap each hold a
 //   `Location`, whose `line` is a `NonZeroU32` and whose `file` is a
 //   non-empty repo-relative path in one spelling only (no absolute path,
@@ -345,12 +345,12 @@ impl<'de> Deserialize<'de> for WikiSkeleton {
 
 /// Strict v1 shape: the `Deserialize` of `WikiSkeleton` goes through it, so
 /// plain serde never accepts another version, an unknown field, a JSON array
-/// in place of an object (`MapOnly`, `object`, `objects`) or an unvalidated
-/// page. A document of another version whose shape also differs
-/// may be refused for its shape first; when the strict parse fails,
-/// `from_json` probes the version, so it reports `SchemaVersion` for any
-/// well-formed JSON object with exactly one top-level `schema_version`, a
-/// string.
+/// in place of an object (`MapOnly`, `objects`), an object in place of a
+/// `provenance` or page `kind` string (`string`) or an unvalidated page. A
+/// document of another version whose shape also differs may be refused for
+/// its shape first; when the strict parse fails, `from_json` probes the
+/// version, so it reports `SchemaVersion` for any well-formed JSON object
+/// with exactly one top-level `schema_version`, a string.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSkeleton {
