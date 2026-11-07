@@ -54,44 +54,35 @@ class ManifestTests(unittest.TestCase):
     def setUp(self):
         self.hooks = json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
 
-    def commands(self, event):
-        return [
-            hook["command"]
-            for group in self.hooks[event]
-            for hook in group["hooks"]
-            if hook["type"] == "command"
-        ]
+    def assert_single_command(self, group, mode):
+        # The whole hook list, so an extra entry of any type (a "prompt" hook,
+        # a second command) or a changed timeout fails here.
+        self.assertEqual(
+            group["hooks"],
+            [
+                {
+                    "type": "command",
+                    "command": f'sh "${{CLAUDE_PLUGIN_ROOT}}/hooks/discovery-nudge.sh" {mode}',
+                    "timeout": 5,
+                }
+            ],
+        )
 
     def test_session_start_covers_every_session_source(self):
         (group,) = self.hooks["SessionStart"]
         self.assertEqual(
             set(group["matcher"].split("|")), {"startup", "resume", "clear", "compact"}
         )
-        self.assertEqual(
-            self.commands("SessionStart"),
-            ['sh "${CLAUDE_PLUGIN_ROOT}/hooks/discovery-nudge.sh" session'],
-        )
+        self.assert_single_command(group, "session")
 
     def test_subagent_start_matches_every_subagent(self):
         (group,) = self.hooks["SubagentStart"]
         self.assertEqual(group["matcher"], "*")
-        self.assertEqual(
-            self.commands("SubagentStart"),
-            ['sh "${CLAUDE_PLUGIN_ROOT}/hooks/discovery-nudge.sh" subagent'],
-        )
+        self.assert_single_command(group, "subagent")
 
     def test_only_the_two_nudge_events_are_registered(self):
         # No PreToolUse gate: the plugin never sits in front of Grep/Glob.
         self.assertEqual(set(self.hooks), {"SessionStart", "SubagentStart"})
-
-    def test_every_hook_has_the_five_second_timeout(self):
-        timeouts = {
-            hook["timeout"]
-            for event in self.hooks
-            for group in self.hooks[event]
-            for hook in group["hooks"]
-        }
-        self.assertEqual(timeouts, {5})
 
     def test_shipped_at_the_plugin_root(self):
         # Claude Code loads <plugin root>/hooks/hooks.json; the marketplace
@@ -150,15 +141,15 @@ class PayloadTests(unittest.TestCase):
         self.assertIn('query_graph(graph="missed")', text)
         self.assertIn("absence from the graph is not proof of absence", text)
 
-    def test_text_names_only_tools_both_profiles_register(self):
+    def test_text_names_exactly_the_core_tools(self):
         contract = json.loads((ROOT / "mcp-contract.json").read_text(encoding="utf-8"))
         text = self.session_text("sh").replace(contract["claude_tool_prefix"], "")
         named = set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", text))
         core = core_tool_names()
         self.assertTrue(named, "the nudge must name the tools it recommends")
-        self.assertLessEqual(named, core)
-        self.assertIn("analyze_codebase", named)
-        self.assertIn("query_graph", named)
+        # Exactly the core set: no tool both profiles lack, and none of the
+        # core tools dropped (the nudge exists to name them).
+        self.assertEqual(named, core)
 
     def test_tool_prefix_matches_the_contract(self):
         contract = json.loads((ROOT / "mcp-contract.json").read_text(encoding="utf-8"))
@@ -177,7 +168,9 @@ class FailOpenTests(unittest.TestCase):
 
     def test_missing_or_unknown_mode(self):
         for shell in SHELLS:
-            for arguments in ((), ("",), ("SubagentStart",), ("extra",)):
+            for arguments in ((), ("",), ("SubagentStart",), ("extra",),
+                              ("Session",), ("Subagent",), ("sessionx",), ("subagentx",),
+                              (" session",)):
                 with self.subTest(shell=shell, arguments=arguments):
                     self.assert_silent_success(run(shell, *arguments))
 
