@@ -11,6 +11,7 @@ that need more than a sentence.
 - [Excluding directories from the walk](#excluding-directories-from-the-walk)
 - [Database address-space reservation (`max_db_size`)](#database-address-space-reservation-max_db_size)
 - [Measured graph sizes](#measured-graph-sizes)
+- [Code-discovery nudge (plugin hooks)](#code-discovery-nudge-plugin-hooks)
 
 ## Team-shared graph artifact
 
@@ -135,3 +136,34 @@ Measured on 2026-07-15 with `du -k` on every `graph` file found under
 
 The 75 graphs totalled about 4.87 GiB. Every graph outside the top three
 (which include `node_modules`) was under 150 MiB.
+
+## Code-discovery nudge (plugin hooks)
+
+The Claude Code plugin registers two hooks in `hooks/hooks.json` (issue #198).
+Nothing is written to `~/.claude/settings.json`.
+
+| Event | Matcher | Output |
+| --- | --- | --- |
+| `SessionStart` | `startup\|resume\|clear\|compact` | the nudge as plain text |
+| `SubagentStart` | `*` | `hookSpecificOutput.additionalContext` JSON carrying the same text |
+
+The nudge names the graph tools for structural questions (`search_codebase`,
+`get_symbol`, `get_context`, `get_impact`, `detect_changes`, `query_graph`),
+says to run `analyze_codebase` on a repository that is not indexed yet, and
+points at `query_graph(graph="missed")` before a negative conclusion. It does
+not claim the graph is complete. There is no `PreToolUse` hook: the plugin
+never sits in front of `Grep` or `Glob`.
+
+**Cost.** The text is 711 bytes, 91 words, paid on every session start and every
+subagent spawn. At the usual 3–4 bytes per token for English that is about 180
+to 240 tokens; this range is an estimate, not a tokenizer measurement.
+`scripts/tests/test_discovery_nudge_hooks.py` caps the text at 900 bytes.
+
+**Fail-open.** `hooks/discovery-nudge.sh` exits 0 with no output when the mode
+is missing or unknown, when `awk` is missing, fails or prints nothing, and when
+stdout is closed. The tests assert each of these under `sh`, `dash` and `bash`.
+The hook needs a POSIX `sh` on `PATH`. On Windows that means `sh` from Git Bash.
+The hook has not been run on Windows.
+
+**Turning it off.** Claude Code has no per-plugin hook switch. To drop the
+nudge, disable the plugin or set `"disableAllHooks": true` in your settings.
