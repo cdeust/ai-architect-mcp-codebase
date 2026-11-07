@@ -96,6 +96,40 @@ pub(super) fn rust_local_receiver_gate(
     resolve_by_hint(ctx, site, &m, file_id, imported_from, constructed)
 }
 
+/// TypeScript/JavaScript `<local>.<m>` whose receiver the parser typed by a
+/// `new T(..)` the enclosing function proves (`parser::spec::ts_receiver`,
+/// issue #444): bound to `T::<m>` when the caller's own file defines the class
+/// `T` with a method `m`. The class is read in the caller's file only: an
+/// imported `T` is not traced through the import here.
+///
+/// postcondition: `None` when the gate does not apply (not TypeScript, no
+/// `constructed` hint, callee not `<ident>.<m>`-shaped) AND when the file holds no
+/// class `T` owning `m` — the call then falls through to the by-name path it
+/// took before this gate existed, so the gate only ever adds a typed answer and
+/// never removes one. `Some(_)` is final: one method of `T` binds, several of
+/// them stay ambiguous.
+pub(super) fn ts_constructed_receiver_gate(
+    ctx: &ResolveContext,
+    site: &CallSite,
+    file_id: &str,
+) -> Option<Gated> {
+    if ctx.provider.language() != "typescript"
+        || site.receiver_hint.is_empty()
+        || site.receiver_hint_via != crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED
+    {
+        return None;
+    }
+    let receiver::ReceiverForm::Local { m, .. } =
+        receiver::classify(site.callee, &receiver::ReceiverSpelling::of(ctx.provider))
+    else {
+        return None;
+    };
+    match receiver::resolve_local_receiver_in_file(ctx.idx, site.receiver_hint, &m, file_id) {
+        PolicyResolution::NotFound => None,
+        resolution => Some((resolution, None)),
+    }
+}
+
 /// A return type named only by a `use` of a crate the latest index pass did not
 /// record as a library of this repository declines (issues #348, #349, #358): a
 /// foreign crate's type of that name would match a namesake. Without recorded
