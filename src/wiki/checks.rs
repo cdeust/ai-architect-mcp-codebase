@@ -1,6 +1,7 @@
-// wiki::checks — the path rule and the duplicate-key map reader used by the
-// skeleton (issue #196). Split out of skeleton.rs to keep it under the §4.1
-// 500-line cap.
+// wiki::checks — the path rule, the duplicate-key map reader and the
+// one-spelling readers (`MapOnly`, `objects`, `string`) used by the skeleton
+// (issue #196). Split out of skeleton.rs to keep it under the §4.1 500-line
+// cap.
 
 use super::error::SkeletonError;
 use std::collections::BTreeMap;
@@ -94,15 +95,6 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for MapOnly<T> {
     }
 }
 
-/// `deserialize_with` for a struct field that must be a JSON object.
-pub(super) fn object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    <MapOnly<T> as serde::Deserialize>::deserialize(deserializer).map(|m| m.0)
-}
-
 /// `deserialize_with` for a list whose every item must be a JSON object.
 pub(super) fn objects<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
@@ -111,4 +103,25 @@ where
 {
     let items: Vec<MapOnly<T>> = serde::Deserialize::deserialize(deserializer)?;
     Ok(items.into_iter().map(|m| m.0).collect())
+}
+
+/// `deserialize_with` for a unit enum that must be a JSON string: serde_json
+/// also reads `{"inferred": null}` as the variant `inferred`, a second
+/// spelling.
+pub(super) fn string<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    struct Str<T>(std::marker::PhantomData<T>);
+    impl<'de, T: serde::Deserialize<'de>> serde::de::Visitor<'de> for Str<T> {
+        type Value = T;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a JSON string")
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<T, E> {
+            T::deserialize(serde::de::value::StrDeserializer::<E>::new(v))
+        }
+    }
+    deserializer.deserialize_str(Str(std::marker::PhantomData))
 }

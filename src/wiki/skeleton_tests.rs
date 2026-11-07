@@ -472,6 +472,51 @@ fn a_json_array_is_refused_for_members_edges_gaps_and_the_document() {
     assert!(matches!(probe, SkeletonError::Json(_)), "{probe:?}");
 }
 
+/// claude[bot] review on #475: serde_json also reads a unit enum written as
+/// `{"variant": null}`. `provenance` and a page `kind` are strings only.
+#[test]
+fn a_unit_enum_written_as_an_object_is_refused() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let rows = [
+        (
+            "provenance",
+            r#""provenance": "inferred""#,
+            r#""provenance": {"inferred": null}"#,
+        ),
+        (
+            "page kind",
+            r#""kind": "god_node""#,
+            r#""kind": {"god_node": null}"#,
+        ),
+    ];
+    for (field, from, to) in rows {
+        let tampered = golden.replacen(from, to, 1);
+        assert_ne!(
+            tampered, golden,
+            "{field}: the fixture must contain the replaced text"
+        );
+        let err = WikiSkeleton::from_json(&tampered).unwrap_err();
+        assert!(
+            matches!(&err, SkeletonError::Json(m) if m.contains("JSON string")),
+            "{field}: {err:?}"
+        );
+    }
+    // The string form still reads every variant.
+    assert_eq!(
+        WikiSkeleton::from_json(golden).unwrap().to_json().unwrap(),
+        golden
+    );
+}
+
+/// The array guard lives in `Location` itself, so a location read on its own
+/// refuses `["f", 1]` too.
+#[test]
+fn a_location_read_on_its_own_refuses_an_array() {
+    assert!(serde_json::from_str::<Location>(r#"["src/a.rs", 3]"#).is_err());
+    let ok: Location = serde_json::from_str(r#"{"file":"src/a.rs","line":3}"#).unwrap();
+    assert_eq!((ok.file(), ok.line()), ("src/a.rs", 3));
+}
+
 /// The read copy is canonicalised like every other list: the same set of
 /// files in another order or with a repeat is accepted.
 #[test]

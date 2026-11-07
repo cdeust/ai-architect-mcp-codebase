@@ -8,7 +8,7 @@
 //   an edge with a missing or unknown tag is an error, so an untagged edge is
 //   unrepresentable on both sides of the wire.
 // * page ids, member ids, edge ends and relations, missed-graph names and
-//   cross-community keys must not be empty. Refused: two pages of the same
+//   cross-community keys (unless the count is 0) must not be empty. Refused: two pages of the same
 //   kind and id, two members with the same id but different fields, and one
 //   edge carrying two provenance tags (exact repeats are merged); a key
 //   repeated in `cross_community_edges` and a community page counting edges
@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
-use super::checks::{object, objects, repo_relative, unique_community_keys, MapOnly};
+use super::checks::{objects, repo_relative, string, unique_community_keys, MapOnly};
 use super::error::SkeletonError;
 
 /// Embedded in every artifact. Bump on any change to the serialised shape.
@@ -56,7 +56,8 @@ pub enum Provenance {
 
 /// A `file:line` anchor. `line` is 1-based and can never be 0.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(try_from = "RawLocation")]
+// Read through `MapOnly`: a location is an object, never `["f", 1]`.
+#[serde(try_from = "MapOnly<RawLocation>")]
 pub struct Location {
     file: String,
     line: NonZeroU32,
@@ -69,9 +70,9 @@ struct RawLocation {
     line: u32,
 }
 
-impl TryFrom<RawLocation> for Location {
+impl TryFrom<MapOnly<RawLocation>> for Location {
     type Error = SkeletonError;
-    fn try_from(raw: RawLocation) -> Result<Self, Self::Error> {
+    fn try_from(MapOnly(raw): MapOnly<RawLocation>) -> Result<Self, Self::Error> {
         Location::new(raw.file, raw.line)
     }
 }
@@ -100,7 +101,6 @@ pub struct Symbol {
     pub id: String,
     pub name: String,
     pub kind: String,
-    #[serde(deserialize_with = "object")]
     pub location: Location,
 }
 
@@ -113,8 +113,9 @@ pub struct Edge {
     source: String,
     target: String,
     relation: String,
+    // A JSON string only: serde_json would also read `{"inferred": null}`.
+    #[serde(deserialize_with = "string")]
     provenance: Provenance,
-    #[serde(deserialize_with = "object")]
     location: Location,
 }
 
@@ -162,11 +163,7 @@ impl Edge {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CoverageGap {
     /// A missed-graph entry: a reference that was seen but not resolved.
-    Missed {
-        name: String,
-        #[serde(deserialize_with = "object")]
-        location: Location,
-    },
+    Missed { name: String, location: Location },
     /// A file whose parse was incomplete (`parse_incomplete`).
     ParseIncomplete { file: String },
 }
@@ -198,6 +195,7 @@ impl std::fmt::Display for PageKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Page {
+    #[serde(deserialize_with = "string")]
     pub kind: PageKind,
     pub id: String,
     pub title: String,

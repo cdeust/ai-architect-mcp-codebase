@@ -23,8 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   `source_files` must be the members' set of files (order and repeats
   ignored); the per-page `coverage` block is always written, `[]` when
   empty; the same pages in any order give byte-identical JSON, pinned by a
-  golden v1 fixture; another schema version is refused on read, and so is
-  a JSON array in place of any object. Library only: no tool yet, and
+  golden v1 fixture; reading a skeleton refuses another schema version, a
+  JSON array in place of any of its objects and an object in place of a
+  `provenance` or page `kind` string. Library only: no tool yet, and
   nothing builds pages from a graph yet (later slices of #196).
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
