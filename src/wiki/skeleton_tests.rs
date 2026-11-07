@@ -430,6 +430,17 @@ fn another_version_with_another_shape_is_still_a_schema_version_error() {
         .unwrap_err()
         .to_string();
     assert!(serde_err.contains("schema version"), "{serde_err}");
+    // The version is only typed when it is a top-level string.
+    let numeric = r#"{"schema_version":2,"pages":[]}"#;
+    assert!(matches!(
+        WikiSkeleton::from_json(numeric),
+        Err(SkeletonError::Json(_))
+    ));
+    let absent = r#"{"pages":[]}"#;
+    assert!(matches!(
+        WikiSkeleton::from_json(absent),
+        Err(SkeletonError::Json(_))
+    ));
     let null_pages = format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":null}}"#);
     let err = WikiSkeleton::from_json(&null_pages).unwrap_err();
     assert!(
@@ -514,6 +525,9 @@ fn a_path_that_could_leave_the_repo_is_refused() {
         "../x",
         "src/../../x",
         "C:\\x",
+        "C:/x",
+        "C:x.rs",
+        "//server/share",
         "src\\a.rs",
         "a\u{0}b",
         "a\nb",
@@ -521,7 +535,7 @@ fn a_path_that_could_leave_the_repo_is_refused() {
         let err = Location::new(bad, 1).unwrap_err();
         assert_eq!(err, SkeletonError::UnsafePath(bad.to_owned()), "{bad:?}");
     }
-    for fine in ["src/a.rs", "a..b/c.rs", "./src/a.rs", ".hidden/x"] {
+    for fine in ["src/a.rs", "a..b/c.rs", "./src/a.rs", ".hidden/x", "1:x.rs"] {
         assert!(Location::new(fine, 1).is_ok(), "{fine:?}");
     }
     let mut page = Page::new(PageKind::Community, "c", "x");
@@ -563,12 +577,17 @@ fn one_edge_with_two_provenance_tags_is_refused_but_two_call_sites_stay() {
         Provenance::Inferred,
         loc("src/a.rs", 5),
     );
-    assert_eq!(
-        WikiSkeleton::new(vec![page]).unwrap().pages()[0]
-            .edges
-            .len(),
-        2
-    );
+    let kept = WikiSkeleton::new(vec![page.clone()]).unwrap();
+    assert_eq!(kept.pages()[0].edges.len(), 2);
+    // `foo(bar())`: same line, other target or other relation, all stay.
+    let line = loc("src/a.rs", 4);
+    page.edges = vec![
+        Edge::new(("a", "foo"), "Calls", Provenance::Inferred, line.clone()),
+        Edge::new(("a", "bar"), "Calls", Provenance::Extracted, line.clone()),
+        Edge::new(("a", "foo"), "References", Provenance::Extracted, line),
+    ];
+    let kept = WikiSkeleton::new(vec![page]).unwrap();
+    assert_eq!(kept.pages()[0].edges.len(), 3);
 }
 
 #[test]
@@ -750,7 +769,8 @@ fn the_boundary_matcher_catches_disguised_names_and_spares_innocent_words() {
 }
 
 /// A tripwire for criteria 1 and 2, not their enforcement: nothing under
-/// `src/wiki/` (recursively, `*.rs`) may name a network or model-client API.
+/// `src/wiki/` (recursively, `*.rs`, except this test file, which has to name
+/// the patterns) may name a network or model-client API.
 /// The real enforcement is the runtime no-egress test that lands with the
 /// export path in a later slice of #196.
 #[test]

@@ -7,9 +7,9 @@
 //   enum has exactly the two values `extracted` / `inferred`. Deserialising
 //   an edge with a missing or unknown tag is an error, so an untagged edge is
 //   unrepresentable on both sides of the wire.
-// * edges, members, missed-graph names and cross-community keys refuse empty
-//   values; two members that share an id but differ elsewhere are refused
-//   (exact repeats are merged). An edge's ends are NOT
+// * page ids, member ids, edge ends and relations, missed-graph names and
+//   cross-community keys must not be empty; two members with the same id but
+//   different fields are refused (exact repeats are merged). An edge's ends are NOT
 //   required to be members of its page: a page lists the edges that leave it
 //   too, and their targets live on other pages.
 // * criterion 4 — `Symbol`, `Edge` and a missed-graph gap each hold a
@@ -25,7 +25,8 @@
 //   produces byte-identical JSON. Maps are `BTreeMap`s.
 // * criterion 7 — `SCHEMA_VERSION` is embedded in the artifact; every
 //   deserialisation path refuses any other version, and `from_json` reports
-//   it as `SchemaVersion` whatever the document's shape.
+//   it as `SchemaVersion` whatever the rest of the document looks like, as
+//   long as `schema_version` is a top-level string (otherwise `Json`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -150,7 +151,8 @@ fn repo_relative(file: &str) -> Result<(), SkeletonError> {
     if file.is_empty() {
         return Err(SkeletonError::EmptyFile);
     }
-    let drive = file.as_bytes().get(1) == Some(&b':');
+    let bytes = file.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
     let unsafe_path = file.starts_with('/')
         || drive
         || file.contains('\\')
@@ -392,8 +394,9 @@ pub struct WikiSkeleton {
 /// Strict v1 shape: the `Deserialize` of `WikiSkeleton` goes through it, so
 /// plain serde never accepts another version, an unknown field or an
 /// unvalidated page. A document of another version whose shape also differs
-/// may be refused for its shape first; `from_json` probes the version before
-/// parsing, so it reports `SchemaVersion` whatever the shape.
+/// may be refused for its shape first; when the strict parse fails,
+/// `from_json` probes the version, so it reports `SchemaVersion` whatever the
+/// rest of the document looks like (given a top-level string version).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSkeleton {
@@ -488,10 +491,17 @@ impl WikiSkeleton {
     /// same checks but reports every error as a serde error.
     pub fn from_json(text: &str) -> Result<Self, SkeletonError> {
         let json = |e: serde_json::Error| SkeletonError::Json(e.to_string());
-        let probe: VersionProbe = serde_json::from_str(text).map_err(json)?;
-        check_version(probe.schema_version)?;
-        let raw: RawSkeleton = serde_json::from_str(text).map_err(json)?;
-        Self::try_from(raw)
+        match serde_json::from_str::<RawSkeleton>(text) {
+            // `try_from` checks the version itself: a valid read parses once.
+            Ok(raw) => Self::try_from(raw),
+            // Only a broken document pays for the probe, to tell another
+            // version apart from a bad v1.
+            Err(strict) => {
+                let probe: VersionProbe = serde_json::from_str(text).map_err(json)?;
+                check_version(probe.schema_version)?;
+                Err(json(strict))
+            }
+        }
     }
 }
 
