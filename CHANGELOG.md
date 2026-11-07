@@ -14,10 +14,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   `query_graph(graph="missed")` before a negative conclusion. Both are
   registered in the plugin, never in the user's settings (`plugin.json` is
   unchanged). Both are fail-open: exit 0 with no output on every failure path,
-  asserted by
-  `scripts/tests/test_discovery_nudge_hooks.py` (wired into `ci.json`
-  regression). The text is 711 bytes per injection. There is no `PreToolUse`
-  gate. See `docs/configuration.md`.
+  asserted by `scripts/tests/test_discovery_nudge_hooks.py` (wired into
+  `ci.json` regression). The text is 711 bytes (712 with the trailing newline
+  of the SessionStart output). There is no `PreToolUse` gate. See
+  `docs/configuration.md`.
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
   runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov

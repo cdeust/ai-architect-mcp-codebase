@@ -3,7 +3,8 @@
 The nudge is paid on every session start and every subagent spawn, and a hook
 that breaks session startup is worse than no nudge. These tests pin both: the
 payload shape for each event, a byte ceiling on the injected text, and an exit
-of 0 with no output on every failure path, under every POSIX shell present.
+of 0 with no output on every failure path, under `sh` and, where installed,
+`dash` and `bash`.
 """
 
 import json
@@ -114,6 +115,8 @@ class PayloadTests(unittest.TestCase):
         for shell in SHELLS:
             with self.subTest(shell=shell):
                 text = self.session_text(shell)
+                # Exactly one line: one trailing newline, none inside.
+                self.assertEqual(text.count("\n"), 1)
                 self.assertTrue(text.endswith("\n"))
                 self.assertIn("ai-architect", text)
                 with self.assertRaises(json.JSONDecodeError):
@@ -140,6 +143,7 @@ class PayloadTests(unittest.TestCase):
         text = self.session_text("sh")
         self.assertIn('query_graph(graph="missed")', text)
         self.assertIn("absence from the graph is not proof of absence", text)
+        self.assertIn("use Grep/Read for comments, strings and unsupported files", text)
 
     def test_text_names_exactly_the_core_tools(self):
         contract = json.loads((ROOT / "mcp-contract.json").read_text(encoding="utf-8"))
