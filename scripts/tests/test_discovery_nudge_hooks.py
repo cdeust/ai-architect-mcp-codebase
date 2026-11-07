@@ -210,5 +210,6 @@ class FailOpenTests(unittest.TestCase):
                         os.close(writer)
                     self.assert_silent_success(result)
 
+
 if __name__ == "__main__":
     unittest.main()

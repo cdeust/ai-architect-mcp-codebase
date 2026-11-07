@@ -161,10 +161,10 @@ to 240 tokens; this range is an estimate, not a tokenizer measurement.
 
 **Fail-open.** `hooks/discovery-nudge.sh` exits 0 with no output when the mode
 is missing or unknown, when stdout is closed or full, and when the reader has
-gone away (SIGPIPE is ignored). It runs no external command:
-both payloads are constants written with the `printf` builtin, so it works with
-an empty `PATH`. The tests assert each of these under every one of `sh`, `dash` and `bash`
-that is installed (`sh` is required, as `hooks.json` runs it).
+gone away (SIGPIPE is ignored). It runs no external command: both payloads are
+constants written with the `printf` builtin, so it works with an empty `PATH`.
+The tests assert each of these under `sh` (required, as `hooks.json` runs it),
+and under `dash` and `bash` where installed; on Ubuntu `sh` is dash.
 The hook needs a POSIX `sh` on `PATH`. On Windows that means `sh` from Git Bash.
 The hook has not been run on Windows.
 

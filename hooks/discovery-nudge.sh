@@ -7,8 +7,9 @@
 #
 # Fail-open by contract: a hook that breaks session startup is worse than a
 # missing nudge, so every failure path (unknown or missing mode, a closed or
-# full stdout, a reader that has gone away) exits 0 with no output. The script runs no external command: both
-# payloads are constants, written with the shell's printf builtin.
+# full stdout, a reader that has gone away) exits 0 with no output. The script
+# runs no external command: both payloads are constants, written with the
+# shell's printf builtin.
 #
 # The text names only tools in CORE_TOOL_NAMES (src/tool_profile.rs), which
 # both profiles register; scripts/tests/test_discovery_nudge_hooks.py enforces
