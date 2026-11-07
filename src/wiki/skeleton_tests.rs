@@ -540,6 +540,13 @@ fn another_version_with_another_shape_is_still_a_schema_version_error() {
         WikiSkeleton::from_json(numeric),
         Err(SkeletonError::Json(_))
     ));
+    // A failed probe keeps the strict error, which names the real problem.
+    let bad_page = r#"{"pages":[{"kind":"bogus"}]}"#;
+    let err = WikiSkeleton::from_json(bad_page).unwrap_err();
+    assert!(
+        matches!(&err, SkeletonError::Json(m) if m.contains("bogus")),
+        "{err:?}"
+    );
     let absent = r#"{"pages":[]}"#;
     assert!(matches!(
         WikiSkeleton::from_json(absent),
@@ -809,7 +816,8 @@ fn errors_from_new_stay_typed_on_the_read_path_and_location_errors_are_json() {
     );
 }
 
-/// Words that name a network or model-client API, matched case-insensitively
+/// Words that name a network, model-client or process-spawning API, matched
+/// case-insensitively
 /// and on identifier boundaries, so `hyperlink`, `philanthropic` and
 /// `network` do not trip it while `OpenAI` and `{net::TcpListener}` do.
 const FORBIDDEN: [&str; 14] = [
@@ -889,7 +897,7 @@ fn the_boundary_matcher_catches_disguised_names_and_spares_innocent_words() {
 
 /// A tripwire for criteria 1 and 2, not their enforcement: nothing under
 /// `src/wiki/` (recursively, `*.rs`, except this test file, which has to name
-/// the patterns) may name a network or model-client API.
+/// the patterns) may name a network, model-client or process-spawning API.
 /// The real enforcement is the runtime no-egress test that lands with the
 /// export path in a later slice of #196.
 #[test]

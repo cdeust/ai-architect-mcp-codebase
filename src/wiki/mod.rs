@@ -12,10 +12,10 @@
 // from a `GraphStore` and the MCP tool that exports them are later slices of
 // #196.
 
-pub mod error;
+mod error;
 pub mod skeleton;
 
+pub use error::SkeletonError;
 pub use skeleton::{
-    CoverageGap, Edge, Location, Page, PageKind, Provenance, SkeletonError, Symbol, WikiSkeleton,
-    SCHEMA_VERSION,
+    CoverageGap, Edge, Location, Page, PageKind, Provenance, Symbol, WikiSkeleton, SCHEMA_VERSION,
 };

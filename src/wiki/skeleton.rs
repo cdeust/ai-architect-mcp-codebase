@@ -8,10 +8,11 @@
 //   an edge with a missing or unknown tag is an error, so an untagged edge is
 //   unrepresentable on both sides of the wire.
 // * page ids, member ids, edge ends and relations, missed-graph names and
-//   cross-community keys must not be empty; two members with the same id but
-//   different fields are refused (exact repeats are merged). An edge's ends are NOT
-//   required to be members of its page: a page lists the edges that leave it
-//   too, and their targets live on other pages.
+//   cross-community keys must not be empty. Refused: two pages of the same
+//   kind and id, two members with the same id but different fields, and one
+//   edge carrying two provenance tags (exact repeats are merged). An edge's
+//   ends are NOT required to be members of its page: a page lists the edges
+//   that leave it too, and their targets live on other pages.
 // * criterion 4 — `Symbol`, `Edge` and a missed-graph gap each hold a
 //   `Location`, whose `line` is a `NonZeroU32` and whose `file` is a
 //   non-empty repo-relative path in one spelling only (no absolute path,
@@ -19,20 +20,21 @@
 //   character). `ParseIncomplete.file` follows the same path rule.
 // * criterion 5 — `Page::coverage` is serialised unconditionally: an empty
 //   block is `"coverage": []`, present, never absent.
-// * criterion 6 — `WikiSkeleton::new` sorts and deduplicates every list and
-//   derives `source_files` from the members, overwriting any stored value
-//   (the read path refuses a stored set of files that differs), so the same
+// * criterion 6 — `WikiSkeleton::new` sorts every list, merges exact repeats
+//   within a page, and derives `source_files` from the members, overwriting
+//   any stored value (the read path refuses a stored set of files that
+//   differs, order and repeats ignored), so the same
 //   input in any order produces byte-identical JSON. Maps are `BTreeMap`s.
 // * criterion 7 — `SCHEMA_VERSION` is embedded in the artifact; every
 //   deserialisation path refuses any other version, and `from_json` reports
-//   it as `SchemaVersion` whatever the rest of the document looks like, as
-//   long as `schema_version` is a top-level string (otherwise `Json`).
+//   it as `SchemaVersion` for any well-formed JSON object whose
+//   `schema_version` is a top-level string (otherwise `Json`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
-pub use super::error::SkeletonError;
+use super::error::SkeletonError;
 
 /// Embedded in every artifact. Bump on any change to the serialised shape.
 pub const SCHEMA_VERSION: &str = "ai-architect.wiki-skeleton/1";
@@ -194,8 +196,8 @@ pub enum PageKind {
 
 /// One page stub. `source_files` is private and derived from `members` by
 /// `WikiSkeleton::new`, which overwrites it; on read it is required and a
-/// value that disagrees with the members' files is refused, so inside a
-/// `WikiSkeleton` the two always agree.
+/// value whose *set* of files differs from the members' (order and repeats
+/// ignored) is refused, so inside a `WikiSkeleton` the two always agree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Page {
@@ -328,8 +330,8 @@ pub struct WikiSkeleton {
 /// plain serde never accepts another version, an unknown field or an
 /// unvalidated page. A document of another version whose shape also differs
 /// may be refused for its shape first; when the strict parse fails,
-/// `from_json` probes the version, so it reports `SchemaVersion` whatever the
-/// rest of the document looks like (given a top-level string version).
+/// `from_json` probes the version, so it reports `SchemaVersion` for any
+/// well-formed JSON object whose `schema_version` is a top-level string.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSkeleton {
@@ -439,7 +441,10 @@ impl WikiSkeleton {
             // Only a broken document pays for the probe, to tell another
             // version apart from a bad v1.
             Err(strict) => {
-                let probe: VersionProbe = serde_json::from_str(text).map_err(json)?;
+                // If the probe fails too, the strict error says more.
+                let Ok(probe) = serde_json::from_str::<VersionProbe>(text) else {
+                    return Err(json(strict));
+                };
                 check_version(probe.schema_version)?;
                 Err(json(strict))
             }

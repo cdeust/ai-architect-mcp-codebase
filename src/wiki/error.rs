@@ -47,7 +47,7 @@ impl fmt::Display for SkeletonError {
             Self::StaleSourceFiles { kind, page } => {
                 write!(
                     f,
-                    "{kind:?} page {page:?} lists source_files that are not its members' files"
+                    "{kind:?} page {page:?} lists source_files that are not exactly its members' files"
                 )
             }
             Self::EmptyId(what) => write!(f, "{what} must not be empty"),
