@@ -238,6 +238,32 @@ fn another_schema_version_is_refused_on_read() {
     ));
 }
 
+/// Codex review on #475: the derived `Deserialize` must not bypass `new`.
+#[test]
+fn plain_serde_deserialisation_applies_the_same_checks_as_from_json() {
+    let unsupported = r#"{"schema_version":"unsupported","pages":[]}"#;
+    assert!(serde_json::from_str::<WikiSkeleton>(unsupported).is_err());
+    let page = |id: &str| {
+        format!(
+            r#"{{"kind":"process","id":"{id}","title":"t","members":[],"edges":[],"cross_community_edges":{{}},"coverage":[]}}"#
+        )
+    };
+    let doc = |pages: &[String]| {
+        format!(
+            r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{}]}}"#,
+            pages.join(",")
+        )
+    };
+    let twice = doc(&[page("p"), page("p")]);
+    assert!(serde_json::from_str::<WikiSkeleton>(&twice).is_err());
+    assert!(serde_json::from_str::<WikiSkeleton>(&doc(&[page("")])).is_err());
+    let unordered = doc(&[page("b"), page("a")]);
+    let read: WikiSkeleton = serde_json::from_str(&unordered).unwrap();
+    let order: Vec<&str> = read.pages().iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(order, ["a", "b"]);
+    assert_eq!(read, WikiSkeleton::from_json(&unordered).unwrap());
+}
+
 #[test]
 fn every_error_has_a_message() {
     let errors = [

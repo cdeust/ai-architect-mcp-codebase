@@ -235,12 +235,33 @@ fn sort_dedup<T: Ord>(items: &mut Vec<T>) {
     items.dedup();
 }
 
-/// The whole artifact.
+/// The whole artifact. Every deserialisation path goes through
+/// `RawSkeleton` and `TryFrom`, so serde cannot build a skeleton that skips
+/// the version check, the validation or the canonical ordering of `new`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawSkeleton")]
 pub struct WikiSkeleton {
     schema_version: String,
     pages: Vec<Page>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSkeleton {
+    schema_version: String,
+    pages: Vec<Page>,
+}
+
+impl TryFrom<RawSkeleton> for WikiSkeleton {
+    type Error = SkeletonError;
+    fn try_from(raw: RawSkeleton) -> Result<Self, Self::Error> {
+        if raw.schema_version != SCHEMA_VERSION {
+            return Err(SkeletonError::SchemaVersion {
+                found: raw.schema_version,
+            });
+        }
+        Self::new(raw.pages)
+    }
 }
 
 impl WikiSkeleton {
@@ -281,16 +302,13 @@ impl WikiSkeleton {
     }
 
     /// Read an artifact back. Refuses another schema version, then re-runs
-    /// the same validation and canonicalisation as `new`.
+    /// the same validation and canonicalisation as `new`. Unlike
+    /// `serde_json::from_str::<WikiSkeleton>`, which applies the same checks,
+    /// this keeps the typed `SkeletonError` variant.
     pub fn from_json(text: &str) -> Result<Self, SkeletonError> {
-        let raw: Self =
+        let raw: RawSkeleton =
             serde_json::from_str(text).map_err(|e| SkeletonError::Json(e.to_string()))?;
-        if raw.schema_version != SCHEMA_VERSION {
-            return Err(SkeletonError::SchemaVersion {
-                found: raw.schema_version,
-            });
-        }
-        Self::new(raw.pages)
+        Self::try_from(raw)
     }
 }
 
