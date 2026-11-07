@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,18 +84,32 @@ class ManifestTests(unittest.TestCase):
         # No PreToolUse gate: the plugin never sits in front of Grep/Glob.
         self.assertEqual(set(self.hooks), {"SessionStart", "SubagentStart"})
 
-    def test_registered_in_the_plugin_not_in_user_settings(self):
-        # Shipped as <plugin root>/hooks/hooks.json; the marketplace source is
-        # the repository root, and the script is reached through
-        # CLAUDE_PLUGIN_ROOT, never an absolute or home-relative path.
+    def test_every_hook_has_the_five_second_timeout(self):
+        timeouts = {
+            hook["timeout"]
+            for event in self.hooks
+            for group in self.hooks[event]
+            for hook in group["hooks"]
+        }
+        self.assertEqual(timeouts, {5})
+
+    def test_shipped_at_the_plugin_root(self):
+        # Claude Code loads <plugin root>/hooks/hooks.json; the marketplace
+        # source is the repository root, so this file is that one.
         marketplace = json.loads(
             (ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
         )
         self.assertEqual(marketplace["plugins"][0]["source"], "./")
-        for event in self.hooks:
-            for command in self.commands(event):
-                self.assertNotIn("~", command)
-                self.assertNotIn(".claude/settings", command)
+
+    def test_running_the_hook_writes_nothing_under_home(self):
+        # The nudge must never touch ~/.claude/settings.json or anything else:
+        # run both modes with an empty HOME and require it to stay empty.
+        for shell in SHELLS:
+            for mode in ("session", "subagent"):
+                with self.subTest(shell=shell, mode=mode), tempfile.TemporaryDirectory() as home:
+                    result = run(shell, mode, env={**os.environ, "HOME": home})
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(list(Path(home).iterdir()), [])
 
 
 class PayloadTests(unittest.TestCase):
@@ -190,6 +205,7 @@ class FailOpenTests(unittest.TestCase):
                     )
                     self.assert_silent_success(result)
 
+    @unittest.skipUnless(os.path.exists("/dev/full"), "needs /dev/full (Linux)")
     def test_failed_write(self):
         # /dev/full accepts the open and fails every write with ENOSPC.
         for shell in SHELLS:
