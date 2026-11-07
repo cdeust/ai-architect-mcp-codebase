@@ -8,9 +8,9 @@
 // type-level provenance tag on every edge, the mandatory `file:line` on every
 // member, edge and missed-graph gap (a `parse_incomplete` gap is file-level
 // and a cross-community count has no line), the always-present coverage
-// block, and the canonical
-// (byte-identical) serialisation. Building pages from a `GraphStore` and the
-// MCP tool that exports them are later slices of #196.
+// block, and the canonical (byte-identical) serialisation. Building pages
+// from a `GraphStore` and the MCP tool that exports them are later slices of
+// #196.
 
 pub mod skeleton;
 

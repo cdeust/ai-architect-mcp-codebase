@@ -221,18 +221,57 @@ fn the_v1_output_matches_the_golden_fixture_byte_for_byte() {
 fn source_files_are_derived_from_the_members() {
     let skeleton = WikiSkeleton::new(vec![community_page(vec![])]).unwrap();
     assert_eq!(skeleton.pages()[0].source_files(), ["src/a.rs", "src/b.rs"]);
+    // `new` overwrites a stored value...
     let mut stale = community_page(vec![]);
     stale.source_files = vec!["stale.rs".to_owned()];
-    let err = WikiSkeleton::new(vec![stale]).unwrap_err();
-    assert_eq!(err, SkeletonError::StaleSourceFiles { page: "c1".into() });
-    let golden = include_str!("testdata/skeleton_v1.json");
-    let tampered = golden.replacen("\"src/b.rs\"\n      ]", "\"src/c.rs\"\n      ]", 1);
-    assert_ne!(
-        tampered, golden,
-        "the fixture must contain the replaced text"
+    let fixed = WikiSkeleton::new(vec![stale]).unwrap();
+    assert_eq!(fixed.pages()[0].source_files(), ["src/a.rs", "src/b.rs"]);
+    // ...so pages taken from a skeleton can be edited and rebuilt.
+    let mut pages = fixed.pages().to_vec();
+    pages[0].members.push(symbol("z", "src/new.rs", 1));
+    pages[0].members.retain(|m| m.id != "b");
+    let rebuilt = WikiSkeleton::new(pages).unwrap();
+    assert_eq!(
+        rebuilt.pages()[0].source_files(),
+        ["src/a.rs", "src/new.rs"]
     );
-    let err = WikiSkeleton::from_json(&tampered).unwrap_err();
-    assert_eq!(err, SkeletonError::StaleSourceFiles { page: "c1".into() });
+}
+
+/// claude[bot] review on #475: on read, `source_files` is required and a
+/// value that disagrees (an explicit `[]` included) is refused.
+#[test]
+fn a_read_source_files_that_disagrees_or_is_missing_is_refused() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let stale = golden.replacen("\"src/b.rs\"\n      ]", "\"src/c.rs\"\n      ]", 1);
+    let emptied = golden.replacen(
+        "\"source_files\": [\n        \"src/a.rs\",\n        \"src/b.rs\"\n      ]",
+        "\"source_files\": []",
+        1,
+    );
+    let missing = golden.replacen(
+        "\"source_files\": [\n        \"src/a.rs\",\n        \"src/b.rs\"\n      ],\n",
+        "",
+        1,
+    );
+    for (case, text) in [
+        ("stale", &stale),
+        ("emptied", &emptied),
+        ("missing", &missing),
+    ] {
+        assert_ne!(
+            text.as_str(),
+            golden,
+            "{case}: the fixture must contain the replaced text"
+        );
+    }
+    let refused = SkeletonError::StaleSourceFiles { page: "c1".into() };
+    assert_eq!(WikiSkeleton::from_json(&stale), Err(refused.clone()));
+    assert_eq!(WikiSkeleton::from_json(&emptied), Err(refused));
+    let err = WikiSkeleton::from_json(&missing).unwrap_err();
+    assert!(
+        matches!(&err, SkeletonError::Json(m) if m.contains("source_files")),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -406,7 +445,7 @@ fn another_version_with_another_shape_is_still_a_schema_version_error() {
         matches!(WikiSkeleton::from_json(&missing), Err(SkeletonError::Json(m)) if m.contains("pages"))
     );
     let unknown_page_field = format!(
-        r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{{"kind":"process","id":"p","title":"t","members":[],"edges":[],"cross_community_edges":{{}},"coverage":[],"x":1}}]}}"#
+        r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{{"kind":"process","id":"p","title":"t","members":[],"edges":[],"cross_community_edges":{{}},"source_files":[],"coverage":[],"x":1}}]}}"#
     );
     assert!(WikiSkeleton::from_json(&unknown_page_field).is_err());
 }
@@ -418,7 +457,7 @@ fn plain_serde_deserialisation_applies_the_same_checks_as_from_json() {
     assert!(serde_json::from_str::<WikiSkeleton>(unsupported).is_err());
     let page = |id: &str| {
         format!(
-            r#"{{"kind":"process","id":"{id}","title":"t","members":[],"edges":[],"cross_community_edges":{{}},"coverage":[]}}"#
+            r#"{{"kind":"process","id":"{id}","title":"t","members":[],"edges":[],"cross_community_edges":{{}},"source_files":[],"coverage":[]}}"#
         )
     };
     let doc = |pages: &[String]| {
@@ -603,7 +642,7 @@ fn errors_from_new_stay_typed_on_the_read_path_and_location_errors_are_json() {
     let doc = |pages: &str| format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{pages}]}}"#);
     let page = |kind: &str, id: &str, members: &str| {
         format!(
-            r#"{{"kind":"{kind}","id":"{id}","title":"t","members":[{members}],"edges":[],"cross_community_edges":{{}},"coverage":[]}}"#
+            r#"{{"kind":"{kind}","id":"{id}","title":"t","members":[{members}],"edges":[],"cross_community_edges":{{}},"source_files":[],"coverage":[]}}"#
         )
     };
     let two = doc(&format!(

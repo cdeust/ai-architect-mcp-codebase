@@ -8,7 +8,8 @@
 //   an edge with a missing or unknown tag is an error, so an untagged edge is
 //   unrepresentable on both sides of the wire.
 // * edges, members, missed-graph names and cross-community keys refuse empty
-//   ids; two members sharing an id are refused. An edge's ends are NOT
+//   values; two members that share an id but differ elsewhere are refused
+//   (exact repeats are merged). An edge's ends are NOT
 //   required to be members of its page: a page lists the edges that leave it
 //   too, and their targets live on other pages.
 // * criterion 4 — `Symbol`, `Edge` and a missed-graph gap each hold a
@@ -70,7 +71,7 @@ pub enum SkeletonError {
 impl fmt::Display for SkeletonError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyFile => write!(f, "a location needs a non-empty file path"),
+            Self::EmptyFile => write!(f, "a file path must not be empty"),
             Self::ZeroLine => write!(f, "a location line is 1-based; 0 is not a line"),
             Self::UnsafePath(path) => write!(f, "{path:?} is not a repo-relative path"),
             Self::StaleSourceFiles { page } => {
@@ -79,7 +80,7 @@ impl fmt::Display for SkeletonError {
                     "page {page:?} lists source_files that are not its members' files"
                 )
             }
-            Self::EmptyId(what) => write!(f, "{what} needs a non-empty id"),
+            Self::EmptyId(what) => write!(f, "{what} must not be empty"),
             Self::DuplicatePage { kind, id } => write!(f, "duplicate {kind:?} page {id:?}"),
             Self::DuplicateSymbol { page, id } => {
                 write!(
@@ -259,8 +260,9 @@ pub enum PageKind {
 }
 
 /// One page stub. `source_files` is private and derived from `members` by
-/// `WikiSkeleton::new`; on read, a non-empty value that disagrees with the
-/// members' files is refused, so inside a `WikiSkeleton` the two agree.
+/// `WikiSkeleton::new`, which overwrites it; on read it is required and a
+/// value that disagrees with the members' files is refused, so inside a
+/// `WikiSkeleton` the two always agree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Page {
@@ -271,7 +273,7 @@ pub struct Page {
     pub edges: Vec<Edge>,
     /// Edge count from this page to each other community, keyed by its id.
     pub cross_community_edges: BTreeMap<String, u64>,
-    #[serde(default)]
+    /// Required on read and compared there (an explicit `[]` included).
     source_files: Vec<String>,
     /// Always serialised: empty means "no known gap", never "not computed".
     pub coverage: Vec<CoverageGap>,
@@ -353,21 +355,15 @@ impl Page {
         Ok(())
     }
 
-    /// Put every list in its canonical order and derive `source_files`. A
-    /// value already present (read from JSON) must equal the derived one.
-    fn normalize(&mut self) -> Result<(), SkeletonError> {
+    /// Put every list in its canonical order and derive `source_files`,
+    /// overwriting any stored value, so pages taken from a skeleton can be
+    /// edited and passed to `new` again. The read path compares instead.
+    fn normalize(&mut self) {
         sort_dedup(&mut self.members);
         sort_dedup(&mut self.edges);
         sort_dedup(&mut self.coverage);
         let files: BTreeSet<&str> = self.members.iter().map(|s| s.location.file()).collect();
-        let derived: Vec<String> = files.into_iter().map(str::to_owned).collect();
-        if !self.source_files.is_empty() && self.source_files != derived {
-            return Err(SkeletonError::StaleSourceFiles {
-                page: self.id.clone(),
-            });
-        }
-        self.source_files = derived;
-        Ok(())
+        self.source_files = files.into_iter().map(str::to_owned).collect();
     }
 }
 
@@ -423,7 +419,20 @@ impl TryFrom<RawSkeleton> for WikiSkeleton {
     type Error = SkeletonError;
     fn try_from(raw: RawSkeleton) -> Result<Self, Self::Error> {
         check_version(raw.schema_version)?;
-        Self::new(raw.pages)
+        let read: BTreeMap<(PageKind, String), Vec<String>> = raw
+            .pages
+            .iter()
+            .map(|p| ((p.kind, p.id.clone()), p.source_files.clone()))
+            .collect();
+        let skeleton = Self::new(raw.pages)?;
+        for page in &skeleton.pages {
+            if read.get(&(page.kind, page.id.clone())) != Some(&page.source_files) {
+                return Err(SkeletonError::StaleSourceFiles {
+                    page: page.id.clone(),
+                });
+            }
+        }
+        Ok(skeleton)
     }
 }
 
@@ -432,7 +441,7 @@ impl WikiSkeleton {
     pub fn new(mut pages: Vec<Page>) -> Result<Self, SkeletonError> {
         for page in &mut pages {
             page.validate()?;
-            page.normalize()?;
+            page.normalize();
             page.check_unique_members()?;
             page.check_unique_edges()?;
         }
