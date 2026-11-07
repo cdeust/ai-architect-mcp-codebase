@@ -237,7 +237,9 @@ impl Page {
         }
         for key in self.cross_community_edges.keys() {
             non_empty(key, "cross-community key")?;
-            if *key == self.id {
+            // Keys name communities: only a community page can count itself.
+            // Ids are scoped by kind, so process `x` -> community `x` is fine.
+            if self.kind == PageKind::Community && *key == self.id {
                 return Err(SkeletonError::SelfCrossCommunity {
                     page: self.id.clone(),
                 });

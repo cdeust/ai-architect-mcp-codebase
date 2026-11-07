@@ -434,6 +434,13 @@ fn empty_edge_fields_cross_keys_and_missed_names_are_refused() {
     own.cross_community_edges.insert("c".to_owned(), 1);
     let err = WikiSkeleton::new(vec![own]).unwrap_err();
     assert_eq!(err, SkeletonError::SelfCrossCommunity { page: "c".into() });
+    // Codex review on #475: ids are scoped by kind, so a process or god-node
+    // page `c` counting edges to community `c` is not counting itself.
+    for kind in [PageKind::Process, PageKind::GodNode] {
+        let mut other = Page::new(kind, "c", "x");
+        other.cross_community_edges.insert("c".to_owned(), 1);
+        assert!(WikiSkeleton::new(vec![other]).is_ok(), "{kind:?}");
+    }
     let mut missed = Page::new(PageKind::Community, "c", "x");
     missed.coverage = vec![CoverageGap::Missed {
         name: String::new(),
