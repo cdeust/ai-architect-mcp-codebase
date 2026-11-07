@@ -12,6 +12,7 @@
 // from a `GraphStore` and the MCP tool that exports them are later slices of
 // #196.
 
+pub mod error;
 pub mod skeleton;
 
 pub use skeleton::{

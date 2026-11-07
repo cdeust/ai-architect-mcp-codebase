@@ -264,14 +264,86 @@ fn a_read_source_files_that_disagrees_or_is_missing_is_refused() {
             "{case}: the fixture must contain the replaced text"
         );
     }
-    let refused = SkeletonError::StaleSourceFiles { page: "c1".into() };
+    let superset = golden.replacen(
+        "\"src/b.rs\"\n      ]",
+        "\"src/b.rs\",\n        \"src/c.rs\"\n      ]",
+        1,
+    );
+    assert_ne!(
+        superset, golden,
+        "superset: the fixture must contain the replaced text"
+    );
+    let refused = SkeletonError::StaleSourceFiles {
+        kind: PageKind::Community,
+        page: "c1".into(),
+    };
     assert_eq!(WikiSkeleton::from_json(&stale), Err(refused.clone()));
-    assert_eq!(WikiSkeleton::from_json(&emptied), Err(refused));
+    assert_eq!(WikiSkeleton::from_json(&emptied), Err(refused.clone()));
+    assert_eq!(WikiSkeleton::from_json(&superset), Err(refused));
     let err = WikiSkeleton::from_json(&missing).unwrap_err();
     assert!(
         matches!(&err, SkeletonError::Json(m) if m.contains("source_files")),
         "{err:?}"
     );
+}
+
+/// The read copy is canonicalised like every other list: the same set of
+/// files in another order or with a repeat is accepted.
+#[test]
+fn a_read_source_files_in_another_order_or_with_a_repeat_is_accepted() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let listed = "\"source_files\": [\n        \"src/a.rs\",\n        \"src/b.rs\"\n      ]";
+    for (case, files) in [
+        ("reordered", r#""source_files": ["src/b.rs", "src/a.rs"]"#),
+        (
+            "repeated",
+            r#""source_files": ["src/a.rs", "src/a.rs", "src/b.rs"]"#,
+        ),
+    ] {
+        let text = golden.replacen(listed, files, 1);
+        assert_ne!(
+            text, golden,
+            "{case}: the fixture must contain the replaced text"
+        );
+        let read = WikiSkeleton::from_json(&text).unwrap();
+        assert_eq!(read.to_json().unwrap(), golden, "{case}");
+    }
+}
+
+/// The read check is keyed by `(kind, id)`: a valid page and a stale one
+/// sharing an id under two kinds are told apart.
+#[test]
+fn the_read_check_tells_one_id_under_two_kinds_apart() {
+    let doc = |community_files: &str| {
+        format!(
+            r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{{"kind":"community","id":"x","title":"t","members":[{{"id":"a","name":"a","kind":"Function","location":{{"file":"src/a.rs","line":1}}}}],"edges":[],"cross_community_edges":{{}},"source_files":{community_files},"coverage":[]}},{{"kind":"process","id":"x","title":"t","members":[],"edges":[],"cross_community_edges":{{}},"source_files":[],"coverage":[]}}]}}"#
+        )
+    };
+    assert_eq!(
+        WikiSkeleton::from_json(&doc(r#"["src/a.rs"]"#))
+            .unwrap()
+            .pages()
+            .len(),
+        2
+    );
+    let err = WikiSkeleton::from_json(&doc("[]")).unwrap_err();
+    let expected = SkeletonError::StaleSourceFiles {
+        kind: PageKind::Community,
+        page: "x".into(),
+    };
+    assert_eq!(err, expected);
+}
+
+#[test]
+fn source_files_are_one_sorted_entry_per_file_not_per_member() {
+    let mut page = Page::new(PageKind::Community, "c", "x");
+    page.members = vec![
+        symbol("a", "src/z.rs", 1),
+        symbol("b", "src/a.rs", 1),
+        symbol("c", "src/a.rs", 2),
+    ];
+    let skeleton = WikiSkeleton::new(vec![page]).unwrap();
+    assert_eq!(skeleton.pages()[0].source_files(), ["src/a.rs", "src/z.rs"]);
 }
 
 #[test]
@@ -504,7 +576,10 @@ fn every_error_has_a_message() {
             target: "b".into(),
             relation: "Calls".into(),
         },
-        SkeletonError::StaleSourceFiles { page: "c".into() },
+        SkeletonError::StaleSourceFiles {
+            kind: PageKind::Community,
+            page: "c".into(),
+        },
         SkeletonError::DuplicateSymbol {
             page: "c".into(),
             id: "a".into(),

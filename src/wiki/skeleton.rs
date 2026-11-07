@@ -20,9 +20,9 @@
 // * criterion 5 — `Page::coverage` is serialised unconditionally: an empty
 //   block is `"coverage": []`, present, never absent.
 // * criterion 6 — `WikiSkeleton::new` sorts and deduplicates every list and
-//   derives `source_files` from the members (a read `source_files` that
-//   disagrees is refused, not rewritten), so the same input in any order
-//   produces byte-identical JSON. Maps are `BTreeMap`s.
+//   derives `source_files` from the members, overwriting any stored value
+//   (the read path refuses a stored set of files that differs), so the same
+//   input in any order produces byte-identical JSON. Maps are `BTreeMap`s.
 // * criterion 7 — `SCHEMA_VERSION` is embedded in the artifact; every
 //   deserialisation path refuses any other version, and `from_json` reports
 //   it as `SchemaVersion` whatever the rest of the document looks like, as
@@ -30,86 +30,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::num::NonZeroU32;
+
+pub use super::error::SkeletonError;
 
 /// Embedded in every artifact. Bump on any change to the serialised shape.
 pub const SCHEMA_VERSION: &str = "ai-architect.wiki-skeleton/1";
-
-/// Why a skeleton could not be built or read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SkeletonError {
-    EmptyFile,
-    ZeroLine,
-    UnsafePath(String),
-    StaleSourceFiles {
-        page: String,
-    },
-    EmptyId(&'static str),
-    DuplicatePage {
-        kind: PageKind,
-        id: String,
-    },
-    DuplicateSymbol {
-        page: String,
-        id: String,
-    },
-    DuplicateEdge {
-        page: String,
-        source: String,
-        target: String,
-        relation: String,
-    },
-    SelfCrossCommunity {
-        page: String,
-    },
-    SchemaVersion {
-        found: String,
-    },
-    Json(String),
-}
-
-impl fmt::Display for SkeletonError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptyFile => write!(f, "a file path must not be empty"),
-            Self::ZeroLine => write!(f, "a location line is 1-based; 0 is not a line"),
-            Self::UnsafePath(path) => write!(f, "{path:?} is not a repo-relative path"),
-            Self::StaleSourceFiles { page } => {
-                write!(
-                    f,
-                    "page {page:?} lists source_files that are not its members' files"
-                )
-            }
-            Self::EmptyId(what) => write!(f, "{what} must not be empty"),
-            Self::DuplicatePage { kind, id } => write!(f, "duplicate {kind:?} page {id:?}"),
-            Self::DuplicateSymbol { page, id } => {
-                write!(
-                    f,
-                    "page {page:?} lists member {id:?} twice with different fields"
-                )
-            }
-            Self::DuplicateEdge {
-                page,
-                source,
-                target,
-                relation,
-            } => write!(
-                f,
-                "page {page:?} tags edge {source:?} -{relation:?}-> {target:?} twice"
-            ),
-            Self::SelfCrossCommunity { page } => {
-                write!(f, "page {page:?} counts cross-community edges to itself")
-            }
-            Self::SchemaVersion { found } => {
-                write!(f, "schema version {found:?} is not {SCHEMA_VERSION:?}")
-            }
-            Self::Json(message) => write!(f, "skeleton JSON: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for SkeletonError {}
 
 /// How an edge came to be in the graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -422,15 +348,22 @@ impl TryFrom<RawSkeleton> for WikiSkeleton {
     type Error = SkeletonError;
     fn try_from(raw: RawSkeleton) -> Result<Self, Self::Error> {
         check_version(raw.schema_version)?;
+        // Canonicalise the read copy like every other list (order, repeats):
+        // only a different set of files is refused.
         let read: BTreeMap<(PageKind, String), Vec<String>> = raw
             .pages
             .iter()
-            .map(|p| ((p.kind, p.id.clone()), p.source_files.clone()))
+            .map(|p| {
+                let mut files = p.source_files.clone();
+                sort_dedup(&mut files);
+                ((p.kind, p.id.clone()), files)
+            })
             .collect();
         let skeleton = Self::new(raw.pages)?;
         for page in &skeleton.pages {
             if read.get(&(page.kind, page.id.clone())) != Some(&page.source_files) {
                 return Err(SkeletonError::StaleSourceFiles {
+                    kind: page.kind,
                     page: page.id.clone(),
                 });
             }
@@ -478,17 +411,19 @@ impl WikiSkeleton {
         Ok(text)
     }
 
-    /// Read an artifact back. Refuses another schema version, then re-runs
-    /// the same validation and canonicalisation as `new`.
+    /// Read an artifact back. Refuses another schema version, re-runs the
+    /// same validation and canonicalisation as `new`, then refuses a page
+    /// whose stored `source_files`, once sorted and deduplicated, is not the
+    /// derived set.
     ///
-    /// Typed on this path: `SchemaVersion` and every error `new` returns
-    /// (`EmptyId`, `DuplicatePage`, `DuplicateSymbol`, `DuplicateEdge`,
-    /// `SelfCrossCommunity`,
-    /// `StaleSourceFiles`, and `EmptyFile`/`UnsafePath` for a
-    /// `ParseIncomplete` file). A `Location` is validated while serde parses
-    /// it, so its errors (line 0, empty or unsafe path) arrive as `Json` with
-    /// the same message. `serde_json::from_str::<WikiSkeleton>` applies the
-    /// same checks but reports every error as a serde error.
+    /// Typed on this path: `SchemaVersion`, `StaleSourceFiles` (read path
+    /// only) and every error `new` returns (`EmptyId`, `DuplicatePage`,
+    /// `DuplicateSymbol`, `DuplicateEdge`, `SelfCrossCommunity`, and
+    /// `EmptyFile`/`UnsafePath` for a `ParseIncomplete` file). A `Location` is
+    /// validated while serde parses it, so its errors (line 0, empty or
+    /// unsafe path) arrive as `Json` with the same message.
+    /// `serde_json::from_str::<WikiSkeleton>` applies the same checks but
+    /// reports every error as a serde error.
     pub fn from_json(text: &str) -> Result<Self, SkeletonError> {
         let json = |e: serde_json::Error| SkeletonError::Json(e.to_string());
         match serde_json::from_str::<RawSkeleton>(text) {
