@@ -23,10 +23,11 @@
 // * criterion 5 — `Page::coverage` is serialised unconditionally: an empty
 //   block is `"coverage": []`, present, never absent.
 // * criterion 6 — `WikiSkeleton::new` sorts every list, merges exact repeats
-//   within a page, and derives `source_files` from the members, overwriting
-//   any stored value (the read path refuses a stored set of files that
-//   differs, order and repeats ignored), so the same
-//   input in any order produces byte-identical JSON. Maps are `BTreeMap`s.
+//   within a page, drops zero cross-community counts (a zero is the absent
+//   key, before any key rule applies), and derives `source_files` from the
+//   members, overwriting any stored value (the read path refuses a stored
+//   set of files that differs, order and repeats ignored), so the same input
+//   in any order produces byte-identical JSON. Maps are `BTreeMap`s.
 // * criterion 7 — `SCHEMA_VERSION` is embedded in the artifact; every
 //   deserialisation path refuses any other version, and `from_json` reports
 //   it as `SchemaVersion` for any well-formed JSON object whose
