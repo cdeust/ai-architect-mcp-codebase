@@ -163,7 +163,8 @@ to 240 tokens; this range is an estimate, not a tokenizer measurement.
 is missing or unknown, when stdout is closed or full, and when the reader has
 gone away (SIGPIPE is ignored). It runs no external command:
 both payloads are constants written with the `printf` builtin, so it works with
-an empty `PATH`. The tests assert each of these under `sh`, `dash` and `bash`.
+an empty `PATH`. The tests assert each of these under every one of `sh`, `dash` and `bash`
+that is installed (`sh` is required, as `hooks.json` runs it).
 The hook needs a POSIX `sh` on `PATH`. On Windows that means `sh` from Git Bash.
 The hook has not been run on Windows.
 
