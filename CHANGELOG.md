@@ -18,7 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   control character); one edge cannot carry two provenance tags, two members
   sharing an id but differing elsewhere are refused (exact repeats merge),
   two pages of the same kind and id are refused, a community page cannot
-  count edges to itself, a zero cross-community count is dropped, and a
+  count edges to itself, a key repeated in `cross_community_edges` is
+  refused, a zero cross-community count is dropped, and a
   read `source_files` must be the members' set of files (order and repeats
   ignored); the per-page `coverage` block is always written, `[]` when
   empty; the same pages in any order give byte-identical JSON, pinned by a

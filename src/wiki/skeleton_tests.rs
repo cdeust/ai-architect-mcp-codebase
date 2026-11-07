@@ -339,6 +339,12 @@ fn a_repeated_cross_community_key_is_refused() {
         "{err:?}"
     );
     assert!(serde_json::from_str::<WikiSkeleton>(&repeated).is_err());
+    // The same value twice is a repeat too.
+    let same = golden.replacen(r#""c2": 5"#, r#""c2": 5, "c2": 5"#, 1);
+    assert!(
+        WikiSkeleton::from_json(&same).is_err(),
+        "equal values must not merge"
+    );
 }
 
 /// The read copy is canonicalised like every other list: the same set of
@@ -990,7 +996,7 @@ fn the_wiki_module_names_no_network_or_model_client_api() {
     );
     let wiki = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wiki");
     sources.retain(|p| *p != wiki.join("skeleton_tests.rs"));
-    for name in ["mod.rs", "error.rs", "skeleton.rs"] {
+    for name in ["mod.rs", "error.rs", "checks.rs", "skeleton.rs"] {
         assert!(
             sources.contains(&wiki.join(name)),
             "the tripwire must scan {name}: {sources:?}"

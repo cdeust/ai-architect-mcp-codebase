@@ -36,7 +36,9 @@ pub(super) fn repo_relative(file: &str) -> Result<(), SkeletonError> {
 /// A JSON object whose keys are all distinct: serde's `BTreeMap` would keep
 /// the last of two equal keys, so the same entries in another order would
 /// read back differently.
-pub(super) fn unique_keys<'de, D>(deserializer: D) -> Result<BTreeMap<String, u64>, D::Error>
+pub(super) fn unique_community_keys<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -52,11 +54,16 @@ where
         ) -> Result<Self::Value, A::Error> {
             let mut out = BTreeMap::new();
             while let Some((key, count)) = map.next_entry::<String, u64>()? {
-                if out.contains_key(&key) {
-                    let msg = format!("cross_community_edges repeats key {key:?}");
-                    return Err(serde::de::Error::custom(msg));
+                // Refused even when both values are equal: one key, one entry.
+                match out.entry(key) {
+                    std::collections::btree_map::Entry::Occupied(e) => {
+                        let msg = format!("cross_community_edges repeats key {:?}", e.key());
+                        return Err(serde::de::Error::custom(msg));
+                    }
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        e.insert(count);
+                    }
                 }
-                out.insert(key, count);
             }
             Ok(out)
         }

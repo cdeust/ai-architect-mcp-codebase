@@ -10,7 +10,9 @@
 // * page ids, member ids, edge ends and relations, missed-graph names and
 //   cross-community keys must not be empty. Refused: two pages of the same
 //   kind and id, two members with the same id but different fields, and one
-//   edge carrying two provenance tags (exact repeats are merged). An edge's
+//   edge carrying two provenance tags (exact repeats are merged); a key
+//   repeated in `cross_community_edges` and a community page counting edges
+//   to itself are refused too. An edge's
 //   ends are NOT required to be members of its page: a page lists the edges
 //   that leave it too, and their targets live on other pages.
 // * criterion 4 — `Symbol`, `Edge` and a missed-graph gap each hold a
@@ -34,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
-use super::checks::{repo_relative, unique_keys};
+use super::checks::{repo_relative, unique_community_keys};
 use super::error::SkeletonError;
 
 /// Embedded in every artifact. Bump on any change to the serialised shape.
@@ -196,7 +198,7 @@ pub struct Page {
     /// Edge count from this page to each community, keyed by community id (a
     /// community page cannot list itself). A key repeated in the JSON is
     /// refused, not merged.
-    #[serde(deserialize_with = "unique_keys")]
+    #[serde(deserialize_with = "unique_community_keys")]
     pub cross_community_edges: BTreeMap<String, u64>,
     /// Required on read and compared there (an explicit `[]` included).
     source_files: Vec<String>,
@@ -422,9 +424,10 @@ impl WikiSkeleton {
     /// Typed on this path: `SchemaVersion`, `StaleSourceFiles` (read path
     /// only) and every error `new` returns (`EmptyId`, `DuplicatePage`,
     /// `DuplicateSymbol`, `DuplicateEdge`, `SelfCrossCommunity`, and
-    /// `EmptyFile`/`UnsafePath` for a `ParseIncomplete` file). A `Location` is
-    /// validated while serde parses it, so its errors (line 0, empty or
-    /// unsafe path) arrive as `Json`, whose message contains the same text.
+    /// `EmptyFile`/`UnsafePath` for a `ParseIncomplete` file). A `Location`
+    /// (line 0, empty or unsafe path) and a repeated `cross_community_edges`
+    /// key are checked while serde parses, so those arrive as `Json` whose
+    /// message contains the same text.
     /// `serde_json::from_str::<WikiSkeleton>` applies the same checks but
     /// reports every error as a serde error.
     pub fn from_json(text: &str) -> Result<Self, SkeletonError> {
