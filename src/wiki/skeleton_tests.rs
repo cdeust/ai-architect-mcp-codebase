@@ -518,36 +518,54 @@ fn a_unit_enum_written_as_an_object_is_refused() {
     );
 }
 
-/// The gap `kind` tag and the page `kind` take only their known strings: a
-/// number, an object or an unknown name is refused, not read as a variant.
+/// The gap `kind` tag and the page `kind` take only their known names. An
+/// unknown name is refused for either tag. The number and object rows for
+/// the gap tag hold today because serde_json reads a tag as an identifier;
+/// they are there for a future wrapper (`flatten`, `untagged`) that would
+/// buffer `coverage` through serde's `Content`, where `0` reads as `Missed`.
 #[test]
 fn a_kind_tag_that_is_not_a_known_string_is_refused() {
     let golden = include_str!("testdata/skeleton_v1.json");
+    let gap = r#""kind": "missed""#;
+    let page = r#""kind": "community""#;
     let rows = [
         (
+            "unknown gap kind",
+            gap,
+            r#""kind": "skipped""#,
+            "unknown variant `skipped`",
+        ),
+        (
             "gap kind as a number",
-            r#""kind": "missed""#,
+            gap,
             r#""kind": 0"#,
+            "invalid type: integer `0`",
         ),
         (
             "gap kind as an object",
-            r#""kind": "missed""#,
+            gap,
             r#""kind": {"missed": null}"#,
+            "invalid type: map",
         ),
         (
             "unknown page kind",
-            r#""kind": "community""#,
+            page,
             r#""kind": "module""#,
+            "unknown variant `module`",
         ),
     ];
-    for (case, from, to) in rows {
+    for (case, from, to, reason) in rows {
         let tampered = golden.replacen(from, to, 1);
         assert_ne!(tampered, golden, "{case}: the fixture must contain {from}");
         let err = WikiSkeleton::from_json(&tampered).unwrap_err();
-        assert!(matches!(err, SkeletonError::Json(_)), "{case}: {err:?}");
         assert!(
-            serde_json::from_str::<WikiSkeleton>(&tampered).is_err(),
-            "{case}: plain serde must refuse it too"
+            matches!(&err, SkeletonError::Json(m) if m.contains(reason)),
+            "{case}: {err:?}"
+        );
+        let serde_err = serde_json::from_str::<WikiSkeleton>(&tampered).unwrap_err();
+        assert!(
+            serde_err.to_string().contains(reason),
+            "{case}: {serde_err}"
         );
     }
 }
