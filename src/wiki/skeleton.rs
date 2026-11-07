@@ -350,7 +350,8 @@ impl<'de> Deserialize<'de> for WikiSkeleton {
 /// document of another version whose shape also differs may be refused for
 /// its shape first; when the strict parse fails, `from_json` probes the
 /// version, so it reports `SchemaVersion` for any well-formed JSON object
-/// with exactly one top-level `schema_version`, a string.
+/// with exactly one top-level `schema_version`, a string other than
+/// `SCHEMA_VERSION`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSkeleton {

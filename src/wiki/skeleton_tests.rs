@@ -518,6 +518,40 @@ fn a_unit_enum_written_as_an_object_is_refused() {
     );
 }
 
+/// The gap `kind` tag and the page `kind` take only their known strings: a
+/// number, an object or an unknown name is refused, not read as a variant.
+#[test]
+fn a_kind_tag_that_is_not_a_known_string_is_refused() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let rows = [
+        (
+            "gap kind as a number",
+            r#""kind": "missed""#,
+            r#""kind": 0"#,
+        ),
+        (
+            "gap kind as an object",
+            r#""kind": "missed""#,
+            r#""kind": {"missed": null}"#,
+        ),
+        (
+            "unknown page kind",
+            r#""kind": "community""#,
+            r#""kind": "module""#,
+        ),
+    ];
+    for (case, from, to) in rows {
+        let tampered = golden.replacen(from, to, 1);
+        assert_ne!(tampered, golden, "{case}: the fixture must contain {from}");
+        let err = WikiSkeleton::from_json(&tampered).unwrap_err();
+        assert!(matches!(err, SkeletonError::Json(_)), "{case}: {err:?}");
+        assert!(
+            serde_json::from_str::<WikiSkeleton>(&tampered).is_err(),
+            "{case}: plain serde must refuse it too"
+        );
+    }
+}
+
 /// The array guard lives in `Location` itself, so a location read on its own
 /// refuses `["f", 1]` too.
 #[test]
@@ -992,7 +1026,7 @@ fn one_edge_with_two_provenance_tags_is_refused_but_two_call_sites_stay() {
     );
     let kept = WikiSkeleton::new(vec![page.clone()]).unwrap();
     assert_eq!(kept.pages()[0].edges.len(), 2);
-    // `foo(bar())`: same line, other target or other relation, all stay.
+    // `foo(bar())`: same line, other source, target or relation, all stay.
     let line = loc("src/a.rs", 4);
     page.edges = vec![
         Edge::new(("a", "foo"), "Calls", Provenance::Inferred, line.clone()),
