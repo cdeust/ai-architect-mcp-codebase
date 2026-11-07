@@ -397,75 +397,85 @@ fn a_json_array_in_place_of_an_object_is_refused_at_every_level() {
     }
 }
 
-/// Same rule for every level built inline: member, edge, gap (both kinds),
-/// each location, and the whole document on both read paths.
-#[test]
-fn a_json_array_is_refused_for_members_edges_gaps_and_the_document() {
+const INLINE_MEMBER: &str =
+    r#"{"id":"a","name":"a","kind":"Function","location":{"file":"f","line":1}}"#;
+const INLINE_EDGE: &str = r#"{"source":"a","target":"b","relation":"Calls","provenance":"inferred","location":{"file":"f","line":1}}"#;
+const INLINE_GAP: &str = r#"{"kind":"missed","name":"x","location":{"file":"f","line":2}}"#;
+
+/// A one-page skeleton with the given member, edge and gap spliced in.
+fn inline_doc(member: &str, edge: &str, gap: &str) -> String {
     let page = r#"{"kind":"process","id":"p","title":"t","members":[MEMBER],"edges":[EDGE],"cross_community_edges":{},"source_files":["f"],"coverage":[GAP]}"#;
-    let member = r#"{"id":"a","name":"a","kind":"Function","location":{"file":"f","line":1}}"#;
-    let edge = r#"{"source":"a","target":"b","relation":"Calls","provenance":"inferred","location":{"file":"f","line":1}}"#;
-    let gap = r#"{"kind":"missed","name":"x","location":{"file":"f","line":2}}"#;
-    let doc = |m: &str, e: &str, g: &str| {
-        let p = page
-            .replace("MEMBER", m)
-            .replace("EDGE", e)
-            .replace("GAP", g);
-        format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{p}]}}"#)
-    };
+    let page = page
+        .replace("MEMBER", member)
+        .replace("EDGE", edge)
+        .replace("GAP", gap);
+    format!(r#"{{"schema_version":"{SCHEMA_VERSION}","pages":[{page}]}}"#)
+}
+
+/// Each case must be refused on both read paths, for being an array where a
+/// JSON object is expected (not for a field count that happens to differ).
+fn assert_refused_as_array(cases: &[(&str, String)]) {
+    for (level, text) in cases {
+        let err = WikiSkeleton::from_json(text).unwrap_err();
+        assert!(
+            matches!(&err, SkeletonError::Json(m) if m.contains("JSON object")),
+            "{level}: {err:?}"
+        );
+        // The plain-serde path has its own guard (`impl Deserialize`).
+        let serde_err = serde_json::from_str::<WikiSkeleton>(text).unwrap_err();
+        assert!(
+            serde_err.to_string().contains("JSON object"),
+            "{level}: {serde_err}"
+        );
+    }
+}
+
+/// Fields built inline: a member, an edge, and the edge and gap locations.
+/// (The member location is covered by the fixture test above.)
+#[test]
+fn a_json_array_is_refused_for_members_edges_and_their_locations() {
+    let (m, e, g) = (INLINE_MEMBER, INLINE_EDGE, INLINE_GAP);
     assert!(
-        WikiSkeleton::from_json(&doc(member, edge, gap)).is_ok(),
+        WikiSkeleton::from_json(&inline_doc(m, e, g)).is_ok(),
         "the object form reads"
     );
-    let cases = [
+    let edge_loc = e.replace(r#"{"file":"f","line":1}"#, r#"["f",1]"#);
+    let gap_loc = g.replace(r#"{"file":"f","line":2}"#, r#"["f",2]"#);
+    assert_refused_as_array(&[
         (
             "member",
-            doc(r#"["a","a","Function",{"file":"f","line":1}]"#, edge, gap),
+            inline_doc(r#"["a","a","Function",{"file":"f","line":1}]"#, e, g),
         ),
         (
             "edge",
-            doc(
-                member,
+            inline_doc(
+                m,
                 r#"["a","b","Calls","inferred",{"file":"f","line":1}]"#,
-                gap,
+                g,
             ),
         ),
-        (
-            "edge location",
-            doc(
-                member,
-                &edge.replace(r#"{"file":"f","line":1}"#, r#"["f",1]"#),
-                gap,
-            ),
-        ),
-        (
-            "gap location",
-            doc(
-                member,
-                edge,
-                &gap.replace(r#"{"file":"f","line":2}"#, r#"["f",2]"#),
-            ),
-        ),
-        // An internally tagged enum also reads a sequence whose first
-        // element is the tag: `objects` on `coverage` is what refuses these.
+        ("edge location", inline_doc(m, &edge_loc, g)),
+        ("gap location", inline_doc(m, e, &gap_loc)),
+    ]);
+}
+
+/// Whole gaps (both kinds), the whole document and the version probe.
+#[test]
+fn a_json_array_is_refused_for_gaps_and_the_document() {
+    let (m, e) = (INLINE_MEMBER, INLINE_EDGE);
+    // An internally tagged enum also reads a sequence whose first element is
+    // the tag: `objects` on `coverage` is what refuses these.
+    assert_refused_as_array(&[
         (
             "gap",
-            doc(member, edge, r#"["missed","x",{"file":"f","line":2}]"#),
+            inline_doc(m, e, r#"["missed","x",{"file":"f","line":2}]"#),
         ),
         (
             "parse_incomplete gap",
-            doc(member, edge, r#"["parse_incomplete","f"]"#),
+            inline_doc(m, e, r#"["parse_incomplete","f"]"#),
         ),
         ("document", format!(r#"["{SCHEMA_VERSION}",[]]"#)),
-    ];
-    for (level, text) in cases {
-        let err = WikiSkeleton::from_json(&text).unwrap_err();
-        assert!(matches!(&err, SkeletonError::Json(_)), "{level}: {err:?}");
-        // The plain-serde path has its own guard (`impl Deserialize`).
-        assert!(
-            serde_json::from_str::<WikiSkeleton>(&text).is_err(),
-            "{level}"
-        );
-    }
+    ]);
     // The version probe reads objects only too: an array is not "another
     // version", it is not a skeleton.
     let probe = WikiSkeleton::from_json(r#"["ai-architect.wiki-skeleton/2"]"#).unwrap_err();
@@ -704,7 +714,8 @@ fn empty_edge_fields_cross_keys_and_missed_names_are_refused() {
 
 #[test]
 fn two_members_sharing_an_id_are_refused_even_when_other_fields_differ() {
-    let mut page = Page::new(PageKind::Community, "c", "x");
+    // A process page, so the kind in the error is the page's, not a constant.
+    let mut page = Page::new(PageKind::Process, "c", "x");
     page.members = vec![
         symbol("a", "src/a.rs", 1),
         symbol("b", "src/b.rs", 1),
@@ -714,7 +725,7 @@ fn two_members_sharing_an_id_are_refused_even_when_other_fields_differ() {
     assert_eq!(
         err,
         SkeletonError::DuplicateSymbol {
-            kind: PageKind::Community,
+            kind: PageKind::Process,
             page: "c".into(),
             id: "a".into()
         }
@@ -949,7 +960,7 @@ fn a_path_that_could_leave_the_repo_is_refused() {
 
 #[test]
 fn one_edge_with_two_provenance_tags_is_refused_but_two_call_sites_stay() {
-    let mut page = Page::new(PageKind::Community, "c", "x");
+    let mut page = Page::new(PageKind::GodNode, "c", "x");
     page.edges = vec![
         Edge::new(
             ("a", "b"),
@@ -966,7 +977,7 @@ fn one_edge_with_two_provenance_tags_is_refused_but_two_call_sites_stay() {
     ];
     let err = WikiSkeleton::new(vec![page.clone()]).unwrap_err();
     let expected = SkeletonError::DuplicateEdge {
-        kind: PageKind::Community,
+        kind: PageKind::GodNode,
         page: "c".into(),
         source: "a".into(),
         target: "b".into(),
