@@ -321,8 +321,8 @@ fn a_zero_cross_community_count_is_the_absent_key() {
     let b = WikiSkeleton::new(vec![absent]).unwrap().to_json().unwrap();
     assert_eq!(a, b);
     assert!(!a.contains("\"c2\""), "{a}");
-    // Zero counts are dropped before any key rule applies: a zero self-count
-    // or a zero under an empty key is the absent key too.
+    // The empty-key and self-count rules skip a zero: a zero self-count or a
+    // zero under an empty key is the absent key too.
     for key in ["c1", ""] {
         let mut page = Page::new(PageKind::Community, "c1", "x");
         page.cross_community_edges.insert(key.to_owned(), 0);
@@ -656,7 +656,28 @@ fn the_schema_version_is_embedded_and_round_trips() {
     let json = skeleton.to_json().unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(value["schema_version"], SCHEMA_VERSION);
+    assert_eq!(skeleton.schema_version(), SCHEMA_VERSION);
     assert_eq!(WikiSkeleton::from_json(&json).unwrap(), skeleton);
+}
+
+/// `PageKind`'s `Display` and its serde name are one spelling, for every
+/// variant.
+#[test]
+fn page_kind_display_is_its_serde_name() {
+    for kind in [PageKind::Community, PageKind::Process, PageKind::GodNode] {
+        assert_eq!(serde_json::to_string(&kind).unwrap(), format!("\"{kind}\""));
+    }
+}
+
+/// A zero count is skipped, not the end of the loop: a key sorting after it
+/// is still validated.
+#[test]
+fn a_zero_count_does_not_stop_validation_of_later_keys() {
+    let mut page = Page::new(PageKind::Community, "c", "x");
+    page.cross_community_edges.insert("a".into(), 0);
+    page.cross_community_edges.insert("c".into(), 1);
+    let err = WikiSkeleton::new(vec![page]).unwrap_err();
+    assert_eq!(err, SkeletonError::SelfCrossCommunity { page: "c".into() });
 }
 
 #[test]

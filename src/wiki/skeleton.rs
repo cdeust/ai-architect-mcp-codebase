@@ -24,7 +24,8 @@
 //   block is `"coverage": []`, present, never absent.
 // * criterion 6 — `WikiSkeleton::new` sorts every list, merges exact repeats
 //   within a page, drops zero cross-community counts (a zero is the absent
-//   key, before any key rule applies), and derives `source_files` from the
+//   key: the empty-key and self-count rules skip it, though a key repeated
+//   in the JSON is still refused on read), and derives `source_files` from the
 //   members, overwriting any stored value (the read path refuses a stored
 //   set of files that differs, order and repeats ignored), so the same input
 //   in any order produces byte-identical JSON. Maps are `BTreeMap`s.

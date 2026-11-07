@@ -19,14 +19,13 @@ adheres to [Semantic Versioning](https://semver.org/).
   sharing an id but differing elsewhere are refused (exact repeats merge),
   two pages of the same kind and id are refused, a community page cannot
   count edges to itself, a key repeated in `cross_community_edges` is
-  refused, a zero cross-community count is dropped, and a
-  read `source_files` must be the members' set of files (order and repeats
+  refused, a zero cross-community count is dropped, and a read
+  `source_files` must be the members' set of files (order and repeats
   ignored); the per-page `coverage` block is always written, `[]` when
   empty; the same pages in any order give byte-identical JSON, pinned by a
-  golden v1 fixture; another schema version is refused on read, and so is a JSON array in
-  place of any object. Library
-  only: no tool yet, and nothing builds pages from a graph yet (later
-  slices of #196).
+  golden v1 fixture; another schema version is refused on read, and so is
+  a JSON array in place of any object. Library only: no tool yet, and
+  nothing builds pages from a graph yet (later slices of #196).
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
   runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov
