@@ -8,6 +8,25 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Wiki skeleton artifact, first slice of #196.** `src/wiki/skeleton.rs`
+  defines the versioned (`ai-architect.wiki-skeleton/1`) skeleton: page stubs
+  for communities, processes and god nodes; every edge carries a
+  `provenance` of `extracted` or `inferred` (an untagged edge cannot be built
+  or deserialised); every member, edge and missed-graph gap carries
+  `file:line` (line 0 is refused, and paths must be repo-relative: no
+  absolute, drive or UNC prefix, empty, `.` or `..` component, backslash or
+  control character); one edge cannot carry two provenance tags, two members
+  sharing an id but differing elsewhere are refused (exact repeats merge),
+  two pages of the same kind and id are refused, a community page cannot
+  count edges to itself, a key repeated in `cross_community_edges` is
+  refused, a zero cross-community count is dropped, and a read
+  `source_files` must be the members' set of files (order and repeats
+  ignored); the per-page `coverage` block is always written, `[]` when
+  empty; the same pages in any order give byte-identical JSON, pinned by a
+  golden v1 fixture; reading a skeleton refuses another schema version, a
+  JSON array in place of any of its objects and an object in place of a
+  `provenance` or page `kind` string. Library only: no tool yet, and
+  nothing builds pages from a graph yet (later slices of #196).
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
   runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov
