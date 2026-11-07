@@ -7,12 +7,10 @@ of 0 with no output on every failure path, under every POSIX shell present.
 """
 
 import json
-import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
-import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -161,11 +159,16 @@ class FailOpenTests(unittest.TestCase):
                 with self.subTest(shell=shell, arguments=arguments):
                     self.assert_silent_success(run(shell, *arguments))
 
-    def test_subagent_without_awk_emits_nothing(self):
-        # An empty PATH removes awk; printf and [ are shell builtins.
+    def test_both_modes_run_without_any_external_command(self):
+        # An empty PATH leaves only shell builtins: the payloads are constants
+        # written with printf, so no missing tool can break or truncate them.
         for shell in SHELLS:
-            with self.subTest(shell=shell):
-                self.assert_silent_success(run(shell, "subagent", env={"PATH": ""}))
+            for mode in ("session", "subagent"):
+                with self.subTest(shell=shell, mode=mode):
+                    result = run(shell, mode, env={"PATH": ""})
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.stderr, b"")
+                    self.assertEqual(result.stdout, run(shell, mode).stdout)
 
     def test_closed_stdout(self):
         for shell in SHELLS:
@@ -178,24 +181,6 @@ class FailOpenTests(unittest.TestCase):
                         check=False,
                     )
                     self.assert_silent_success(result)
-
-    def run_with_fake_awk(self, body):
-        with tempfile.TemporaryDirectory() as directory:
-            awk = Path(directory) / "awk"
-            awk.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-            awk.chmod(0o755)
-            environment = {**os.environ, "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"}
-            for shell in SHELLS:
-                with self.subTest(shell=shell, awk=body):
-                    self.assert_silent_success(run(shell, "subagent", env=environment))
-
-    def test_awk_failure_emits_nothing(self):
-        # A failing awk must not leave half a JSON document on stdout.
-        self.run_with_fake_awk("printf 'partial'; exit 3")
-
-    def test_awk_empty_output_emits_nothing(self):
-        # An awk that succeeds without output would yield empty context.
-        self.run_with_fake_awk("cat >/dev/null; exit 0")
 
     def test_final_status_is_zero_when_the_write_fails(self):
         # The last printf's status must never become the hook's exit status.

@@ -160,8 +160,9 @@ to 240 tokens; this range is an estimate, not a tokenizer measurement.
 `scripts/tests/test_discovery_nudge_hooks.py` caps the text at 900 bytes.
 
 **Fail-open.** `hooks/discovery-nudge.sh` exits 0 with no output when the mode
-is missing or unknown, when `awk` is missing, fails or prints nothing, and when
-stdout is closed. The tests assert each of these under `sh`, `dash` and `bash`.
+is missing or unknown and when stdout is closed. It runs no external command:
+both payloads are constants written with the `printf` builtin, so it works with
+an empty `PATH`. The tests assert each of these under `sh`, `dash` and `bash`.
 The hook needs a POSIX `sh` on `PATH`. On Windows that means `sh` from Git Bash.
 The hook has not been run on Windows.
 
