@@ -110,8 +110,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   not reused yet: the resolver keeps edges of unchanged files whose candidate
   set the edit changed (a call made ambiguous by an added function), so reuse
   after edits waits on resolver invalidation. The README no longer claims
-  analyze is incremental after edits. A failed coverage write on the
-  incremental path is now returned to the caller instead of only logged.
+  analyze is incremental after edits. On the analyze reuse path, a failed
+  coverage write now fails the call instead of only being logged
+  (`index_codebase` still logs it). Both full paths snapshot the manifest
+  before indexing and save it after, so a file saved during a rebuild is seen
+  as changed by the next call.
   **Changed:** the response's `index` block carries `mode`; `node_count`,
   `edge_count` and `files_indexed` appear only when `mode` is `full` (whole-graph
   totals stay in `graph`). **Added:** the `full` parameter. A full rebuild
