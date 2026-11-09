@@ -476,8 +476,10 @@ fn callsite_column_is_persisted_not_zero() {
 }
 
 /// Issue #447: PHP and Lua files are File nodes only. The full index tallies
-/// them by extension, outside the gap counts, and leaves out the Dockerfile
-/// and the Kubernetes manifest the IaC pass extracted. An incremental refresh
+/// them by extension, outside the gap counts, with a plain `ci.yml` (no
+/// manifest, so nothing extracted), and leaves out the Dockerfile, the
+/// Kubernetes manifest and the Kustomization the IaC pass extracted. An
+/// incremental refresh
 /// that adds a C# file, deletes a PHP file and renames the Lua file to `.txt`
 /// recomputes the tally over the whole tree and writes it to the sidecar.
 #[test]
