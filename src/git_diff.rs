@@ -245,7 +245,7 @@ fn hunk_line(line: &str, lists: &mut LineLists, current_line: &mut u64) -> Resul
 
 /// True for a hunk header whose new range has a zero count (`+N,0`).
 /// source: GNU diffutils manual, "Detailed Description of Unified Format" —
-/// an empty range's start is the line just before it.
+/// an empty hunk "is considered to end at the line that precedes the hunk".
 fn new_range_is_empty(line: &str) -> bool {
     line.find('+')
         .map(|p| &line[p + 1..])
