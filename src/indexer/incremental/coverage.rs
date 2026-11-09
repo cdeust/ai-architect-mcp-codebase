@@ -67,9 +67,23 @@ fn merge_coverage(
     }
     // files_indexed = files with a covered surface = total minus not-indexed
     // (skipped/quarantined). Parse-partial and outside-build-targets files
-    // WERE indexed (declarations are in the graph), so they count.
-    let counts = report.counts();
-    report.files_indexed = files_indexed.saturating_sub(counts.skipped + counts.quarantined);
+    // WERE indexed (declarations are in the graph), so they count. Only
+    // entries for discovered files are subtracted: a pruned directory (e.g.
+    // `user_excluded`) is a `skipped` entry too, but it was never part of
+    // `files_indexed` (Codex review of #478: one file plus one excluded
+    // directory read 1 on the full run and 0 on reuse).
+    let not_indexed = report
+        .files
+        .iter()
+        .filter(|(rel, c)| {
+            current_rels.contains(*rel)
+                && matches!(
+                    c.kind,
+                    coverage::CoverageKind::Skipped | coverage::CoverageKind::Quarantined
+                )
+        })
+        .count() as u64;
+    report.files_indexed = files_indexed.saturating_sub(not_indexed);
     report
 }
 

@@ -10,17 +10,20 @@
 //!
 //! # When the previous graph is reused
 //!
-//! All five must hold, otherwise the graph is rebuilt in full:
+//! All of these must hold, otherwise the graph is rebuilt in full:
 //! 1. the caller did not pass `full: true`;
-//! 2. `<output_dir>/graph` exists and is not a symlink, and
-//!    `file_manifest.json` and the coverage sidecar both load;
+//! 2. `<output_dir>/graph` exists and is not a symlink, `file_manifest.json`
+//!    and the coverage sidecar both load, `meta.json` names the same codebase
+//!    root, and neither this call nor the graph involves language-server rows
+//!    (`lsp`);
 //! 3. the manifest records the server version and the walk/parse settings the
 //!    graph was built with, and they equal this call's (`IndexOptions::scope`).
 //!    The per-file states cannot see a changed `language`, `dependency_scope`
 //!    or `exclude_dirs`, which change which files belong in the graph at all;
-//! 4. no file changed, was added, deleted or renamed since that manifest
-//!    (`indexer::tree_changed_since`);
-//! 5. the incremental pass that refreshes the sidecars succeeds. A failure is
+//! 4. no file changed, was added, deleted or renamed since that manifest, and
+//!    none was unreadable when it was written (`indexer::tree_changed_since`);
+//! 5. the incremental pass that refreshes the sidecars succeeds and itself
+//!    finds no change (a save in between rebuilds). A failure is
 //!    logged and falls back to the full rebuild (§13 — no silent path).
 //!
 //! # Why an edited tree is still rebuilt in full
@@ -76,6 +79,12 @@ fn reusable_manifest(req: &AnalyzeRequest) -> Option<indexer::manifest::FileMani
         eprintln!("[ap] analyze_codebase: no readable coverage sidecar; rebuilding in full");
         return None;
     }
+    if !same_root(req) || req.enable_lsp || graph_has_lsp_rows(&req.graph_dir) {
+        eprintln!(
+            "[ap] analyze_codebase: another root, or language-server rows in play; rebuilding in full"
+        );
+        return None;
+    }
     let prior = indexer::manifest::load(&indexer::manifest::manifest_path(&req.output_dir))?;
     if prior.scope.as_ref() != Some(&req.options.scope()) {
         eprintln!(
@@ -100,6 +109,27 @@ fn reusable_manifest(req: &AnalyzeRequest) -> Option<indexer::manifest::FileMani
 /// leaves its target alone (Codex review of #478).
 fn is_own_graph(graph_dir: &std::path::Path) -> bool {
     std::fs::symlink_metadata(graph_dir).is_ok_and(|m| !m.file_type().is_symlink())
+}
+
+/// True when `meta.json` names this call's root. Another checkout whose files
+/// all match by (mtime, size) — normalized mtimes, `cp -p` — would otherwise
+/// pass the change check (review of #478). `write_graph_meta` records the root
+/// exactly as this compares it.
+fn same_root(req: &AnalyzeRequest) -> bool {
+    std::fs::read_to_string(req.output_dir.join("meta.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|m| m["root"].as_str() == Some(&*req.codebase.to_string_lossy()))
+}
+
+/// True when the graph holds language-server rows, or cannot say. A fresh
+/// analysis without `lsp` has none, and `resolve_graph` does not drop them, so
+/// such a graph is not reused (review of #478). With `lsp: true` the caller
+/// rebuilds too: the pass writes against the statically resolved graph.
+fn graph_has_lsp_rows(graph_dir: &std::path::Path) -> bool {
+    crate::graph_store::GraphStore::open_or_create(graph_dir)
+        .and_then(|s| s.count_edges_by_method("lsp-definition"))
+        .map_or(true, |n| n > 0)
 }
 
 /// `Ok(None)`: not applicable, or the refresh pass failed (logged).

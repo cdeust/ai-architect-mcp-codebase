@@ -102,8 +102,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   resolves, clusters and rebuilds the search index over the whole graph;
   `index.mode` says which path ran. The file manifest records the server
   version and the `language`, `dependency_scope` and `exclude_dirs` the graph
-  was built with; a different or unrecorded value, any changed file,
-  `full: true`, or a failed refresh rebuilds from scratch. An edited tree is
+  was built with; a different or unrecorded value, another codebase root,
+  language-server rows (`lsp: true` now or before), any changed file or one
+  unreadable at build time, `full: true`, or a failed refresh rebuilds from
+  scratch. An edited tree is
   not reused yet: the resolver keeps edges of unchanged files whose candidate
   set the edit changed (a call made ambiguous by an added function), so reuse
   after edits waits on resolver invalidation. The README no longer claims

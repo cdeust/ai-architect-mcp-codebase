@@ -497,3 +497,110 @@ fn a_touched_file_with_identical_content_is_still_reused() {
     assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
     assert_eq!(resp["index"]["files_reparsed"], 0, "{resp}");
 }
+
+#[test]
+fn reuse_with_an_excluded_directory_keeps_the_files_indexed_count() {
+    // Codex review of #478: the reuse path subtracted the excluded directory's
+    // `skipped` entry from `files_indexed`.
+    let (repo, base) = fixture("analyze443_count_");
+    let out = base.join("out");
+    let args = json!({ "exclude_dirs": ["extra"] });
+    let first = analyze(&repo, &out, args.clone());
+    let second = analyze(&repo, &out, args);
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert_eq!(
+        second["coverage"]["files_indexed"], first["coverage"]["files_indexed"],
+        "{second}"
+    );
+}
+
+#[test]
+fn another_checkout_with_matching_files_is_rebuilt() {
+    // Review of #478: identical relative paths, sizes and mtimes (normalized
+    // mtimes, `cp -p`) passed the change check for another root.
+    let (repo, base) = fixture("analyze443_root_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let copy = base.join("copy");
+    for entry in walk(&repo) {
+        let rel = entry.strip_prefix(&repo).expect("rel");
+        let dst = copy.join(rel);
+        fs::create_dir_all(dst.parent().expect("parent")).expect("mkdir");
+        fs::copy(&entry, &dst).expect("copy");
+        let mtime = fs::metadata(&entry)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        fs::File::options()
+            .write(true)
+            .open(&dst)
+            .and_then(|f| f.set_modified(mtime))
+            .expect("keep mtime");
+    }
+    let resp = analyze(&copy, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for e in fs::read_dir(dir).expect("read_dir") {
+        let p = e.expect("entry").path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
+}
+
+#[test]
+fn a_graph_with_language_server_rows_is_not_reused() {
+    // Review of #478: an earlier `lsp: true` run's rows survived reuse with
+    // `lsp: false`, which a fresh analysis would not have.
+    let (repo, base) = fixture("analyze443_lsp_");
+    let out = base.join("out");
+    let first = analyze(&repo, &out, json!({}));
+    {
+        let path = PathBuf::from(first["graph_path"].as_str().expect("graph_path"));
+        let store = crate::graph_store::GraphStore::open_or_create(&path).expect("open");
+        let mut marked = 0;
+        for &(rel, from, to) in crate::graph_store::REL_TABLES {
+            if !rel.starts_with("Calls_") || marked > 0 {
+                continue;
+            }
+            let q = format!(
+                "MATCH (:{from})-[r:{rel}]->(:{to}) SET r.resolution_method = 'lsp-definition' \
+                 RETURN count(r)"
+            );
+            if let Ok(qr) = store.execute_query(&q) {
+                marked += qr
+                    .rows
+                    .first()
+                    .and_then(|r| r[0].parse::<u64>().ok())
+                    .unwrap_or(0);
+            }
+        }
+        assert!(marked > 0, "precondition: a call edge to mark");
+    }
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    // And `lsp: true` itself never reuses.
+    let resp = analyze(&repo, &out, json!({ "lsp": true }));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+#[test]
+fn a_file_unreadable_at_build_time_is_retried() {
+    // Review of #478: an empty recorded hash means the full index could not
+    // read the file; `chmod +r` moves no mtime, so it must count as changed.
+    let (repo, base) = fixture("analyze443_unreadable_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let path = crate::indexer::manifest::manifest_path(&out);
+    let mut m: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("parse");
+    m["files"]["src/b.rs"]["content_hash"] = json!("");
+    fs::write(&path, m.to_string()).expect("write");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}

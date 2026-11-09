@@ -164,7 +164,8 @@ query_graph(graph_path, graph: "missed")
 
 Re-run `analyze_codebase` after edits. On the same `output_dir`, a tree with no
 changed file reuses the graph without re-parsing anything. Any edit, a change of
-`language`, `dependency_scope` or `exclude_dirs`, a new server version, or
+`language`, `dependency_scope` or `exclude_dirs`, another codebase root, a new
+server version, `lsp: true` (now or on the run that built the graph), or
 `full: true` rebuilds from scratch. Reusing an edited graph waits on resolver
 invalidation (#443); the three-stage `index_codebase` path re-parses only the
 changed files.
