@@ -4,15 +4,19 @@
 //   1. analyze_diff(store, diff_text) — parse raw unified diff text
 //   2. analyze_git_diff(store, codebase_path, base_ref, head_ref) — run git diff
 //
-// Changed lines are mapped to graph symbols by overlapping [start_line, end_line]
-// ranges. Each affected symbol is enriched with community and process membership.
+// Each changed line is attributed to the innermost graph symbol whose
+// [start_line, end_line] range holds it (`symbols`). Each affected symbol is
+// enriched with community and process membership. Changed lines no symbol
+// holds make the answer `lower-bound` (issue #446).
 
 use crate::clustering;
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::GraphStore;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
+
+mod symbols;
 
 // ---------------------------------------------------------------------------
 // Safety limit — diff line counter overflow guard.
@@ -73,10 +77,12 @@ pub struct DiffAnalysis {
     /// heuristically-resolved edges — read `risk_score` as itself uncertain.
     /// source: epistemic module; clustering::get_impact per-edge confidence.
     pub mean_dependency_confidence: f64,
-    /// `exact` when every changed symbol's blast radius is statically
-    /// exhaustive; `lower-bound` when at least one changed symbol is reached via
-    /// dynamic dispatch or through heuristic edges — true risk may exceed the
-    /// reported score. source: epistemic module.
+    /// `exact` when every changed line lies in a symbol and every changed
+    /// symbol's blast radius is statically exhaustive; `lower-bound` when some
+    /// changed lines lie in no indexed symbol (issue #446), or at least one
+    /// changed symbol is reached via dynamic dispatch or through heuristic
+    /// edges — true risk may exceed the reported score. source: epistemic
+    /// module.
     pub epistemic: &'static str,
     /// Carriers of epistemic uncertainty across the changed-symbol set (empty
     /// when `exact`), each naming the symbol and why its impact under-counts.
@@ -178,88 +184,74 @@ fn parse_hunk_header(line: &str) -> Option<u64> {
 // Symbol mapping — lines to graph nodes
 // ---------------------------------------------------------------------------
 
-const SYMBOL_LABELS_WITH_LINES: &[&str] = &["Function", "Method", "Struct", "Enum", "Trait"];
-
+/// The changed symbols of one file, plus why the file's changes may be
+/// under-counted (none when every changed line lies in a symbol).
 fn map_lines_to_symbols(
     store: &GraphStore,
-    file_path: &str,
-    changed_lines: &[u64],
-    is_new: bool,
-    is_deleted: bool,
-) -> Vec<ChangedSymbol> {
-    let mut symbols: Vec<ChangedSymbol> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    // source: M1 fix — centralized escape handles both `\` and `'` correctly.
-    let path_lit = cypher_str(file_path);
-
-    for &label in SYMBOL_LABELS_WITH_LINES {
-        let defines_rel = format!("Defines_File_{label}");
-        let cypher = format!(
-            "MATCH (f:File)-[:{defines_rel}]->(n:{label}) \
-             WHERE f.path = {path_lit} \
-             RETURN n.id, n.name, n.qualified_name, n.start_line, n.end_line"
-        );
-        let qr = match store.execute_query(&cypher) {
-            Ok(q) => q,
-            Err(_) => continue,
-        };
-
-        for row in &qr.rows {
-            if row.len() < 5 {
-                continue;
-            }
-            let id = &row[0];
-            if seen.contains(id) {
-                continue;
-            }
-
-            let start: u64 = row[3].parse().unwrap_or(0);
-            let end: u64 = row[4].parse().unwrap_or(0);
-
-            // Count how many changed lines overlap this symbol's range
-            let overlap: u64 = changed_lines
-                .iter()
-                .filter(|&&l| l >= start && l <= end)
-                .count() as u64;
-
-            if overlap == 0 && !is_new && !is_deleted {
-                continue;
-            }
-
-            seen.insert(id.clone());
-
-            let change_type = if is_new {
-                "added"
-            } else if is_deleted {
-                "deleted"
-            } else {
-                "modified"
-            };
-
-            let impact = clustering::get_impact(store, &row[2]);
-            let (community_id, processes) = match impact {
+    hunk: &FileHunk,
+) -> (Vec<ChangedSymbol>, Option<String>) {
+    let whole_file = hunk.is_new || hunk.is_deleted;
+    let attribution = symbols::attribute_lines(store, &hunk.file_path, &hunk.changed_lines);
+    let coverage_gap = coverage_gap(hunk, &attribution);
+    let change_type = if hunk.is_new {
+        "added"
+    } else if hunk.is_deleted {
+        "deleted"
+    } else {
+        "modified"
+    };
+    let changed = attribution
+        .candidates
+        .into_iter()
+        .filter(|c| whole_file || c.overlap > 0)
+        .map(|c| {
+            let (community_id, processes) = match clustering::get_impact(store, &c.qualified_name) {
                 Ok(imp) => (imp.communities.into_iter().next(), imp.processes),
                 Err(_) => (None, Vec::new()),
             };
-
-            symbols.push(ChangedSymbol {
-                qualified_name: row[2].clone(),
-                name: row[1].clone(),
-                label: label.to_string(),
-                file_path: file_path.to_string(),
-                change_type: change_type.to_string(),
-                lines_changed: if is_new || is_deleted {
-                    end.saturating_sub(start) + 1
+            ChangedSymbol {
+                lines_changed: if whole_file {
+                    c.end.saturating_sub(c.start) + 1
                 } else {
-                    overlap
+                    c.overlap
                 },
+                qualified_name: c.qualified_name,
+                name: c.name,
+                label: c.label.to_string(),
+                file_path: hunk.file_path.clone(),
+                change_type: change_type.to_string(),
                 community_id,
                 processes,
-            });
-        }
-    }
+            }
+        })
+        .collect();
+    (changed, coverage_gap)
+}
 
-    symbols
+/// Why `hunk`'s changes are not fully represented by symbols (issue #446): the
+/// graph has no File at that path (an unsupported language, a file outside the
+/// indexed root, a deleted file), or some changed lines lie in no symbol
+/// (top-level code, imports, a kind without a line range).
+fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Option<String> {
+    let path = &hunk.file_path;
+    if !attribution.file_known {
+        return Some(format!(
+            "{path}: no indexed File at this path (unsupported language, outside the \
+             indexed root, or deleted); its changes are not attributed to any symbol"
+        ));
+    }
+    let whole_file = hunk.is_new || hunk.is_deleted;
+    if whole_file && attribution.candidates.is_empty() {
+        return Some(format!("{path}: the file holds no indexed symbol"));
+    }
+    match attribution.unattributed_lines {
+        0 => None,
+        _ if whole_file => None,
+        n => Some(format!(
+            "{path}: {n} changed line(s) lie in no indexed symbol (top-level code, \
+             imports, or a symbol kind without a line range)"
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -355,15 +347,12 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
     let files_changed = hunks.len() as u64;
     let mut all_symbols: Vec<ChangedSymbol> = Vec::new();
 
+    let mut coverage_gaps: Vec<String> = Vec::new();
+
     for hunk in hunks {
-        let symbols = map_lines_to_symbols(
-            store,
-            &hunk.file_path,
-            &hunk.changed_lines,
-            hunk.is_new,
-            hunk.is_deleted,
-        );
+        let (symbols, gap) = map_lines_to_symbols(store, hunk);
         all_symbols.extend(symbols);
+        coverage_gaps.extend(gap);
     }
 
     let communities: Vec<String> = all_symbols
@@ -382,8 +371,14 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
 
     let total_communities = count_total_communities(store);
     let risk_score = compute_risk_score(&all_symbols, total_communities);
-    let (mean_dependency_confidence, epistemic, epistemic_reasons) =
+    let (mean_dependency_confidence, mut epistemic, mut epistemic_reasons) =
         assess_dependency_confidence(store, &all_symbols);
+    // A change no symbol carries is a change the risk does not see: the answer
+    // is a lower bound, never `exact` (issue #446).
+    if !coverage_gaps.is_empty() {
+        epistemic = crate::epistemic::Boundary::LowerBound.as_str();
+        epistemic_reasons.extend(coverage_gaps);
+    }
 
     Ok(DiffAnalysis {
         files_changed,
@@ -592,6 +587,15 @@ diff --git a/src/main.rs b/src/main.rs
         // No symbols in an empty graph
         assert!(result.symbols_affected.is_empty());
         assert_eq!(result.risk_score, 0.0);
+        // Issue #446: zero symbols for a non-empty diff is never `exact`.
+        assert_eq!(result.epistemic, "lower-bound");
+        assert_eq!(
+            result.epistemic_reasons.len(),
+            1,
+            "{:?}",
+            result.epistemic_reasons
+        );
+        assert!(result.epistemic_reasons[0].starts_with("src/main.rs: no indexed File"));
     }
 
     #[test]
