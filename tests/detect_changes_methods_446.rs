@@ -161,7 +161,7 @@ fn an_added_file_with_top_level_code_is_a_lower_bound() {
     );
     assert_eq!(analysis.epistemic, "lower-bound");
     assert!(
-        analysis.epistemic_reasons == vec!["script.py: 2 changed line(s) lie in no indexed symbol (top-level code, imports, a removal between symbols, or a declaration the graph does \
+        analysis.epistemic_reasons == vec!["script.py: 1 changed line(s) lie in no indexed symbol (top-level code, imports, a removal between symbols, or a declaration the graph does \
              not index)".to_string()],
         "{:?}",
         analysis.epistemic_reasons
@@ -233,4 +233,34 @@ fn a_removal_goes_to_the_symbol_spanning_it_not_to_the_next_one() {
     );
     assert_eq!(analysis.epistemic, "lower-bound");
     assert_eq!(analysis.coverage_gap_count, 1);
+}
+
+#[test]
+fn a_deleted_file_reports_every_symbol_it_held() {
+    let (store, _root) = indexed();
+    let mut diff =
+        "diff --git a/shapes.ts b/shapes.ts\n--- a/shapes.ts\n+++ /dev/null\n@@ -1,8 +0,0 @@\n"
+            .to_string();
+    for line in TS.lines() {
+        diff.push_str(&format!("-{line}\n"));
+    }
+    let analysis = analyze_diff(&store, &diff).expect("analyze_diff");
+    assert_eq!(
+        changed(&analysis),
+        vec![
+            ("Method".to_string(), "area".to_string()),
+            ("Method".to_string(), "perimeter".to_string()),
+            ("Struct".to_string(), "Shape".to_string()),
+        ]
+    );
+    assert!(analysis
+        .symbols_affected
+        .iter()
+        .all(|s| s.change_type == "deleted"));
+    assert_eq!(
+        analysis.coverage_gap_count, 0,
+        "{:?}",
+        analysis.epistemic_reasons
+    );
+    assert_eq!(analysis.epistemic, "exact");
 }

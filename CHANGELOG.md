@@ -22,11 +22,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   line counts once (`git_diff::symbols`). A pure removal counts for a symbol
   only when that symbol spans the lines on both sides of it (deleting `fn foo`
   just above `fn bar` no longer reports `bar`). Symbols are read once per diff,
-  one batched query per label, not once per file. `next_steps` suggests
+  one query per label for each chunk of 64 files, and `get_impact` runs once
+  per changed symbol. Blank added lines and the `\ No newline at end of file`
+  marker no longer count as changes. `next_steps` suggests
   `lsp_resolve` only for dependency reasons, not for coverage gaps. The answer is `lower-bound`, with a
   reason naming the file, when a changed line of a modified or added file lies
   in no indexed symbol, when the diff names a path with no indexed File (an
-  unsupported language), or when a graph query failed. Tests:
+  unsupported language), when an added or deleted file holds no indexed
+  symbol, or (one reason for the whole diff) when a symbol query failed. Tests:
   `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
   a change in `Shape::area`, and `exact` for a diff of an unsupported file),
   unit tests in `git_diff::symbols`, and `test_analyze_diff_on_empty_graph`.

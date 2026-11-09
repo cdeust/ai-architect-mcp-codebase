@@ -411,6 +411,47 @@ pub(crate) fn detect_changes_next_steps(analysis: &git_diff::DiffAnalysis) -> Va
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+mod detect_changes_next_steps_tests {
+    use super::*;
+
+    fn analysis(reasons: usize, gaps: usize) -> git_diff::DiffAnalysis {
+        git_diff::DiffAnalysis {
+            files_changed: 1,
+            symbols_affected: Vec::new(),
+            communities_affected: Vec::new(),
+            processes_affected: Vec::new(),
+            risk_score: 0.0,
+            mean_dependency_confidence: 1.0,
+            epistemic: "lower-bound",
+            epistemic_reasons: vec!["r".to_string(); reasons],
+            coverage_gap_count: gaps,
+        }
+    }
+
+    fn mentions(steps: &Value, needle: &str) -> bool {
+        steps
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s.as_str().unwrap().contains(needle))
+    }
+
+    /// Issue #446 review: lsp_resolve tightens dependency edges, not coverage.
+    #[test]
+    fn lsp_resolve_only_for_dependency_reasons() {
+        let dep_only = detect_changes_next_steps(&analysis(1, 0));
+        assert!(mentions(&dep_only, "lsp_resolve"));
+        assert!(!mentions(&dep_only, "reach no indexed symbol"));
+        let gap_only = detect_changes_next_steps(&analysis(1, 1));
+        assert!(!mentions(&gap_only, "lsp_resolve"));
+        assert!(mentions(&gap_only, "reach no indexed symbol"));
+        let both = detect_changes_next_steps(&analysis(2, 1));
+        assert!(mentions(&both, "lsp_resolve"));
+        assert!(mentions(&both, "reach no indexed symbol"));
+    }
+}
+
+#[cfg(test)]
 mod confirm_lsp_rows_tests {
     use super::*;
     use crate::lsp_client::{LspResolutionResult, ServerHealth, UnlinkedFileCheck};

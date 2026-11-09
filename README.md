@@ -156,7 +156,8 @@ get_impact(graph_path, qualified_name: "src/main.rs::handle_tool_call")
     affected, and an epistemic label (exact or lower-bound) with its reasons
 
 detect_changes(graph_path, codebase_path: "/path/to/repo", base_ref: "main", head_ref: "HEAD")
-  → symbols the diff adds, modifies or deletes, with a heuristic risk score each
+  → symbols the diff adds, modifies or deletes, one heuristic risk score for the
+    diff, and an epistemic label (exact or lower-bound) with its reasons
 
 query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep

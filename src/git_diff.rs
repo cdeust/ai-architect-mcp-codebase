@@ -12,7 +12,7 @@
 use crate::clustering;
 use crate::graph_store::GraphStore;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -77,10 +77,12 @@ pub struct DiffAnalysis {
     /// heuristically-resolved edges — read `risk_score` as itself uncertain.
     /// source: epistemic module; clustering::get_impact per-edge confidence.
     pub mean_dependency_confidence: f64,
-    /// `exact` when every changed line lies in a symbol and every changed
-    /// symbol's blast radius is statically exhaustive; `lower-bound` when a
-    /// changed line of a modified or added file lies in no indexed symbol, a
-    /// path has no indexed File, or a query failed (issue #446), or at least one
+    /// `exact` when every non-blank changed line lies in a symbol and every
+    /// changed symbol's blast radius is statically exhaustive; `lower-bound`
+    /// when a non-blank changed line of a modified or added file (or a pure
+    /// removal) lies in no indexed symbol, a path has no indexed File, an added
+    /// or deleted file holds no indexed symbol, or a symbol query failed
+    /// (issue #446), or at least one
     /// changed symbol is reached via dynamic dispatch or through heuristic
     /// edges — true risk may exceed the reported score. source: epistemic
     /// module.
@@ -90,7 +92,9 @@ pub struct DiffAnalysis {
     /// of its changes reach no symbol (issue #446).
     pub epistemic_reasons: Vec<String>,
     /// How many of `epistemic_reasons` are coverage gaps (a changed file whose
-    /// changes partly reach no symbol) rather than dependency uncertainty.
+    /// changes partly reach no symbol, or a failed symbol query) rather than
+    /// dependency uncertainty. Internal: read by `next_steps`, not emitted.
+    #[serde(skip)]
     pub coverage_gap_count: usize,
 }
 
@@ -106,7 +110,7 @@ pub(crate) struct FileHunk {
     /// takes the position of the new-file line that follows it). Read by the
     /// history module.
     pub(crate) changed_lines: Vec<u64>,
-    /// New-file positions of the `+` lines only.
+    /// New-file positions of the non-blank `+` lines.
     pub(crate) added_lines: Vec<u64>,
     /// New-file positions just after a run of `-` lines that no `+` line
     /// replaces (a pure removal between lines p-1 and p).
@@ -182,10 +186,16 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             if let Some(new_range) = parse_hunk_header(line) {
                 current_line = new_range;
             }
+        } else if line.starts_with('\\') {
+            // "\ No newline at end of file": no line in either file.
         } else if line.starts_with('+') && !line.starts_with("+++") {
             lists.pending_removal = None;
             lists.changed.push(current_line);
-            lists.added.push(current_line);
+            // A blank added line changes no behavior; it must not make a
+            // complete answer a lower bound (issue #446 review).
+            if !line[1..].trim().is_empty() {
+                lists.added.push(current_line);
+            }
             if current_line >= DIFF_LINE_MAX {
                 return Err("diff_too_large: line counter would overflow".to_string());
             }
@@ -237,11 +247,27 @@ fn parse_hunk_header(line: &str) -> Option<u64> {
 // Symbol mapping — lines to graph nodes
 // ---------------------------------------------------------------------------
 
+/// `get_impact` per qualified name, computed once per diff: the symbol mapping
+/// and `assess_dependency_confidence` both read it (`None` when it failed).
+type ImpactCache = HashMap<String, Option<clustering::ImpactResult>>;
+
+fn impact_of<'c>(
+    store: &GraphStore,
+    cache: &'c mut ImpactCache,
+    qualified_name: &str,
+) -> Option<&'c clustering::ImpactResult> {
+    cache
+        .entry(qualified_name.to_string())
+        .or_insert_with(|| clustering::get_impact(store, qualified_name).ok())
+        .as_ref()
+}
+
 /// The changed symbols of one file, plus why the file's changes may be
 /// under-counted (none when every changed line lies in a symbol).
 fn map_lines_to_symbols(
     store: &GraphStore,
     loaded: &symbols::DiffSymbols,
+    impacts: &mut ImpactCache,
     hunk: &FileHunk,
 ) -> (Vec<ChangedSymbol>, Option<String>) {
     let whole_file = hunk.is_new || hunk.is_deleted;
@@ -259,9 +285,9 @@ fn map_lines_to_symbols(
         .into_iter()
         .filter(|c| whole_file || c.overlap > 0)
         .map(|c| {
-            let (community_id, processes) = match clustering::get_impact(store, &c.qualified_name) {
-                Ok(imp) => (imp.communities.into_iter().next(), imp.processes),
-                Err(_) => (None, Vec::new()),
+            let (community_id, processes) = match impact_of(store, impacts, &c.qualified_name) {
+                Some(imp) => (imp.communities.first().cloned(), imp.processes.clone()),
+                None => (None, Vec::new()),
             };
             ChangedSymbol {
                 lines_changed: if whole_file {
@@ -282,18 +308,13 @@ fn map_lines_to_symbols(
     (changed, coverage_gap)
 }
 
-/// Why `hunk`'s changes are not fully represented by symbols (issue #446): a
-/// graph query failed, the graph has no File at that path (an unsupported
+/// Why `hunk`'s changes are not fully represented by symbols (issue #446): the
+/// graph has no File at that path (an unsupported
 /// language, a file outside the indexed root, a deleted file), or some changed
 /// lines of a modified or added file lie in no symbol (top-level code, imports,
 /// a kind without a line range).
 fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Option<String> {
     let path = &hunk.file_path;
-    if attribution.query_failed {
-        return Some(format!(
-            "{path}: a graph query failed, so its symbols may be incomplete"
-        ));
-    }
     if !attribution.file_known {
         return Some(format!(
             "{path}: no indexed File at this path (unsupported language, outside the \
@@ -411,9 +432,18 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
     let mut coverage_gaps: Vec<String> = Vec::new();
     let paths: Vec<&str> = hunks.iter().map(|h| h.file_path.as_str()).collect();
     let loaded = symbols::DiffSymbols::load(store, &paths);
+    let mut impacts = ImpactCache::new();
+    // One reason for the whole diff: the failed query is not any one file's.
+    if loaded.query_failed() {
+        coverage_gaps.push(
+            "a graph query failed while loading the changed files' symbols; \
+             the attribution may be incomplete"
+                .to_string(),
+        );
+    }
 
     for hunk in hunks {
-        let (symbols, gap) = map_lines_to_symbols(store, &loaded, hunk);
+        let (symbols, gap) = map_lines_to_symbols(store, &loaded, &mut impacts, hunk);
         all_symbols.extend(symbols);
         coverage_gaps.extend(gap);
     }
@@ -435,7 +465,7 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
     let total_communities = count_total_communities(store);
     let risk_score = compute_risk_score(&all_symbols, total_communities);
     let (mean_dependency_confidence, mut epistemic, mut epistemic_reasons) =
-        assess_dependency_confidence(store, &all_symbols);
+        assess_dependency_confidence(store, &mut impacts, &all_symbols);
     // A change no symbol carries is a change the risk does not see: the answer
     // is a lower bound, never `exact` (issue #446).
     let coverage_gap_count = coverage_gaps.len();
@@ -466,6 +496,7 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
 /// formula is unchanged. source: epistemic module; checkpoint Phase 1 #2.
 fn assess_dependency_confidence(
     store: &GraphStore,
+    impacts: &mut ImpactCache,
     symbols: &[ChangedSymbol],
 ) -> (f64, &'static str, Vec<String>) {
     let mut confidence_sum = 0.0_f64;
@@ -474,9 +505,8 @@ fn assess_dependency_confidence(
     let mut any_lower_bound = false;
 
     for sym in symbols {
-        let impact = match clustering::get_impact(store, &sym.qualified_name) {
-            Ok(i) => i,
-            Err(_) => continue, // symbol not in graph (e.g. deleted) — skip
+        let Some(impact) = impact_of(store, impacts, &sym.qualified_name) else {
+            continue; // symbol not in graph (e.g. deleted) — skip
         };
         for node in impact
             .callers
@@ -490,7 +520,7 @@ fn assess_dependency_confidence(
         }
         if impact.epistemic == crate::epistemic::Boundary::LowerBound {
             any_lower_bound = true;
-            for reason in impact.epistemic_reasons {
+            for reason in &impact.epistemic_reasons {
                 reasons.push(format!("{}: {reason}", sym.qualified_name));
             }
         }
@@ -535,6 +565,72 @@ mod tests {
             parse_unified_diff(with_context).unwrap()[0].removal_gaps,
             vec![2]
         );
+    }
+
+    fn one_file(body: &str) -> FileHunk {
+        let diff = format!("diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n{body}");
+        parse_unified_diff(&diff).unwrap().remove(0)
+    }
+
+    /// Claude review of PR #482: how `added_lines` and `removal_gaps` record
+    /// each hunk shape.
+    #[test]
+    fn added_lines_and_removal_gaps_per_hunk_shape() {
+        // (hunk body, added_lines, removal_gaps)
+        let cases: [(&str, &[u64], &[u64]); 6] = [
+            // a replacement is not a gap
+            ("@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n", &[2], &[]),
+            // a run partly replaced: the `+` cancels the gap
+            ("@@ -1,4 +1,3 @@\n a\n-b\n-c\n+C\n d\n", &[2], &[]),
+            // `-x +y -z`: the second `-` opens a gap after `y`
+            ("@@ -1,4 +1,3 @@\n a\n-x\n+y\n-z\n d\n", &[2], &[3]),
+            // a gap closed by the next `@@` header
+            ("@@ -1,2 +1,1 @@\n a\n-b\n@@ -9,1 +8,1 @@\n z\n", &[], &[2]),
+            // a blank added line changes nothing
+            ("@@ -1,2 +1,3 @@\n a\n+\n+  \n b\n", &[], &[]),
+            // "\ No newline at end of file" is no line of either file
+            (
+                "@@ -1,3 +1,3 @@\n f() {\n     1\n-}\n\\ No newline at end of file\n+} // x\n\\ No newline at end of file\n",
+                &[3],
+                &[],
+            ),
+        ];
+        for (body, added, gaps) in cases {
+            let hunk = one_file(body);
+            assert_eq!(hunk.added_lines, added, "{body:?}");
+            assert_eq!(hunk.removal_gaps, gaps, "{body:?}");
+        }
+    }
+
+    #[test]
+    fn a_removal_on_the_last_line_closes_before_the_next_file() {
+        let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,2 +1,1 @@\n a\n-b\n\
+                    diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+        let hunks = parse_unified_diff(diff).unwrap();
+        assert_eq!(hunks[0].removal_gaps, vec![2]);
+        assert!(hunks[1].removal_gaps.is_empty());
+    }
+
+    /// Claude review of PR #482: a failed symbol query yields one reason for
+    /// the whole diff, not one per file. A store with no schema fails every
+    /// query.
+    #[test]
+    fn a_failed_query_is_one_diff_level_reason() {
+        let dir = tempfile::Builder::new()
+            .prefix("git_diff_noschema")
+            .tempdir()
+            .unwrap();
+        let store = GraphStore::open_or_create(&dir.path().join("db")).unwrap();
+        let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-x\n+y\n\
+                    diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+        let result = analyze_diff(&store, diff).unwrap();
+        assert_eq!(result.epistemic, "lower-bound");
+        let failed: Vec<&String> = result
+            .epistemic_reasons
+            .iter()
+            .filter(|r| r.contains("a graph query failed"))
+            .collect();
+        assert_eq!(failed.len(), 1, "{:?}", result.epistemic_reasons);
     }
 
     #[test]

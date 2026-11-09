@@ -44,8 +44,8 @@ const LABELS_WITH_LINES: &[&str] = &[
 ];
 
 /// Prefixes OR-ed into one `starts_with` query: one scan per label serves a
-/// whole chunk of files instead of one scan per file (same batching as
-/// `indexer::incremental::edges`).
+/// whole chunk of files instead of one scan per file (the OR-of-prefixes
+/// shape of `indexer::incremental::edges`, chunked here to bound the query).
 const PREFIX_CHUNK: usize = 64;
 
 /// One symbol of a file with its line range.
@@ -78,11 +78,15 @@ pub(super) struct FileAttribution {
     pub(super) candidates: Vec<Candidate>,
     /// Distinct changed lines (and pure removals) that lie in no candidate.
     pub(super) unattributed_lines: u64,
-    /// Whether a graph query failed, so the candidates may be incomplete.
-    pub(super) query_failed: bool,
 }
 
 impl DiffSymbols {
+    /// Whether a File or symbol query failed while loading, so some
+    /// candidates may be missing.
+    pub(super) fn query_failed(&self) -> bool {
+        self.query_failed
+    }
+
     /// Reads the Files at `paths` and every line-ranged symbol whose id starts
     /// with `<File.id>::`, one query per label and chunk of paths.
     pub(super) fn load(store: &GraphStore, paths: &[&str]) -> Self {
@@ -194,7 +198,6 @@ impl DiffSymbols {
             file_known: self.known_files.contains(file_path),
             candidates,
             unattributed_lines,
-            query_failed: self.query_failed,
         }
     }
 }
