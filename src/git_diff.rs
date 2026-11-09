@@ -9,7 +9,7 @@
 // enriched with community and process membership. A change no symbol holds (a
 // line or a pure removal outside every symbol, blank-only ones excepted; a path
 // with no indexed File; an added or deleted file with no symbol) or a failed
-// symbol load or impact query makes the answer `lower-bound` (issue #446).
+// symbol load makes the answer `lower-bound` (issue #446).
 
 use crate::clustering;
 use crate::graph_store::GraphStore;
@@ -103,7 +103,8 @@ pub struct DiffAnalysis {
 // ---------------------------------------------------------------------------
 
 /// `get_impact` per qualified name, computed once per diff: the symbol mapping
-/// and `assess_dependency_confidence` both read it (`None` when it failed).
+/// and `assess_dependency_confidence` both read it. `None` mirrors its `Err`
+/// signature; it reports no inner query failure today.
 type ImpactCache = HashMap<String, Option<clustering::ImpactResult>>;
 
 fn impact_of<'c>(
@@ -174,6 +175,11 @@ fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Opti
         return Some(format!(
             "{path}: a hunk could not be read (unreadable header, or lines past its \
              announced counts); some of its changes may be missing"
+        ));
+    }
+    if hunk.binary {
+        return Some(format!(
+            "{path}: binary content; its changes are not attributed to any symbol"
         ));
     }
     if !attribution.file_known {
@@ -270,6 +276,8 @@ pub fn analyze_git_diff(
     // head_ref cannot smuggle a path-based side effect either.
     // source: C2 fix — git-diff(1) synopsis `git diff [<commit>] [--] [<path>…]`.
     let output = Command::new("git")
+        // Non-ASCII paths stay unquoted, so `+++ b/<path>` matches the File.
+        .args(["-c", "core.quotePath=false"])
         .arg("diff")
         // The parser reads `a/`/`b/` paths and plain `+`/`-` lines: pin them
         // against `diff.noprefix`, `color.diff=always` and `diff.external`, under
@@ -295,37 +303,43 @@ pub fn analyze_git_diff(
     analyze_diff(store, &diff_text)
 }
 
-/// One `FileHunk` per path: a diff that names a path several times (never
-/// `git diff`, but a crafted `diff_text` can) is attributed once, so it cannot
+/// One `FileHunk` per path: a diff that names a path several times (a crafted
+/// `diff_text`, or `git diff` for a file<->symlink type change) is attributed
+/// once, so it cannot
 /// duplicate symbols, skew the risk averages or multiply the output.
 fn merge_by_path(hunks: Vec<FileHunk>) -> Vec<FileHunk> {
     let mut merged: Vec<FileHunk> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for h in hunks {
-        match merged.iter_mut().find(|m| m.file_path == h.file_path) {
-            Some(m) => {
-                m.changed_lines.extend(h.changed_lines);
-                m.added_lines.extend(h.added_lines);
-                m.removal_gaps.extend(h.removal_gaps);
-                m.blank_lines.extend(h.blank_lines);
-                m.blank_gaps.extend(h.blank_gaps);
-                m.malformed |= h.malformed;
-                m.is_new |= h.is_new;
-                m.is_deleted |= h.is_deleted;
-            }
-            None => merged.push(h),
-        }
+        let Some(&i) = index.get(&h.file_path) else {
+            index.insert(h.file_path.clone(), merged.len());
+            merged.push(h);
+            continue;
+        };
+        let m = &mut merged[i];
+        m.changed_lines.extend(h.changed_lines);
+        m.added_lines.extend(h.added_lines);
+        m.removal_gaps.extend(h.removal_gaps);
+        m.nonblank_lines.extend(h.nonblank_lines);
+        m.nonblank_gaps.extend(h.nonblank_gaps);
+        m.malformed |= h.malformed;
+        m.binary |= h.binary;
+        m.is_new |= h.is_new;
+        m.is_deleted |= h.is_deleted;
     }
     merged
 }
 
-fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis, String> {
-    let files_changed = hunks.len() as u64;
-    let mut all_symbols: Vec<ChangedSymbol> = Vec::new();
-
+/// Every hunk's changed symbols into `out`; returns the coverage gaps.
+fn map_all_hunks(
+    store: &GraphStore,
+    hunks: &[FileHunk],
+    impacts: &mut ImpactCache,
+    out: &mut Vec<ChangedSymbol>,
+) -> Vec<String> {
     let mut coverage_gaps: Vec<String> = Vec::new();
     let paths: Vec<&str> = hunks.iter().map(|h| h.file_path.as_str()).collect();
     let loaded = symbols::DiffSymbols::load(store, &paths);
-    let mut impacts = ImpactCache::new();
     // One reason for the whole diff: the failed query is not any one file's.
     if loaded.query_failed() {
         coverage_gaps.push(
@@ -334,12 +348,20 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
                 .to_string(),
         );
     }
-
     for hunk in hunks {
-        let (symbols, gap) = map_lines_to_symbols(store, &loaded, &mut impacts, hunk);
-        all_symbols.extend(symbols);
+        let (symbols, gap) = map_lines_to_symbols(store, &loaded, impacts, hunk);
+        out.extend(symbols);
         coverage_gaps.extend(gap);
     }
+    coverage_gaps
+}
+
+fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis, String> {
+    let files_changed = hunks.len() as u64;
+    let mut all_symbols: Vec<ChangedSymbol> = Vec::new();
+
+    let mut impacts = ImpactCache::new();
+    let coverage_gaps = map_all_hunks(store, hunks, &mut impacts, &mut all_symbols);
 
     let communities: Vec<String> = all_symbols
         .iter()
@@ -398,11 +420,9 @@ fn assess_dependency_confidence(
     let mut any_lower_bound = false;
 
     for sym in symbols {
-        // Every changed symbol was read from the graph, so a failed impact
-        // query is a gap in the answer, not a missing symbol.
+        // `get_impact` returns `Ok` even when its inner queries fail (they
+        // yield empty lists), so `None` only stands for its `Err` signature.
         let Some(impact) = impact_of(store, impacts, &sym.qualified_name) else {
-            any_lower_bound = true;
-            reasons.push(format!("{}: its impact query failed", sym.qualified_name));
             continue;
         };
         for node in impact
@@ -508,14 +528,34 @@ mod tests {
         }
     }
 
-    /// Blank-only changes are marked, so attribution can skip them outside
-    /// every symbol; a blank line replacing code is not blank-only.
+    /// Only changes beyond blank lines are marked non-blank, so attribution
+    /// can skip blank-only ones outside every symbol; a blank line replacing
+    /// code is not blank-only.
     #[test]
-    fn blank_only_changes_are_marked() {
+    fn non_blank_changes_are_marked() {
         let h = one_file("@@ -1,4 +1,4 @@\n a\n+\n-\n b\n-x\n+\n");
-        assert_eq!(h.blank_lines, vec![2]);
-        let h = one_file("@@ -1,3 +1,2 @@\n a\n-\n b\n");
-        assert_eq!(h.blank_gaps, vec![2]);
+        assert_eq!(h.added_lines, vec![2, 4]);
+        assert_eq!(h.nonblank_lines, vec![4]);
+        assert_eq!(h.removal_gaps, vec![3]);
+        assert!(h.nonblank_gaps.is_empty());
+    }
+
+    /// Claude review of PR #482: real `diff -u` headers (no prefix, a tab and
+    /// a timestamp), the `diff --git` path when no header names the file, and
+    /// binary sections.
+    #[test]
+    fn headers_without_git_prefixes_still_name_the_file() {
+        let plain = "--- old.rs\t2026-11-09 10:00:00.000000000 +0100\n\
+                     +++ new.rs\t2026-11-09 10:01:00.000000000 +0100\n@@ -1,1 +1,1 @@\n-a\n+b\n";
+        assert_eq!(parse_unified_diff(plain).unwrap()[0].file_path, "new.rs");
+        let binary = "diff --git a/img.png b/img.png\nindex 1..2 100644\n\
+                      Binary files a/img.png and b/img.png differ\n";
+        let hunks = parse_unified_diff(binary).unwrap();
+        assert_eq!(hunks[0].file_path, "img.png");
+        assert!(hunks[0].binary);
+        let headless = "@@ -1,1 +1,1 @@\n-a\n+b\n";
+        let hunks = parse_unified_diff(headless).unwrap();
+        assert!(hunks[0].malformed, "a hunk with no file path is reported");
     }
 
     /// Claude review of PR #482: a hunk ends where its header's counts say,
@@ -782,6 +822,25 @@ diff --git a/x b/x
         let huge = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +9223372036854775807 @@\n+a\n";
         let err = parse_unified_diff(huge).err().expect("header past the cap");
         assert!(err.starts_with("diff_too_large"), "{err}");
+    }
+
+    /// Claude review of PR #482: `analyze_diff` merges repeated paths.
+    #[test]
+    fn analyze_diff_counts_a_repeated_path_once() {
+        let dir = tempfile::Builder::new()
+            .prefix("git_diff_merge")
+            .tempdir()
+            .unwrap();
+        let store = GraphStore::open_or_create(&dir.path().join("db")).unwrap();
+        store.create_schema().unwrap();
+        let section = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n";
+        let result = analyze_diff(&store, &section.repeat(2)).unwrap();
+        assert_eq!(result.files_changed, 1);
+        assert_eq!(
+            result.coverage_gap_count, 1,
+            "{:?}",
+            result.epistemic_reasons
+        );
     }
 
     /// Claude review of PR #482: a path named twice is attributed once.

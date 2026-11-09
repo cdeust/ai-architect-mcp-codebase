@@ -14,16 +14,17 @@
 //   relies on), so every label is read by that prefix instead. This also
 //   reaches the symbols whose `Defines` edge the persister drops (a C++
 //   namespace's functions, a Rust inline `mod`'s functions, nested classes).
-// - A changed line inside a method also lies inside its class, and was counted
-//   for both. Each line now goes to the innermost candidates whose range holds
-//   it; on equal ranges the deeper id (`A::m` over `A`) wins, and siblings that
-//   neither range nor id can tell apart all keep it.
+// - A changed line inside a method also lies inside its class, so once methods
+//   are candidates it would count for both. Each line goes to the innermost
+//   candidates whose range holds it; on equal ranges the deeper id (`A::m`
+//   over `A`) wins, and siblings that neither range nor id can tell apart all
+//   keep it.
 // - A pure removal was credited to the line after it: deleting `fn foo` just
 //   above `fn bar` reported `bar`. It now counts for a symbol only when that
 //   symbol spans the lines on both sides of it.
 //
-// Every label is read once per diff (one `starts_with` query per label and
-// chunk of files), not once per file.
+// Each label is read once per chunk of 64 paths (one `starts_with` query per
+// label and chunk), not once per file.
 //
 // Lines that fall in no candidate, and queries that fail, are reported, so the
 // caller can refuse to call an incomplete answer `exact`.
@@ -62,7 +63,7 @@ pub(super) struct Candidate {
     pub(super) overlap: u64,
 }
 
-/// The symbols of every file a diff names, read once per diff.
+/// The symbols of every file a diff names, read once per chunk of paths.
 pub(super) struct DiffSymbols {
     /// `File.id`s the graph holds among the diff's paths (`File.id` is the
     /// path: `indexer::persist::insert_file_node`).
@@ -175,10 +176,12 @@ impl DiffSymbols {
             .get(&hunk.file_path)
             .cloned()
             .unwrap_or_default();
+        let nonblank_lines: HashSet<u64> = hunk.nonblank_lines.iter().copied().collect();
+        let nonblank_gaps: HashSet<u64> = hunk.nonblank_gaps.iter().copied().collect();
         let mut unattributed_lines = 0;
         for line in distinct(&hunk.added_lines) {
             let owners = innermost(&candidates, line, line);
-            if owners.is_empty() && !hunk.blank_lines.contains(&line) {
+            if owners.is_empty() && nonblank_lines.contains(&line) {
                 unattributed_lines += 1;
             }
             for i in owners {
@@ -194,7 +197,7 @@ impl DiffSymbols {
             } else {
                 Vec::new()
             };
-            if owners.is_empty() && !hunk.blank_gaps.contains(&gap) {
+            if owners.is_empty() && nonblank_gaps.contains(&gap) {
                 unattributed_lines += 1;
             }
             for i in owners {
@@ -336,15 +339,17 @@ mod gap_tests {
         }
     }
 
+    /// A hunk whose lines and gaps are all non-blank.
     fn hunk(added: &[u64], gaps: &[u64]) -> FileHunk {
         FileHunk {
             file_path: "m.rs".to_string(),
             changed_lines: Vec::new(),
             added_lines: added.to_vec(),
             removal_gaps: gaps.to_vec(),
-            blank_lines: Vec::new(),
-            blank_gaps: Vec::new(),
+            nonblank_lines: added.to_vec(),
+            nonblank_gaps: gaps.to_vec(),
             malformed: false,
+            binary: false,
             is_new: false,
             is_deleted: false,
         }
@@ -399,11 +404,12 @@ mod gap_tests {
     #[test]
     fn a_blank_change_counts_inside_a_symbol_only() {
         let d = loaded(vec![function("m.rs::f", 1, 3)]);
-        let mut h = hunk(&[2, 9], &[]);
-        h.blank_lines = vec![2, 9];
+        let mut h = hunk(&[2, 9], &[9]);
+        h.nonblank_lines.clear();
+        h.nonblank_gaps.clear();
         let a = d.attribute(&h);
         assert_eq!(a.candidates[0].overlap, 1);
-        assert_eq!(a.unattributed_lines, 0);
+        assert_eq!(a.unattributed_lines, 0, "blank line and blank gap at 9");
     }
 
     #[test]

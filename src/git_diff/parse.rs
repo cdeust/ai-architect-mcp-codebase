@@ -32,15 +32,18 @@ pub(crate) struct FileHunk {
     /// New-file positions just after a run of `-` lines that no `+` line
     /// replaces (a pure removal between lines p-1 and p).
     pub(crate) removal_gaps: Vec<u64>,
-    /// The `added_lines` and `removal_gaps` that only add or remove blank
-    /// lines. Inside a symbol they still count (a blank line in a multiline
-    /// string changes its value); outside every symbol they are no coverage
-    /// gap.
-    pub(crate) blank_lines: Vec<u64>,
-    pub(crate) blank_gaps: Vec<u64>,
+    /// The `added_lines` and `removal_gaps` that change more than blank lines.
+    /// A blank-only change still counts inside a symbol (a blank line in a
+    /// multiline string changes its value); outside every symbol it is no
+    /// coverage gap. Kept as the non-blank set, so a blank line at N never
+    /// hides a non-blank one at N from another hunk of the same path.
+    pub(crate) nonblank_lines: Vec<u64>,
+    pub(crate) nonblank_gaps: Vec<u64>,
     /// A hunk header could not be read, or `+`/`-`/context lines appeared
     /// past a hunk's announced counts: some changes may be missing.
     pub(crate) malformed: bool,
+    /// A `Binary files … differ` or `GIT binary patch` section.
+    pub(crate) binary: bool,
     pub(crate) is_new: bool,
     pub(crate) is_deleted: bool,
 }
@@ -62,8 +65,12 @@ struct FileSection {
     changed: Vec<u64>,
     added: Vec<u64>,
     gaps: Vec<u64>,
-    blank_lines: Vec<u64>,
-    blank_gaps: Vec<u64>,
+    nonblank_lines: Vec<u64>,
+    nonblank_gaps: Vec<u64>,
+    /// The `b/` path of the `diff --git a/X b/Y` line, used when no `---` or
+    /// `+++` header names the file.
+    git_path: Option<String>,
+    binary: bool,
     pending: Option<PendingRemoval>,
     /// 1 inside a hunk whose new range is empty (`+N,0`): its start N names
     /// the line BEFORE the removal, so the line after it is N + 1.
@@ -88,8 +95,8 @@ impl FileSection {
         if let Some(p) = self.pending.take() {
             let gap = p.at.saturating_add(self.gap_shift);
             self.gaps.push(gap);
-            if p.all_blank {
-                self.blank_gaps.push(gap);
+            if !p.all_blank {
+                self.nonblank_gaps.push(gap);
             }
         }
     }
@@ -139,8 +146,8 @@ impl FileSection {
             let replaced_code = self.pending.take().is_some_and(|p| !p.all_blank);
             self.changed.push(self.line);
             self.added.push(self.line);
-            if is_blank(body) && !replaced_code {
-                self.blank_lines.push(self.line);
+            if !is_blank(body) || replaced_code {
+                self.nonblank_lines.push(self.line);
             }
         } else {
             self.old_left = self.old_left.saturating_sub(1);
@@ -164,6 +171,10 @@ impl FileSection {
             self.malformed = true;
             return;
         }
+        if line.starts_with("Binary files ") || line.starts_with("GIT binary patch") {
+            self.binary = true;
+            return;
+        }
         if !self.had_hunk {
             return;
         }
@@ -176,14 +187,24 @@ impl FileSection {
 
     fn into_hunk(mut self) -> Option<FileHunk> {
         self.close_removal();
+        // A section whose hunks name no usable path is reported, not dropped.
+        let file_path = match self.path.take().or(self.git_path.take()) {
+            Some(p) => p,
+            None if self.had_hunk => {
+                self.malformed = true;
+                "(diff section with no file path)".to_string()
+            }
+            None => return None,
+        };
         Some(FileHunk {
-            file_path: self.path?,
+            file_path,
             changed_lines: self.changed,
             added_lines: self.added,
             removal_gaps: self.gaps,
-            blank_lines: self.blank_lines,
-            blank_gaps: self.blank_gaps,
+            nonblank_lines: self.nonblank_lines,
+            nonblank_gaps: self.nonblank_gaps,
             malformed: self.malformed,
+            binary: self.binary,
             is_new: self.is_new,
             is_deleted: self.is_deleted,
         })
@@ -232,6 +253,24 @@ pub(super) fn parse_hunk_header(line: &str) -> Option<u64> {
     HunkHeader::parse(line).map(|h| h.new_start)
 }
 
+/// The path of a `---`/`+++` header: cut at the tab that `diff -u` puts
+/// before its timestamp, `prefix` (`a/` or `b/`) removed when present.
+/// `None` for `/dev/null`.
+fn header_path(text: &str, prefix: &str) -> Option<String> {
+    let path = text.split('\t').next().unwrap_or(text).trim_end();
+    if path == "/dev/null" || path.is_empty() {
+        return None;
+    }
+    Some(path.strip_prefix(prefix).unwrap_or(path).to_string())
+}
+
+/// The `b/` path of `diff --git a/X b/Y`.
+fn git_header_path(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("diff --git ")?;
+    let (_, new) = rest.rsplit_once(" b/")?;
+    Some(new.to_string())
+}
+
 pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, String> {
     let mut hunks: Vec<FileHunk> = Vec::new();
     let mut section = FileSection::default();
@@ -244,6 +283,7 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             section.body_line(line)?;
         } else if line.starts_with("diff --git") {
             hunks.extend(std::mem::take(&mut section).into_hunk());
+            section.git_path = git_header_path(line);
         } else if line.starts_with("@@ ") {
             section.start_hunk(line)?;
         } else if let Some(old) = line.strip_prefix("--- ") {
@@ -252,17 +292,17 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             if section.had_hunk {
                 hunks.extend(std::mem::take(&mut section).into_hunk());
             }
-            if let Some(path) = old.strip_prefix("a/") {
+            match header_path(old, "a/") {
                 // For a deleted file, this is the only place the path appears.
-                section.path.get_or_insert_with(|| path.to_string());
-            } else if old.starts_with("/dev/null") {
-                section.is_new = true;
+                Some(path) => {
+                    section.path.get_or_insert(path);
+                }
+                None => section.is_new = true,
             }
         } else if let Some(new) = line.strip_prefix("+++ ") {
-            match new.strip_prefix("b/") {
-                Some(path) => section.path = Some(path.to_string()),
-                None if new.starts_with("/dev/null") => section.is_deleted = true,
-                None => {}
+            match header_path(new, "b/") {
+                Some(path) => section.path = Some(path),
+                None => section.is_deleted = true,
             }
         } else {
             section.stray_line(line);
