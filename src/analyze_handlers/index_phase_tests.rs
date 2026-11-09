@@ -360,3 +360,52 @@ fn a_graph_the_refresh_cannot_open_is_rebuilt() {
     let fresh = analyze(&repo, &base.join("fresh"), json!({}));
     assert_eq!(outcome(&resp), outcome(&fresh));
 }
+
+#[test]
+fn a_missing_or_unreadable_coverage_sidecar_is_not_reused() {
+    // Codex review of #478: the refresh carries gaps forward from this report,
+    // so without it a reused graph would report clean coverage.
+    let (repo, base) = fixture("analyze443_nocov_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let cov = crate::indexer::coverage::coverage_path(&out);
+    fs::write(&cov, b"{ not json").expect("corrupt sidecar");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    fs::remove_file(&cov).expect("rm sidecar");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_graph_is_not_reused_and_its_target_is_left_alone() {
+    // Codex review of #478: reuse followed the link and the later phases
+    // rewrote the other graph's communities.
+    let (repo, base) = fixture("analyze443_symlink_");
+    let out = base.join("out");
+    let other = base.join("other");
+    analyze(&repo, &out, json!({}));
+    analyze(&repo, &other, json!({}));
+    let before = edge_rows(&json!({ "graph_path": other.join("graph").to_string_lossy() }));
+
+    let graph = out.join("graph");
+    if graph.is_dir() {
+        fs::remove_dir_all(&graph).expect("rm graph dir");
+    } else {
+        fs::remove_file(&graph).expect("rm graph file");
+    }
+    std::os::unix::fs::symlink(other.join("graph"), &graph).expect("symlink");
+
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    assert!(
+        !fs::symlink_metadata(&graph)
+            .expect("graph")
+            .file_type()
+            .is_symlink(),
+        "the full path replaces the link with a graph of its own"
+    );
+    let after = edge_rows(&json!({ "graph_path": other.join("graph").to_string_lossy() }));
+    assert_eq!(before, after, "the link target is untouched");
+}

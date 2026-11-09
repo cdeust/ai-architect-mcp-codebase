@@ -12,7 +12,8 @@
 //!
 //! All five must hold, otherwise the graph is rebuilt in full:
 //! 1. the caller did not pass `full: true`;
-//! 2. `<output_dir>/graph` exists and `file_manifest.json` loads;
+//! 2. `<output_dir>/graph` exists and is not a symlink, and
+//!    `file_manifest.json` and the coverage sidecar both load;
 //! 3. the manifest records the server version and the walk/parse settings the
 //!    graph was built with, and they equal this call's (`IndexOptions::scope`).
 //!    The per-file states cannot see a changed `language`, `dependency_scope`
@@ -66,7 +67,13 @@ pub(super) fn run(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
 
 /// Conditions 1 to 4 of the module doc: the manifest to reuse, or `None`.
 fn reusable_manifest(req: &AnalyzeRequest) -> Option<indexer::manifest::FileManifest> {
-    if req.want_full || !req.graph_dir.exists() {
+    if req.want_full || !is_own_graph(&req.graph_dir) {
+        return None;
+    }
+    // The refresh carries the unchanged files' gaps forward from this report;
+    // without it the reused graph would read as clean (Codex review of #478).
+    if indexer::coverage::load(&indexer::coverage::coverage_path(&req.output_dir)).is_none() {
+        eprintln!("[ap] analyze_codebase: no readable coverage sidecar; rebuilding in full");
         return None;
     }
     let prior = indexer::manifest::load(&indexer::manifest::manifest_path(&req.output_dir))?;
@@ -85,6 +92,14 @@ fn reusable_manifest(req: &AnalyzeRequest) -> Option<indexer::manifest::FileMani
             None
         }
     }
+}
+
+/// True when `graph_dir` is a real directory or file, not a symlink. A
+/// symlinked graph is never reused: the later phases would rewrite the target,
+/// whereas the full path's `remove_stale_graph_artifact` unlinks the link and
+/// leaves its target alone (Codex review of #478).
+fn is_own_graph(graph_dir: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(graph_dir).is_ok_and(|m| !m.file_type().is_symlink())
 }
 
 /// `Ok(None)`: not applicable, or the refresh pass failed (logged).
