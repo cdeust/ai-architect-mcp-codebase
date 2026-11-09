@@ -501,6 +501,7 @@ mod tests {
                 "include/x.h",
                 "web/app.js",
                 "Makefile",
+                "trailing.",
                 "Dockerfile",
                 "k8s/deploy.yaml",
             ],
@@ -510,7 +511,8 @@ mod tests {
             ("php".to_string(), 2),
             ("cs".to_string(), 1),
             ("lua".to_string(), 1),
-            (NO_EXTENSION_KEY.to_string(), 1),
+            // `Makefile` and `trailing.` (an empty extension is not a key).
+            (NO_EXTENSION_KEY.to_string(), 2),
         ]
         .into_iter()
         .collect();

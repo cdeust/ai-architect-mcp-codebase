@@ -555,7 +555,7 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
 /// Issue #447: a `language`-filtered index walks only the files that language
 /// parses, so it records no tally rather than a false "nothing unextracted".
 #[test]
-fn a_language_filtered_index_records_no_extraction_tally() {
+fn a_language_filtered_index_leaves_no_extraction_unrecorded() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let source = tmp.path().join("source");
     std::fs::create_dir_all(&source).unwrap();
@@ -568,6 +568,36 @@ fn a_language_filtered_index_records_no_extraction_tally() {
     let result =
         index_codebase_with_language(&source, &tmp.path().join("graph"), &options).expect("index");
     assert_eq!(result.coverage.no_extraction, None);
+}
+
+/// Issue #447: a `language`-filtered INCREMENTAL refresh records no tally
+/// either. The prior sidecar holds a real `{php: 1}` from an unfiltered full
+/// index; the filtered refresh must not overwrite it with a false
+/// "recorded, nothing unextracted", nor carry the old count forward.
+#[test]
+fn a_language_filtered_incremental_refresh_leaves_no_extraction_unrecorded() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let source = tmp.path().join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("mod.py"), "def f():\n    return 1\n").unwrap();
+    std::fs::write(source.join("a.php"), "<?php\nfunction a() {}\n").unwrap();
+    let graph = tmp.path().join("graph");
+    let manifest_path = tmp.path().join("manifest.json");
+    let full = index_codebase(&source, &graph).expect("index");
+    assert!(full.coverage.no_extraction.is_some());
+    coverage::save(&coverage::coverage_path(tmp.path()), &full.coverage).expect("prior sidecar");
+
+    let filtered = IndexOptions {
+        language_filter: Some(Language::Python),
+        ..IndexOptions::default()
+    };
+    write_full_manifest(&source, &manifest_path, &filtered).expect("manifest");
+    std::fs::write(source.join("mod.py"), "def g():\n    return 2\n").unwrap();
+    let prior = manifest::load(&manifest_path).expect("load manifest");
+    index_incremental(&source, &graph, &manifest_path, &filtered, &prior)
+        .expect("incremental refresh");
+    let sidecar = coverage::load(&coverage::coverage_path(tmp.path())).expect("sidecar");
+    assert_eq!(sidecar.no_extraction, None);
 }
 
 #[cfg(test)]
