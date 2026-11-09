@@ -422,6 +422,7 @@ fn record_reparse_outcome(
 /// discarded here — the caller (a just-completed full index) already wrote
 /// the coverage sidecar from its own walk; this re-walk exists only to build
 /// the manifest baseline for the NEXT incremental call.
+#[allow(dead_code)] // see the re-export in `indexer/mod.rs`
 pub fn write_full_manifest(
     codebase: &Path,
     manifest_path: &Path,

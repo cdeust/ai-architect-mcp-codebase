@@ -33,9 +33,14 @@ use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
 use coverage::{CoverageCollector, CoverageReport};
 pub use incremental::{
-    fill_after_bootstrap, full_manifest, index_incremental, tree_changed_since,
-    write_full_manifest, FillMethod, FillResult,
+    fill_after_bootstrap, full_manifest, index_incremental, tree_changed_since, FillMethod,
+    FillResult,
 };
+// Both full paths now take `full_manifest` before indexing and save it after
+// (#478), so the bin no longer calls this; the integration tests (`tests/*.rs`)
+// and the bin's unit tests still build fixtures with it through this path.
+#[allow(unused_imports)]
+pub use incremental::write_full_manifest;
 use persist::{
     index_single_file, insert_ancestor_dirs, insert_dir_file_edge, insert_file_node, FileScope,
     ParseOutcome,
