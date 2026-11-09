@@ -582,6 +582,38 @@ mod tests {
         assert!(h.removal_gaps.is_empty());
     }
 
+    /// Claude review of PR #482: parser edge cases that must not yield a
+    /// silent `exact`.
+    #[test]
+    fn parser_edge_cases_from_review() {
+        // An empty `+++ ` path is no `/dev/null`: the section is unreadable,
+        // not a deleted file.
+        let h = &parse_unified_diff("--- a/m.rs\n+++ \n@@ -1,1 +1,1 @@\n-a\n+b\n").unwrap()[0];
+        assert!(h.malformed && !h.is_deleted);
+        // A path holding ` b/` (git does not quote spaces).
+        let bin = "diff --git a/docs/a b/c.png b/docs/a b/c.png\nBinary files differ\n";
+        assert_eq!(
+            parse_unified_diff(bin).unwrap()[0].file_path,
+            "docs/a b/c.png"
+        );
+        // The next commit of a `git log -p` is no stray hunk line.
+        let log = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n\
+                   commit 0123456789abcdef0123456789abcdef01234567\n\n    Fix bug\n";
+        assert!(!parse_unified_diff(log).unwrap()[0].malformed);
+        // A malformed first hunk does not hide the next file of a plain diff.
+        let plain = "--- a/x.rs\n+++ b/x.rs\n@@ -1,x +1 @@\n-a\n+A\n\
+                     --- a/y.rs\n+++ b/y.rs\n@@ -1,1 +1,1 @@\n-b\n+B\n";
+        let paths: Vec<String> = parse_unified_diff(plain)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.file_path)
+            .collect();
+        assert_eq!(paths, vec!["x.rs", "y.rs"]);
+        // A hunk-less section (mode change, empty new file) adds no file.
+        let chmod = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n";
+        assert!(parse_unified_diff(chmod).unwrap().is_empty());
+    }
+
     /// Plain `diff -u` output has no `diff --git` lines: each `---` header
     /// after a hunk starts the next file.
     /// Claude review of PR #482: a hunk that cannot be read is flagged, not

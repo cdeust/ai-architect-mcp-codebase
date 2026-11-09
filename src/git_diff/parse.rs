@@ -81,6 +81,8 @@ struct FileSection {
     old_left: u64,
     new_left: u64,
     had_hunk: bool,
+    /// A `+++` header was read: the next `---` starts another file.
+    seen_new_header: bool,
     malformed: bool,
     /// Past a `git format-patch` signature delimiter (`-- `): no more body.
     in_trailer: bool,
@@ -178,7 +180,10 @@ impl FileSection {
         if !self.had_hunk {
             return;
         }
-        if line == "-- " || line == "--" {
+        // The format-patch signature, or the next commit of a `git log -p`
+        // (its indented message would read as context lines).
+        if line == "-- " || line == "--" || line.starts_with("commit ") || line.starts_with("From ")
+        {
             self.in_trailer = true;
         } else if line.starts_with(['+', '-', ' ']) {
             self.malformed = true;
@@ -188,13 +193,18 @@ impl FileSection {
     fn into_hunk(mut self) -> Option<FileHunk> {
         self.close_removal();
         // A section whose hunks name no usable path is reported, not dropped.
+        // A section with no hunk changes no line (a mode change, an empty
+        // new file): it neither adds a file nor changes another section's
+        // type, unless it is binary or could not be read.
+        if !self.had_hunk && !self.malformed && !self.binary {
+            return None;
+        }
         let file_path = match self.path.take().or(self.git_path.take()) {
             Some(p) => p,
-            None if self.had_hunk || self.malformed || self.binary => {
+            None => {
                 self.malformed = true;
                 "(diff section with no file path)".to_string()
             }
-            None => return None,
         };
         Some(FileHunk {
             file_path,
@@ -253,20 +263,37 @@ pub(super) fn parse_hunk_header(line: &str) -> Option<u64> {
     HunkHeader::parse(line).map(|h| h.new_start)
 }
 
-/// The path of a `---`/`+++` header: cut at the tab that `diff -u` puts
-/// before its timestamp, `prefix` (`a/` or `b/`) removed when present.
-/// `None` for `/dev/null`.
-fn header_path(text: &str, prefix: &str) -> Option<String> {
-    let path = text.split('\t').next().unwrap_or(text).trim_end();
-    if path == "/dev/null" || path.is_empty() {
-        return None;
-    }
-    Some(path.strip_prefix(prefix).unwrap_or(path).to_string())
+/// What a `---`/`+++` header names.
+enum HeaderPath {
+    /// `/dev/null`: no file on that side.
+    DevNull,
+    /// Nothing usable: the section cannot be attributed.
+    Empty,
+    Path(String),
 }
 
-/// The `b/` path of `diff --git a/X b/Y`.
+/// The path of a `---`/`+++` header: cut at the tab that `diff -u` puts
+/// before its timestamp, `prefix` (`a/` or `b/`) removed when present.
+fn header_path(text: &str, prefix: &str) -> HeaderPath {
+    let path = text.split('\t').next().unwrap_or(text).trim_end();
+    match path {
+        "/dev/null" => HeaderPath::DevNull,
+        "" => HeaderPath::Empty,
+        _ => HeaderPath::Path(path.strip_prefix(prefix).unwrap_or(path).to_string()),
+    }
+}
+
+/// The `b/` path of `diff --git a/X b/Y`. Git does not quote spaces, so a
+/// path holding ` b/` is ambiguous; when both halves are the same path (no
+/// rename), the midpoint split is exact.
 fn git_header_path(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("diff --git ")?;
+    let rest = line.strip_prefix("diff --git a/")?;
+    if rest.len() % 2 == 1 {
+        let half = (rest.len() - 3) / 2;
+        if rest.get(half..half + 3) == Some(" b/") && rest.get(..half) == rest.get(half + 3..) {
+            return Some(rest[half + 3..].to_string());
+        }
+    }
     let (_, new) = rest.rsplit_once(" b/")?;
     Some(new.to_string())
 }
@@ -288,21 +315,25 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             section.start_hunk(line)?;
         } else if let Some(old) = line.strip_prefix("--- ") {
             // A second file header with no `diff --git` line between them
-            // (plain `diff -u`) starts a new section.
-            if section.had_hunk {
+            // (plain `diff -u`) starts a new section, even after a hunk that
+            // could not be read.
+            if section.seen_new_header {
                 hunks.extend(std::mem::take(&mut section).into_hunk());
             }
             match header_path(old, "a/") {
                 // For a deleted file, this is the only place the path appears.
-                Some(path) => {
+                HeaderPath::Path(path) => {
                     section.path.get_or_insert(path);
                 }
-                None => section.is_new = true,
+                HeaderPath::DevNull => section.is_new = true,
+                HeaderPath::Empty => section.malformed = true,
             }
         } else if let Some(new) = line.strip_prefix("+++ ") {
+            section.seen_new_header = true;
             match header_path(new, "b/") {
-                Some(path) => section.path = Some(path),
-                None => section.is_deleted = true,
+                HeaderPath::Path(path) => section.path = Some(path),
+                HeaderPath::DevNull => section.is_deleted = true,
+                HeaderPath::Empty => section.malformed = true,
             }
         } else {
             section.stray_line(line);
