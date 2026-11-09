@@ -14,7 +14,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   search over it read as absence. The coverage sidecar now carries
   `no_extraction`, extension → file count, over every file the walk yields
   (the same `Language::from_extension` rule the indexer applies before it
-  parses), recomputed on full and incremental passes. `analyze_codebase`,
+  parses), minus the files the IaC pass drew nodes from (read from the
+  graph's `Defines_File_IacResource`/`Defines_File_IacModule` edges, so a
+  Dockerfile or a Kubernetes manifest is not counted), recomputed on full and
+  incremental passes. `analyze_codebase`,
   `index_codebase`, `index_status` and `missed` render it as
   `coverage.no_extraction` `{count, by_extension, extensions_omitted, note}`.
   It is a declared limit, not a gap bucket: `.md` and `.json` land there too,

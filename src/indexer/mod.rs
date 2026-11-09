@@ -324,7 +324,9 @@ pub fn index_codebase_with_language(
                 .into_owned()
         })
         .collect();
-    coverage.no_extraction = no_extraction_by_extension(walked_rels.iter().map(String::as_str));
+    let iac_extracted = iac_extracted_files(&store);
+    coverage.no_extraction =
+        no_extraction_by_extension(walked_rels.iter().map(String::as_str), &iac_extracted);
 
     Ok(IndexResult {
         graph_path: graph_path.to_path_buf(),
@@ -356,6 +358,18 @@ fn record_iac_gaps(
         Ok(gaps) => fold_iac_gaps(collector, gaps),
         Err(e) => eprintln!("indexer: IaC pass skipped: {e}"),
     }
+}
+
+/// The files the IaC pass drew nodes from (issue #447), for the
+/// `no_extraction` tally of both the full and the incremental pass.
+/// Best-effort like the IaC pass itself: a failed read is logged and leaves
+/// the set empty, so those files are tallied as unextracted rather than
+/// failing a completed index.
+pub(super) fn iac_extracted_files(store: &GraphStore) -> std::collections::HashSet<String> {
+    iac::files_with_iac_nodes(store).unwrap_or_else(|e| {
+        eprintln!("indexer: IaC file set not read for the no_extraction tally: {e}");
+        std::collections::HashSet::new()
+    })
 }
 
 /// Flags each indexed `.rs` file that sits outside every compiled Cargo

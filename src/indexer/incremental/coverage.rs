@@ -164,6 +164,14 @@ pub(in crate::indexer) fn apply_cargo_facts(
     }
 }
 
+/// What one incremental pass or bootstrap fill observed for the sidecar: the
+/// fresh per-file gaps (reparsed files plus walk-level directories) and the
+/// directories the walk pruned by policy (§4.4 parameter object).
+pub(super) struct PassGaps {
+    pub(super) files: BTreeMap<String, FileCoverage>,
+    pub(super) pruned_dirs: BTreeMap<String, String>,
+}
+
 /// Builds and writes the coverage sidecar for an incremental pass or bootstrap
 /// fill: carry forward unchanged files' gaps, overlay the reparsed files'
 /// fresh gaps, drop gaps for vanished/now-clean files, then recompute
@@ -173,12 +181,16 @@ pub(in crate::indexer) fn apply_cargo_facts(
 pub(super) fn save_incremental_coverage(
     codebase: &Path,
     graph_dir: &Path,
+    store: &crate::graph_store::GraphStore,
     current: &[Discovered],
     changes: &ChangeSet,
-    reparsed_gaps: BTreeMap<String, FileCoverage>,
-    pruned_dirs: BTreeMap<String, String>,
+    pass: PassGaps,
     index_mode: &str,
 ) -> cargo_attribution::CargoFacts {
+    let PassGaps {
+        files: reparsed_gaps,
+        pruned_dirs,
+    } = pass;
     let output_dir = match graph_dir.parent() {
         Some(p) => p,
         None => return cargo_attribution::CargoFacts::default(),
@@ -208,8 +220,13 @@ pub(super) fn save_incremental_coverage(
     // added or removed. source: ADR-9841.
     report.pruned_dirs = pruned_dirs;
     // Issue #447: recomputed over the whole current tree, like `pruned_dirs`.
-    report.no_extraction =
-        coverage::no_extraction_by_extension(current.iter().map(|d| d.rel.as_str()));
+    // Files the IaC pass drew nodes from are read from the graph, so the
+    // manifests this pass did not reparse are excluded too.
+    let iac_extracted = super::super::iac_extracted_files(store);
+    report.no_extraction = coverage::no_extraction_by_extension(
+        current.iter().map(|d| d.rel.as_str()),
+        &iac_extracted,
+    );
     let facts = overlay_cargo_attributions(&mut report, codebase, current);
     if let Err(e) = coverage::save(&cov_path, &report) {
         eprintln!("[ap] coverage sidecar write failed: {e}");

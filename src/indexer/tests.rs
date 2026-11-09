@@ -476,9 +476,10 @@ fn callsite_column_is_persisted_not_zero() {
 }
 
 /// Issue #447: PHP and Lua files are File nodes only. The full index tallies
-/// them by extension, outside the gap counts, and an incremental refresh that
-/// adds a C# file recomputes the tally over the whole tree (the untouched
-/// PHP and Lua files are still there) and writes it to the sidecar.
+/// them by extension, outside the gap counts, and leaves out the Dockerfile
+/// and the Kubernetes manifest the IaC pass extracted. An incremental refresh
+/// that adds a C# file recomputes the tally over the whole tree (the
+/// untouched files are still there) and writes it to the sidecar.
 #[test]
 fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     let tmp = tempfile::tempdir().expect("temp dir");
@@ -492,6 +493,16 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     .unwrap();
     std::fs::write(source.join("lib/b.php"), "<?php\nclass B {}\n").unwrap();
     std::fs::write(source.join("init.lua"), "local function f() end\n").unwrap();
+    // The IaC pass extracts these two: neither is tallied.
+    std::fs::create_dir_all(source.join("k8s")).unwrap();
+    std::fs::write(source.join("Dockerfile"), "FROM alpine:3.20\n").unwrap();
+    std::fs::write(
+        source.join("k8s/deploy.yaml"),
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n",
+    )
+    .unwrap();
+    // A YAML file that is not a manifest defines nothing: it is tallied.
+    std::fs::write(source.join("ci.yml"), "jobs:\n  build: {}\n").unwrap();
     let graph = tmp.path().join("graph");
     let manifest_path = tmp.path().join("manifest.json");
     let tally = |pairs: &[(&str, u64)]| -> std::collections::BTreeMap<String, u64> {
@@ -501,7 +512,7 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     let full = index_codebase(&source, &graph).expect("index");
     assert_eq!(
         full.coverage.no_extraction,
-        tally(&[("lua", 1), ("php", 2)])
+        tally(&[("lua", 1), ("php", 2), ("yml", 1)])
     );
     assert_eq!(
         full.coverage.counts(),
@@ -523,7 +534,8 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     let sidecar = coverage::load(&coverage::coverage_path(tmp.path())).expect("sidecar");
     assert_eq!(
         sidecar.no_extraction,
-        tally(&[("cs", 1), ("lua", 1), ("php", 2)])
+        tally(&[("cs", 1), ("lua", 1), ("php", 2), ("yml", 1)]),
+        "the untouched Dockerfile and manifest stay excluded on an incremental pass"
     );
 }
 

@@ -198,10 +198,13 @@ pub fn index_incremental(
     let facts = save_incremental_coverage(
         codebase,
         graph_dir,
+        &store,
         &current,
         &plan.change_set,
-        merged_gaps,
-        walk_pruned,
+        coverage::PassGaps {
+            files: merged_gaps,
+            pruned_dirs: walk_pruned,
+        },
         "incremental",
     );
     apply_cargo_facts(&store, &facts);

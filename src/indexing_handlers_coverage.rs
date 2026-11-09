@@ -121,7 +121,8 @@ fn cargo_attribution_json(report: &indexer::coverage::CoverageReport) -> Value {
 }
 
 /// The `no_extraction` block (issue #447): files that are File nodes only
-/// because no parser handles their extension, as an exact total plus a
+/// (no language parser handles their extension and the IaC pass drew no node
+/// from them), as an exact total plus a
 /// per-extension count. The `COVERAGE_LIST_CAP` largest extensions are kept
 /// (ties by name) and `extensions_omitted` says how many were left out, so a
 /// capped list never reads as the whole set. An empty map renders zero: an
@@ -139,10 +140,11 @@ fn no_extraction_json(report: &indexer::coverage::CoverageReport) -> Value {
         "count": total,
         "by_extension": listed,
         "extensions_omitted": by_count.len().saturating_sub(COVERAGE_LIST_CAP),
-        "note": "File nodes only: no parser handles these extensions, so their \
-                 symbols are not in the graph and a search that returns nothing \
-                 there is not evidence of absence — grep them. Not counted as a \
-                 gap: data and doc files land here too.",
+        "note": "File nodes only: no language parser handles these extensions \
+                 and the IaC pass drew no node from them, so their symbols are \
+                 not in the graph and a search that returns nothing there is not \
+                 evidence of absence — grep them. Not counted as a gap: data and \
+                 doc files land here too.",
     })
 }
 
