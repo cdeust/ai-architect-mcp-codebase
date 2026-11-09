@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **README: a supported-platforms table** (issue #449, first slice). The
+  README did not say which platforms the plugin installs on, nor that the Linux
+  aarch64 asset is built but never started by CI. The table lists each release
+  asset, whether the launcher installs or refuses the platform (macOS Intel and
+  Windows arm64 are refused), and whether the pipeline's `install` job starts
+  the published asset there. `ReadmePlatformTable` in
+  `scripts/tests/test_claude_bootstrap_platforms.py` fails when the table and
+  the launcher's or the release matrix's targets disagree.
+
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to

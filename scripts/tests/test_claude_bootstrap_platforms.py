@@ -220,5 +220,39 @@ class BootstrapPlatforms(unittest.TestCase):
         )
 
 
+class ReadmePlatformTable(unittest.TestCase):
+    """Issue #449: the README's supported-platforms table states what the
+    launcher installs and what the release builds, nothing more."""
+
+    @staticmethod
+    def rows():
+        readme = (ROOT / "README.md").read_text()
+        start = readme.index("<!-- platforms:begin -->")
+        end = readme.index("<!-- platforms:end -->")
+        lines = [l for l in readme[start:end].splitlines() if l.startswith("|")]
+        return [[c.strip() for c in l.strip("|").split("|")] for l in lines[2:]]
+
+    def test_release_assets_match_the_launcher_and_the_release_matrix(self):
+        import re
+
+        listed = {
+            row[1].strip("`") for row in self.rows() if row[2] == "installs"
+        }
+        launcher = (ROOT / "bin/ensure-binary.sh").read_text()
+        accepted = set(re.findall(r'release_target="([a-z0-9_-]+)"', launcher))
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        built = set(re.findall(r"target_tag: ([a-z0-9_-]+)", release))
+        self.assertEqual(listed, accepted)
+        self.assertEqual(listed, built)
+
+    def test_refused_rows_are_refused_by_the_launcher(self):
+        refused = [row for row in self.rows() if row[2] == "refuses"]
+        self.assertEqual(len(refused), 1)
+        self.assertIn(
+            "unsupported plugin platform",
+            BootstrapPlatforms().exercise("Darwin", "x86_64", "unsupported"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

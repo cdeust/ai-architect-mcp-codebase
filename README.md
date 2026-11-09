@@ -73,6 +73,28 @@ The plugin downloads the release binary and verifies its Sigstore provenance
 before running it; this needs GitHub CLI 2.68 or newer. The plugin starts the
 `full` profile unless `AP_PROFILE=core` is set.
 
+### Supported platforms
+
+The plugin launcher (`bin/ensure-binary.sh`) installs one release asset per
+platform below and refuses every other one. "Started by CI" means the
+pipeline's `install` job installs the published asset on that runner and runs
+`initialize` and `health_check` against it (`scripts/smoke_claude_plugin.py
+--installed`).
+
+<!-- platforms:begin -->
+| Platform | Release asset | Plugin launcher | Started by CI |
+|---|---|---|---|
+| macOS arm64 | `macos-aarch64` | installs | yes, on `macos-latest` |
+| Linux x86_64 | `linux-x86_64` | installs | yes, on `ubuntu-latest` |
+| Linux aarch64 | `linux-aarch64` | installs | **no**: built on `ubuntu-24.04-arm`, never started |
+| Windows x86_64 (Git Bash) | `windows-x86_64` | installs | yes, on `windows-latest` |
+| macOS x86_64 (Intel), Windows arm64, any other | none | refuses | no |
+<!-- platforms:end -->
+
+A `cargo install` or a source build does not go through the launcher; CI runs
+the test suite from source on Linux x86_64 only, and builds (without running)
+Windows x86_64 on every pull request (`windows-build.yml`).
+
 ### Other MCP hosts
 
 ```bash
