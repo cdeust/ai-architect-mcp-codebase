@@ -20,6 +20,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`get_impact` names the call sites it could not resolve** (#445). An
+  incomplete answer gave only `unresolved_callsites_naming_target`, a count, so
+  an agent could not read the callers the resolver missed. It now returns
+  `unresolved_callsites` (id, file, line, callee spelling, reason; by file then
+  line, at most 50, with `unresolved_callsites_truncated`) and
+  `callers_completeness` (`exact`, `none_found`, `found_more_may_exist`), which
+  tells an empty lower-bound answer from a partial one, read from the final
+  `epistemic` and counting cross-repo callers. The list is byte-bounded,
+  renders as `file:line` under `detail='ids'` and as rows (header in
+  `unresolved_callsites_columns`) under `format='tabular'`, and is filled on
+  graphs without recorded reasons too. A site whose reason was never written is
+  now counted as `not_recorded` instead of under lbug's `Null(String)`
+  rendering, in `get_impact`'s `unresolved_callsites_by_reason`, in
+  `index_status`'s `unresolved_call_sites.by_reason`, and in the
+  `open_by_reason` of `lsp_resolve` and `analyze_codebase`.
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to

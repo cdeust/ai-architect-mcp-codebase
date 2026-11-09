@@ -34,10 +34,15 @@ pub(super) struct UnresolvedCallsiteAttribution {
     /// their spelling names another owner (`Vec::new` for `TaskSet::new`, issue
     /// #392). Not part of `total`.
     pub(super) excluded_other_owner: u64,
+    /// The first `impact_sites::UNRESOLVED_SITES_LISTED` sites of `total`, by file then line,
+    /// so an agent can read them (issue #445). On a graph without the
+    /// `unresolved_reason` column they carry `not_recorded`.
+    pub(super) sites: Vec<super::impact_sites::UnresolvedSite>,
 }
 
-/// Counts unresolved `CallSite` nodes (`is_resolved = false`) whose
-/// `callee_name` names `target_bare_name` — the same evidence `resolve_calls`
+/// Counts and lists (issue #445, see `impact_sites`) the unresolved `CallSite`
+/// nodes (`is_resolved = false`) whose `callee_name` names `target_bare_name` —
+/// the same evidence `resolve_calls`
 /// (src/resolver/calls.rs) would have consumed had resolution succeeded,
 /// generic across every language and every reason resolution can fail.
 /// `target_bare_name` is the target's own unescaped unqualified identifier
@@ -56,7 +61,8 @@ pub(super) struct UnresolvedCallsiteAttribution {
 /// `lsp_resolver::pass::LspPass::mark_resolved`). Read-only: the presence
 /// check (`node_column_exists`) never `ALTER`s — `get_impact` runs against
 /// `graph_cache::open_cached`'s shared, `readOnlyHint`-advertised handle — so
-/// a graph indexed before this lot degrades to the plain count instead of the
+/// a graph indexed before this lot degrades to the plain count and a reason-less
+/// listing (every site `not_recorded`, from the same scan) instead of the
 /// hard Binder exception a query naming a missing property would otherwise
 /// raise (measured 2026-08-24, lbug 0.19.1).
 pub(super) fn unresolved_callsite_attribution(
@@ -94,6 +100,7 @@ pub(super) fn unresolved_callsite_attribution(
         cfg_twins,
         by_reason,
         excluded_other_owner,
+        sites: super::impact_sites::listed_sites(&rows),
     }
 }
 
@@ -135,7 +142,9 @@ fn attribution_without_reason_column(
     store: &GraphStore,
     name_filter: &str,
 ) -> UnresolvedCallsiteAttribution {
-    let total = count_unresolved(store, name_filter);
+    // One scan gives both the count and the listing, so they cannot disagree.
+    let rows = legacy_rows(store, name_filter);
+    let total = rows.len() as u64;
     let not_recorded = crate::graph_store::callsite_reasons::REASON_NOT_RECORDED;
     let by_reason = (total > 0)
         .then(|| (not_recorded.to_string(), total))
@@ -148,12 +157,15 @@ fn attribution_without_reason_column(
         cfg_twins: 0,
         by_reason,
         excluded_other_owner: 0,
+        sites: super::impact_sites::listed_sites(&rows),
     }
 }
 
 /// Cypher selecting the open sites and, as columns 2.., what the spelling of
-/// each says about its owner (issue #392). The hint column is newer than the
-/// reason column, so it is asked for only when the graph has it.
+/// each says about its owner (issue #392), then the site's line (issue #445).
+/// A row is `[id, unresolved_reason, callee_name, language, line,
+/// receiver_hint?]`. The hint column is newer than the reason column, so it is
+/// asked for only when the graph has it.
 fn unresolved_sites_query(store: &GraphStore, name_filter: &str) -> String {
     let hint_col = if store
         .node_column_exists(NODE_CALL_SITE, "receiver_hint")
@@ -165,7 +177,7 @@ fn unresolved_sites_query(store: &GraphStore, name_filter: &str) -> String {
     };
     format!(
         "MATCH (cs:{NODE_CALL_SITE}) WHERE {name_filter} \
-         RETURN cs.id, cs.unresolved_reason, cs.callee_name, cs.language{hint_col}"
+         RETURN cs.id, cs.unresolved_reason, cs.callee_name, cs.language, cs.line{hint_col}"
     )
 }
 
@@ -200,24 +212,27 @@ pub fn outside_target_sites_query(qualified_name: &str) -> String {
     )
 }
 
-/// Plain `COUNT(cs)` over `name_filter` — the whole answer on a graph that
-/// predates `unresolved_reason`, where no attribution is possible.
-///
-/// Postcondition: return value is never negative — `COUNT(cs)` in Cypher is
-/// bounded below by 0 by construction, so the u64 return type is exact, not a
-/// truncating cast of a signed count.
-fn count_unresolved(store: &GraphStore, name_filter: &str) -> u64 {
-    let cypher = format!("MATCH (cs:{NODE_CALL_SITE}) WHERE {name_filter} RETURN count(cs)");
+/// The open sites of a graph without the reason column, as listing rows
+/// (`[id, "", callee_name, "", line]`, see `impact_sites::listed_sites`). The
+/// legacy table still has `id`, `callee_name` and `line`, so the sites are
+/// listed with no reason (`not_recorded`) rather than only counted (issue
+/// #445); their number is the whole count on such a graph, where no
+/// attribution is possible. A failed query yields no row, as the former
+/// `COUNT(cs)` yielded 0.
+fn legacy_rows(store: &GraphStore, name_filter: &str) -> Vec<Vec<String>> {
+    let cypher = format!(
+        "MATCH (cs:{NODE_CALL_SITE}) WHERE {name_filter} RETURN cs.id, cs.callee_name, cs.line"
+    );
     store
         .execute_query(&cypher)
-        .ok()
-        .and_then(|qr| {
-            qr.rows
-                .first()
-                .and_then(|r| r.first())
-                .and_then(|c| c.parse::<u64>().ok())
+        .map(|qr| qr.rows)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let cell = |i: usize| row.get(i).cloned().unwrap_or_default();
+            vec![cell(0), String::new(), cell(1), String::new(), cell(2)]
         })
-        .unwrap_or(0)
+        .collect()
 }
 
 /// Assembles the epistemic-boundary reasons for a `get_impact` result:
