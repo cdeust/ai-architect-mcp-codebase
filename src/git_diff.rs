@@ -8,8 +8,9 @@
 // [start_line, end_line] range holds it (`symbols`). Each affected symbol is
 // enriched with community and process membership. A change no symbol holds (a
 // line or a pure removal outside every symbol, blank-only ones excepted; a path
-// with no indexed File; an added or deleted file with no symbol) or a failed
-// symbol load makes the answer `lower-bound` (issue #446).
+// with no indexed File; an added or deleted file with no symbol; an unreadable
+// or binary section) or a failed symbol load makes the answer `lower-bound`
+// (issue #446).
 
 use crate::clustering;
 use crate::graph_store::GraphStore;
@@ -76,15 +77,14 @@ pub struct DiffAnalysis {
     /// heuristically-resolved edges — read `risk_score` as itself uncertain.
     /// source: epistemic module; clustering::get_impact per-edge confidence.
     pub mean_dependency_confidence: f64,
-    /// `exact` when every changed line lies in a symbol (a blank-only change
-    /// outside every symbol excepted) and every changed symbol's blast radius
-    /// is statically exhaustive; `lower-bound` when such a changed line of a
-    /// modified or added file (or a pure removal) lies in no indexed symbol, a path has no indexed File, an added
-    /// or deleted file holds no indexed symbol, or the symbol load failed
-    /// (issue #446), or at least one
-    /// changed symbol is reached via dynamic dispatch or through heuristic
-    /// edges — true risk may exceed the reported score. source: epistemic
-    /// module.
+    /// `lower-bound` (issue #446) when part of a file's diff could not be
+    /// read (malformed, truncated or path-less), a section is binary, a path
+    /// has no indexed File, an added or deleted file holds no indexed symbol,
+    /// a changed line or pure removal of a modified or added file lies in no
+    /// indexed symbol (blank-only ones excepted), or the symbol load failed;
+    /// or when a changed symbol's impact is itself a lower bound (dynamic
+    /// dispatch, heuristic edges, unresolved call sites). `exact` otherwise.
+    /// source: epistemic module.
     pub epistemic: &'static str,
     /// Carriers of epistemic uncertainty (empty when `exact`): a changed
     /// symbol and why its impact under-counts, a changed file and why some of
@@ -164,17 +164,19 @@ fn map_lines_to_symbols(
     (changed, coverage_gap)
 }
 
-/// Why `hunk`'s changes are not fully represented by symbols (issue #446): the
-/// graph has no File at that path (an unsupported
-/// language, a file outside the indexed root, a deleted file), or some changed
-/// lines of a modified or added file lie in no symbol (top-level code, imports,
-/// a kind without a line range).
+/// Why `hunk`'s changes are not fully represented by symbols (issue #446), in
+/// this order: part of its diff could not be read; it is binary; the graph has
+/// no File at that path (an unsupported language, a file outside the indexed
+/// root, a deleted file); it is added or deleted and holds no symbol; or some
+/// changed lines or pure removals of a modified or added file lie in no symbol
+/// (blank-only ones excepted; a deleted file's lines are exempt).
 fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Option<String> {
     let path = &hunk.file_path;
     if hunk.malformed {
         return Some(format!(
-            "{path}: a hunk could not be read (unreadable header, or lines past its \
-             announced counts); some of its changes may be missing"
+            "{path}: part of this file's diff could not be read (an unreadable or \
+             truncated hunk, or a missing or repeated file header); some of its \
+             changes may be missing"
         ));
     }
     if hunk.binary {
@@ -326,7 +328,9 @@ fn merge_by_path(hunks: Vec<FileHunk>) -> Vec<FileHunk> {
         m.removal_gaps.extend(h.removal_gaps);
         m.nonblank_lines.extend(h.nonblank_lines);
         m.nonblank_gaps.extend(h.nonblank_gaps);
-        m.malformed |= h.malformed;
+        // Sections that disagree on the change type (one modified, another
+        // added or deleted) cannot all be right.
+        m.malformed |= h.malformed || m.is_new != h.is_new || m.is_deleted != h.is_deleted;
         m.binary |= h.binary;
         m.is_new |= h.is_new;
         m.is_deleted |= h.is_deleted;
@@ -614,8 +618,6 @@ mod tests {
         assert!(parse_unified_diff(chmod).unwrap().is_empty());
     }
 
-    /// Plain `diff -u` output has no `diff --git` lines: each `---` header
-    /// after a hunk starts the next file.
     /// Claude review of PR #482: a hunk that cannot be read is flagged, not
     /// dropped silently; the format-patch signature is not.
     #[test]
@@ -624,6 +626,12 @@ mod tests {
             "@@ -5,x +5,1 @@\n-old\n+new\n",
             "@@ -1 +1 @@\n-a\n+A\n+B\n",
             "@@@ -1,2 -1,2 +1,3 @@@\n  a\n++b\n",
+            // truncated: the header owes 4 new lines, the input ends first
+            "@@ -10,3 +10,4 @@\n x\n",
+            // a `+` line before any `@@`, after the file header
+            "+fn evil() {}\n",
+            // a second `+++` would rename the file
+            "@@ -1,1 +1,1 @@\n-a\n+b\n+++ b/other.rs\n",
         ] {
             assert!(one_file(body).malformed, "{body:?}");
         }
@@ -631,6 +639,8 @@ mod tests {
         assert!(!signed.malformed);
     }
 
+    /// Plain `diff -u` output has no `diff --git` lines: each `---` header
+    /// after a file's `+++` starts the next file.
     #[test]
     fn plain_unified_diffs_split_at_each_file_header() {
         let diff = "--- a/x.rs\n+++ b/x.rs\n@@ -1,1 +1,1 @@\n-a\n+A\n\
@@ -684,7 +694,7 @@ mod tests {
 diff --git a/src/main.rs b/src/main.rs
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -10,3 +10,4 @@ fn main() {
+@@ -10,2 +10,3 @@ fn main() {
      let x = 1;
 +    let y = 2;
      let z = 3;
@@ -736,13 +746,13 @@ diff --git a/src/old.rs b/src/old.rs
 diff --git a/src/a.rs b/src/a.rs
 --- a/src/a.rs
 +++ b/src/a.rs
-@@ -1,3 +1,4 @@
+@@ -1,1 +1,2 @@
  fn a() {}
 +fn a2() {}
 diff --git a/src/b.rs b/src/b.rs
 --- a/src/b.rs
 +++ b/src/b.rs
-@@ -5,3 +5,4 @@
+@@ -5,1 +5,2 @@
  fn b() {}
 +fn b2() {}
 ";
@@ -794,7 +804,7 @@ diff --git a/src/b.rs b/src/b.rs
 diff --git a/src/main.rs b/src/main.rs
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -10,3 +10,4 @@ fn main() {
+@@ -10,2 +10,3 @@ fn main() {
      let x = 1;
 +    let y = 2;
      let z = 3;
@@ -849,9 +859,8 @@ diff --git a/src/main.rs b/src/main.rs
     #[test]
     fn test_diff_too_large_overflow_guard() {
         // source: M3 fix — parse_unified_diff must return diff_too_large
-        // rather than overflowing current_line. We can't realistically craft
-        // a diff with u64::MAX lines, but validate_git_ref's logic is tested;
-        // instead smoke-test that a normal diff still succeeds and returns Ok.
+        // rather than overflowing current_line: a normal diff still parses,
+        // and a hunk header at the cap is rejected (below).
         let diff = "\
 diff --git a/x b/x
 --- a/x

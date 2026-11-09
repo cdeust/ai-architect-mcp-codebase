@@ -264,3 +264,32 @@ fn a_deleted_file_reports_every_symbol_it_held() {
     );
     assert_eq!(analysis.epistemic, "exact");
 }
+
+/// Claude review of PR #482: on an indexed file, a binary section and a hunk
+/// that overruns its header are reported, not answered `exact`.
+#[test]
+fn binary_and_unreadable_sections_of_an_indexed_file_are_lower_bounds() {
+    let (store, _root) = indexed();
+    let binary = "diff --git a/shapes.ts b/shapes.ts\nindex 1..2 100644\n\
+                  Binary files a/shapes.ts and b/shapes.ts differ\n";
+    let overrun = "diff --git a/shapes.ts b/shapes.ts\n--- a/shapes.ts\n+++ b/shapes.ts\n\
+                   @@ -3 +3 @@\n-old\n+new\n+extra\n";
+    for (diff, reason) in [
+        (binary, "shapes.ts: binary content"),
+        (
+            overrun,
+            "shapes.ts: part of this file's diff could not be read",
+        ),
+    ] {
+        let analysis = analyze_diff(&store, diff).expect("analyze_diff");
+        assert_eq!(analysis.epistemic, "lower-bound", "{reason}");
+        assert!(
+            analysis
+                .epistemic_reasons
+                .iter()
+                .any(|r| r.starts_with(reason)),
+            "{reason}: {:?}",
+            analysis.epistemic_reasons
+        );
+    }
+}

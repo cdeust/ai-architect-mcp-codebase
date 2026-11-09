@@ -39,8 +39,10 @@ pub(crate) struct FileHunk {
     /// hides a non-blank one at N from another hunk of the same path.
     pub(crate) nonblank_lines: Vec<u64>,
     pub(crate) nonblank_gaps: Vec<u64>,
-    /// A hunk header could not be read, or `+`/`-`/context lines appeared
-    /// past a hunk's announced counts: some changes may be missing.
+    /// The section could not be read in full: an unreadable hunk header, a
+    /// hunk cut short or overrun, body lines before any `@@`, an unreadable
+    /// or repeated file header, or no file path at all. Some changes may be
+    /// missing.
     pub(crate) malformed: bool,
     /// A `Binary files … differ` or `GIT binary patch` section.
     pub(crate) binary: bool,
@@ -103,10 +105,19 @@ impl FileSection {
         }
     }
 
-    fn start_hunk(&mut self, header: &str) -> Result<(), String> {
-        self.close_removal();
+    /// Ends the current hunk; one that still owes lines (a truncated
+    /// `diff_text`) is unreadable: its missing lines are unknown.
+    fn end_hunk(&mut self) {
+        if self.in_hunk() {
+            self.malformed = true;
+        }
         self.old_left = 0;
         self.new_left = 0;
+    }
+
+    fn start_hunk(&mut self, header: &str) -> Result<(), String> {
+        self.close_removal();
+        self.end_hunk();
         let Some(h) = HunkHeader::parse(header) else {
             self.malformed = true;
             return Ok(());
@@ -178,6 +189,13 @@ impl FileSection {
             return;
         }
         if !self.had_hunk {
+            // A `+`/`-`/context line after a file header but before any `@@`
+            // (a pasted diff whose hunk header was stripped). Diffstat and
+            // commit-message lines come before any file header.
+            let named = self.path.is_some() || self.git_path.is_some();
+            if named && line.starts_with(['+', '-', ' ']) {
+                self.malformed = true;
+            }
             return;
         }
         // The format-patch signature, or the next commit of a `git log -p`
@@ -192,6 +210,7 @@ impl FileSection {
 
     fn into_hunk(mut self) -> Option<FileHunk> {
         self.close_removal();
+        self.end_hunk();
         // A section whose hunks name no usable path is reported, not dropped.
         // A section with no hunk changes no line (a mode change, an empty
         // new file): it neither adds a file nor changes another section's
@@ -329,6 +348,12 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
                 HeaderPath::Empty => section.malformed = true,
             }
         } else if let Some(new) = line.strip_prefix("+++ ") {
+            // A second `+++` with no `---` before it would rename the section
+            // and credit its change to another file.
+            if section.seen_new_header {
+                section.malformed = true;
+                continue;
+            }
             section.seen_new_header = true;
             match header_path(new, "b/") {
                 HeaderPath::Path(path) => section.path = Some(path),

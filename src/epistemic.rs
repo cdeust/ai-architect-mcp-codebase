@@ -38,7 +38,8 @@ pub enum Boundary {
     /// The static set under-counts true impact: target is reachable through
     /// dynamic dispatch, or one or more contributing edges were resolved
     /// heuristically (confidence < 1.0). For `detect_changes`, also: some of
-    /// the diff's changes reach no indexed symbol (issue #446).
+    /// the diff's changes reach no indexed symbol, or part of the diff could
+    /// not be read or is binary (issue #446).
     LowerBound,
 }
 
