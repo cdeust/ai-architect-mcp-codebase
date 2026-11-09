@@ -651,3 +651,17 @@ fn a_graph_imported_from_an_artifact_is_rebuilt_from_source() {
     let resp = analyze(&repo, &out, json!({}));
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
 }
+
+#[test]
+fn reuse_survives_its_own_refresh() {
+    // Review of #478: a refresh that dropped the scope would make only the
+    // second call reuse; the third must too.
+    let (repo, base) = fixture("analyze443_thrice_");
+    let out = base.join("out");
+    let first = analyze(&repo, &out, json!({}));
+    for call in ["second", "third"] {
+        let resp = analyze(&repo, &out, json!({}));
+        assert_eq!(resp["index"]["mode"], "incremental", "{call}: {resp}");
+        assert_eq!(outcome(&resp), outcome(&first), "{call}");
+    }
+}

@@ -4,10 +4,10 @@
 
 use std::path::Path;
 
-use super::super::manifest::FileManifest;
+use super::super::manifest::{self, FileManifest};
 use super::super::walk::WalkOptions;
 use super::super::{IndexOptions, MAX_TOTAL_BYTES};
-use super::classify::{classify, discover};
+use super::classify::discover;
 use super::Discovered;
 
 /// True when the tree under `codebase`, walked with `options`, differs from
@@ -39,11 +39,24 @@ pub fn tree_changed_since(
     if prior.files.values().any(|f| f.content_hash.is_empty()) {
         return Ok(true);
     }
-    let c = classify(prior, &current).change_set;
-    Ok(!(c.changed.is_empty()
-        && c.added.is_empty()
-        && c.deleted.is_empty()
-        && c.renamed.is_empty()))
+    Ok(differs(prior, &current))
+}
+
+/// The early-exit form of `classify` (review of #478): only a yes or no is
+/// needed, and on a changed tree the full rebuild re-reads every file anyway,
+/// so this stops at the first difference. A different file set (an add, a
+/// delete, either half of a rename) answers without reading any file; a file
+/// whose (mtime, size) moved is hashed, and identical bytes are no change
+/// (a `touch` or a `git checkout` of the same content).
+fn differs(prior: &FileManifest, current: &[Discovered]) -> bool {
+    if current.len() != prior.files.len() {
+        return true;
+    }
+    current.iter().any(|d| match prior.files.get(&d.rel) {
+        None => true,
+        Some(p) if p.mtime_ns == d.mtime_ns && p.size == d.size => false,
+        Some(p) => manifest::hash_file(&d.abs).as_deref() != Some(p.content_hash.as_str()),
+    })
 }
 
 /// `Err(total_bytes_exceeded…)` when the discovered files sum past `cap` —

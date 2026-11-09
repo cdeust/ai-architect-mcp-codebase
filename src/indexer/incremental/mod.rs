@@ -7,7 +7,8 @@
 // walk→parse→persist machinery the full index uses, and re-derives the
 // light-link edges out of them. It depends inward on `graph_store` (the store
 // port), `parser`, and its sibling indexer submodules; nothing depends on it
-// except the composition root (`do_index_codebase`) and its tests.
+// except the composition roots (`do_index_codebase`, and `analyze_codebase`'s
+// reuse check and refresh, issue #443) and their tests.
 //
 // Reference: DeusData/codebase-memory-mcp `src/pipeline/pipeline_incremental.c`.
 // Their design, adapted to AP's store and improved:
@@ -169,8 +170,8 @@ pub fn index_incremental(
     // No create_schema() here: the graph already exists (this path is reached
     // only when a prior full index built it with the current schema), and the
     // DDL pass is ~0.4s of pure fixed cost that would defeat the whole point of
-    // an incremental re-index. A schema mismatch is instead the caller's cue to
-    // pass `full: true` (documented on the tool). source: measured — skipping
+    // an incremental re-index. A schema mismatch fails this pass instead, and
+    // both callers then fall back to a full rebuild on their own. source: measured — skipping
     // the redundant CREATE TABLE IF NOT EXISTS pass is the single largest
     // incremental speedup on small change sets.
 

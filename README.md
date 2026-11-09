@@ -165,7 +165,8 @@ query_graph(graph_path, graph: "missed")
 Re-run `analyze_codebase` after edits. On the same `output_dir`, a tree with no
 changed file reuses the graph without re-parsing anything. Any edit, a change of
 `language`, `dependency_scope` or `exclude_dirs`, another codebase root, a new
-server version, `lsp: true` (now or on the run that built the graph), or
+server version, `lsp: true` (now or on the run that built the graph), a
+symlinked or artifact-imported graph, a missing coverage sidecar, or
 `full: true` rebuilds from scratch. Reusing an edited graph waits on resolver
 invalidation (#443); the three-stage `index_codebase` path re-parses only the
 changed files.
@@ -364,7 +365,7 @@ On the server side, bulk graph writes through UNWIND with a typed struct cost
 0.127 ms per edge against 9.658 ms for the naive raw-string path, 76 times
 less work for the same output (measured 2026-07-28 on `lbug 0.18` with
 `tests/lbug_bulk_investigation.rs`). Tree-sitter extracts structure without a
-model, and indexing is incremental by default. The server-side measurements
+model, and `index_codebase` is incremental by default. The server-side measurements
 and their dates are in [docs/evaluation.md](docs/evaluation.md).
 
 ## The zetetic standard

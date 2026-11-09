@@ -104,8 +104,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   version and the `language`, `dependency_scope` and `exclude_dirs` the graph
   was built with; a different or unrecorded value, another codebase root,
   language-server rows (`lsp: true` now or before), any changed file or one
-  unreadable at build time, `full: true`, or a failed refresh rebuilds from
-  scratch. An edited tree is
+  unreadable at build time, a symlinked `graph`, a graph imported from an
+  artifact, a missing or unreadable coverage sidecar, `full: true`, or a failed
+  refresh rebuilds from scratch. An edited tree is
   not reused yet: the resolver keeps edges of unchanged files whose candidate
   set the edit changed (a call made ambiguous by an added function), so reuse
   after edits waits on resolver invalidation. The README no longer claims
