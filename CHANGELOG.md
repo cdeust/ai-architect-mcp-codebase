@@ -38,8 +38,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   the indexed root, or a deleted file); when an added or deleted file holds no
   indexed symbol; when part of a file's diff cannot be read (an unreadable or
   combined-diff header, a hunk cut short or overrun, body lines before any
-  `@@`, a missing, empty or repeated file header, or sections of one path that
-  disagree on the change type); when a section is binary; or
+  `@@`, file headers with no hunk, a missing, empty or out-of-place file
+  header, several commits, or sections of one path that disagree on the
+  change type); when a section is binary; or
   when the symbol load fails (one reason for the whole diff). Headers without
   `a/`/`b/` prefixes (plain `diff -u`, timestamps after a tab) name their file,
   and `git diff` also runs with `--no-renames --no-textconv -c

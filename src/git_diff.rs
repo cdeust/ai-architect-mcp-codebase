@@ -174,9 +174,10 @@ fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Opti
     let path = &hunk.file_path;
     if hunk.malformed {
         return Some(format!(
-            "{path}: part of this file's diff could not be read (an unreadable or \
-             truncated hunk, or a missing or repeated file header); some of its \
-             changes may be missing"
+            "{path}: part of this file's diff could not be read (an unreadable, \
+             truncated or overrun hunk, a missing or out-of-place file header, \
+             several commits, or sections that disagree on the change type, as \
+             a file<->symlink change does); some of its changes may be missing"
         ));
     }
     if hunk.binary {
@@ -531,6 +532,7 @@ mod tests {
         ];
         for (body, added, gaps) in cases {
             let hunk = one_file(body);
+            assert!(!hunk.malformed, "miscounted fixture {body:?}");
             assert_eq!(hunk.added_lines, added, "{body:?}");
             assert_eq!(hunk.removal_gaps, gaps, "{body:?}");
         }
@@ -602,10 +604,24 @@ mod tests {
         );
         // A one-byte `diff --git a/x` path must not underflow the split.
         assert!(parse_unified_diff("diff --git a/x\n").unwrap().is_empty());
-        // The next commit of a `git log -p` is no stray hunk line.
+        // Several commits (`git log -p`) are reported: their line numbers
+        // belong to different revisions.
         let log = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n\
                    commit 0123456789abcdef0123456789abcdef01234567\n\n    Fix bug\n";
-        assert!(!parse_unified_diff(log).unwrap()[0].malformed);
+        assert!(parse_unified_diff(log).unwrap()[0].malformed);
+        // File headers with no hunk: the `@@` lines were cut off.
+        let cut = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n";
+        assert!(parse_unified_diff(cut).unwrap()[0].malformed);
+        // A file header after a hunk with no `+++` before it.
+        let late = "diff --git a/real.rs b/real.rs\n--- a/real.rs\n@@ -10,1 +10,1 @@\n-a\n+b\n+++ b/other.rs\n";
+        let h = &parse_unified_diff(late).unwrap()[0];
+        assert!(h.malformed);
+        assert_eq!(h.file_path, "real.rs");
+        // A file<->symlink type change: a deleted then a new section of one path.
+        let typechange = "diff --git a/l b/l\n--- a/l\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n\
+                          diff --git a/l b/l\n--- /dev/null\n+++ b/l\n@@ -0,0 +1 @@\n+y\n";
+        let merged = merge_by_path(parse_unified_diff(typechange).unwrap());
+        assert!(merged[0].malformed);
         // A malformed first hunk does not hide the next file of a plain diff.
         let plain = "--- a/x.rs\n+++ b/x.rs\n@@ -1,x +1 @@\n-a\n+A\n\
                      --- a/y.rs\n+++ b/y.rs\n@@ -1,1 +1,1 @@\n-b\n+B\n";
@@ -639,6 +655,11 @@ mod tests {
         }
         let signed = one_file("@@ -1,1 +1,1 @@\n-a\n+A\n-- \n2.43.0\n");
         assert!(!signed.malformed);
+        // The second `+++` does not rename the file.
+        assert_eq!(
+            one_file("@@ -1,1 +1,1 @@\n-a\n+b\n+++ b/other.rs\n").file_path,
+            "m.rs"
+        );
     }
 
     /// Plain `diff -u` output has no `diff --git` lines: each `---` header
@@ -715,13 +736,14 @@ diff --git a/src/main.rs b/src/main.rs
 diff --git a/src/new.rs b/src/new.rs
 --- /dev/null
 +++ b/src/new.rs
-@@ -0,0 +1,5 @@
+@@ -0,0 +1,3 @@
 +fn hello() {
 +    println!(\"hello\");
 +}
 ";
         let hunks = parse_unified_diff(diff).unwrap();
         assert_eq!(hunks.len(), 1);
+        assert!(!hunks[0].malformed);
         assert_eq!(hunks[0].file_path, "src/new.rs");
         assert!(hunks[0].is_new);
     }

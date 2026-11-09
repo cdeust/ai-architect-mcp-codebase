@@ -40,9 +40,9 @@ pub(crate) struct FileHunk {
     pub(crate) nonblank_lines: Vec<u64>,
     pub(crate) nonblank_gaps: Vec<u64>,
     /// The section could not be read in full: an unreadable hunk header, a
-    /// hunk cut short or overrun, body lines before any `@@`, an unreadable
-    /// or repeated file header, or no file path at all. Some changes may be
-    /// missing.
+    /// hunk cut short or overrun, body lines before any `@@`, file headers
+    /// with no hunk, an empty or out-of-place file header, several commits, or
+    /// no file path at all. Some changes may be missing.
     pub(crate) malformed: bool,
     /// A `Binary files … differ` or `GIT binary patch` section.
     pub(crate) binary: bool,
@@ -118,6 +118,7 @@ impl FileSection {
     fn start_hunk(&mut self, header: &str) -> Result<(), String> {
         self.close_removal();
         self.end_hunk();
+        self.in_trailer = false;
         let Some(h) = HunkHeader::parse(header) else {
             self.malformed = true;
             return Ok(());
@@ -198,10 +199,13 @@ impl FileSection {
             }
             return;
         }
-        // The format-patch signature, or the next commit of a `git log -p`
-        // (its indented message would read as context lines).
-        if line == "-- " || line == "--" || line.starts_with("commit ") || line.starts_with("From ")
-        {
+        // Several commits (`git log -p`, a patch series) hold line numbers of
+        // different revisions: they cannot all be matched against one index.
+        if line.starts_with("commit ") || line.starts_with("From ") {
+            self.malformed = true;
+            self.in_trailer = true;
+        } else if line == "-- " {
+            // The format-patch signature: what follows is no diff.
             self.in_trailer = true;
         } else if line.starts_with(['+', '-', ' ']) {
             self.malformed = true;
@@ -215,6 +219,11 @@ impl FileSection {
         // A section with no hunk changes no line (a mode change, an empty
         // new file): it neither adds a file nor changes another section's
         // type, unless it is binary or could not be read.
+        // `git diff` prints `---`/`+++` only before a hunk: headers with none
+        // mean the `@@` lines were cut off.
+        if !self.had_hunk && (self.seen_new_header || self.path.is_some()) {
+            self.malformed = true;
+        }
         if !self.had_hunk && !self.malformed && !self.binary {
             return None;
         }
@@ -332,6 +341,13 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             section.git_path = git_header_path(line);
         } else if line.starts_with("@@ ") {
             section.start_hunk(line)?;
+        } else if (line.starts_with("--- ") || line.starts_with("+++ "))
+            && section.had_hunk
+            && !section.seen_new_header
+        {
+            // A file header after a hunk with no `+++` before it would rename
+            // the section and credit its change to another file.
+            section.malformed = true;
         } else if let Some(old) = line.strip_prefix("--- ") {
             // A second file header with no `diff --git` line between them
             // (plain `diff -u`) starts a new section, even after a hunk that
