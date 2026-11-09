@@ -584,7 +584,10 @@ fn a_language_filtered_incremental_refresh_leaves_no_extraction_unrecorded() {
     let graph = tmp.path().join("graph");
     let manifest_path = tmp.path().join("manifest.json");
     let full = index_codebase(&source, &graph).expect("index");
-    assert!(full.coverage.no_extraction.is_some());
+    assert_eq!(
+        full.coverage.no_extraction,
+        Some([("php".to_string(), 1)].into_iter().collect())
+    );
     coverage::save(&coverage::coverage_path(tmp.path()), &full.coverage).expect("prior sidecar");
 
     let filtered = IndexOptions {
@@ -592,7 +595,8 @@ fn a_language_filtered_incremental_refresh_leaves_no_extraction_unrecorded() {
         ..IndexOptions::default()
     };
     write_full_manifest(&source, &manifest_path, &filtered).expect("manifest");
-    std::fs::write(source.join("mod.py"), "def g():\n    return 2\n").unwrap();
+    // A different length, so the change is seen even with coarse mtimes.
+    std::fs::write(source.join("mod.py"), "def g():\n    return 20\n").unwrap();
     let prior = manifest::load(&manifest_path).expect("load manifest");
     index_incremental(&source, &graph, &manifest_path, &filtered, &prior)
         .expect("incremental refresh");
