@@ -127,18 +127,21 @@ pub struct CoverageReport {
     /// binary sets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cargo_attribution: Option<CargoAttributionStatus>,
-    /// Files that got a File node and nothing else (issue #447): no language
-    /// parser handles their extension and the IaC pass drew no node from
-    /// them. Extension → file count, over the WHOLE current tree. A PHP, C#
-    /// or Lua file is indexed this way, so a search
-    /// that finds nothing in it is not evidence of absence. Like
-    /// `pruned_dirs`, this is a declared limit of the indexer, not a per-file
-    /// gap: it is outside `counts()`, and a README.md lands here as well as a
-    /// `.php`. Recomputed every pass (full and incremental), never carried
-    /// forward. Additive, `#[serde(default)]`: a sidecar written before it
-    /// existed loads with an empty map (see the schema note above).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub no_extraction: BTreeMap<String, u64>,
+    /// Files no symbol was extracted from (issue #447): no language parser
+    /// handles their extension and the IaC pass drew no node from them.
+    /// Extension → file count, over the WHOLE current tree. A PHP, C# or Lua
+    /// file is indexed this way, so a search that finds nothing in it is not
+    /// evidence of absence. Like `pruned_dirs`, this is a declared limit of
+    /// the indexer, not a per-file gap: it is outside `counts()`, and a
+    /// README.md lands here as well as a `.php`. Recomputed every pass (full
+    /// and incremental), never carried forward.
+    ///
+    /// `None` only on a sidecar written before this field existed: every
+    /// write path of this binary sets `Some`, an empty map included, so "not
+    /// recorded" never reads as "nothing unextracted" (the
+    /// `cargo_attribution` rule, issue #316). Additive, see the schema note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_extraction: Option<BTreeMap<String, u64>>,
 }
 
 impl CoverageReport {
@@ -150,7 +153,7 @@ impl CoverageReport {
             files: BTreeMap::new(),
             pruned_dirs: BTreeMap::new(),
             cargo_attribution: None,
-            no_extraction: BTreeMap::new(),
+            no_extraction: None,
         }
     }
 
@@ -514,11 +517,14 @@ mod tests {
     /// Issue #447: the tally survives the sidecar, stays out of the gap
     /// counts, and an old sidecar without it loads with an empty map.
     #[test]
-    fn no_extraction_round_trips_and_an_old_sidecar_loads_empty() {
+    fn no_extraction_round_trips_and_an_old_sidecar_is_not_recorded() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = coverage_path(dir.path());
         let mut report = CoverageReport::new("full", 2);
-        report.no_extraction = no_extraction_by_extension(["a.php", "b.lua"], &HashSet::new());
+        report.no_extraction = Some(no_extraction_by_extension(
+            ["a.php", "b.lua"],
+            &HashSet::new(),
+        ));
         save(&path, &report).expect("save");
         let loaded = load(&path).expect("load");
         assert_eq!(loaded.no_extraction, report.no_extraction);
@@ -529,7 +535,19 @@ mod tests {
             r#"{"schema_version":1,"index_mode":"full","files_indexed":2,"files":{}}"#,
         )
         .unwrap();
-        assert!(load(&path).expect("old sidecar").no_extraction.is_empty());
+        assert_eq!(
+            load(&path).expect("old sidecar").no_extraction,
+            None,
+            "an old sidecar is not recorded, never an empty tally"
+        );
+
+        report.no_extraction = Some(BTreeMap::new());
+        save(&path, &report).expect("save an empty tally");
+        assert_eq!(
+            load(&path).expect("load").no_extraction,
+            Some(BTreeMap::new()),
+            "a recorded empty tally survives the round trip as recorded"
+        );
     }
 
     const OUTSIDE_TARGETS_DETAIL_FOR_TEST: &str = "not in any Cargo target (test fixture)";

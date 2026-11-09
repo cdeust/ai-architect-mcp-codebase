@@ -478,8 +478,8 @@ fn callsite_column_is_persisted_not_zero() {
 /// Issue #447: PHP and Lua files are File nodes only. The full index tallies
 /// them by extension, outside the gap counts, and leaves out the Dockerfile
 /// and the Kubernetes manifest the IaC pass extracted. An incremental refresh
-/// that adds a C# file recomputes the tally over the whole tree (the
-/// untouched files are still there) and writes it to the sidecar.
+/// that adds a C# file, deletes a PHP file and renames the Lua file to `.txt`
+/// recomputes the tally over the whole tree and writes it to the sidecar.
 #[test]
 fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     let tmp = tempfile::tempdir().expect("temp dir");
@@ -512,7 +512,7 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     let full = index_codebase(&source, &graph).expect("index");
     assert_eq!(
         full.coverage.no_extraction,
-        tally(&[("lua", 1), ("php", 2), ("yml", 1)])
+        Some(tally(&[("lua", 1), ("php", 2), ("yml", 1)]))
     );
     assert_eq!(
         full.coverage.counts(),
@@ -521,7 +521,14 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     );
 
     write_full_manifest(&source, &manifest_path, &IndexOptions::default()).expect("manifest");
+    // The prior sidecar the incremental pass would carry forward from, as the
+    // indexing handler writes it after a full index.
+    coverage::save(&coverage::coverage_path(tmp.path()), &full.coverage).expect("prior sidecar");
+    // Growth, shrink and move in one refresh: a tally carried forward from
+    // the prior sidecar would keep `lua` and the second `php`.
     std::fs::write(source.join("lib/C.cs"), "class C {}\n").unwrap();
+    std::fs::remove_file(source.join("lib/b.php")).unwrap();
+    std::fs::rename(source.join("init.lua"), source.join("init.txt")).unwrap();
     let prior = manifest::load(&manifest_path).expect("load manifest");
     index_incremental(
         &source,
@@ -534,8 +541,8 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     let sidecar = coverage::load(&coverage::coverage_path(tmp.path())).expect("sidecar");
     assert_eq!(
         sidecar.no_extraction,
-        tally(&[("cs", 1), ("lua", 1), ("php", 2), ("yml", 1)]),
-        "the untouched Dockerfile and manifest stay excluded on an incremental pass"
+        Some(tally(&[("cs", 1), ("php", 1), ("txt", 1), ("yml", 1)])),
+        "recomputed over the current tree; the untouched Dockerfile and manifest stay excluded"
     );
 }
 

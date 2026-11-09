@@ -223,10 +223,10 @@ pub(super) fn save_incremental_coverage(
     // Files the IaC pass drew nodes from are read from the graph, so the
     // manifests this pass did not reparse are excluded too.
     let iac_extracted = super::super::iac_extracted_files(store);
-    report.no_extraction = coverage::no_extraction_by_extension(
+    report.no_extraction = Some(coverage::no_extraction_by_extension(
         current.iter().map(|d| d.rel.as_str()),
         &iac_extracted,
-    );
+    ));
     let facts = overlay_cargo_attributions(&mut report, codebase, current);
     if let Err(e) = coverage::save(&cov_path, &report) {
         eprintln!("[ap] coverage sidecar write failed: {e}");

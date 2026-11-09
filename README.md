@@ -251,7 +251,8 @@ its reason. `coverage.no_extraction` counts, per extension, the files that are
 File nodes only because no language parser handles them and the IaC pass drew
 no node from them (PHP, C#, Lua, but also `.md` or `.json`; a Dockerfile or a
 Kubernetes manifest the IaC pass read is not counted): their symbols are not in the graph, so grep them before reading an
-empty search as absence. It is not a gap bucket and does not affect `exact`.
+empty search as absence. It is not a gap bucket and does not affect `exact`;
+`status: not_recorded` means the record predates the tally (re-index).
 An empty coverage report is still not proof of completeness.
 
 ### Epistemic boundary on impact

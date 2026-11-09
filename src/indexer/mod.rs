@@ -325,8 +325,10 @@ pub fn index_codebase_with_language(
         })
         .collect();
     let iac_extracted = iac_extracted_files(&store);
-    coverage.no_extraction =
-        no_extraction_by_extension(walked_rels.iter().map(String::as_str), &iac_extracted);
+    coverage.no_extraction = Some(no_extraction_by_extension(
+        walked_rels.iter().map(String::as_str),
+        &iac_extracted,
+    ));
 
     Ok(IndexResult {
         graph_path: graph_path.to_path_buf(),
