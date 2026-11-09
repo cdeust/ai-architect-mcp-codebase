@@ -33,8 +33,8 @@ use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
 use coverage::{CoverageCollector, CoverageReport};
 pub use incremental::{
-    fill_after_bootstrap, index_incremental, tree_changed_since, write_full_manifest, FillMethod,
-    FillResult,
+    fill_after_bootstrap, full_manifest, index_incremental, tree_changed_since,
+    write_full_manifest, FillMethod, FillResult,
 };
 use persist::{
     index_single_file, insert_ancestor_dirs, insert_dir_file_edge, insert_file_node, FileScope,

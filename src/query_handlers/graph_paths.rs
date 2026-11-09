@@ -132,6 +132,26 @@ pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
 /// told. Callers decide: every one of them logs loudly, and the ones with a
 /// response attach the error to it. On failure the previous sidecar is left
 /// intact rather than destroyed.
+/// Removes the manifest and `meta.json` that describe the graph in
+/// `output_dir`, before a full rebuild replaces it (review of #478). A rebuild
+/// that fails or is killed then leaves nothing that vouches for a new or
+/// partial graph: the next call starts from scratch instead of trusting the
+/// previous run's manifest. Absent is fine; a file that cannot be removed fails
+/// the call, since it would still be read.
+pub(crate) fn forget_graph_sidecars(output_dir: &Path) -> Result<(), String> {
+    for path in [
+        crate::indexer::manifest::manifest_path(output_dir),
+        output_dir.join("meta.json"),
+    ] {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("remove stale {}: {e}", path.display())),
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) -> Result<(), String> {
     // Schema 3 (fleet-watch#112 review round 4): record WHICH `file_manifest.json`
     // this sidecar accompanies. Both indexing paths write the manifest first and

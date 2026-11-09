@@ -427,6 +427,16 @@ pub fn write_full_manifest(
     manifest_path: &Path,
     options: &IndexOptions,
 ) -> Result<(), String> {
+    manifest::save(manifest_path, &full_manifest(codebase, options)?)
+}
+
+/// The manifest a full index of `codebase` under `options` leaves, built from
+/// the tree as it is now. A full rebuild takes it BEFORE indexing and saves it
+/// after (review of #478): a file added, edited or deleted while the index
+/// runs then differs from this snapshot, so the next reuse check sees it,
+/// instead of a manifest written after the index vouching for a file the
+/// graph never parsed.
+pub fn full_manifest(codebase: &Path, options: &IndexOptions) -> Result<FileManifest, String> {
     let walk_opts = WalkOptions {
         language_filter: options.language_filter,
         dependency_scope: options.dependency_scope,
@@ -446,5 +456,5 @@ pub fn write_full_manifest(
             },
         );
     }
-    manifest::save(manifest_path, &m)
+    Ok(m)
 }

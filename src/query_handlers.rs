@@ -20,7 +20,7 @@ mod read_only_gate;
 mod row_limit_tests;
 
 pub(crate) use graph_paths::{
-    remove_stale_graph_artifact, validate_graph_path_safe, write_graph_meta,
+    forget_graph_sidecars, remove_stale_graph_artifact, validate_graph_path_safe, write_graph_meta,
     FORBIDDEN_GRAPH_PATH_PREFIXES,
 };
 use read_only_gate::{

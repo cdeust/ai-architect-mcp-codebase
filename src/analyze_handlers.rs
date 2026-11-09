@@ -260,13 +260,14 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
 fn persist_analyze_sidecars(
     req: &AnalyzeRequest,
     coverage: &indexer::coverage::CoverageReport,
+    snapshot: Result<indexer::manifest::FileManifest, String>,
 ) -> Result<Option<String>, String> {
     // Source: dy-wcet stdio reproduction (2026-09-06): analyze discarded
     // IndexResult.coverage, leaving query_graph(graph="missed") unavailable
     // or stale. A failed write must not return a successful coverage receipt.
     indexer::coverage::save(&indexer::coverage::coverage_path(&req.output_dir), coverage)?;
     let manifest_path = indexer::manifest::manifest_path(&req.output_dir);
-    if let Err(e) = indexer::write_full_manifest(&req.codebase, &manifest_path, &req.options) {
+    if let Err(e) = snapshot.and_then(|m| indexer::manifest::save(&manifest_path, &m)) {
         eprintln!("[ap] file manifest write failed (analyze succeeded): {e}");
         return Ok(Some(e));
     }
