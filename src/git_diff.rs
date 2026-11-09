@@ -519,7 +519,6 @@ fn assess_dependency_confidence(
 mod tests {
     use super::*;
 
-    #[test]
     /// Codex review of PR #482: `@@ -2 +1,0 @@` removes old line 2, which sat
     /// before new line 2, not before new line 1.
     #[test]
