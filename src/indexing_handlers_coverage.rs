@@ -125,14 +125,16 @@ fn cargo_attribution_json(report: &indexer::coverage::CoverageReport) -> Value {
 /// node from them), as an exact total plus a per-extension count. The
 /// `COVERAGE_LIST_CAP` largest extensions are kept (ties by name) and
 /// `extensions_omitted` says how many were left out, so a capped list never
-/// reads as the whole set. A sidecar written before the tally existed renders
-/// `not_recorded`, never a count of zero.
+/// reads as the whole set. A sidecar written before the tally existed, or by
+/// a `language`-filtered index, renders `not_recorded`, never a count of zero.
 fn no_extraction_json(report: &indexer::coverage::CoverageReport) -> Value {
     let Some(tally) = &report.no_extraction else {
         return json!({
             "status": "not_recorded",
-            "detail": "this coverage record predates the no_extraction tally \
-                       (issue #447); re-index to record it",
+            "detail": "no tally recorded: this coverage record predates it \
+                       (issue #447), or the index ran with a `language` filter, \
+                       which walks only the files that language parses; re-index \
+                       without a filter to record it",
         });
     };
     let mut by_count: Vec<(&String, &u64)> = tally.iter().collect();

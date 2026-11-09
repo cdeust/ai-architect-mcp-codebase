@@ -129,17 +129,20 @@ pub struct CoverageReport {
     pub cargo_attribution: Option<CargoAttributionStatus>,
     /// Files no symbol was extracted from (issue #447): no language parser
     /// handles their extension and the IaC pass drew no node from them.
-    /// Extension → file count, over the WHOLE current tree. A PHP, C# or Lua
+    /// Extension → file count, over every file the walk yields. A PHP, C# or Lua
     /// file is indexed this way, so a search that finds nothing in it is not
     /// evidence of absence. Like `pruned_dirs`, this is a declared limit of
     /// the indexer, not a per-file gap: it is outside `counts()`, and a
     /// README.md lands here as well as a `.php`. Recomputed every pass (full
     /// and incremental), never carried forward.
     ///
-    /// `None` only on a sidecar written before this field existed: every
-    /// write path of this binary sets `Some`, an empty map included, so "not
-    /// recorded" never reads as "nothing unextracted" (the
-    /// `cargo_attribution` rule, issue #316). Additive, see the schema note.
+    /// `None` means not recorded: a sidecar written before this field
+    /// existed, or an index run with a `language` filter, whose walk yields
+    /// only files that filter parses, so its empty tally would claim
+    /// "nothing unextracted" about files it never looked at. Every other
+    /// write path sets `Some`, an empty map included, so "not recorded" never
+    /// reads as "nothing unextracted" (the `cargo_attribution` rule, issue
+    /// #316). Additive, see the schema note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_extraction: Option<BTreeMap<String, u64>>,
 }
@@ -515,7 +518,8 @@ mod tests {
     }
 
     /// Issue #447: the tally survives the sidecar, stays out of the gap
-    /// counts, and an old sidecar without it loads with an empty map.
+    /// counts, an old sidecar without it loads as `None` (not recorded), and
+    /// a recorded empty tally round-trips as `Some({})`.
     #[test]
     fn no_extraction_round_trips_and_an_old_sidecar_is_not_recorded() {
         let dir = tempfile::tempdir().expect("temp dir");

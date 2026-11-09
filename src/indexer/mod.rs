@@ -324,11 +324,14 @@ pub fn index_codebase_with_language(
                 .into_owned()
         })
         .collect();
-    let iac_extracted = iac_extracted_files(&store);
-    coverage.no_extraction = Some(no_extraction_by_extension(
-        walked_rels.iter().map(String::as_str),
-        &iac_extracted,
-    ));
+    // Not recorded under a `language` filter: see `CoverageReport::no_extraction`.
+    if options.language_filter.is_none() {
+        let iac_extracted = iac_extracted_files(&store);
+        coverage.no_extraction = Some(no_extraction_by_extension(
+            walked_rels.iter().map(String::as_str),
+            &iac_extracted,
+        ));
+    }
 
     Ok(IndexResult {
         graph_path: graph_path.to_path_buf(),

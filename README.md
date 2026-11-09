@@ -247,12 +247,15 @@ Cargo-derived buckets were determined: `known`, `unknown` (the `cargo
 metadata` call failed or `cargo` is missing, so an empty bucket means "not
 determined"), `not_applicable`, or `not_recorded` for an older record.
 `coverage.pruned_dirs` names every directory the walk skipped by policy, with
-its reason. `coverage.no_extraction` counts, per extension, the files that are
-File nodes only because no language parser handles them and the IaC pass drew
-no node from them (PHP, C#, Lua, but also `.md` or `.json`; a Dockerfile or a
-Kubernetes manifest the IaC pass read is not counted): their symbols are not in the graph, so grep them before reading an
-empty search as absence. It is not a gap bucket and does not affect `exact`;
-`status: not_recorded` means the record predates the tally (re-index).
+its reason. `coverage.no_extraction` counts, per extension, the files no symbol was
+extracted from: no language parser handles them and the IaC pass drew no node
+from them (PHP, C#, Lua, but also `.md` or `.json`; a Dockerfile or a
+Kubernetes manifest the IaC pass read is not counted). What they declare is
+not in the graph, so grep them before reading an empty search as absence. It
+is not a gap bucket and does not affect `exact`; `status: not_recorded` means
+the record predates the tally or the index ran with a `language` filter
+(re-index without one). It is reported by `analyze_codebase`,
+`index_codebase`, `index_status` and `query_graph(graph="missed")`.
 An empty coverage report is still not proof of completeness.
 
 ### Epistemic boundary on impact

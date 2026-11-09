@@ -204,6 +204,7 @@ pub fn index_incremental(
         coverage::PassGaps {
             files: merged_gaps,
             pruned_dirs: walk_pruned,
+            language_filtered: options.language_filter.is_some(),
         },
         "incremental",
     );

@@ -137,6 +137,7 @@ pub fn fill_after_bootstrap(
         PassGaps {
             files: merged_gaps,
             pruned_dirs: walk_pruned,
+            language_filtered: options.language_filter.is_some(),
         },
         "bootstrap_fill",
     );

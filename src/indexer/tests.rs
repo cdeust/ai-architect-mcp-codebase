@@ -493,12 +493,18 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
     .unwrap();
     std::fs::write(source.join("lib/b.php"), "<?php\nclass B {}\n").unwrap();
     std::fs::write(source.join("init.lua"), "local function f() end\n").unwrap();
-    // The IaC pass extracts these two: neither is tallied.
+    // The IaC pass extracts these three (a Dockerfile resource, a manifest
+    // resource, a Kustomization module): none is tallied.
     std::fs::create_dir_all(source.join("k8s")).unwrap();
     std::fs::write(source.join("Dockerfile"), "FROM alpine:3.20\n").unwrap();
     std::fs::write(
         source.join("k8s/deploy.yaml"),
         "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("k8s/kustomization.yaml"),
+        "resources:\n  - deploy.yaml\n",
     )
     .unwrap();
     // A YAML file that is not a manifest defines nothing: it is tallied.
@@ -544,6 +550,24 @@ fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
         Some(tally(&[("cs", 1), ("php", 1), ("txt", 1), ("yml", 1)])),
         "recomputed over the current tree; the untouched Dockerfile and manifest stay excluded"
     );
+}
+
+/// Issue #447: a `language`-filtered index walks only the files that language
+/// parses, so it records no tally rather than a false "nothing unextracted".
+#[test]
+fn a_language_filtered_index_records_no_extraction_tally() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let source = tmp.path().join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("mod.py"), "def f():\n    return 1\n").unwrap();
+    std::fs::write(source.join("a.php"), "<?php\nfunction a() {}\n").unwrap();
+    let options = IndexOptions {
+        language_filter: Some(Language::Python),
+        ..IndexOptions::default()
+    };
+    let result =
+        index_codebase_with_language(&source, &tmp.path().join("graph"), &options).expect("index");
+    assert_eq!(result.coverage.no_extraction, None);
 }
 
 #[cfg(test)]

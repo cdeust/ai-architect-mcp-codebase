@@ -20,8 +20,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   incremental passes. `analyze_codebase`,
   `index_codebase`, `index_status` and `missed` render it as
   `coverage.no_extraction` `{status, count, by_extension, extensions_omitted,
-  note}`; an older sidecar renders `status: not_recorded`, never a count of
-  zero.
+  note}`; an older sidecar, or one written by a `language`-filtered index (its walk
+  yields only files that language parses), renders `status: not_recorded`,
+  never a count of zero.
   It is a declared limit, not a gap bucket: `.md` and `.json` land there too,
   so it does not turn `get_impact` into `lower-bound`. Not yet done: the zero-result note on `search_codebase`.
 

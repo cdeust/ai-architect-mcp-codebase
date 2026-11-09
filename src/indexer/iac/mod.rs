@@ -125,7 +125,8 @@ pub(super) fn run_iac_pass_for(
 /// incremental refresh sees the untouched manifests too. A Dockerfile defines
 /// its `::dockerfile` resource and a Kustomization its module, so both are
 /// covered; a `.yaml` that is not a Kubernetes manifest defines nothing and is
-/// not in the set.
+/// not in the set. All or nothing: a failed read of either edge table is an
+/// `Err`, never a partial set.
 pub(super) fn files_with_iac_nodes(store: &GraphStore) -> Result<HashSet<String>, String> {
     let mut files = HashSet::new();
     for edge in ["Defines_File_IacResource", "Defines_File_IacModule"] {
