@@ -1,8 +1,8 @@
 // git_diff::symbols — attributes a diff's changed lines to the graph symbols
 // that contain them (issue #446).
 //
-// Two defects made `detect_changes` report a modified method as its class, or as
-// nothing:
+// Three defects made `detect_changes` misreport a change (a modified method as
+// its class or as nothing, a removal as the next symbol):
 //
 // - Methods were looked up through `Defines_File_Method`, a table that does not
 //   exist (methods hang off their container through `HasMethod_*`; see
@@ -30,6 +30,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::FileHunk;
 use crate::graph_store::{cypher_str, GraphStore};
 
 /// Symbol labels that carry a line range.
@@ -160,42 +161,48 @@ impl DiffSymbols {
         }
     }
 
-    /// Attributes `lines` (lines present in the new file) and `removal_gaps`
-    /// (a pure removal just above that line) of `file_path` to its symbols.
+    /// Attributes `hunk`'s added lines and pure removals to its file's
+    /// symbols. A blank-only line or removal outside every symbol is no gap;
+    /// inside a symbol it still counts (it can change a multiline literal).
     ///
     /// postcondition: every distinct line and gap counts in
-    /// `unattributed_lines` or in the `overlap` of at least one candidate,
-    /// never in a candidate that encloses another holding it.
-    pub(super) fn attribute(
-        &self,
-        file_path: &str,
-        lines: &[u64],
-        removal_gaps: &[u64],
-    ) -> FileAttribution {
-        let mut candidates = self.by_file.get(file_path).cloned().unwrap_or_default();
+    /// `unattributed_lines`, in the `overlap` of at least one candidate (never
+    /// one that encloses another holding it), or is a blank-only change
+    /// outside every symbol.
+    pub(super) fn attribute(&self, hunk: &FileHunk) -> FileAttribution {
+        let mut candidates = self
+            .by_file
+            .get(&hunk.file_path)
+            .cloned()
+            .unwrap_or_default();
         let mut unattributed_lines = 0;
-        for line in distinct(lines) {
+        for line in distinct(&hunk.added_lines) {
             let owners = innermost(&candidates, line, line);
-            unattributed_lines += u64::from(owners.is_empty());
+            if owners.is_empty() && !hunk.blank_lines.contains(&line) {
+                unattributed_lines += 1;
+            }
             for i in owners {
                 candidates[i].overlap += 1;
             }
         }
         // A removal between lines p-1 and p belongs to a symbol only when that
         // symbol spans both: deleting `fn foo` just above `fn bar` is not a
-        // change of `bar`.
-        for gap in distinct(removal_gaps) {
-            let owners = innermost(&candidates, gap.saturating_sub(1).max(1), gap);
-            let inside = gap > 1 && !owners.is_empty();
-            unattributed_lines += u64::from(!inside);
-            if inside {
-                for i in owners {
-                    candidates[i].overlap += 1;
-                }
+        // change of `bar`. Line 0 does not exist, so a gap at 1 is outside.
+        for gap in distinct(&hunk.removal_gaps) {
+            let owners = if gap > 1 {
+                innermost(&candidates, gap - 1, gap)
+            } else {
+                Vec::new()
+            };
+            if owners.is_empty() && !hunk.blank_gaps.contains(&gap) {
+                unattributed_lines += 1;
+            }
+            for i in owners {
+                candidates[i].overlap += 1;
             }
         }
         FileAttribution {
-            file_known: self.known_files.contains(file_path),
+            file_known: self.known_files.contains(&hunk.file_path),
             candidates,
             unattributed_lines,
         }
@@ -329,6 +336,19 @@ mod gap_tests {
         }
     }
 
+    fn hunk(added: &[u64], gaps: &[u64]) -> FileHunk {
+        FileHunk {
+            file_path: "m.rs".to_string(),
+            changed_lines: Vec::new(),
+            added_lines: added.to_vec(),
+            removal_gaps: gaps.to_vec(),
+            blank_lines: Vec::new(),
+            blank_gaps: Vec::new(),
+            is_new: false,
+            is_deleted: false,
+        }
+    }
+
     fn function(id: &str, start: u64, end: u64) -> Candidate {
         Candidate {
             id: id.to_string(),
@@ -346,7 +366,7 @@ mod gap_tests {
     #[test]
     fn a_removal_just_above_a_symbol_is_not_that_symbol() {
         let d = loaded(vec![function("m.rs::bar", 5, 8)]);
-        let a = d.attribute("m.rs", &[], &[5]);
+        let a = d.attribute(&hunk(&[], &[5]));
         assert_eq!(a.candidates[0].overlap, 0);
         assert_eq!(a.unattributed_lines, 1);
     }
@@ -354,7 +374,7 @@ mod gap_tests {
     #[test]
     fn a_removal_inside_a_symbol_is_that_symbol() {
         let d = loaded(vec![function("m.rs::bar", 5, 8)]);
-        let a = d.attribute("m.rs", &[], &[7]);
+        let a = d.attribute(&hunk(&[], &[7]));
         assert_eq!(a.candidates[0].overlap, 1);
         assert_eq!(a.unattributed_lines, 0);
     }
@@ -365,12 +385,24 @@ mod gap_tests {
     #[test]
     fn a_removal_of_a_first_statement_is_its_function() {
         let d = loaded(vec![function("m.rs::f", 1, 3)]);
-        let a = d.attribute("m.rs", &[], &[2]);
+        let a = d.attribute(&hunk(&[], &[2]));
         assert_eq!(a.candidates[0].overlap, 1);
         // A gap before line 1 lies above every symbol.
-        let a = d.attribute("m.rs", &[], &[1]);
+        let a = d.attribute(&hunk(&[], &[1]));
         assert_eq!(a.candidates[0].overlap, 0);
         assert_eq!(a.unattributed_lines, 1);
+    }
+
+    /// Codex review of PR #482: a blank line inside a function (a multiline
+    /// string) is that function's change; outside every symbol it is no gap.
+    #[test]
+    fn a_blank_change_counts_inside_a_symbol_only() {
+        let d = loaded(vec![function("m.rs::f", 1, 3)]);
+        let mut h = hunk(&[2, 9], &[]);
+        h.blank_lines = vec![2, 9];
+        let a = d.attribute(&h);
+        assert_eq!(a.candidates[0].overlap, 1);
+        assert_eq!(a.unattributed_lines, 0);
     }
 
     #[test]

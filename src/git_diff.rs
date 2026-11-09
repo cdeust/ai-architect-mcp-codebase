@@ -18,15 +18,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
+mod parse;
 mod symbols;
 
-// ---------------------------------------------------------------------------
-// Safety limit — diff line counter overflow guard.
-// source: M3 fix — current_line is u64, but a malicious diff with billions of
-// `+` lines could wrap around. Cap at u64::MAX / 2 so we always have headroom.
-// ---------------------------------------------------------------------------
-
-const DIFF_LINE_MAX: u64 = u64::MAX / 2;
+#[cfg(test)]
+use parse::parse_hunk_header;
+pub(crate) use parse::{parse_unified_diff, FileHunk};
 
 /// Validates a git ref for safe use as a positional argument.
 /// Rejects refs starting with `-` (which git would treat as an option flag)
@@ -90,181 +87,15 @@ pub struct DiffAnalysis {
     /// module.
     pub epistemic: &'static str,
     /// Carriers of epistemic uncertainty (empty when `exact`): a changed
-    /// symbol and why its impact under-counts, or a changed file and why some
-    /// of its changes reach no symbol (issue #446).
+    /// symbol and why its impact under-counts, a changed file and why some of
+    /// its changes reach no symbol, or one diff-level reason when the query
+    /// loading the changed files' symbols failed (issue #446).
     pub epistemic_reasons: Vec<String>,
     /// How many of `epistemic_reasons` are coverage gaps (a changed file whose
     /// changes partly reach no symbol, or a failed symbol query) rather than
     /// dependency uncertainty. Internal: read by `next_steps`, not emitted.
     #[serde(skip)]
     pub coverage_gap_count: usize,
-}
-
-// ---------------------------------------------------------------------------
-// Diff parsing — unified diff format
-// ---------------------------------------------------------------------------
-
-// pub(crate): reused by the history module, which parses per-commit
-// `git show` diffs into the same hunk shape to attribute changes to entities.
-pub(crate) struct FileHunk {
-    pub(crate) file_path: String,
-    /// New-file positions of every `+` line and of every `-` line (a `-` line
-    /// takes the position of the new-file line that follows it, except in a
-    /// `+N,0` hunk, where it takes N, the line before: `removal_gaps` corrects
-    /// that, this list keeps it). Read by the history module.
-    pub(crate) changed_lines: Vec<u64>,
-    /// New-file positions of the `+` lines, blank ones excepted unless they
-    /// replace removed lines.
-    pub(crate) added_lines: Vec<u64>,
-    /// New-file positions just after a run of `-` lines that no `+` line
-    /// replaces (a pure removal between lines p-1 and p).
-    pub(crate) removal_gaps: Vec<u64>,
-    pub(crate) is_new: bool,
-    pub(crate) is_deleted: bool,
-}
-
-/// The per-file line lists `parse_unified_diff` accumulates.
-#[derive(Default)]
-struct LineLists {
-    changed: Vec<u64>,
-    added: Vec<u64>,
-    gaps: Vec<u64>,
-    /// Position of a `-` run not yet followed by a `+` line.
-    pending_removal: Option<u64>,
-    /// 1 inside a hunk whose new range is empty (`+N,0`): its start N names
-    /// the line BEFORE the removal, so the line after it is N + 1.
-    gap_shift: u64,
-}
-
-impl LineLists {
-    fn close_removal(&mut self) {
-        if let Some(p) = self.pending_removal.take() {
-            self.gaps.push(p.saturating_add(self.gap_shift));
-        }
-    }
-
-    fn into_hunk(mut self, file_path: String, is_new: bool, is_deleted: bool) -> FileHunk {
-        self.close_removal();
-        FileHunk {
-            file_path,
-            changed_lines: self.changed,
-            added_lines: self.added,
-            removal_gaps: self.gaps,
-            is_new,
-            is_deleted,
-        }
-    }
-}
-
-pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, String> {
-    let mut hunks: Vec<FileHunk> = Vec::new();
-    let mut current_file: Option<String> = None;
-    let mut lists = LineLists::default();
-    let mut current_line: u64 = 0;
-    let mut is_new = false;
-    let mut is_deleted = false;
-    let mut in_hunk = false;
-
-    for line in diff_text.lines() {
-        if line.starts_with("diff --git") {
-            // Flush previous file
-            if let Some(fp) = current_file.take() {
-                hunks.push(std::mem::take(&mut lists).into_hunk(fp, is_new, is_deleted));
-            }
-            is_new = false;
-            is_deleted = false;
-            in_hunk = false;
-        } else if in_hunk && !line.starts_with("@@ ") {
-            // Inside a hunk, `+++i;` is an added `++i;` and `--- note` a
-            // removed `-- note`: never file headers (issue #446 review).
-            hunk_line(line, &mut lists, &mut current_line)?;
-        } else if let Some(stripped) = line.strip_prefix("--- a/") {
-            // For deleted files, this is the only place we get the path
-            if current_file.is_none() {
-                current_file = Some(stripped.to_string());
-            }
-        } else if line.starts_with("--- /dev/null") {
-            is_new = true;
-        } else if let Some(stripped) = line.strip_prefix("+++ b/") {
-            current_file = Some(stripped.to_string());
-        } else if line.starts_with("+++ /dev/null") {
-            is_deleted = true;
-        } else if line.starts_with("@@ ") {
-            // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
-            in_hunk = true;
-            lists.close_removal();
-            lists.gap_shift = u64::from(new_range_is_empty(line));
-            if let Some(new_range) = parse_hunk_header(line) {
-                if new_range >= DIFF_LINE_MAX {
-                    return Err("diff_too_large: line counter would overflow".to_string());
-                }
-                current_line = new_range;
-            }
-        }
-    }
-
-    // Flush last file
-    if let Some(fp) = current_file.take() {
-        hunks.push(lists.into_hunk(fp, is_new, is_deleted));
-    }
-
-    Ok(hunks)
-}
-
-/// One body line of a hunk: `+` added, `-` removed, `\` metadata, anything
-/// else context.
-fn hunk_line(line: &str, lists: &mut LineLists, current_line: &mut u64) -> Result<(), String> {
-    if line.starts_with('\\') {
-        // "\ No newline at end of file": no line in either file.
-        return Ok(());
-    }
-    if let Some(body) = line.strip_prefix('-') {
-        // Deleted lines affect the old position; we record current_line
-        // so we can match the surrounding context in the new file.
-        lists.changed.push(*current_line);
-        // Removing a blank line changes no behavior, as adding one does not.
-        if !body.trim().is_empty() {
-            lists.pending_removal.get_or_insert(*current_line);
-        }
-        // Don't increment — deleted lines don't exist in the new file
-        return Ok(());
-    }
-    if *current_line >= DIFF_LINE_MAX {
-        return Err("diff_too_large: line counter would overflow".to_string());
-    }
-    if let Some(body) = line.strip_prefix('+') {
-        let replaces_removal = lists.pending_removal.take().is_some();
-        lists.changed.push(*current_line);
-        // A blank added line on its own changes no behavior and must not make
-        // a complete answer a lower bound; a blank line that replaces removed
-        // lines still carries that removal (issue #446 review).
-        if replaces_removal || !body.trim().is_empty() {
-            lists.added.push(*current_line);
-        }
-    } else {
-        lists.close_removal();
-    }
-    *current_line += 1;
-    Ok(())
-}
-
-/// True for a hunk header whose new range has a zero count (`+N,0`).
-/// source: GNU diffutils manual, "Detailed Description of Unified Format" —
-/// an empty hunk "is considered to end at the line that precedes the hunk".
-fn new_range_is_empty(line: &str) -> bool {
-    line.find('+')
-        .map(|p| &line[p + 1..])
-        .and_then(|rest| rest.split(' ').next())
-        .and_then(|range| range.split_once(','))
-        .is_some_and(|(_, count)| count == "0")
-}
-
-fn parse_hunk_header(line: &str) -> Option<u64> {
-    // Format: @@ -old_start[,old_count] +new_start[,new_count] @@
-    let plus_pos = line.find('+')?;
-    let rest = &line[plus_pos + 1..];
-    let end = rest.find([',', ' '])?;
-    rest[..end].parse::<u64>().ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +126,7 @@ fn map_lines_to_symbols(
     hunk: &FileHunk,
 ) -> (Vec<ChangedSymbol>, Option<String>) {
     let whole_file = hunk.is_new || hunk.is_deleted;
-    let attribution = loaded.attribute(&hunk.file_path, &hunk.added_lines, &hunk.removal_gaps);
+    let attribution = loaded.attribute(hunk);
     let coverage_gap = coverage_gap(hunk, &attribution);
     let change_type = if hunk.is_new {
         "added"
@@ -602,8 +433,8 @@ mod tests {
     fn added_lines_and_removal_gaps_per_hunk_shape() {
         // (hunk body, added_lines, removal_gaps)
         let cases: [(&str, &[u64], &[u64]); 10] = [
-            // removing a blank line is no change, like adding one
-            ("@@ -1,3 +1,2 @@\n a\n-\n b\n", &[], &[]),
+            // removing a blank line: a gap, marked blank (see below)
+            ("@@ -1,3 +1,2 @@\n a\n-\n b\n", &[], &[2]),
             // Codex review of PR #482: a statement replaced by a blank line
             // is still a change at that line
             ("@@ -1,3 +1,3 @@\n f() {\n-    do_work();\n+\n }\n", &[2], &[]),
@@ -617,10 +448,10 @@ mod tests {
             ("@@ -1,4 +1,3 @@\n a\n-b\n-c\n+C\n d\n", &[2], &[]),
             // `-x +y -z`: the second `-` opens a gap after `y`
             ("@@ -1,4 +1,3 @@\n a\n-x\n+y\n-z\n d\n", &[2], &[3]),
-            // a gap closed by the next `@@` header
-            ("@@ -1,2 +1,1 @@\n a\n-b\n@@ -9,1 +8,1 @@\n z\n", &[], &[2]),
-            // a blank added line changes nothing
-            ("@@ -1,2 +1,3 @@\n a\n+\n+  \n b\n", &[], &[]),
+            // a gap closed by the next `@@` header (no context line after it)
+            ("@@ -1,2 +1,1 @@\n a\n-b\n@@ -9,1 +8,1 @@\n-y\n+Y\n", &[8], &[2]),
+            // blank added lines are recorded (and marked blank, see below)
+            ("@@ -1,2 +1,4 @@\n a\n+\n+  \n b\n", &[2, 3], &[]),
             // "\ No newline at end of file" is no line of either file
             (
                 "@@ -1,3 +1,3 @@\n f() {\n     1\n-}\n\\ No newline at end of file\n+} // x\n\\ No newline at end of file\n",
@@ -633,6 +464,39 @@ mod tests {
             assert_eq!(hunk.added_lines, added, "{body:?}");
             assert_eq!(hunk.removal_gaps, gaps, "{body:?}");
         }
+    }
+
+    /// Blank-only changes are marked, so attribution can skip them outside
+    /// every symbol; a blank line replacing code is not blank-only.
+    #[test]
+    fn blank_only_changes_are_marked() {
+        let h = one_file("@@ -1,4 +1,4 @@\n a\n+\n-\n b\n-x\n+\n");
+        assert_eq!(h.blank_lines, vec![2]);
+        let h = one_file("@@ -1,3 +1,2 @@\n a\n-\n b\n");
+        assert_eq!(h.blank_gaps, vec![2]);
+    }
+
+    /// Claude review of PR #482: a hunk ends where its header's counts say,
+    /// so header-like body lines stay in the file and a `git format-patch`
+    /// trailer after the last hunk is no removal.
+    #[test]
+    fn a_hunk_ends_at_its_counts() {
+        let h = one_file("@@ -1,3 +1,3 @@\n a\n--- a/x.rs\n+++ b/evil.rs\n c\n");
+        assert_eq!(h.file_path, "m.rs");
+        assert_eq!(h.added_lines, vec![2]);
+        let h = one_file("@@ -1,2 +1,2 @@\n a\n-b\n+B\n-- \n2.43.0\n");
+        assert!(h.removal_gaps.is_empty());
+    }
+
+    /// Plain `diff -u` output has no `diff --git` lines: each `---` header
+    /// after a hunk starts the next file.
+    #[test]
+    fn plain_unified_diffs_split_at_each_file_header() {
+        let diff = "--- a/x.rs\n+++ b/x.rs\n@@ -1,1 +1,1 @@\n-a\n+A\n\
+                    --- a/y.rs\n+++ b/y.rs\n@@ -1,1 +1,1 @@\n-b\n+B\n";
+        let hunks = parse_unified_diff(diff).unwrap();
+        let paths: Vec<&str> = hunks.iter().map(|h| h.file_path.as_str()).collect();
+        assert_eq!(paths, vec!["x.rs", "y.rs"]);
     }
 
     #[test]

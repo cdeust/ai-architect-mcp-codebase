@@ -1,0 +1,237 @@
+// git_diff::parse — unified diff text to per-file hunks.
+//
+// Each hunk body is read for exactly the line counts its `@@ -a,b +c,d @@`
+// header announces (issue #446 review): a `+++i;` or `--- note` body line is a
+// change, never a file header, and whatever follows the last hunk (the `-- `
+// trailer of `git format-patch`, the next file of a plain `diff -u` without
+// `diff --git` lines) is not read as hunk body.
+//
+// source: GNU diffutils manual, "Detailed Description of Unified Format" — a
+// missing count means 1, and an empty hunk "is considered to end at the line
+// that precedes the hunk".
+
+/// Safety limit: `current_line` is u64, but a crafted diff with billions of
+/// `+` lines, or a header near `u64::MAX`, could wrap around. Capped at
+/// u64::MAX / 2 so there is always headroom.
+/// source: M3 fix (previously in `git_diff`).
+pub(super) const DIFF_LINE_MAX: u64 = u64::MAX / 2;
+
+const TOO_LARGE: &str = "diff_too_large: line counter would overflow";
+
+// pub(crate): reused by the history module, which parses per-commit
+// `git show` diffs into the same hunk shape to attribute changes to entities.
+pub(crate) struct FileHunk {
+    pub(crate) file_path: String,
+    /// New-file positions of every `+` line and of every `-` line (a `-` line
+    /// takes the position of the new-file line that follows it, except in a
+    /// `+N,0` hunk, where it takes N, the line before: `removal_gaps` corrects
+    /// that, this list keeps it). Read by the history module.
+    pub(crate) changed_lines: Vec<u64>,
+    /// New-file positions of every `+` line.
+    pub(crate) added_lines: Vec<u64>,
+    /// New-file positions just after a run of `-` lines that no `+` line
+    /// replaces (a pure removal between lines p-1 and p).
+    pub(crate) removal_gaps: Vec<u64>,
+    /// The `added_lines` and `removal_gaps` that only add or remove blank
+    /// lines. Inside a symbol they still count (a blank line in a multiline
+    /// string changes its value); outside every symbol they are no coverage
+    /// gap.
+    pub(crate) blank_lines: Vec<u64>,
+    pub(crate) blank_gaps: Vec<u64>,
+    pub(crate) is_new: bool,
+    pub(crate) is_deleted: bool,
+}
+
+/// A `-` run not yet followed by a `+` line: its position, and whether every
+/// removed line in it is blank.
+#[derive(Clone, Copy)]
+struct PendingRemoval {
+    at: u64,
+    all_blank: bool,
+}
+
+/// The state of one file section while its hunks are read.
+#[derive(Default)]
+struct FileSection {
+    path: Option<String>,
+    is_new: bool,
+    is_deleted: bool,
+    changed: Vec<u64>,
+    added: Vec<u64>,
+    gaps: Vec<u64>,
+    blank_lines: Vec<u64>,
+    blank_gaps: Vec<u64>,
+    pending: Option<PendingRemoval>,
+    /// 1 inside a hunk whose new range is empty (`+N,0`): its start N names
+    /// the line BEFORE the removal, so the line after it is N + 1.
+    gap_shift: u64,
+    /// Next new-file position.
+    line: u64,
+    /// Body lines the current hunk still owes, old side and new side.
+    old_left: u64,
+    new_left: u64,
+    had_hunk: bool,
+}
+
+impl FileSection {
+    fn in_hunk(&self) -> bool {
+        self.old_left > 0 || self.new_left > 0
+    }
+
+    fn close_removal(&mut self) {
+        if let Some(p) = self.pending.take() {
+            let gap = p.at.saturating_add(self.gap_shift);
+            self.gaps.push(gap);
+            if p.all_blank {
+                self.blank_gaps.push(gap);
+            }
+        }
+    }
+
+    fn start_hunk(&mut self, header: &str) -> Result<(), String> {
+        self.close_removal();
+        self.old_left = 0;
+        self.new_left = 0;
+        let Some(h) = HunkHeader::parse(header) else {
+            return Ok(());
+        };
+        if h.new_start >= DIFF_LINE_MAX {
+            return Err(TOO_LARGE.to_string());
+        }
+        self.gap_shift = u64::from(h.new_count == 0);
+        self.line = h.new_start;
+        self.old_left = h.old_count;
+        self.new_left = h.new_count;
+        self.had_hunk = true;
+        Ok(())
+    }
+
+    /// One body line of a hunk: `+` added, `-` removed, `\` metadata,
+    /// anything else context.
+    fn body_line(&mut self, line: &str) -> Result<(), String> {
+        if line.starts_with('\\') {
+            // "\ No newline at end of file": no line in either file.
+            return Ok(());
+        }
+        if let Some(body) = line.strip_prefix('-') {
+            self.old_left = self.old_left.saturating_sub(1);
+            self.changed.push(self.line);
+            let blank = body.trim().is_empty();
+            let pending = self.pending.get_or_insert(PendingRemoval {
+                at: self.line,
+                all_blank: true,
+            });
+            pending.all_blank &= blank;
+            return Ok(());
+        }
+        if self.line >= DIFF_LINE_MAX {
+            return Err(TOO_LARGE.to_string());
+        }
+        if let Some(body) = line.strip_prefix('+') {
+            self.new_left = self.new_left.saturating_sub(1);
+            let replaced_code = self.pending.take().is_some_and(|p| !p.all_blank);
+            self.changed.push(self.line);
+            self.added.push(self.line);
+            if body.trim().is_empty() && !replaced_code {
+                self.blank_lines.push(self.line);
+            }
+        } else {
+            self.old_left = self.old_left.saturating_sub(1);
+            self.new_left = self.new_left.saturating_sub(1);
+            self.close_removal();
+        }
+        self.line += 1;
+        if !self.in_hunk() {
+            self.close_removal();
+        }
+        Ok(())
+    }
+
+    fn into_hunk(mut self) -> Option<FileHunk> {
+        self.close_removal();
+        Some(FileHunk {
+            file_path: self.path?,
+            changed_lines: self.changed,
+            added_lines: self.added,
+            removal_gaps: self.gaps,
+            blank_lines: self.blank_lines,
+            blank_gaps: self.blank_gaps,
+            is_new: self.is_new,
+            is_deleted: self.is_deleted,
+        })
+    }
+}
+
+/// The four numbers of `@@ -old_start[,old_count] +new_start[,new_count] @@`.
+struct HunkHeader {
+    old_count: u64,
+    new_start: u64,
+    new_count: u64,
+}
+
+impl HunkHeader {
+    fn parse(line: &str) -> Option<Self> {
+        let mut ranges = line.strip_prefix("@@ ")?.split(' ');
+        let old = ranges.next()?.strip_prefix('-')?;
+        let new = ranges.next()?.strip_prefix('+')?;
+        let (_, old_count) = range(old)?;
+        let (new_start, new_count) = range(new)?;
+        Some(HunkHeader {
+            old_count,
+            new_start,
+            new_count,
+        })
+    }
+}
+
+/// `start[,count]`, with a missing count meaning 1.
+fn range(text: &str) -> Option<(u64, u64)> {
+    match text.split_once(',') {
+        Some((start, count)) => Some((start.parse().ok()?, count.parse().ok()?)),
+        None => Some((text.parse().ok()?, 1)),
+    }
+}
+
+/// The new-file start of a hunk header, or `None` when it is malformed.
+#[cfg(test)]
+pub(super) fn parse_hunk_header(line: &str) -> Option<u64> {
+    HunkHeader::parse(line).map(|h| h.new_start)
+}
+
+pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, String> {
+    let mut hunks: Vec<FileHunk> = Vec::new();
+    let mut section = FileSection::default();
+    for line in diff_text.lines() {
+        // `diff --git` and `@@` are never body lines (body lines start with
+        // ` `, `+`, `-` or `\`), so they end a hunk whose header overstated
+        // its counts, as a hand-trimmed `diff_text` can.
+        let header = line.starts_with("diff --git") || line.starts_with("@@ ");
+        if section.in_hunk() && !header {
+            section.body_line(line)?;
+        } else if line.starts_with("diff --git") {
+            hunks.extend(std::mem::take(&mut section).into_hunk());
+        } else if line.starts_with("@@ ") {
+            section.start_hunk(line)?;
+        } else if let Some(old) = line.strip_prefix("--- ") {
+            // A second file header with no `diff --git` line between them
+            // (plain `diff -u`) starts a new section.
+            if section.had_hunk {
+                hunks.extend(std::mem::take(&mut section).into_hunk());
+            }
+            if let Some(path) = old.strip_prefix("a/") {
+                // For a deleted file, this is the only place the path appears.
+                section.path.get_or_insert_with(|| path.to_string());
+            } else if old.starts_with("/dev/null") {
+                section.is_new = true;
+            }
+        } else if let Some(new) = line.strip_prefix("+++ ") {
+            match new.strip_prefix("b/") {
+                Some(path) => section.path = Some(path.to_string()),
+                None if new.starts_with("/dev/null") => section.is_deleted = true,
+                None => {}
+            }
+        }
+    }
+    hunks.extend(section.into_hunk());
+    Ok(hunks)
+}

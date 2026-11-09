@@ -23,11 +23,13 @@ adheres to [Semantic Versioning](https://semver.org/).
   symbol only when that symbol spans the lines on both sides of it (deleting
   `fn foo` just above `fn bar` no longer reports `bar`). Per diff, the symbols
   are read with one File query and one query per label for each chunk of 64
-  paths, and `get_impact` runs once per changed symbol. Blank lines added or
-  removed on their own (a blank line that replaces code still counts) and the
-  `\ No newline at end of file` marker no longer count as changes, and
-  inside a hunk a line such as `+++i;` (an added `++i;`) or `--- note` (a
-  removed `-- note`) is a change, not a file header. The answer is
+  paths, and `get_impact` runs once per changed symbol. A blank line added or
+  removed on its own is no coverage gap outside every symbol, but inside one
+  it still counts (it can change a multiline string). Each hunk is read for
+  the line counts its header announces: a `+++i;` or `--- note` body line is a
+  change, not a file header, the `git format-patch` trailer is no removal, and
+  a plain `diff -u` with several files is split at each file header. The
+  `\ No newline at end of file` marker is no line of either file. The answer is
   `lower-bound`, with a reason naming the file, when a non-blank changed line
   of a modified or added file, or a pure removal, lies in no indexed symbol;
   when the diff names a path with no indexed File (an unsupported language, a
