@@ -11,23 +11,35 @@
 //   whose type is defined in another file has no in-file container at all.
 //   Every symbol node's `id` starts with `<File.id>::` (the prefix the
 //   incremental purge, `indexer::incremental::mutate::purge_file_symbols`,
-//   relies on), so Methods are read by that prefix instead.
+//   relies on), so every label is read by that prefix instead. This also
+//   reaches the symbols whose `Defines` edge the persister drops (a C++
+//   namespace's functions, a Rust inline `mod`'s functions, nested classes).
 // - A changed line inside a method also lies inside its class, and was counted
 //   for both. Each line now goes to the innermost candidates whose range holds
-//   it; siblings whose line ranges cannot be told apart all keep it.
+//   it; on equal ranges the deeper id (`A::m` over `A`) wins, and siblings that
+//   neither range nor id can tell apart all keep it.
 //
-// Lines that fall in no candidate are counted, so the caller can refuse to call
-// a zero-symbol answer `exact`.
+// Lines that fall in no candidate, and queries that fail, are reported, so the
+// caller can refuse to call an incomplete answer `exact`.
 
 use std::collections::HashSet;
 
 use crate::graph_store::{cypher_str, GraphStore};
 
-/// Labels read through their `Defines_File_<label>` edge.
-const DEFINED_LABELS: &[&str] = &["Function", "Struct", "Enum", "Trait"];
+/// Symbol labels that carry a line range.
+const LABELS_WITH_LINES: &[&str] = &[
+    "Function",
+    "Method",
+    "Struct",
+    "Enum",
+    "Trait",
+    "Constant",
+    "TypeAlias",
+];
 
 /// One symbol of the file with its line range.
 pub(super) struct Candidate {
+    pub(super) id: String,
     pub(super) name: String,
     pub(super) qualified_name: String,
     pub(super) label: &'static str,
@@ -42,8 +54,10 @@ pub(super) struct FileAttribution {
     /// Whether the graph holds a `File` with this path.
     pub(super) file_known: bool,
     pub(super) candidates: Vec<Candidate>,
-    /// Changed lines that lie in no candidate's range.
+    /// Distinct changed lines that lie in no candidate's range.
     pub(super) unattributed_lines: u64,
+    /// Whether a graph query failed, so the candidates may be incomplete.
+    pub(super) query_failed: bool,
 }
 
 /// Reads the symbols of `file_path` and attributes each of `changed_lines` to
@@ -57,28 +71,26 @@ pub(super) fn attribute_lines(
     file_path: &str,
     changed_lines: &[u64],
 ) -> FileAttribution {
-    let file_ids = file_ids(store, file_path);
+    let mut query_failed = false;
+    let file_ids = file_ids(store, file_path, &mut query_failed);
     let mut candidates = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let path_lit = cypher_str(file_path);
-    for &label in DEFINED_LABELS {
-        let cypher = format!(
-            "MATCH (f:File)-[:Defines_File_{label}]->(n:{label}) \
-             WHERE f.path = {path_lit} \
-             RETURN n.id, n.name, n.qualified_name, n.start_line, n.end_line"
-        );
-        push_candidates(store, &cypher, label, &mut seen, &mut candidates);
-    }
     for id in &file_ids {
         let prefix = cypher_str(&format!("{id}::"));
-        let cypher = format!(
-            "MATCH (n:Method) WHERE starts_with(n.id, {prefix}) \
-             RETURN n.id, n.name, n.qualified_name, n.start_line, n.end_line"
-        );
-        push_candidates(store, &cypher, "Method", &mut seen, &mut candidates);
+        for &label in LABELS_WITH_LINES {
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE starts_with(n.id, {prefix}) \
+                 RETURN n.id, n.name, n.qualified_name, n.start_line, n.end_line"
+            );
+            query_failed |= !push_candidates(store, &cypher, label, &mut seen, &mut candidates);
+        }
     }
+    // A modified line appears once as `-` and once as `+` at the same number.
+    let mut lines = changed_lines.to_vec();
+    lines.sort_unstable();
+    lines.dedup();
     let mut unattributed_lines = 0;
-    for &line in changed_lines {
+    for line in lines {
         let owners = innermost(&candidates, line);
         if owners.is_empty() {
             unattributed_lines += 1;
@@ -91,12 +103,14 @@ pub(super) fn attribute_lines(
         file_known: !file_ids.is_empty(),
         candidates,
         unattributed_lines,
+        query_failed,
     }
 }
 
-/// Indices of the candidates holding `line` that hold no other candidate
-/// holding it: a method wins over its class, but siblings whose line ranges
-/// cannot be told apart (`fn a() {} fn b() {}` on one line) are all kept.
+/// Indices of the candidates holding `line` that enclose no other candidate
+/// holding it: a method wins over its class, also on one line
+/// (`class A { m() {} }`), but siblings that neither range nor id can tell
+/// apart (`fn a() {} fn b() {}` on one line) are all kept.
 fn innermost(candidates: &[Candidate], line: u64) -> Vec<usize> {
     let holding: Vec<usize> = (0..candidates.len())
         .filter(|&i| candidates[i].start <= line && line <= candidates[i].end)
@@ -107,43 +121,52 @@ fn innermost(candidates: &[Candidate], line: u64) -> Vec<usize> {
         .filter(|&i| {
             !holding
                 .iter()
-                .any(|&j| strictly_contains(&candidates[i], &candidates[j]))
+                .any(|&j| encloses(&candidates[i], &candidates[j]))
         })
         .collect()
 }
 
-/// True when `outer`'s range holds `inner`'s and is wider.
-fn strictly_contains(outer: &Candidate, inner: &Candidate) -> bool {
-    outer.start <= inner.start
-        && inner.end <= outer.end
-        && (outer.end - outer.start) > (inner.end - inner.start)
+/// True when `outer`'s range holds `inner`'s and is wider, or the ranges are
+/// equal and `inner`'s id extends `outer`'s (`A::m` inside `A`).
+fn encloses(outer: &Candidate, inner: &Candidate) -> bool {
+    let holds = outer.start <= inner.start && inner.end <= outer.end;
+    let wider = (outer.end - outer.start) > (inner.end - inner.start);
+    let deeper = inner
+        .id
+        .strip_prefix(outer.id.as_str())
+        .is_some_and(|rest| rest.starts_with("::"));
+    holds && (wider || deeper)
 }
 
-fn file_ids(store: &GraphStore, file_path: &str) -> Vec<String> {
+/// The ids of the Files at `file_path`; sets `query_failed` on an error.
+fn file_ids(store: &GraphStore, file_path: &str, query_failed: &mut bool) -> Vec<String> {
     let cypher = format!(
         "MATCH (f:File) WHERE f.path = {} RETURN f.id",
         cypher_str(file_path)
     );
-    store
-        .execute_query(&cypher)
-        .map(|qr| {
-            qr.rows
-                .into_iter()
-                .filter_map(|r| r.into_iter().next())
-                .collect()
-        })
-        .unwrap_or_default()
+    match store.execute_query(&cypher) {
+        Ok(qr) => qr
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next())
+            .collect(),
+        Err(_) => {
+            *query_failed = true;
+            Vec::new()
+        }
+    }
 }
 
+/// Appends the rows of `cypher` not already `seen`; false when it failed.
 fn push_candidates(
     store: &GraphStore,
     cypher: &str,
     label: &'static str,
     seen: &mut HashSet<String>,
     out: &mut Vec<Candidate>,
-) {
+) -> bool {
     let Ok(qr) = store.execute_query(cypher) else {
-        return;
+        return false;
     };
     for row in qr.rows {
         let Ok([id, name, qualified_name, start, end]) = <[String; 5]>::try_from(row) else {
@@ -155,6 +178,7 @@ fn push_candidates(
         let start: u64 = start.parse().unwrap_or(0);
         let end: u64 = end.parse().unwrap_or(0);
         out.push(Candidate {
+            id,
             name,
             qualified_name,
             label,
@@ -163,14 +187,17 @@ fn push_candidates(
             overlap: 0,
         });
     }
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn candidate(name: &str, start: u64, end: u64) -> Candidate {
+    fn candidate(id: &str, start: u64, end: u64) -> Candidate {
+        let name = id.rsplit("::").next().unwrap_or(id);
         Candidate {
+            id: id.to_string(),
             name: name.to_string(),
             qualified_name: name.to_string(),
             label: "Function",
@@ -189,7 +216,10 @@ mod tests {
 
     #[test]
     fn a_nested_symbol_wins_over_its_container() {
-        let c = [candidate("Shape", 1, 8), candidate("area", 2, 4)];
+        let c = [
+            candidate("s.ts::Shape", 1, 8),
+            candidate("s.ts::Shape::area", 2, 4),
+        ];
         assert_eq!(owners(&c, 3), vec!["area"]);
         assert_eq!(owners(&c, 6), vec!["Shape"]);
         assert!(owners(&c, 9).is_empty());
@@ -198,7 +228,20 @@ mod tests {
     /// Codex review of PR #482: `fn a() {} fn b() {}` on one line.
     #[test]
     fn siblings_on_one_line_all_keep_it() {
-        let c = [candidate("a", 5, 5), candidate("b", 5, 5)];
+        let c = [candidate("m.rs::a", 5, 5), candidate("m.rs::b", 5, 5)];
         assert_eq!(owners(&c, 5), vec!["a", "b"]);
+    }
+
+    /// Claude review of PR #482: `class A { m() {} }` on one line.
+    #[test]
+    fn on_one_line_the_deeper_id_wins() {
+        let c = [candidate("s.ts::A", 3, 3), candidate("s.ts::A::m", 3, 3)];
+        assert_eq!(owners(&c, 3), vec!["m"]);
+        // `A::mx` is not inside `A::m`.
+        let c = [
+            candidate("s.ts::A::m", 3, 3),
+            candidate("s.ts::A::mx", 3, 3),
+        ];
+        assert_eq!(owners(&c, 3), vec!["m", "mx"]);
     }
 }

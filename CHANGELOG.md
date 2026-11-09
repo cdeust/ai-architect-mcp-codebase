@@ -9,20 +9,23 @@ adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - **`detect_changes` reports a modified method as the method, and never calls
-  a zero-symbol answer `exact`** (issue #446). Methods were looked up through
+  an incomplete answer `exact`** (issue #446). Methods were looked up through
   `Defines_File_Method`, a table that does not exist: the query failed, the
   error was skipped, and no Method was ever a candidate, so a change inside a
   TypeScript or Python method was reported as its class and a change inside a
-  Rust `impl` method (whose type is defined in another file) as nothing.
-  Methods are now read by the `<File.id>::` prefix every symbol id carries, and
-  each changed line goes to the innermost symbols whose range holds it (siblings
-  on one line all keep it)
-  (`git_diff::symbols`). When a changed line lies in no indexed symbol, or the
-  diff names a path with no indexed File (an unsupported language), the answer
-  is `lower-bound` and `epistemic_reasons` names the file. Tests:
-  `tests/detect_changes_methods_446.rs` (both fail on `main`: `[Struct Shape]`
-  for a change in `Shape::area`, and `exact` for a diff of an unsupported
-  file), and `test_analyze_diff_on_empty_graph`.
+  Rust `impl` method (whose type is defined in another file) as nothing. Every
+  symbol label is now read by the `<File.id>::` prefix every symbol id carries,
+  which also reaches functions whose `Defines` edge is dropped (C++ namespace,
+  Rust inline `mod`), and Constant and TypeAlias are candidates too. Each
+  changed line goes to the innermost symbols whose range holds it (on one line,
+  the deeper id wins; siblings it cannot tell apart all keep it), and a modified
+  line counts once (`git_diff::symbols`). The answer is `lower-bound`, with a
+  reason naming the file, when a changed line of a modified or added file lies
+  in no indexed symbol, when the diff names a path with no indexed File (an
+  unsupported language), or when a graph query failed. Tests:
+  `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
+  a change in `Shape::area`, and `exact` for a diff of an unsupported file),
+  unit tests in `git_diff::symbols`, and `test_analyze_diff_on_empty_graph`.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;

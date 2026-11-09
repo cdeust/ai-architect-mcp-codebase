@@ -78,8 +78,9 @@ pub struct DiffAnalysis {
     /// source: epistemic module; clustering::get_impact per-edge confidence.
     pub mean_dependency_confidence: f64,
     /// `exact` when every changed line lies in a symbol and every changed
-    /// symbol's blast radius is statically exhaustive; `lower-bound` when some
-    /// changed lines lie in no indexed symbol (issue #446), or at least one
+    /// symbol's blast radius is statically exhaustive; `lower-bound` when a
+    /// changed line of a modified or added file lies in no indexed symbol, a
+    /// path has no indexed File, or a query failed (issue #446), or at least one
     /// changed symbol is reached via dynamic dispatch or through heuristic
     /// edges — true risk may exceed the reported score. source: epistemic
     /// module.
@@ -228,25 +229,31 @@ fn map_lines_to_symbols(
     (changed, coverage_gap)
 }
 
-/// Why `hunk`'s changes are not fully represented by symbols (issue #446): the
-/// graph has no File at that path (an unsupported language, a file outside the
-/// indexed root, a deleted file), or some changed lines lie in no symbol
-/// (top-level code, imports, a kind without a line range).
+/// Why `hunk`'s changes are not fully represented by symbols (issue #446): a
+/// graph query failed, the graph has no File at that path (an unsupported
+/// language, a file outside the indexed root, a deleted file), or some changed
+/// lines of a modified or added file lie in no symbol (top-level code, imports,
+/// a kind without a line range).
 fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Option<String> {
     let path = &hunk.file_path;
+    if attribution.query_failed {
+        return Some(format!(
+            "{path}: a graph query failed, so its symbols may be incomplete"
+        ));
+    }
     if !attribution.file_known {
         return Some(format!(
             "{path}: no indexed File at this path (unsupported language, outside the \
              indexed root, or deleted); its changes are not attributed to any symbol"
         ));
     }
-    let whole_file = hunk.is_new || hunk.is_deleted;
-    if whole_file && attribution.candidates.is_empty() {
+    if (hunk.is_new || hunk.is_deleted) && attribution.candidates.is_empty() {
         return Some(format!("{path}: the file holds no indexed symbol"));
     }
     match attribution.unattributed_lines {
         0 => None,
-        _ if whole_file => None,
+        // A deleted file's hunk (`+0,0`) carries no line of the indexed file.
+        _ if hunk.is_deleted => None,
         n => Some(format!(
             "{path}: {n} changed line(s) lie in no indexed symbol (top-level code, \
              imports, or a symbol kind without a line range)"

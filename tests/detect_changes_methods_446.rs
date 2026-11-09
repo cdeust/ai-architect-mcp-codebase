@@ -38,6 +38,8 @@ const RS_IMPLS: &str = "use crate::types::Engine;\n\
     \x20\x20\x20\x20}\n\
     }\n";
 
+const SCRIPT: &str = "import os\n\ndef run():\n    return os.sep\n";
+
 const RS_LIB: &str = "pub mod impls;\npub mod types;\n";
 
 fn indexed() -> (GraphStore, common::TestTempDir) {
@@ -54,6 +56,15 @@ fn indexed() -> (GraphStore, common::TestTempDir) {
         ("types.rs", RS_TYPES),
         ("impls.rs", RS_IMPLS),
         ("notes.xyz", "one\ntwo\n"),
+        ("script.py", SCRIPT),
+        (
+            "geo.cpp",
+            "namespace geo {\nint area() {\n  return 1;\n}\n}\n",
+        ),
+        (
+            "inline.rs",
+            "mod inner {\n    pub fn deep() -> u32 {\n        1\n    }\n}\n",
+        ),
     ] {
         fs::create_dir_all(&src).expect("create src");
         fs::write(src.join(rel), body).expect("write fixture");
@@ -83,24 +94,25 @@ fn changed(analysis: &DiffAnalysis) -> Vec<(String, String)> {
 }
 
 #[test]
-fn modified_methods_are_reported_as_methods_not_their_container() {
+fn modified_nested_symbols_are_reported_as_themselves_not_their_container() {
     let (store, _root) = indexed();
     let cases = [
         // `return 1;` inside `area`
-        ("shapes.ts", 3, "area"),
+        ("shapes.ts", 3, "Method", "area"),
         // `return 1` inside `save`
-        ("models.py", 3, "save"),
+        ("models.py", 3, "Method", "save"),
         // `self.power` inside the impl method `start`, whose type is defined
         // in another file
-        ("impls.rs", 5, "start"),
+        ("impls.rs", 5, "Method", "start"),
+        // a function inside a C++ namespace (a `Struct` whose `Defines` edge
+        // the persister drops) and inside a Rust inline `mod`
+        ("geo.cpp", 3, "Function", "area"),
+        ("inline.rs", 3, "Function", "deep"),
     ];
-    for (path, line, method) in cases {
+    for (path, line, label, name) in cases {
+        let label_name = (label.to_string(), name.to_string());
         let analysis = analyze_diff(&store, &diff_at(path, line)).expect("analyze_diff");
-        assert_eq!(
-            changed(&analysis),
-            vec![("Method".to_string(), method.to_string())],
-            "{path}:{line}"
-        );
+        assert_eq!(changed(&analysis), vec![label_name], "{path}:{line}");
         assert!(
             !analysis
                 .epistemic_reasons
@@ -109,7 +121,49 @@ fn modified_methods_are_reported_as_methods_not_their_container() {
             "{path}: every changed line lies in a symbol: {:?}",
             analysis.epistemic_reasons
         );
+        // No caller reaches these methods, so a fully covered diff stays exact.
+        assert_eq!(analysis.epistemic, "exact", "{path}");
     }
+}
+
+#[test]
+fn a_changed_line_outside_every_symbol_makes_the_answer_a_lower_bound() {
+    let (store, _root) = indexed();
+    // Line 1 is the `use`, line 5 lies in `start`.
+    let diff = format!("{}@@ -5,1 +5,1 @@\n-old\n+new\n", diff_at("impls.rs", 1));
+    let analysis = analyze_diff(&store, &diff).expect("analyze_diff");
+    assert_eq!(
+        changed(&analysis),
+        vec![("Method".to_string(), "start".to_string())]
+    );
+    assert_eq!(analysis.symbols_affected[0].lines_changed, 1);
+    assert_eq!(analysis.epistemic, "lower-bound");
+    assert_eq!(
+        analysis.epistemic_reasons,
+        vec![
+            "impls.rs: 1 changed line(s) lie in no indexed symbol (top-level code, \
+             imports, or a symbol kind without a line range)"
+                .to_string()
+        ]
+    );
+}
+
+#[test]
+fn an_added_file_with_top_level_code_is_a_lower_bound() {
+    let (store, _root) = indexed();
+    let diff = "diff --git a/script.py b/script.py\n--- /dev/null\n+++ b/script.py\n\
+                @@ -0,0 +1,4 @@\n+import os\n+\n+def run():\n+    return os.sep\n";
+    let analysis = analyze_diff(&store, diff).expect("analyze_diff");
+    assert_eq!(
+        changed(&analysis),
+        vec![("Function".to_string(), "run".to_string())]
+    );
+    assert_eq!(analysis.epistemic, "lower-bound");
+    assert!(
+        analysis.epistemic_reasons == vec!["script.py: 2 changed line(s) lie in no indexed symbol (top-level code, imports, or a symbol kind without a line range)".to_string()],
+        "{:?}",
+        analysis.epistemic_reasons
+    );
 }
 
 #[test]
