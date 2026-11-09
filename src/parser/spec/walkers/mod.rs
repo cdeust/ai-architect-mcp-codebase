@@ -46,6 +46,7 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser, Tree};
 
 use super::lang_spec::LangSpec;
+use super::ts_receiver::ReceiverScopes;
 use crate::parser::{
     collect_error_ranges, count_parse_errors, parse_tree_too_deep, parse_with_timeout,
     ExtractedNode, ExtractedRef, Language, ParseResult, MAX_TREE_DEPTH,
@@ -79,6 +80,10 @@ pub(crate) struct WalkCtx<'a> {
     /// some: the emitters then append each twin's gate to its qualified name.
     /// Empty on every other walk.
     pub(super) twins: HashMap<(String, String), Vec<String>>,
+    /// Issue #444. The binding tables the TS/JS constructed-receiver hint reads,
+    /// built once per scope of THIS tree (node ids are per tree, so an embedded
+    /// region's walk starts its own).
+    pub(super) ts_receivers: ReceiverScopes,
 }
 
 impl<'a> WalkCtx<'a> {
@@ -99,6 +104,7 @@ impl<'a> WalkCtx<'a> {
             emitted_qns: HashSet::new(),
             cfg_gates,
             twins,
+            ts_receivers: ReceiverScopes::default(),
         }
     }
 }

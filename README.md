@@ -279,8 +279,13 @@ when `x` is bound once in the enclosing function by a typed parameter, a typed
 types `x` from the declared return type of a free function of the same file
 that initialised it (`let x = make();`, and an `Option` or `Result` unwrapped by
 `let Some(x) = .. else`, `.expect(..)`, `.unwrap()` or `?`), at a lower
-confidence (`"receiver-return-type"`, 0.85). A receiver it cannot type is left
-unresolved; it never falls back to a lookup by bare name.
+confidence (`"receiver-return-type"`, 0.85). In TypeScript and JavaScript (issue #444) it
+binds `x.m()` when the enclosing function declares `x` exactly once, by
+`const`/`let`/`var x = new T(..)` before the call, nothing else in the function
+binds or writes `x`, and the caller's own file defines the class `T` with a
+method `m` (`"receiver-local-binding"`); otherwise the call keeps its by-name
+resolution. In Rust, a receiver it cannot type is left unresolved; it never
+falls back to a lookup by bare name.
 
 ### Query truncation and paging
 

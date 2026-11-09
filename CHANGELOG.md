@@ -18,11 +18,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   `const`/`let`/`var x = new T(..)` written before the call in a block that
   contains it, and nothing else in the function binds or writes `x`
   (`parser::spec::ts_receiver`). The resolver binds it to `T::<m>` when the
-  caller's file defines the class `T` with that method, and otherwise keeps the
-  by-name path it took before, so no previous edge is removed. Reassigned,
-  shadowed, destructured, parameter and module-scope receivers carry no hint.
-  Tests: `tests/ts_constructed_local_receiver_444.rs` (fails on `main` with no
-  edge for `useConst`), four unit tests in `ts_receiver`.
+  caller's file defines the class `T` with that method (several such methods
+  stay ambiguous), and otherwise keeps the by-name path it took before.
+  Reassigned (also through `(x)`, `x!`, `x as T`), shadowed, destructured,
+  parameter and module-scope receivers carry no hint, nor does a `new T(..)`
+  whose `T` an enclosing function rebinds. Each function's binding table is
+  built once per file, so the cost does not grow with the number of calls in
+  it. Tests: `tests/ts_constructed_local_receiver_444.rs` (fails on `main` with
+  no edge for `useConst`), seven unit tests in `ts_receiver`.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;

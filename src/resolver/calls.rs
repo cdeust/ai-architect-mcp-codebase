@@ -335,11 +335,11 @@ struct RowInput<'a> {
 /// reaches here); `file_id` is the caller's file path; `site.caller_qn`/
 /// `site.caller_label` identify the calling symbol (used only by the
 /// same-class receiver gate below); `site.receiver_hint` is the
-/// parser-attached issue #283 palier 3 hint (used only by the local-receiver
-/// gate below).
+/// parser-attached issue #283 palier 3 hint (used only by the Rust
+/// local-receiver gate and the TS/JS constructed-receiver gate below).
 /// postcondition: the returned `Resolution` depends only on the candidate
 /// set and the evidence context — never directly on whether the callee was
-/// spelled qualified or unqualified — EXCEPT for the two receiver gates,
+/// spelled qualified or unqualified — EXCEPT for the three receiver gates,
 /// each of which is itself evidence (the callee's own receiver
 /// spelling, or the parser's derived local-binding type), not a
 /// spelling-dependent shortcut around the policy.

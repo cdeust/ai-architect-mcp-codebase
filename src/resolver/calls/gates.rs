@@ -1,5 +1,6 @@
-// resolver::calls::gates: the two receiver gates `resolve_single_call` consults
-// before the by-name ambiguity policy (same-class receiver, Rust local binding).
+// resolver::calls::gates: the three receiver gates `resolve_single_call` consults
+// before the by-name ambiguity policy (same-class receiver, Rust local binding,
+// TypeScript/JavaScript constructed local).
 // Moved out of `calls.rs` to keep it under the size cap; behavior unchanged.
 
 use super::reason::{self, Decline, Gated};
@@ -105,9 +106,9 @@ pub(super) fn rust_local_receiver_gate(
 /// postcondition: `None` when the gate does not apply (not TypeScript, no
 /// `constructed` hint, callee not `<ident>.<m>`-shaped) AND when the file holds no
 /// class `T` owning `m` — the call then falls through to the by-name path it
-/// took before this gate existed, so the gate only ever adds a typed answer and
-/// never removes one. `Some(_)` is final: one method of `T` binds, several of
-/// them stay ambiguous.
+/// took before this gate existed. Otherwise its answer, `Ambiguous` included,
+/// is final: one method of `T` binds; several (two classes named `T` in one
+/// file, e.g. in two namespaces) stay ambiguous without the by-name path.
 pub(super) fn ts_constructed_receiver_gate(
     ctx: &ResolveContext,
     site: &CallSite,

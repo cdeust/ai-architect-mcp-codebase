@@ -105,7 +105,7 @@ impl LanguageConventions for TsConventions {
 
     fn call_entry(
         &self,
-        source: &str,
+        _source: &str,
         call_node: Node,
         caller_qn: &str,
         callee: &str,
@@ -124,7 +124,10 @@ impl LanguageConventions for TsConventions {
         let end_byte = call_node.end_byte() as u64;
         let cs_id = format!("{caller_qn}::call@{line}:{col}#{start_byte}-{end_byte}");
         let callee_tail = callee.rsplit('.').next().unwrap_or(callee).to_string();
-        let mut properties = vec![
+        // The constructed-receiver hint (issue #444) is appended by
+        // `walkers::typescript::ts_walk_calls`, which holds the per-file
+        // binding tables (`ts_receiver::ReceiverScopes`).
+        let properties = vec![
             ("callee_name".to_string(), callee.to_string()),
             ("caller_qn".to_string(), caller_qn.to_string()),
             // source: LSP 3.17 Base Protocol — positions are 0-based;
@@ -133,11 +136,6 @@ impl LanguageConventions for TsConventions {
             // indexer::persist::nodes::append_label_properties.
             ("lsp_col".to_string(), col.to_string()),
         ];
-        // `const w = new Worker(); w.run()`: the receiver's type when the
-        // enclosing function proves it (issue #444).
-        properties.extend(super::ts_receiver::constructed_receiver_properties(
-            source, call_node,
-        ));
         CallEntry {
             name: callee.to_string(),
             qualified_name: cs_id,
