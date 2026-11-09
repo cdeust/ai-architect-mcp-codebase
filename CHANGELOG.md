@@ -19,7 +19,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   Rust inline `mod`), and Constant and TypeAlias are candidates too. Each
   changed line goes to the innermost symbols whose range holds it (on one line,
   the deeper id wins; siblings it cannot tell apart all keep it), and a modified
-  line counts once (`git_diff::symbols`). The answer is `lower-bound`, with a
+  line counts once (`git_diff::symbols`). A pure removal counts for a symbol
+  only when that symbol spans the lines on both sides of it (deleting `fn foo`
+  just above `fn bar` no longer reports `bar`). Symbols are read once per diff,
+  one batched query per label, not once per file. `next_steps` suggests
+  `lsp_resolve` only for dependency reasons, not for coverage gaps. The answer is `lower-bound`, with a
   reason naming the file, when a changed line of a modified or added file lies
   in no indexed symbol, when the diff names a path with no indexed File (an
   unsupported language), or when a graph query failed. Tests:

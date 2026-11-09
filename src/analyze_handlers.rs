@@ -2,7 +2,6 @@
 //! Stage 3b-v2 `lsp_resolve`, and Stage 3e `detect_changes` handler logic.
 //! Extracted from `main.rs` per issue #151 (Fowler: Extract Class).
 
-use crate::epistemic;
 use crate::search;
 use serde_json::{json, Value};
 use std::fs;
@@ -388,10 +387,19 @@ pub(crate) fn detect_changes_next_steps(analysis: &git_diff::DiffAnalysis) -> Va
                 .to_string(),
         );
     }
-    if analysis.epistemic == epistemic::Boundary::LowerBound.as_str() {
+    // Dependency reasons (dynamic dispatch, heuristic edges) are what
+    // lsp_resolve can tighten; a coverage gap (issue #446) is not.
+    if analysis.epistemic_reasons.len() > analysis.coverage_gap_count {
         steps.push(
             "risk is a lower bound (see `epistemic_reasons`) — run lsp_resolve to \
              tighten dynamic-dispatch edges before trusting the score"
+                .to_string(),
+        );
+    }
+    if analysis.coverage_gap_count > 0 {
+        steps.push(
+            "some changes reach no indexed symbol (see `epistemic_reasons`) — read \
+             those hunks directly; index_status shows whether the file is indexed"
                 .to_string(),
         );
     }

@@ -142,7 +142,8 @@ fn a_changed_line_outside_every_symbol_makes_the_answer_a_lower_bound() {
         analysis.epistemic_reasons,
         vec![
             "impls.rs: 1 changed line(s) lie in no indexed symbol (top-level code, \
-             imports, or a symbol kind without a line range)"
+             imports, a removal between symbols, or a declaration the graph does \
+             not index)"
                 .to_string()
         ]
     );
@@ -160,7 +161,8 @@ fn an_added_file_with_top_level_code_is_a_lower_bound() {
     );
     assert_eq!(analysis.epistemic, "lower-bound");
     assert!(
-        analysis.epistemic_reasons == vec!["script.py: 2 changed line(s) lie in no indexed symbol (top-level code, imports, or a symbol kind without a line range)".to_string()],
+        analysis.epistemic_reasons == vec!["script.py: 2 changed line(s) lie in no indexed symbol (top-level code, imports, a removal between symbols, or a declaration the graph does \
+             not index)".to_string()],
         "{:?}",
         analysis.epistemic_reasons
     );
@@ -183,4 +185,52 @@ fn a_diff_touching_only_unsupported_files_is_never_exact() {
         "{:?}",
         analysis.epistemic_reasons
     );
+}
+
+#[test]
+fn one_incomplete_file_in_a_mixed_diff_gives_exactly_one_reason() {
+    let (store, _root) = indexed();
+    let diff = format!("{}{}", diff_at("shapes.ts", 3), diff_at("notes.xyz", 1));
+    let analysis = analyze_diff(&store, &diff).expect("analyze_diff");
+    assert_eq!(
+        changed(&analysis),
+        vec![("Method".to_string(), "area".to_string())]
+    );
+    assert_eq!(analysis.epistemic, "lower-bound");
+    assert_eq!(
+        analysis.epistemic_reasons.len(),
+        1,
+        "{:?}",
+        analysis.epistemic_reasons
+    );
+    assert!(analysis.epistemic_reasons[0].starts_with("notes.xyz: "));
+    assert_eq!(analysis.coverage_gap_count, 1);
+}
+
+/// Claude review of PR #482: a removal used to be credited to the line after
+/// it. Removing a method between `area` and `perimeter` changes their class,
+/// not `perimeter`; removing a top-level item just above `impl Engine` changes
+/// no symbol.
+#[test]
+fn a_removal_goes_to_the_symbol_spanning_it_not_to_the_next_one() {
+    let (store, _root) = indexed();
+    let in_class = "diff --git a/shapes.ts b/shapes.ts\n--- a/shapes.ts\n+++ b/shapes.ts\n\
+                    @@ -4,5 +4,2 @@\n   }\n-  gone(): number {\n-    return 3;\n-  }\n   perimeter(): number {\n";
+    let analysis = analyze_diff(&store, in_class).expect("analyze_diff");
+    assert_eq!(
+        changed(&analysis),
+        vec![("Struct".to_string(), "Shape".to_string())]
+    );
+    assert_eq!(analysis.coverage_gap_count, 0);
+
+    let top_level = "diff --git a/impls.rs b/impls.rs\n--- a/impls.rs\n+++ b/impls.rs\n\
+                     @@ -2,3 +2,2 @@\n \n-pub const GONE: u32 = 1;\n impl Engine {\n";
+    let analysis = analyze_diff(&store, top_level).expect("analyze_diff");
+    assert!(
+        analysis.symbols_affected.is_empty(),
+        "{:?}",
+        changed(&analysis)
+    );
+    assert_eq!(analysis.epistemic, "lower-bound");
+    assert_eq!(analysis.coverage_gap_count, 1);
 }

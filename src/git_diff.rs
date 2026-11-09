@@ -85,9 +85,13 @@ pub struct DiffAnalysis {
     /// edges — true risk may exceed the reported score. source: epistemic
     /// module.
     pub epistemic: &'static str,
-    /// Carriers of epistemic uncertainty across the changed-symbol set (empty
-    /// when `exact`), each naming the symbol and why its impact under-counts.
+    /// Carriers of epistemic uncertainty (empty when `exact`): a changed
+    /// symbol and why its impact under-counts, or a changed file and why some
+    /// of its changes reach no symbol (issue #446).
     pub epistemic_reasons: Vec<String>,
+    /// How many of `epistemic_reasons` are coverage gaps (a changed file whose
+    /// changes partly reach no symbol) rather than dependency uncertainty.
+    pub coverage_gap_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -98,15 +102,53 @@ pub struct DiffAnalysis {
 // `git show` diffs into the same hunk shape to attribute changes to entities.
 pub(crate) struct FileHunk {
     pub(crate) file_path: String,
+    /// New-file positions of every `+` line and of every `-` line (a `-` line
+    /// takes the position of the new-file line that follows it). Read by the
+    /// history module.
     pub(crate) changed_lines: Vec<u64>,
+    /// New-file positions of the `+` lines only.
+    pub(crate) added_lines: Vec<u64>,
+    /// New-file positions just after a run of `-` lines that no `+` line
+    /// replaces (a pure removal between lines p-1 and p).
+    pub(crate) removal_gaps: Vec<u64>,
     pub(crate) is_new: bool,
     pub(crate) is_deleted: bool,
+}
+
+/// The per-file line lists `parse_unified_diff` accumulates.
+#[derive(Default)]
+struct LineLists {
+    changed: Vec<u64>,
+    added: Vec<u64>,
+    gaps: Vec<u64>,
+    /// Position of a `-` run not yet followed by a `+` line.
+    pending_removal: Option<u64>,
+}
+
+impl LineLists {
+    fn close_removal(&mut self) {
+        if let Some(p) = self.pending_removal.take() {
+            self.gaps.push(p);
+        }
+    }
+
+    fn into_hunk(mut self, file_path: String, is_new: bool, is_deleted: bool) -> FileHunk {
+        self.close_removal();
+        FileHunk {
+            file_path,
+            changed_lines: self.changed,
+            added_lines: self.added,
+            removal_gaps: self.gaps,
+            is_new,
+            is_deleted,
+        }
+    }
 }
 
 pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, String> {
     let mut hunks: Vec<FileHunk> = Vec::new();
     let mut current_file: Option<String> = None;
-    let mut current_lines: Vec<u64> = Vec::new();
+    let mut lists = LineLists::default();
     let mut current_line: u64 = 0;
     let mut is_new = false;
     let mut is_deleted = false;
@@ -115,12 +157,7 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
         if line.starts_with("diff --git") {
             // Flush previous file
             if let Some(fp) = current_file.take() {
-                hunks.push(FileHunk {
-                    file_path: fp,
-                    changed_lines: std::mem::take(&mut current_lines),
-                    is_new,
-                    is_deleted,
-                });
+                hunks.push(std::mem::take(&mut lists).into_hunk(fp, is_new, is_deleted));
             }
             is_new = false;
             is_deleted = false;
@@ -137,11 +174,14 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             is_deleted = true;
         } else if line.starts_with("@@ ") {
             // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
+            lists.close_removal();
             if let Some(new_range) = parse_hunk_header(line) {
                 current_line = new_range;
             }
         } else if line.starts_with('+') && !line.starts_with("+++") {
-            current_lines.push(current_line);
+            lists.pending_removal = None;
+            lists.changed.push(current_line);
+            lists.added.push(current_line);
             if current_line >= DIFF_LINE_MAX {
                 return Err("diff_too_large: line counter would overflow".to_string());
             }
@@ -149,10 +189,12 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
         } else if line.starts_with('-') && !line.starts_with("---") {
             // Deleted lines affect the old position; we record current_line
             // so we can match the surrounding context in the new file.
-            current_lines.push(current_line);
+            lists.changed.push(current_line);
+            lists.pending_removal.get_or_insert(current_line);
             // Don't increment — deleted lines don't exist in the new file
         } else {
             // Context line (or other)
+            lists.close_removal();
             if current_line >= DIFF_LINE_MAX {
                 return Err("diff_too_large: line counter would overflow".to_string());
             }
@@ -162,12 +204,7 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
 
     // Flush last file
     if let Some(fp) = current_file.take() {
-        hunks.push(FileHunk {
-            file_path: fp,
-            changed_lines: current_lines,
-            is_new,
-            is_deleted,
-        });
+        hunks.push(lists.into_hunk(fp, is_new, is_deleted));
     }
 
     Ok(hunks)
@@ -189,10 +226,11 @@ fn parse_hunk_header(line: &str) -> Option<u64> {
 /// under-counted (none when every changed line lies in a symbol).
 fn map_lines_to_symbols(
     store: &GraphStore,
+    loaded: &symbols::DiffSymbols,
     hunk: &FileHunk,
 ) -> (Vec<ChangedSymbol>, Option<String>) {
     let whole_file = hunk.is_new || hunk.is_deleted;
-    let attribution = symbols::attribute_lines(store, &hunk.file_path, &hunk.changed_lines);
+    let attribution = loaded.attribute(&hunk.file_path, &hunk.added_lines, &hunk.removal_gaps);
     let coverage_gap = coverage_gap(hunk, &attribution);
     let change_type = if hunk.is_new {
         "added"
@@ -256,7 +294,8 @@ fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Opti
         _ if hunk.is_deleted => None,
         n => Some(format!(
             "{path}: {n} changed line(s) lie in no indexed symbol (top-level code, \
-             imports, or a symbol kind without a line range)"
+             imports, a removal between symbols, or a declaration the graph does \
+             not index)"
         )),
     }
 }
@@ -355,9 +394,11 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
     let mut all_symbols: Vec<ChangedSymbol> = Vec::new();
 
     let mut coverage_gaps: Vec<String> = Vec::new();
+    let paths: Vec<&str> = hunks.iter().map(|h| h.file_path.as_str()).collect();
+    let loaded = symbols::DiffSymbols::load(store, &paths);
 
     for hunk in hunks {
-        let (symbols, gap) = map_lines_to_symbols(store, hunk);
+        let (symbols, gap) = map_lines_to_symbols(store, &loaded, hunk);
         all_symbols.extend(symbols);
         coverage_gaps.extend(gap);
     }
@@ -382,7 +423,8 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
         assess_dependency_confidence(store, &all_symbols);
     // A change no symbol carries is a change the risk does not see: the answer
     // is a lower bound, never `exact` (issue #446).
-    if !coverage_gaps.is_empty() {
+    let coverage_gap_count = coverage_gaps.len();
+    if coverage_gap_count > 0 {
         epistemic = crate::epistemic::Boundary::LowerBound.as_str();
         epistemic_reasons.extend(coverage_gaps);
     }
@@ -396,6 +438,7 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
         mean_dependency_confidence,
         epistemic,
         epistemic_reasons,
+        coverage_gap_count,
     })
 }
 
