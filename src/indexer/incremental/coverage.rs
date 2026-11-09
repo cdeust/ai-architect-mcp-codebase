@@ -180,9 +180,10 @@ pub(super) struct PassGaps {
 /// Builds and writes the coverage sidecar for an incremental pass or bootstrap
 /// fill: carry forward unchanged files' gaps, overlay the reparsed files'
 /// fresh gaps, drop gaps for vanished/now-clean files, then recompute
-/// outside-build-targets fresh over the whole current tree (issue #284), and
-/// the `no_extraction` tally (issue #447), for which `store` says which files
-/// carry IaC nodes; it is read only after the IaC pass of `apply_changes`.
+/// outside-build-targets fresh over the whole current tree (issue #284), and,
+/// unless the walk was `language`-filtered (then `None`), the `no_extraction`
+/// tally (issue #447), for which `store` says which files carry IaC nodes;
+/// `store` is read only after the IaC pass of `apply_changes`.
 /// Best-effort — a failed write only degrades the honesty signal, never the
 /// index.
 pub(super) fn save_incremental_coverage(
