@@ -282,9 +282,13 @@ pub fn analyze_git_diff(
         // The parser reads `a/`/`b/` paths and plain `+`/`-` lines: pin them
         // against `diff.noprefix`, `color.diff=always` and `diff.external`, under
         // which every file would be dropped (issue #446 review).
+        // A rename would be a section with no hunk, and a textconv driver
+        // would shift the line numbers away from the indexed file.
         .args([
             "--no-color",
             "--no-ext-diff",
+            "--no-renames",
+            "--no-textconv",
             "--src-prefix=a/",
             "--dst-prefix=b/",
         ])
@@ -556,6 +560,14 @@ mod tests {
         let headless = "@@ -1,1 +1,1 @@\n-a\n+b\n";
         let hunks = parse_unified_diff(headless).unwrap();
         assert!(hunks[0].malformed, "a hunk with no file path is reported");
+        // Neither an unreadable headless hunk nor a binary section whose quoted
+        // `diff --git` paths cannot be read disappears.
+        let unreadable = parse_unified_diff("@@ -5,x +5,1 @@\n-old\n+new\n").unwrap();
+        assert!(unreadable[0].malformed);
+        let quoted = "diff --git \"a/x\\ty.png\" \"b/x\\ty.png\"\n\
+                      Binary files \"a/x\\ty.png\" and \"b/x\\ty.png\" differ\n";
+        let hunks = parse_unified_diff(quoted).unwrap();
+        assert!(hunks[0].binary && hunks[0].malformed);
     }
 
     /// Claude review of PR #482: a hunk ends where its header's counts say,

@@ -190,7 +190,7 @@ impl FileSection {
         // A section whose hunks name no usable path is reported, not dropped.
         let file_path = match self.path.take().or(self.git_path.take()) {
             Some(p) => p,
-            None if self.had_hunk => {
+            None if self.had_hunk || self.malformed || self.binary => {
                 self.malformed = true;
                 "(diff section with no file path)".to_string()
             }
