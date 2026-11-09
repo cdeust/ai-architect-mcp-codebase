@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The CI follows Cortex's: the Claude review decides the merge.** Codex is out
+  of the pipeline (`Codex.yml`, the 800-line `review` job and its scripts are
+  removed); `merge` is the aggregate of the test jobs. `claude-review.yml` caps
+  automatic reviews at three per pull request and ends each with
+  `Verdict: approve` or `Verdict: block`. The post-merge resolver merges a pull
+  request only on an `approve` bound to the review run of its head, except a
+  Dependabot minor or patch update of `Cargo.lock` / `Cargo.toml`, which merges
+  on green required checks; it then closes the issues the pull request closes.
+  Source: Cortex ADR-1119, ADR-1120, ADR-1121, ADR-1126.
+
 ### Fixed
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
