@@ -359,6 +359,20 @@ mod gap_tests {
         assert_eq!(a.unattributed_lines, 0);
     }
 
+    /// Codex review of PR #482 (P2 on 205b1db): `@@ -2 +1,0 @@` removes the
+    /// first statement of a function on lines 1-3; the gap sits before line 2,
+    /// inside the function.
+    #[test]
+    fn a_removal_of_a_first_statement_is_its_function() {
+        let d = loaded(vec![function("m.rs::f", 1, 3)]);
+        let a = d.attribute("m.rs", &[], &[2]);
+        assert_eq!(a.candidates[0].overlap, 1);
+        // A gap before line 1 lies above every symbol.
+        let a = d.attribute("m.rs", &[], &[1]);
+        assert_eq!(a.candidates[0].overlap, 0);
+        assert_eq!(a.unattributed_lines, 1);
+    }
+
     #[test]
     fn rows_go_to_the_file_their_id_extends() {
         assert_eq!(

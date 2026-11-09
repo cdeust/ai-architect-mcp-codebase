@@ -399,7 +399,7 @@ pub(crate) fn detect_changes_next_steps(analysis: &git_diff::DiffAnalysis) -> Va
     if analysis.coverage_gap_count > 0 {
         steps.push(
             "some changes reach no indexed symbol (see `epistemic_reasons`) — read \
-             those hunks directly; index_status shows whether the file is indexed"
+             those hunks directly: their impact is not in the score"
                 .to_string(),
         );
     }

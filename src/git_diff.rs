@@ -6,8 +6,10 @@
 //
 // Each changed line is attributed to the innermost graph symbols whose
 // [start_line, end_line] range holds it (`symbols`). Each affected symbol is
-// enriched with community and process membership. Changed lines no symbol
-// holds make the answer `lower-bound` (issue #446).
+// enriched with community and process membership. A change no symbol holds (a
+// non-blank line or a pure removal outside every symbol, a path with no indexed
+// File, an added or deleted file with no symbol) or a failed symbol query makes
+// the answer `lower-bound` (issue #446).
 
 use crate::clustering;
 use crate::graph_store::GraphStore;
@@ -107,8 +109,9 @@ pub struct DiffAnalysis {
 pub(crate) struct FileHunk {
     pub(crate) file_path: String,
     /// New-file positions of every `+` line and of every `-` line (a `-` line
-    /// takes the position of the new-file line that follows it). Read by the
-    /// history module.
+    /// takes the position of the new-file line that follows it, except in a
+    /// `+N,0` hunk, where it takes N, the line before: `removal_gaps` corrects
+    /// that, this list keeps it). Read by the history module.
     pub(crate) changed_lines: Vec<u64>,
     /// New-file positions of the non-blank `+` lines.
     pub(crate) added_lines: Vec<u64>,
@@ -135,7 +138,7 @@ struct LineLists {
 impl LineLists {
     fn close_removal(&mut self) {
         if let Some(p) = self.pending_removal.take() {
-            self.gaps.push(p + self.gap_shift);
+            self.gaps.push(p.saturating_add(self.gap_shift));
         }
     }
 
@@ -159,6 +162,7 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
     let mut current_line: u64 = 0;
     let mut is_new = false;
     let mut is_deleted = false;
+    let mut in_hunk = false;
 
     for line in diff_text.lines() {
         if line.starts_with("diff --git") {
@@ -168,6 +172,11 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             }
             is_new = false;
             is_deleted = false;
+            in_hunk = false;
+        } else if in_hunk && !line.starts_with("@@ ") {
+            // Inside a hunk, `+++i;` is an added `++i;` and `--- note` a
+            // removed `-- note`: never file headers (issue #446 review).
+            hunk_line(line, &mut lists, &mut current_line)?;
         } else if let Some(stripped) = line.strip_prefix("--- a/") {
             // For deleted files, this is the only place we get the path
             if current_file.is_none() {
@@ -181,38 +190,15 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             is_deleted = true;
         } else if line.starts_with("@@ ") {
             // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
+            in_hunk = true;
             lists.close_removal();
             lists.gap_shift = u64::from(new_range_is_empty(line));
             if let Some(new_range) = parse_hunk_header(line) {
+                if new_range >= DIFF_LINE_MAX {
+                    return Err("diff_too_large: line counter would overflow".to_string());
+                }
                 current_line = new_range;
             }
-        } else if line.starts_with('\\') {
-            // "\ No newline at end of file": no line in either file.
-        } else if line.starts_with('+') && !line.starts_with("+++") {
-            lists.pending_removal = None;
-            lists.changed.push(current_line);
-            // A blank added line changes no behavior; it must not make a
-            // complete answer a lower bound (issue #446 review).
-            if !line[1..].trim().is_empty() {
-                lists.added.push(current_line);
-            }
-            if current_line >= DIFF_LINE_MAX {
-                return Err("diff_too_large: line counter would overflow".to_string());
-            }
-            current_line += 1;
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            // Deleted lines affect the old position; we record current_line
-            // so we can match the surrounding context in the new file.
-            lists.changed.push(current_line);
-            lists.pending_removal.get_or_insert(current_line);
-            // Don't increment — deleted lines don't exist in the new file
-        } else {
-            // Context line (or other)
-            lists.close_removal();
-            if current_line >= DIFF_LINE_MAX {
-                return Err("diff_too_large: line counter would overflow".to_string());
-            }
-            current_line += 1;
         }
     }
 
@@ -222,6 +208,39 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
     }
 
     Ok(hunks)
+}
+
+/// One body line of a hunk: `+` added, `-` removed, `\` metadata, anything
+/// else context.
+fn hunk_line(line: &str, lists: &mut LineLists, current_line: &mut u64) -> Result<(), String> {
+    if line.starts_with('\\') {
+        // "\ No newline at end of file": no line in either file.
+        return Ok(());
+    }
+    if line.starts_with('-') {
+        // Deleted lines affect the old position; we record current_line
+        // so we can match the surrounding context in the new file.
+        lists.changed.push(*current_line);
+        lists.pending_removal.get_or_insert(*current_line);
+        // Don't increment — deleted lines don't exist in the new file
+        return Ok(());
+    }
+    if *current_line >= DIFF_LINE_MAX {
+        return Err("diff_too_large: line counter would overflow".to_string());
+    }
+    if let Some(body) = line.strip_prefix('+') {
+        lists.pending_removal = None;
+        lists.changed.push(*current_line);
+        // A blank added line changes no behavior; it must not make a
+        // complete answer a lower bound (issue #446 review).
+        if !body.trim().is_empty() {
+            lists.added.push(*current_line);
+        }
+    } else {
+        lists.close_removal();
+    }
+    *current_line += 1;
+    Ok(())
 }
 
 /// True for a hunk header whose new range has a zero count (`+N,0`).
@@ -577,7 +596,11 @@ mod tests {
     #[test]
     fn added_lines_and_removal_gaps_per_hunk_shape() {
         // (hunk body, added_lines, removal_gaps)
-        let cases: [(&str, &[u64], &[u64]); 6] = [
+        let cases: [(&str, &[u64], &[u64]); 8] = [
+            // an added `++i;` is the hunk line `+++i;`, not a header
+            ("@@ -1,2 +1,3 @@\n a\n+++i;\n b\n", &[2], &[]),
+            // a removed `-- note` is the hunk line `--- note`: a removal
+            ("@@ -1,3 +1,2 @@\n a\n--- note\n b\n", &[], &[2]),
             // a replacement is not a gap
             ("@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n", &[2], &[]),
             // a run partly replaced: the `+` cancels the gap
