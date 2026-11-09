@@ -13,7 +13,8 @@
 //   incremental purge, `indexer::incremental::mutate::purge_file_symbols`,
 //   relies on), so Methods are read by that prefix instead.
 // - A changed line inside a method also lies inside its class, and was counted
-//   for both. Each line now goes to the innermost candidate whose range holds it.
+//   for both. Each line now goes to the innermost candidates whose range holds
+//   it; siblings whose line ranges cannot be told apart all keep it.
 //
 // Lines that fall in no candidate are counted, so the caller can refuse to call
 // a zero-symbol answer `exact`.
@@ -46,10 +47,11 @@ pub(super) struct FileAttribution {
 }
 
 /// Reads the symbols of `file_path` and attributes each of `changed_lines` to
-/// the innermost one whose range holds it.
+/// the innermost ones whose range holds it (`innermost`).
 ///
-/// postcondition: every changed line counts in exactly one candidate's
-/// `overlap` or in `unattributed_lines`; candidates are unique by node `id`.
+/// postcondition: every changed line counts in `unattributed_lines` or in the
+/// `overlap` of at least one candidate, never in a candidate that strictly
+/// contains another holding it; candidates are unique by node `id`.
 pub(super) fn attribute_lines(
     store: &GraphStore,
     file_path: &str,
@@ -77,9 +79,12 @@ pub(super) fn attribute_lines(
     }
     let mut unattributed_lines = 0;
     for &line in changed_lines {
-        match innermost(&candidates, line) {
-            Some(i) => candidates[i].overlap += 1,
-            None => unattributed_lines += 1,
+        let owners = innermost(&candidates, line);
+        if owners.is_empty() {
+            unattributed_lines += 1;
+        }
+        for i in owners {
+            candidates[i].overlap += 1;
         }
     }
     FileAttribution {
@@ -89,15 +94,29 @@ pub(super) fn attribute_lines(
     }
 }
 
-/// Index of the candidate with the narrowest range holding `line`; the first
-/// read wins a tie.
-fn innermost(candidates: &[Candidate], line: u64) -> Option<usize> {
-    candidates
+/// Indices of the candidates holding `line` that hold no other candidate
+/// holding it: a method wins over its class, but siblings whose line ranges
+/// cannot be told apart (`fn a() {} fn b() {}` on one line) are all kept.
+fn innermost(candidates: &[Candidate], line: u64) -> Vec<usize> {
+    let holding: Vec<usize> = (0..candidates.len())
+        .filter(|&i| candidates[i].start <= line && line <= candidates[i].end)
+        .collect();
+    holding
         .iter()
-        .enumerate()
-        .filter(|(_, c)| c.start <= line && line <= c.end)
-        .min_by_key(|(_, c)| c.end - c.start)
-        .map(|(i, _)| i)
+        .copied()
+        .filter(|&i| {
+            !holding
+                .iter()
+                .any(|&j| strictly_contains(&candidates[i], &candidates[j]))
+        })
+        .collect()
+}
+
+/// True when `outer`'s range holds `inner`'s and is wider.
+fn strictly_contains(outer: &Candidate, inner: &Candidate) -> bool {
+    outer.start <= inner.start
+        && inner.end <= outer.end
+        && (outer.end - outer.start) > (inner.end - inner.start)
 }
 
 fn file_ids(store: &GraphStore, file_path: &str) -> Vec<String> {
@@ -143,5 +162,43 @@ fn push_candidates(
             end: end.max(start),
             overlap: 0,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(name: &str, start: u64, end: u64) -> Candidate {
+        Candidate {
+            name: name.to_string(),
+            qualified_name: name.to_string(),
+            label: "Function",
+            start,
+            end,
+            overlap: 0,
+        }
+    }
+
+    fn owners(candidates: &[Candidate], line: u64) -> Vec<&str> {
+        innermost(candidates, line)
+            .into_iter()
+            .map(|i| candidates[i].name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_nested_symbol_wins_over_its_container() {
+        let c = [candidate("Shape", 1, 8), candidate("area", 2, 4)];
+        assert_eq!(owners(&c, 3), vec!["area"]);
+        assert_eq!(owners(&c, 6), vec!["Shape"]);
+        assert!(owners(&c, 9).is_empty());
+    }
+
+    /// Codex review of PR #482: `fn a() {} fn b() {}` on one line.
+    #[test]
+    fn siblings_on_one_line_all_keep_it() {
+        let c = [candidate("a", 5, 5), candidate("b", 5, 5)];
+        assert_eq!(owners(&c, 5), vec!["a", "b"]);
     }
 }

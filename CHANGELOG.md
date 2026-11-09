@@ -15,7 +15,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   TypeScript or Python method was reported as its class and a change inside a
   Rust `impl` method (whose type is defined in another file) as nothing.
   Methods are now read by the `<File.id>::` prefix every symbol id carries, and
-  each changed line goes to the innermost symbol whose range holds it
+  each changed line goes to the innermost symbols whose range holds it (siblings
+  on one line all keep it)
   (`git_diff::symbols`). When a changed line lies in no indexed symbol, or the
   diff names a path with no indexed File (an unsupported language), the answer
   is `lower-bound` and `epistemic_reasons` names the file. Tests:

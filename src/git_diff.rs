@@ -4,7 +4,7 @@
 //   1. analyze_diff(store, diff_text) — parse raw unified diff text
 //   2. analyze_git_diff(store, codebase_path, base_ref, head_ref) — run git diff
 //
-// Each changed line is attributed to the innermost graph symbol whose
+// Each changed line is attributed to the innermost graph symbols whose
 // [start_line, end_line] range holds it (`symbols`). Each affected symbol is
 // enriched with community and process membership. Changed lines no symbol
 // holds make the answer `lower-bound` (issue #446).
