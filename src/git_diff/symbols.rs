@@ -412,5 +412,15 @@ mod gap_tests {
             Some("src/a.rs")
         );
         assert_eq!(owning_file(&["a.rs"], "a.rsx::f"), None);
+        // Longest match, whatever the order: a directory literally named
+        // `d::e.rs` beside a file `d` (both legal on Unix).
+        assert_eq!(
+            owning_file(&["d", "d::e.rs"], "d::e.rs::f"),
+            Some("d::e.rs")
+        );
+        assert_eq!(
+            owning_file(&["d::e.rs", "d"], "d::e.rs::f"),
+            Some("d::e.rs")
+        );
     }
 }

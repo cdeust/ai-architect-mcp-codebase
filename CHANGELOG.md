@@ -29,18 +29,20 @@ adheres to [Semantic Versioning](https://semver.org/).
   the line counts its header announces: a `+++i;` or `--- note` body line is a
   change, not a file header, the `git format-patch` trailer is no removal, and
   a plain `diff -u` with several files is split at each file header. The
-  `\ No newline at end of file` marker is no line of either file. The answer is
-  `lower-bound`, with a reason naming the file, when a non-blank changed line
-  of a modified or added file, or a pure removal, lies in no indexed symbol;
-  when the diff names a path with no indexed File (an unsupported language, a
-  path outside the indexed root, or a deleted file); when an added or deleted
-  file holds no indexed symbol; or, with one reason for the whole diff, when a
-  symbol query failed. `next_steps` suggests `lsp_resolve` only for dependency
-  reasons, not for these coverage gaps. Tests:
-  `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
-  a change in `Shape::area`, and `exact` for a diff of an unsupported file),
-  unit tests in `git_diff` and `git_diff::symbols`, and
-  `detect_changes_next_steps_tests`.
+  `\ No newline at end of file` marker is no line of either file. Sections
+  that repeat a path are merged, and `git diff` runs with `--no-color
+  --no-ext-diff` and pinned `a/`/`b/` prefixes. The answer is `lower-bound`,
+  with a reason, when a changed line of a modified or added file, or a pure
+  removal, lies in no indexed symbol (a blank-only one excepted); when the diff
+  names a path with no indexed File (an unsupported language, a path outside
+  the indexed root, or a deleted file); when an added or deleted file holds no
+  indexed symbol; when the symbol load fails (one reason for the whole diff);
+  or when a changed symbol's impact query fails. `next_steps` suggests
+  `lsp_resolve` only for dependency reasons, not for these coverage gaps.
+  Tests: `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct
+  Shape]` for a change in `Shape::area`, and `exact` for a diff of an
+  unsupported file), unit tests in `git_diff`, `git_diff::parse` behaviour and
+  `git_diff::symbols`, and `detect_changes_next_steps_tests`.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;

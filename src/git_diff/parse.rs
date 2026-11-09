@@ -116,7 +116,7 @@ impl FileSection {
         if let Some(body) = line.strip_prefix('-') {
             self.old_left = self.old_left.saturating_sub(1);
             self.changed.push(self.line);
-            let blank = body.trim().is_empty();
+            let blank = is_blank(body);
             let pending = self.pending.get_or_insert(PendingRemoval {
                 at: self.line,
                 all_blank: true,
@@ -132,7 +132,7 @@ impl FileSection {
             let replaced_code = self.pending.take().is_some_and(|p| !p.all_blank);
             self.changed.push(self.line);
             self.added.push(self.line);
-            if body.trim().is_empty() && !replaced_code {
+            if is_blank(body) && !replaced_code {
                 self.blank_lines.push(self.line);
             }
         } else {
@@ -160,6 +160,12 @@ impl FileSection {
             is_deleted: self.is_deleted,
         })
     }
+}
+
+/// Only ASCII spaces and tabs: a line of U+00A0 is code that can break the
+/// build (issue #446 review).
+fn is_blank(body: &str) -> bool {
+    body.bytes().all(|b| b == b' ' || b == b'\t')
 }
 
 /// The four numbers of `@@ -old_start[,old_count] +new_start[,new_count] @@`.

@@ -7,9 +7,9 @@
 // Each changed line is attributed to the innermost graph symbols whose
 // [start_line, end_line] range holds it (`symbols`). Each affected symbol is
 // enriched with community and process membership. A change no symbol holds (a
-// non-blank line or a pure removal outside every symbol, a path with no indexed
-// File, an added or deleted file with no symbol) or a failed symbol query makes
-// the answer `lower-bound` (issue #446).
+// line or a pure removal outside every symbol, blank-only ones excepted; a path
+// with no indexed File; an added or deleted file with no symbol) or a failed
+// symbol load or impact query makes the answer `lower-bound` (issue #446).
 
 use crate::clustering;
 use crate::graph_store::GraphStore;
@@ -76,11 +76,11 @@ pub struct DiffAnalysis {
     /// heuristically-resolved edges — read `risk_score` as itself uncertain.
     /// source: epistemic module; clustering::get_impact per-edge confidence.
     pub mean_dependency_confidence: f64,
-    /// `exact` when every non-blank changed line lies in a symbol and every
-    /// changed symbol's blast radius is statically exhaustive; `lower-bound`
-    /// when a non-blank changed line of a modified or added file (or a pure
-    /// removal) lies in no indexed symbol, a path has no indexed File, an added
-    /// or deleted file holds no indexed symbol, or a symbol query failed
+    /// `exact` when every changed line lies in a symbol (a blank-only change
+    /// outside every symbol excepted) and every changed symbol's blast radius
+    /// is statically exhaustive; `lower-bound` when such a changed line of a
+    /// modified or added file (or a pure removal) lies in no indexed symbol, a path has no indexed File, an added
+    /// or deleted file holds no indexed symbol, or the symbol load failed
     /// (issue #446), or at least one
     /// changed symbol is reached via dynamic dispatch or through heuristic
     /// edges — true risk may exceed the reported score. source: epistemic
@@ -92,7 +92,7 @@ pub struct DiffAnalysis {
     /// loading the changed files' symbols failed (issue #446).
     pub epistemic_reasons: Vec<String>,
     /// How many of `epistemic_reasons` are coverage gaps (a changed file whose
-    /// changes partly reach no symbol, or a failed symbol query) rather than
+    /// changes partly or wholly reach no symbol, or a failed symbol load) rather than
     /// dependency uncertainty. Internal: read by `next_steps`, not emitted.
     #[serde(skip)]
     pub coverage_gap_count: usize,
@@ -146,7 +146,7 @@ fn map_lines_to_symbols(
             };
             ChangedSymbol {
                 lines_changed: if whole_file {
-                    c.end.saturating_sub(c.start) + 1
+                    c.end.saturating_sub(c.start).saturating_add(1)
                 } else {
                     c.overlap
                 },
@@ -246,7 +246,7 @@ fn count_total_communities(store: &GraphStore) -> u64 {
 // ---------------------------------------------------------------------------
 
 pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis, String> {
-    let hunks = parse_unified_diff(diff_text)?;
+    let hunks = merge_by_path(parse_unified_diff(diff_text)?);
     build_analysis(store, &hunks)
 }
 
@@ -265,6 +265,15 @@ pub fn analyze_git_diff(
     // source: C2 fix — git-diff(1) synopsis `git diff [<commit>] [--] [<path>…]`.
     let output = Command::new("git")
         .arg("diff")
+        // The parser reads `a/`/`b/` paths and plain `+`/`-` lines: pin them
+        // against `diff.noprefix`, `color.diff=always` and `diff.external`, under
+        // which every file would be dropped (issue #446 review).
+        .args([
+            "--no-color",
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ])
         .arg(format!("{base_ref}..{head_ref}"))
         .arg("--")
         .current_dir(codebase_path)
@@ -278,6 +287,28 @@ pub fn analyze_git_diff(
 
     let diff_text = String::from_utf8_lossy(&output.stdout);
     analyze_diff(store, &diff_text)
+}
+
+/// One `FileHunk` per path: a diff that names a path several times (never
+/// `git diff`, but a crafted `diff_text` can) is attributed once, so it cannot
+/// duplicate symbols, skew the risk averages or multiply the output.
+fn merge_by_path(hunks: Vec<FileHunk>) -> Vec<FileHunk> {
+    let mut merged: Vec<FileHunk> = Vec::new();
+    for h in hunks {
+        match merged.iter_mut().find(|m| m.file_path == h.file_path) {
+            Some(m) => {
+                m.changed_lines.extend(h.changed_lines);
+                m.added_lines.extend(h.added_lines);
+                m.removal_gaps.extend(h.removal_gaps);
+                m.blank_lines.extend(h.blank_lines);
+                m.blank_gaps.extend(h.blank_gaps);
+                m.is_new |= h.is_new;
+                m.is_deleted |= h.is_deleted;
+            }
+            None => merged.push(h),
+        }
+    }
+    merged
 }
 
 fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis, String> {
@@ -360,8 +391,12 @@ fn assess_dependency_confidence(
     let mut any_lower_bound = false;
 
     for sym in symbols {
+        // Every changed symbol was read from the graph, so a failed impact
+        // query is a gap in the answer, not a missing symbol.
         let Some(impact) = impact_of(store, impacts, &sym.qualified_name) else {
-            continue; // symbol not in graph (e.g. deleted) — skip
+            any_lower_bound = true;
+            reasons.push(format!("{}: its impact query failed", sym.qualified_name));
+            continue;
         };
         for node in impact
             .callers
@@ -721,5 +756,18 @@ diff --git a/x b/x
 ";
         let hunks = parse_unified_diff(diff).expect("small diff must parse");
         assert_eq!(hunks.len(), 1);
+        // A header at the cap is rejected instead of overflowing later.
+        let huge = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +9223372036854775807 @@\n+a\n";
+        let err = parse_unified_diff(huge).err().expect("header past the cap");
+        assert!(err.starts_with("diff_too_large"), "{err}");
+    }
+
+    /// Claude review of PR #482: a path named twice is attributed once.
+    #[test]
+    fn a_path_named_twice_is_one_file() {
+        let section = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n";
+        let hunks = merge_by_path(parse_unified_diff(&section.repeat(3)).unwrap());
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].added_lines, vec![1, 1, 1]);
     }
 }
