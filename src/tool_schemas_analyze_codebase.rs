@@ -47,7 +47,7 @@ pub(super) fn analyze_codebase_schema() -> Value {
                 "full": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Issue #443 — rebuild the graph from scratch even when the previous one at <output_dir>/graph would be reused (unchanged tree, same server version, root and settings). Not needed after changing language, dependency_scope, exclude_dirs or any file: each of those already forces a full rebuild."
+                    "description": "Issue #443 — rebuild the graph from scratch even when the previous one at <output_dir>/graph would be reused (unchanged tree, same server version, root and settings, no language-server rows). Not needed after changing language, dependency_scope, exclude_dirs, the root or any file, or with lsp=true: each of those already forces a full rebuild."
                 },
                 "dependency_scope": dependency_scope_param(),
                 "include_dependencies": include_dependencies_param(),

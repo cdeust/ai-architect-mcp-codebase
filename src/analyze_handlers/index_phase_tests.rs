@@ -665,3 +665,21 @@ fn reuse_survives_its_own_refresh() {
         assert_eq!(outcome(&resp), outcome(&first), "{call}");
     }
 }
+
+#[test]
+fn an_in_place_edit_of_the_same_size_rebuilds() {
+    // Review of #478: every other edit test also adds a file, so the hash arm
+    // of the change check was never reached with a real content change.
+    let (repo, base) = fixture("analyze443_same_size_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let b = repo.join("src/b.rs");
+    let before = fs::read_to_string(&b).expect("read");
+    let after = before.replacen("beta", "bxta", 1);
+    assert_eq!(before.len(), after.len(), "precondition: same size");
+    fs::write(&b, after).expect("edit");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
+    assert_eq!(outcome(&resp), outcome(&fresh));
+}

@@ -347,7 +347,13 @@ pub fn import_artifact(repo_path: &Path, graph_path: &Path) -> Result<ArtifactMe
     // tar-rs rejects absolute paths and `..` components on unpack by default,
     // so a malicious archive cannot escape `dest_parent` (path-traversal safe).
     archive.unpack(dest_parent).map_err(|e| {
-        let _ = fs::remove_dir_all(graph_path);
+        // A single-file graph is not a directory: `remove_dir_all` alone failed
+        // on it and left the partial graph behind (review of #478).
+        let _ = match fs::symlink_metadata(graph_path) {
+            Ok(m) if m.is_dir() => fs::remove_dir_all(graph_path),
+            Ok(_) => fs::remove_file(graph_path),
+            Err(e) => Err(e),
+        };
         format!("artifact import: unpack: {e}")
     })?;
 

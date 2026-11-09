@@ -281,8 +281,13 @@ pub(crate) fn attempt_bootstrap(
 /// obsolete. Refuse before publishing freshness or attempting an incremental
 /// fill: only a full reparse can recover discarded Rust harness attributes.
 pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> Result<(), String> {
-    artifact::import_artifact(codebase, graph_dir)?;
-    forget_imported_scope(graph_dir)?;
+    // The scope goes whether or not the import succeeds (review of #478): a
+    // failed unpack can leave the bundled manifest behind, and the caller's
+    // fallback (`index_codebase`'s incremental pass) would otherwise adopt it.
+    let imported = artifact::import_artifact(codebase, graph_dir);
+    let forgot = forget_imported_scope(graph_dir);
+    imported?;
+    forgot?;
     let store = graph_store::GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
     store.require_cfg_gate_metadata()?;
