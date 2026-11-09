@@ -89,7 +89,8 @@ impl IndexRequest {
             accept_stale: parse_bool_arg(args, "accept_stale", false)?,
             // Issue #62: force a from-scratch rebuild even when an incremental
             // baseline exists (e.g. after changing the language filter or
-            // dependency scope, which the manifest does not capture).
+            // dependency scope: the manifest records them since #443, but
+            // this tool's incremental pass does not compare them).
             want_full: parse_bool_arg(args, "full", false)?,
             // Issue #58: mine git temporal coupling (FILE_CHANGES_WITH) after
             // indexing. Cheap (one bounded `git log`) and the architect agent

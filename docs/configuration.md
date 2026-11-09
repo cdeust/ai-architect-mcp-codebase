@@ -72,8 +72,10 @@ included: it is checked first, independently of dependency-directory descent.
 Each pruned directory appears in the coverage sidecar as `skipped` with reason
 `user_excluded`, and the response's `coverage.skipped.user_excluded_count`
 carries the exact count. Changing `exclude_dirs` on an existing graph requires
-`"full": true`, because the incremental-index manifest does not record it (the
-same holds for `dependency_scope`).
+`"full": true` on `index_codebase`, whose incremental pass does not compare
+settings (the same holds for `dependency_scope`). `analyze_codebase` needs no
+flag: the manifest records both, with `language` and the server version, and
+analyze rebuilds when any of them differs.
 
 Separately from `exclude_dirs`, a directory the OS refuses to read
 (`EACCES` / `PermissionDenied`) does not abort the index. It is recorded in the

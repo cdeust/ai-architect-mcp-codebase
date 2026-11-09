@@ -52,6 +52,7 @@ fn analyze(repo: &Path, out: &Path, extra: Value) -> Value {
 /// which index path produced the graph.
 fn outcome(resp: &Value) -> Value {
     json!({
+        "edges": edge_rows(resp),
         "graph": resp["graph"],
         "resolve_edges": resp["resolve"]["total_edges"],
         "communities": resp["cluster"]["community_count"],
@@ -60,12 +61,32 @@ fn outcome(resp: &Value) -> Value {
     })
 }
 
+/// Every relationship row of the graph, as sorted `table|from|to` strings, so
+/// two graphs with equal totals but a different call target still differ.
+fn edge_rows(resp: &Value) -> Vec<String> {
+    let path = PathBuf::from(resp["graph_path"].as_str().expect("graph_path"));
+    let store = crate::graph_store::GraphStore::open_or_create(&path).expect("open graph");
+    let mut rows = Vec::new();
+    for &(rel, from, to) in crate::graph_store::REL_TABLES {
+        let q = format!("MATCH (a:{from})-[r:{rel}]->(b:{to}) RETURN a.id, b.id");
+        if let Ok(qr) = store.execute_query(&q) {
+            rows.extend(qr.rows.iter().map(|r| format!("{rel}|{}|{}", r[0], r[1])));
+        }
+    }
+    rows.sort();
+    rows
+}
+
 #[test]
 fn a_second_call_on_an_unchanged_tree_reparses_nothing() {
     let (repo, base) = fixture("analyze443_unchanged_");
     let out = base.join("out");
     let first = analyze(&repo, &out, json!({}));
     assert_eq!(first["index"]["mode"], "full", "{first}");
+    assert!(
+        edge_rows(&first).iter().any(|r| r.starts_with("Calls_")),
+        "the comparison must see the call edges"
+    );
 
     let second = analyze(&repo, &out, json!({}));
     assert_eq!(second["index"]["mode"], "incremental", "{second}");
@@ -264,4 +285,78 @@ fn a_graph_built_by_another_version_is_rebuilt() {
     fs::write(&path, m.to_string()).expect("write");
     let resp = analyze(&repo, &out, json!({}));
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+#[test]
+fn a_full_rebuild_that_fails_leaves_no_manifest_to_trust() {
+    // Claude review of #478: a rebuild that failed before its sidecars were
+    // written left the previous manifest, so a later call with the previous
+    // settings reused a graph built under other ones (here: with `extra/`
+    // indexed although the caller excludes it).
+    let (repo, base) = fixture("analyze443_stale_manifest_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({ "exclude_dirs": ["extra"] }));
+    let cov = crate::indexer::coverage::coverage_path(&out);
+    fs::create_dir_all(cov.with_extension("json.tmp")).expect("block the temp file");
+    do_analyze_codebase(&json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "language": "rust",
+    }))
+    .expect_err("the rebuild without the exclusion fails on its coverage write");
+    assert!(
+        crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out)).is_none(),
+        "the previous manifest must not survive a failed rebuild"
+    );
+    fs::remove_dir_all(cov.with_extension("json.tmp")).expect("unblock");
+
+    let resp = analyze(&repo, &out, json!({ "exclude_dirs": ["extra"] }));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    let fresh = analyze(
+        &repo,
+        &base.join("fresh"),
+        json!({ "exclude_dirs": ["extra"] }),
+    );
+    assert_eq!(outcome(&resp), outcome(&fresh));
+}
+
+#[test]
+fn a_changed_language_or_dependency_scope_rebuilds() {
+    let (repo, base) = fixture("analyze443_lang_scope_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let auto = analyze(&repo, &out, json!({ "language": "auto" }));
+    assert_eq!(auto["index"]["mode"], "full", "{auto}");
+    let scoped = analyze(
+        &repo,
+        &out,
+        json!({ "language": "auto", "dependency_scope": "full" }),
+    );
+    assert_eq!(scoped["index"]["mode"], "full", "{scoped}");
+    // The deprecated spelling of the same tier is the same setting.
+    let legacy = analyze(
+        &repo,
+        &out,
+        json!({ "language": "auto", "include_dependencies": true }),
+    );
+    assert_eq!(legacy["index"]["mode"], "incremental", "{legacy}");
+}
+
+#[test]
+fn a_graph_the_refresh_cannot_open_is_rebuilt() {
+    let (repo, base) = fixture("analyze443_corrupt_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let graph = out.join("graph");
+    if graph.is_dir() {
+        fs::remove_dir_all(&graph).expect("rm graph dir");
+    } else {
+        fs::remove_file(&graph).expect("rm graph file");
+    }
+    fs::write(&graph, b"not a database").expect("corrupt graph");
+
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
+    assert_eq!(outcome(&resp), outcome(&fresh));
 }

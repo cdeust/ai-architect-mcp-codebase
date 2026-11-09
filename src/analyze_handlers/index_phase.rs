@@ -138,6 +138,11 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
 /// The from-scratch rebuild: remove whatever a prior run left, index, then
 /// write the sidecars.
 fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
+    // The manifest and `meta.json` go first (review of #478): they vouch for
+    // the graph about to be removed. A rebuild that fails or is killed before
+    // `persist_analyze_sidecars` would otherwise leave the old manifest, and
+    // its scope, beside a new or partial graph for the next call to trust.
+    forget_sidecars(req)?;
     if req.graph_dir.exists() {
         // Prior run may have left a dir OR a single-file Kuzu db; remove either.
         remove_stale_graph_artifact(&req.graph_dir)?;
@@ -156,6 +161,22 @@ fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
         coverage: result.coverage,
         sidecar_err,
     })
+}
+
+/// Removes the sidecars that describe the previous graph. Absent is fine; a
+/// file that cannot be removed fails the call, since it would still be read.
+fn forget_sidecars(req: &AnalyzeRequest) -> Result<(), String> {
+    for path in [
+        indexer::manifest::manifest_path(&req.output_dir),
+        req.output_dir.join("meta.json"),
+    ] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("remove stale {}: {e}", path.display())),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -150,8 +150,9 @@ fn confirm_lsp_rows(
 }
 
 /// Node and relationship totals of the finished graph, read after the last
-/// phase. `index.*` above is the snapshot the index phase took before resolve
-/// wrote its edges, so it is not the size of the graph `index_status` reports;
+/// phase. On a full rebuild `index.*` above is the snapshot the index phase
+/// took before resolve wrote its edges (an incremental `index` block carries
+/// change counts instead), so it is not the size of the graph `index_status` reports;
 /// this block is, field for field (issue #338). When the graph cannot be read
 /// back the block carries the reason under `error` instead of counts.
 fn graph_totals(graph_dir: &std::path::Path) -> Value {
@@ -240,8 +241,9 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     Ok(response)
 }
 
-/// Writes coverage and the manifest before `meta.json`, the commit point.
-/// Coverage is replaced on every full analysis, including an empty gap map.
+/// Full-rebuild path only (`index_phase::full`): writes coverage and the
+/// manifest before `meta.json`, the commit point. Coverage is replaced on
+/// every full analysis, including an empty gap map.
 ///
 /// `analyze_codebase` used to write `meta.json` and NO manifest at all
 /// (fleet-watch#112 review round 6). It and `index_codebase` are documented as

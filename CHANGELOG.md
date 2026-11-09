@@ -109,6 +109,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   after edits waits on resolver invalidation. The README no longer claims
   analyze is incremental after edits. A failed coverage write on the
   incremental path is now returned to the caller instead of only logged.
+  **Changed:** the response's `index` block carries `mode`; `node_count`,
+  `edge_count` and `files_indexed` appear only when `mode` is `full` (whole-graph
+  totals stay in `graph`). **Added:** the `full` parameter. A full rebuild
+  removes the previous manifest and `meta.json` first, so a rebuild that fails
+  or is killed leaves nothing for the next call to reuse.
 
 - C++ follow-ups of #406 (#412, points 1 and 2; point 3, the suffix matching of a
   declared type, stays open on #412). Measured on ETLCPP 7d604f2e, `origin/main`
