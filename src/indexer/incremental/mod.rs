@@ -444,6 +444,9 @@ pub fn full_manifest(codebase: &Path, options: &IndexOptions) -> Result<FileMani
         exclude_dirs: options.exclude_dirs.clone(),
     };
     let (current, _walk_gaps, _walk_pruned) = discover(codebase, walk_opts)?;
+    // Taken before indexing, so the indexer's own cap has not run yet: refuse
+    // a tree over it before hashing anything (Codex review of #478).
+    check_total_bytes(&current, super::MAX_TOTAL_BYTES)?;
     let mut m = FileManifest::new();
     // A full index's manifest describes a graph built with exactly `options`.
     m.scope = Some(options.scope());
