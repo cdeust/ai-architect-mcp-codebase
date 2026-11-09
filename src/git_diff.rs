@@ -123,12 +123,15 @@ struct LineLists {
     gaps: Vec<u64>,
     /// Position of a `-` run not yet followed by a `+` line.
     pending_removal: Option<u64>,
+    /// 1 inside a hunk whose new range is empty (`+N,0`): its start N names
+    /// the line BEFORE the removal, so the line after it is N + 1.
+    gap_shift: u64,
 }
 
 impl LineLists {
     fn close_removal(&mut self) {
         if let Some(p) = self.pending_removal.take() {
-            self.gaps.push(p);
+            self.gaps.push(p + self.gap_shift);
         }
     }
 
@@ -175,6 +178,7 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
         } else if line.starts_with("@@ ") {
             // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
             lists.close_removal();
+            lists.gap_shift = u64::from(new_range_is_empty(line));
             if let Some(new_range) = parse_hunk_header(line) {
                 current_line = new_range;
             }
@@ -208,6 +212,17 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
     }
 
     Ok(hunks)
+}
+
+/// True for a hunk header whose new range has a zero count (`+N,0`).
+/// source: GNU diffutils manual, "Detailed Description of Unified Format" —
+/// an empty range's start is the line just before it.
+fn new_range_is_empty(line: &str) -> bool {
+    line.find('+')
+        .map(|p| &line[p + 1..])
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|range| range.split_once(','))
+        .is_some_and(|(_, count)| count == "0")
 }
 
 fn parse_hunk_header(line: &str) -> Option<u64> {
@@ -503,6 +518,25 @@ fn assess_dependency_confidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Codex review of PR #482: `@@ -2 +1,0 @@` removes old line 2, which sat
+    /// before new line 2, not before new line 1.
+    #[test]
+    fn a_pure_removal_with_an_empty_new_range_sits_after_its_start() {
+        let diff = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n\
+                    @@ -2 +1,0 @@\n-    let x = 1;\n";
+        let hunks = parse_unified_diff(diff).unwrap();
+        assert_eq!(hunks[0].removal_gaps, vec![2]);
+        // The history module's coordinates are unchanged.
+        assert_eq!(hunks[0].changed_lines, vec![1]);
+        let with_context = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n\
+                            @@ -1,3 +1,2 @@\n fn f() {\n-    let x = 1;\n }\n";
+        assert_eq!(
+            parse_unified_diff(with_context).unwrap()[0].removal_gaps,
+            vec![2]
+        );
+    }
 
     #[test]
     fn test_parse_hunk_header() {
