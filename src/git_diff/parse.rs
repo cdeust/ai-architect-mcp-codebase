@@ -307,7 +307,7 @@ fn header_path(text: &str, prefix: &str) -> HeaderPath {
 /// rename), the midpoint split is exact.
 fn git_header_path(line: &str) -> Option<String> {
     let rest = line.strip_prefix("diff --git a/")?;
-    if rest.len() % 2 == 1 {
+    if rest.len() >= 3 && rest.len() % 2 == 1 {
         let half = (rest.len() - 3) / 2;
         if rest.get(half..half + 3) == Some(" b/") && rest.get(..half) == rest.get(half + 3..) {
             return Some(rest[half + 3..].to_string());

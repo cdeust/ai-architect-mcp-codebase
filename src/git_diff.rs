@@ -600,6 +600,8 @@ mod tests {
             parse_unified_diff(bin).unwrap()[0].file_path,
             "docs/a b/c.png"
         );
+        // A one-byte `diff --git a/x` path must not underflow the split.
+        assert!(parse_unified_diff("diff --git a/x\n").unwrap().is_empty());
         // The next commit of a `git log -p` is no stray hunk line.
         let log = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n\
                    commit 0123456789abcdef0123456789abcdef01234567\n\n    Fix bug\n";
