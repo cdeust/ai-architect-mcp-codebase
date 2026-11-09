@@ -604,3 +604,50 @@ fn a_file_unreadable_at_build_time_is_retried() {
     let resp = analyze(&repo, &out, json!({}));
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
 }
+
+#[test]
+fn a_graph_imported_from_an_artifact_is_rebuilt_from_source() {
+    // Claude review of #478: the bundled manifest carried the exporter's scope,
+    // so analyze reused a graph it never built from source (a doctored
+    // `graph.zst` would survive every later call).
+    let (repo, base) = fixture("analyze443_artifact_");
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .expect("git")
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@ap.dev"]);
+    git(&["config", "user.name", "AP"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "--no-gpg-sign", "-m", "initial"]);
+    let index = |out: &Path, extra: Value| {
+        let mut args = json!({
+            "path": repo.to_string_lossy(),
+            "output_dir": out.to_string_lossy(),
+            "language": "rust",
+        });
+        for (k, v) in extra.as_object().expect("object") {
+            args[k] = v.clone();
+        }
+        crate::indexing_handlers::do_index_codebase(&args).expect("index")
+    };
+    index(&base.join("exporter"), json!({ "export_artifact": true }));
+
+    let out = base.join("out");
+    let imported = index(&out, json!({ "bootstrap": true }));
+    assert_eq!(imported["source"], "artifact_bootstrap", "{imported}");
+    let m = crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out))
+        .expect("bundled manifest");
+    assert_eq!(
+        m.scope, None,
+        "an imported manifest must not vouch for the graph"
+    );
+
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}

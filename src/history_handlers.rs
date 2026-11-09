@@ -282,12 +282,32 @@ pub(crate) fn attempt_bootstrap(
 /// fill: only a full reparse can recover discarded Rust harness attributes.
 pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> Result<(), String> {
     artifact::import_artifact(codebase, graph_dir)?;
+    forget_imported_scope(graph_dir)?;
     let store = graph_store::GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
     store.require_cfg_gate_metadata()?;
     store.require_code_context_metadata()?;
     store.require_body_kind_metadata()?;
     store.require_crate_evidence_metadata()
+}
+
+/// Drops the `scope` of the manifest an artifact unpacked beside the graph
+/// (review of #478). The scope says "this graph was built from source with
+/// these settings"; an imported graph was built by whoever exported it, so
+/// `analyze_codebase` must rebuild it from source rather than reuse it. The
+/// per-file states stay: `index_codebase` still fills incrementally from them.
+fn forget_imported_scope(graph_dir: &Path) -> Result<(), String> {
+    let Some(output_dir) = graph_dir.parent() else {
+        return Ok(());
+    };
+    let path = indexer::manifest::manifest_path(output_dir);
+    match indexer::manifest::load(&path) {
+        Some(mut m) if m.scope.is_some() => {
+            m.scope = None;
+            indexer::manifest::save(&path, &m)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Imports the snapshot into `graph_dir` and builds the bootstrap response
