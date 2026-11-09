@@ -20,12 +20,16 @@ adheres to [Semantic Versioning](https://semver.org/).
   (`parser::spec::ts_receiver`). The resolver binds it to `T::<m>` when the
   caller's file defines the class `T` with that method (several such methods
   stay ambiguous), and otherwise keeps the by-name path it took before.
-  Reassigned (also through `(x)`, `x!`, `x as T`), shadowed, destructured,
+  Reassigned (also through `(x)`, `x!`, `x as T`, `x satisfies T`, `<T>x`),
+  shadowed (also by a named class or function expression), destructured,
   parameter and module-scope receivers carry no hint, nor does a `new T(..)`
-  whose `T` an enclosing function rebinds. Each function's binding table is
-  built once per file, so the cost does not grow with the number of calls in
-  it. Tests: `tests/ts_constructed_local_receiver_444.rs` (fails on `main` with
-  no edge for `useConst`), seven unit tests in `ts_receiver`.
+  whose `T` an enclosing function rebinds, whose `T` has a `static` member of
+  the called name, or whose `extends` chain has a constructor returning a value
+  or leaves the file. The facts are gathered in one pass over the file, each
+  node visited once, so the cost grows neither with the number of calls nor
+  with function nesting. Tests: `tests/ts_constructed_local_receiver_444.rs`
+  (fails on `main` with no edge for `useConst`), ten unit tests in
+  `ts_receiver`.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;

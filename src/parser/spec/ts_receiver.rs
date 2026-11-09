@@ -15,16 +15,26 @@
 // - nothing else in that function binds or writes `x`: no second declarator, no
 //   assignment (also through `(x)`, `x!`, `x as T`, `x satisfies T`, `<T>x`), no
 //   `++`/`--`, no parameter (bare arrow parameters included), no destructuring
-//   pattern, no `catch` or `for .. in/of` binding, no function or class
-//   declaration of that name;
+//   pattern, no `catch` or `for .. in/of` binding, no function declaration or
+//   named function expression, no class declaration or named class expression
+//   of that name;
 // - `T` itself is not rebound on the way to the program: no function scope that
-//   encloses the call binds or writes `T` (`function f(Worker: typeof Other)`),
-//   and the program holds at most one binding of `T` (its class declaration).
+//   encloses the call binds or writes `T` (`function f(Worker: typeof Other)`,
+//   `const g = function Worker() {..}`), and the program holds at most one
+//   binding of `T` (its class declaration);
+// - `new T(..)` is an instance of `T` whose `m` is an instance method: when the
+//   file declares `T`, `T` has no `static` member `m` (the instance call would
+//   reach an inherited `m`, not `static m`), and no constructor on its `extends`
+//   chain returns a value (`constructor() { return new Other(); }` replaces the
+//   instance). A base the file does not declare (imported, or not a plain
+//   identifier) cannot be checked, so it declines.
 //
-// Cost: the binding table of each function scope (and of the program) is built
-// once per file in one DFS (`ReceiverScopes`, cached in the walk context), so a
-// function with thousands of `console.log(..)` calls is walked once, not once
-// per call (review of PR #479).
+// Cost: ONE depth-first pass over the tree, on the first query (`FileFacts`,
+// cached in the walk context). Each frame carries its parent, its two next
+// ancestors and its enclosing function spans down the stack, so no node climbs
+// with `Node::parent()` (which tree-sitter answers by descending from the root,
+// review of PR #479), and no scope is rescanned for a nested one. A query is two
+// hash lookups and two binary searches over the occurrences of one name.
 //
 // Anything else yields no hint, so the resolver keeps its by-name path. A hint
 // that is wrong would bind a call to a method it does not reach (a wrong single
@@ -32,12 +42,16 @@
 // even when a finer scope analysis could type it.
 //
 // source: tree-sitter-typescript 0.23.2 node-types.json — `call_expression.function`,
-// `member_expression.object`, `variable_declarator.name`/`value`,
+// `member_expression.object`/`property`, `variable_declarator.name`/`value`,
 // `new_expression.constructor`, `assignment_expression.left`,
 // `augmented_assignment_expression.left`, `update_expression.argument`,
-// `arrow_function.parameter`, `class_declaration.name` (a `type_identifier`).
+// `arrow_function.parameter`, `function_expression.name` (an `identifier`),
+// `class_declaration.name` and `class.name` (a `type_identifier`), `class.body`,
+// `class_heritage` > `extends_clause.value`, `type_assertion` (children
+// `type_arguments` then the operand), `method_definition.name`/`body`,
+// `public_field_definition.name`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
@@ -86,25 +100,42 @@ const TARGET_WRAPPER_KINDS: &[&str] = &[
     "type_assertion",
 ];
 
-/// Class declarations, whose `name` is a `type_identifier` in both grammars.
-const CLASS_DECLARATION_KINDS: &[&str] = &["class_declaration", "abstract_class_declaration"];
+/// Class declarations and class expressions, whose `name` is a
+/// `type_identifier` in both grammars.
+const CLASS_KINDS: &[&str] = &["class_declaration", "abstract_class_declaration", "class"];
 
-/// Per-tree cache of the binding tables of function scopes and of the program,
-/// keyed by node id: each table is built in one DFS of its scope, so the walk
-/// of a file costs O(nodes × function nesting depth) whatever its call count.
-/// Valid for ONE tree only: node ids are unique within a tree, not across trees.
+/// A byte span `[start, end)`.
+type Span = (usize, usize);
+
+/// Per-tree cache of the facts the hint reads, built in one pass on the first
+/// query. Valid for ONE tree only: node ids are unique within a tree, not
+/// across trees.
 #[derive(Default)]
 pub(crate) struct ReceiverScopes {
-    tables: HashMap<usize, HashMap<String, NameUse>>,
+    facts: Option<FileFacts>,
+    /// Number of passes over a tree (one per `ReceiverScopes`).
+    #[cfg(test)]
+    builds: usize,
+    /// Nodes visited by those passes.
+    #[cfg(test)]
+    visits: usize,
 }
 
-/// Every binding or write of one name inside a scope (nested functions
-/// included).
 #[derive(Default)]
-struct NameUse {
-    /// Declarators, parameters, patterns, assignment targets and declarations.
-    bindings: u32,
-    /// The first `variable_declarator` of the name, when there is one.
+struct FileFacts {
+    /// Every binding or write of a name in the file, sorted by start byte.
+    names: HashMap<String, Vec<Occurrence>>,
+    /// Call node id → (innermost, outermost) enclosing function span. Calls
+    /// outside every function are absent.
+    calls: HashMap<usize, (Span, Span)>,
+    /// What the file says of each class it declares by that name.
+    classes: HashMap<String, Vec<ClassFacts>>,
+}
+
+/// One binding or write of a name.
+struct Occurrence {
+    start: usize,
+    /// Set when the occurrence is the `name` of a `variable_declarator`.
     declared: Option<Declared>,
 }
 
@@ -112,9 +143,28 @@ struct NameUse {
 struct Declared {
     end_byte: usize,
     /// Byte span of the block that holds the declaration; `None` at the root.
-    block: Option<(usize, usize)>,
+    block: Option<Span>,
     /// `T` when the value is `new T(..)` with `T` a plain identifier.
     constructor: Option<String>,
+}
+
+#[derive(Default)]
+struct ClassFacts {
+    /// Names of the class's `static` methods and fields.
+    statics: HashSet<String>,
+    /// A constructor of the class returns a value (it may replace `this`).
+    ctor_returns_value: bool,
+    base: Base,
+}
+
+#[derive(Default)]
+enum Base {
+    #[default]
+    None,
+    /// `extends B` with `B` a plain identifier.
+    Named(String),
+    /// `extends <expression>`: a mixin call, a member access, ...
+    Unknown,
 }
 
 impl ReceiverScopes {
@@ -142,8 +192,8 @@ impl ReceiverScopes {
     }
 
     /// The class name `T` of `x` in `x.m(..)` when the enclosing function binds
-    /// `x` once to `new T(..)` and no scope on the way to the program rebinds
-    /// `T`; `None` otherwise.
+    /// `x` once to `new T(..)`, no scope on the way to the program rebinds `T`,
+    /// and `m` is not a static member of `T`; `None` otherwise.
     fn constructed_receiver_type(&mut self, source: &str, call_node: Node) -> Option<String> {
         let function = call_node.child_by_field_name("function")?;
         if function.kind() != "member_expression" {
@@ -153,159 +203,332 @@ impl ReceiverScopes {
         if object.kind() != "identifier" {
             return None;
         }
+        let method = text(source, function.child_by_field_name("property")?);
         let name = text(source, object);
-        let scope = enclosing_function(call_node)?;
-        let ty = {
-            let use_ = self.table(source, scope).get(name)?;
-            let declared = use_.declared.as_ref().filter(|_| use_.bindings == 1)?;
-            if !declaration_reaches(declared, call_node) {
-                return None;
-            }
-            declared.constructor.clone()?
+        let facts = self.facts(source, call_node);
+        let &(inner, outer) = facts.calls.get(&call_node.id())?;
+        let [only] = within(facts.names.get(name)?, inner) else {
+            return None;
         };
-        if self.constructor_rebound(source, scope, &ty) {
+        let declared = only.declared.as_ref()?;
+        if !declaration_reaches(declared, call_node) {
             return None;
         }
-        Some(ty)
+        let ty = declared.constructor.as_deref()?;
+        if facts.rebound(ty, outer) || !facts.instance_method_of(ty, method) {
+            return None;
+        }
+        Some(ty.to_string())
     }
 
-    /// True when the constructor's name `ty` may not denote the file's class
-    /// `ty` at the call: a function scope enclosing the call binds or writes
-    /// it (`function f(Worker: typeof Other) { new Worker() }`), or the program
-    /// holds more than its one declaration (`Worker = Other`).
-    fn constructor_rebound(&mut self, source: &str, scope: Node, ty: &str) -> bool {
-        let mut current = Some(scope);
-        let mut root = scope;
-        while let Some(s) = current {
-            if self.table(source, s).contains_key(ty) {
-                return true;
+    fn facts(&mut self, source: &str, call_node: Node) -> &FileFacts {
+        if self.facts.is_none() {
+            // Once per tree: the climb to the root is paid on the first query
+            // only.
+            let mut root = call_node;
+            while let Some(p) = root.parent() {
+                root = p;
             }
-            root = s;
-            current = enclosing_function(s);
+            let (facts, visits) = build_facts(source, root);
+            #[cfg(test)]
+            {
+                self.builds += 1;
+                self.visits += visits;
+            }
+            #[cfg(not(test))]
+            let _ = visits;
+            self.facts = Some(facts);
         }
-        while let Some(p) = root.parent() {
-            root = p;
-        }
-        self.table(source, root)
-            .get(ty)
-            .is_some_and(|use_| use_.bindings > 1)
-    }
-
-    fn table(&mut self, source: &str, scope: Node) -> &HashMap<String, NameUse> {
-        self.tables
-            .entry(scope.id())
-            .or_insert_with(|| binding_table(source, scope))
+        self.facts.get_or_insert_with(FileFacts::default)
     }
 }
 
-/// The nearest function-scope node above `node`.
-fn enclosing_function(node: Node) -> Option<Node> {
-    let mut current = node.parent();
-    while let Some(n) = current {
-        if FUNCTION_KINDS.contains(&n.kind()) {
-            return Some(n);
-        }
-        current = n.parent();
+impl FileFacts {
+    /// True when the constructor's name `ty` may not denote the file's class
+    /// `ty` at the call: the outermost function enclosing the call binds or
+    /// writes it (every enclosing function lies inside that one), or the
+    /// program holds more than its one declaration (`Worker = Other`).
+    fn rebound(&self, ty: &str, outer: Span) -> bool {
+        let occurrences = self.names.get(ty).map_or(&[][..], Vec::as_slice);
+        occurrences.len() > 1 || !within(occurrences, outer).is_empty()
     }
-    None
-}
 
-/// Every name bound or written anywhere in `scope` (nested functions
-/// included), in one DFS. Reads are not recorded.
-fn binding_table(source: &str, scope: Node) -> HashMap<String, NameUse> {
-    let mut table: HashMap<String, NameUse> = HashMap::new();
-    let mut stack = vec![scope];
-    while let Some(n) = stack.pop() {
-        if is_name_node(n) {
-            let role = binding_role(n);
-            if !matches!(role, Role::Read) {
-                let use_ = table.entry(text(source, n).to_string()).or_default();
-                use_.bindings += 1;
-                if let Role::Declarator(d) = role {
-                    if use_.declared.is_none() {
-                        use_.declared = Some(declared(source, d));
-                    }
+    /// True unless the file's class `ty` makes `new ty(..).m` something other
+    /// than an instance method of `ty`'s own chain: `m` is static on `ty`, a
+    /// constructor on the chain returns a value, or the chain leaves the file.
+    /// A `ty` the file does not declare is true: the resolver's gate binds in
+    /// the caller's file only, so it finds no class to bind to.
+    fn instance_method_of(&self, ty: &str, m: &str) -> bool {
+        let Some(own) = self.classes.get(ty) else {
+            return true;
+        };
+        if own.iter().any(|c| c.statics.contains(m)) {
+            return false;
+        }
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut pending = vec![ty];
+        while let Some(name) = pending.pop() {
+            // A cycle, or a base the file does not declare once.
+            if !seen.insert(name) || (name != ty && self.names.get(name).map_or(0, Vec::len) != 1) {
+                return false;
+            }
+            let Some(chain) = self.classes.get(name) else {
+                return false;
+            };
+            for class in chain {
+                if class.ctor_returns_value {
+                    return false;
+                }
+                match &class.base {
+                    Base::None => {}
+                    Base::Named(base) => pending.push(base),
+                    Base::Unknown => return false,
                 }
             }
         }
-        let mut cursor = n.walk();
-        for c in n.children(&mut cursor) {
-            stack.push(c);
-        }
+        true
     }
-    table
 }
 
-fn declared(source: &str, declarator: Node) -> Declared {
-    let block = declarator
-        .parent()
-        .and_then(|declaration| declaration.parent())
-        .map(|b| (b.start_byte(), b.end_byte()));
-    let constructor = declarator
+/// The occurrences that start inside `span` (`occurrences` sorted by start).
+fn within(occurrences: &[Occurrence], (start, end): Span) -> &[Occurrence] {
+    let lo = occurrences.partition_point(|o| o.start < start);
+    let hi = occurrences.partition_point(|o| o.start < end);
+    &occurrences[lo..hi]
+}
+
+/// One node of the pass, with what its ancestors say about it.
+#[derive(Clone, Copy)]
+struct Frame<'t> {
+    node: Node<'t>,
+    parent: Option<Node<'t>>,
+    grandparent: Option<Node<'t>>,
+    great_grandparent: Option<Node<'t>>,
+    /// `(p, t)`: `t` is `node` or the outermost `TARGET_WRAPPER_KINDS` node of
+    /// which `node` is the operand, and `p` is `t`'s parent.
+    target: Option<(Node<'t>, Node<'t>)>,
+    /// (innermost, outermost) function span enclosing `node`.
+    scope: Option<(Span, Span)>,
+}
+
+/// The facts of the tree under `root`, in one depth-first pass, and the number
+/// of nodes visited.
+fn build_facts(source: &str, root: Node) -> (FileFacts, usize) {
+    let mut facts = FileFacts::default();
+    let mut visits = 0;
+    let mut stack = vec![Frame {
+        node: root,
+        parent: None,
+        grandparent: None,
+        great_grandparent: None,
+        target: None,
+        scope: None,
+    }];
+    while let Some(f) = stack.pop() {
+        visits += 1;
+        let n = f.node;
+        if is_name_node(n) {
+            let role = binding_role(&f);
+            if !matches!(role, Role::Read) {
+                let declared = matches!(role, Role::Declarator).then(|| Declared {
+                    end_byte: f.parent.map_or(n.end_byte(), |d| d.end_byte()),
+                    block: f.great_grandparent.map(span),
+                    constructor: f.parent.and_then(|d| constructor_of(source, d)),
+                });
+                facts
+                    .names
+                    .entry(text(source, n).to_string())
+                    .or_default()
+                    .push(Occurrence {
+                        start: n.start_byte(),
+                        declared,
+                    });
+            }
+        }
+        if n.kind() == "call_expression" {
+            if let Some(scope) = f.scope {
+                facts.calls.insert(n.id(), scope);
+            }
+        }
+        record_class(source, n, &mut facts.classes);
+        let operand = if TARGET_WRAPPER_KINDS.contains(&n.kind()) {
+            operand(n).map(|o| o.id())
+        } else {
+            None
+        };
+        let scope = if FUNCTION_KINDS.contains(&n.kind()) {
+            let s = span(n);
+            Some((s, f.scope.map_or(s, |(_, outer)| outer)))
+        } else {
+            f.scope
+        };
+        let mut cursor = n.walk();
+        for c in n.children(&mut cursor) {
+            stack.push(Frame {
+                node: c,
+                parent: Some(n),
+                grandparent: f.parent,
+                great_grandparent: f.grandparent,
+                target: if operand == Some(c.id()) {
+                    f.target
+                } else {
+                    Some((n, c))
+                },
+                scope,
+            });
+        }
+    }
+    for occurrences in facts.names.values_mut() {
+        occurrences.sort_by_key(|o| o.start);
+    }
+    (facts, visits)
+}
+
+/// The operand of a `TARGET_WRAPPER_KINDS` node: the last named child of
+/// `type_assertion` (its first is the `type_arguments`), the first otherwise.
+fn operand(wrapper: Node) -> Option<Node> {
+    if wrapper.kind() == "type_assertion" {
+        let last = wrapper.named_child_count().checked_sub(1)?;
+        wrapper.named_child(u32::try_from(last).ok()?)
+    } else {
+        wrapper.named_child(0)
+    }
+}
+
+/// `T` when the declarator's value is `new T(..)` with `T` a plain identifier.
+fn constructor_of(source: &str, declarator: Node) -> Option<String> {
+    declarator
         .child_by_field_name("value")
         .filter(|v| v.kind() == "new_expression")
         .and_then(|v| v.child_by_field_name("constructor"))
         .filter(|c| c.kind() == "identifier")
-        .map(|c| text(source, c).to_string());
-    Declared {
-        end_byte: declarator.end_byte(),
-        block,
-        constructor,
-    }
+        .map(|c| text(source, c).to_string())
 }
 
-/// What one occurrence of the receiver's name does.
-enum Role<'t> {
-    /// The `name` of this `variable_declarator`.
-    Declarator(Node<'t>),
+/// Records the class `n` declares under its name: a class declaration or a
+/// named class expression, and a `const T = class {..}` declarator.
+fn record_class(source: &str, n: Node, classes: &mut HashMap<String, Vec<ClassFacts>>) {
+    let (name, class) = if CLASS_KINDS.contains(&n.kind()) {
+        (n.child_by_field_name("name"), n)
+    } else if n.kind() == "variable_declarator" {
+        match n.child_by_field_name("value") {
+            Some(v) if v.kind() == "class" => (n.child_by_field_name("name"), v),
+            _ => return,
+        }
+    } else {
+        return;
+    };
+    let Some(name) = name else {
+        return;
+    };
+    classes
+        .entry(text(source, name).to_string())
+        .or_default()
+        .push(class_facts(source, class));
+}
+
+fn class_facts(source: &str, class: Node) -> ClassFacts {
+    let mut facts = ClassFacts::default();
+    let mut cursor = class.walk();
+    for heritage in class
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "class_heritage")
+    {
+        let mut inner = heritage.walk();
+        for clause in heritage
+            .named_children(&mut inner)
+            .filter(|c| c.kind() == "extends_clause")
+        {
+            facts.base = match clause.child_by_field_name("value") {
+                Some(v) if v.kind() == "identifier" => Base::Named(text(source, v).to_string()),
+                _ => Base::Unknown,
+            };
+        }
+    }
+    let Some(body) = class.child_by_field_name("body") else {
+        return facts;
+    };
+    let mut cursor = body.walk();
+    for member in body.named_children(&mut cursor) {
+        if !matches!(
+            member.kind(),
+            "method_definition" | "public_field_definition"
+        ) {
+            continue;
+        }
+        let Some(name) = member.child_by_field_name("name") else {
+            continue;
+        };
+        let name = text(source, name);
+        let mut tokens = member.walk();
+        let is_static = member.children(&mut tokens).any(|t| t.kind() == "static");
+        if is_static {
+            facts.statics.insert(name.to_string());
+        } else if member.kind() == "method_definition" && name == "constructor" {
+            facts.ctor_returns_value |= member
+                .child_by_field_name("body")
+                .is_some_and(returns_value);
+        }
+    }
+    facts
+}
+
+/// True when a `return <value>;` of `body` itself (not of a nested function or
+/// class) exists.
+fn returns_value(body: Node) -> bool {
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "return_statement" && n.named_child_count() > 0 {
+            return true;
+        }
+        let mut cursor = n.walk();
+        for c in n.children(&mut cursor) {
+            if !FUNCTION_KINDS.contains(&c.kind()) && !CLASS_KINDS.contains(&c.kind()) {
+                stack.push(c);
+            }
+        }
+    }
+    false
+}
+
+/// What one occurrence of a name does.
+enum Role {
+    /// The `name` of a `variable_declarator` (the frame's parent).
+    Declarator,
     /// A parameter, pattern, assignment target or other declaration.
     OtherBinding,
     /// A use that does not bind or write the name.
     Read,
 }
 
-fn binding_role<'t>(n: Node<'t>) -> Role<'t> {
+fn binding_role(f: &Frame) -> Role {
+    let n = f.node;
     if n.kind() == "type_identifier" {
-        return match n.parent() {
-            Some(p) if CLASS_DECLARATION_KINDS.contains(&p.kind()) && is_field_of(p, "name", n) => {
+        return match f.parent {
+            Some(p) if CLASS_KINDS.contains(&p.kind()) && is_field_of(p, "name", n) => {
                 Role::OtherBinding
             }
             _ => Role::Read,
         };
     }
-    let target = unwrap_target(n);
-    let Some(parent) = target.parent() else {
+    let Some((parent, target)) = f.target else {
         return Role::Read;
     };
     let is_field = |field: &str| is_field_of(parent, field, target);
     match parent.kind() {
-        "variable_declarator" if is_field("name") => Role::Declarator(parent),
+        "variable_declarator" if is_field("name") => Role::Declarator,
         "assignment_expression" | "augmented_assignment_expression" if is_field("left") => {
             Role::OtherBinding
         }
         "update_expression" if is_field("argument") => Role::OtherBinding,
         "arrow_function" if is_field("parameter") => Role::OtherBinding,
+        "function_expression" | "generator_function" if is_field("name") => Role::OtherBinding,
         "for_in_statement" if !is_field("left") => Role::Read,
         "catch_clause" if !is_field("parameter") => Role::Read,
         kind if BINDING_PARENT_KINDS.contains(&kind) => Role::OtherBinding,
         _ if n.kind() == "shorthand_property_identifier_pattern" => Role::OtherBinding,
         _ => Role::Read,
     }
-}
-
-/// The outermost wrapper of `n` among `TARGET_WRAPPER_KINDS` of which `n` is
-/// the operand, or `n` itself.
-fn unwrap_target(n: Node) -> Node {
-    let mut current = n;
-    while let Some(p) = current.parent() {
-        if !TARGET_WRAPPER_KINDS.contains(&p.kind())
-            || p.named_child(0).map(|c| c.id()) != Some(current.id())
-        {
-            break;
-        }
-        current = p;
-    }
-    current
 }
 
 fn is_field_of(parent: Node, field: &str, child: Node) -> bool {
@@ -333,6 +556,10 @@ fn declaration_reaches(declared: &Declared, call: Node) -> bool {
         return false;
     };
     start <= call.start_byte() && call.end_byte() <= end
+}
+
+fn span(n: Node) -> Span {
+    (n.start_byte(), n.end_byte())
 }
 
 fn text<'s>(source: &'s str, n: Node) -> &'s str {
@@ -458,6 +685,46 @@ mod tests {
                 "class A {} class B {} A = B; function f() { const w = new A(); w.run(); }",
                 "constructor reassigned in the program",
             ),
+            (
+                "function f() { let w = new A(); (<any>w) = new B(); w.run(); }",
+                "type-assertion write",
+            ),
+            (
+                "function f() { let w = new A(); (w satisfies A) = new B(); w.run(); }",
+                "satisfies write",
+            ),
+            (
+                "class A { run() {} } function f() { const w = new A(); return class w { static s = w.run(); }; }",
+                "named class expression",
+            ),
+            (
+                "class A { run() {} } const g = function A() { const w = new A(); w.run(); };",
+                "constructor named by a function expression",
+            ),
+            (
+                "class Other { run() {} } class Worker extends Other { static run() {} } function f() { const w = new Worker(); w.run(); }",
+                "static member of the constructed class",
+            ),
+            (
+                "class Worker { static run = () => 1; } function f() { const w = new Worker(); w.run(); }",
+                "static field of the constructed class",
+            ),
+            (
+                "class Other { run() {} } class Worker { constructor() { return new Other(); } run() {} } function f() { const w = new Worker(); w.run(); }",
+                "constructor returns a replacement",
+            ),
+            (
+                "class B { constructor() { return {}; } } class W extends B { run() {} } function f() { const w = new W(); w.run(); }",
+                "base constructor returns a replacement",
+            ),
+            (
+                "import { Base } from './b'; class W extends Base { run() {} } function f() { const w = new W(); w.run(); }",
+                "base declared elsewhere",
+            ),
+            (
+                "class W extends mix(A) { run() {} } function f() { const w = new W(); w.run(); }",
+                "base is an expression",
+            ),
         ];
         for (src, why) in cases {
             let callee = if why == "chain" {
@@ -473,6 +740,21 @@ mod tests {
     fn a_file_local_class_constructed_in_a_function_carries_the_class() {
         let src = "class A { run() {} } function f() { const w = new A(); w.run(); }";
         assert_eq!(hint_of(src, "w.run"), constructed("A"));
+    }
+
+    #[test]
+    fn an_in_file_chain_without_replacement_carries_the_class() {
+        let src = "class B { constructor() { this.x = 1; this.f = () => { return 2; }; } } \
+                   class W extends B { run() {} } \
+                   function f() { const w = new W(); w.run(); }";
+        assert_eq!(hint_of(src, "w.run"), constructed("W"));
+    }
+
+    #[test]
+    fn a_static_member_of_another_name_does_not_decline() {
+        let src =
+            "class W { static make() {} run() {} } function f() { const w = new W(); w.run(); }";
+        assert_eq!(hint_of(src, "w.run"), constructed("W"));
     }
 
     #[test]
@@ -511,8 +793,49 @@ mod tests {
         }
         assert_eq!(calls, 2_001);
         assert_eq!(hints, 1, "only w.run carries a hint");
-        // `f` and the program: one table each.
-        assert_eq!(scopes.tables.len(), 2);
+        assert_eq!(scopes.builds, 1, "one pass per tree");
+    }
+
+    /// Review of PR #479 (Codex security finding): nested functions made every
+    /// scope's table walk the whole subtree again, 23.5 s on a 270 KB file of
+    /// 40 nested functions. The pass now visits each node once, whatever the
+    /// nesting, and no query adds a visit.
+    #[test]
+    fn nested_scopes_are_not_rescanned() {
+        let depth = 40;
+        let bindings: String = (0..2_000).map(|i| format!("let v{i} = {i}; ")).collect();
+        let mut src = String::new();
+        for d in 0..depth {
+            src.push_str(&format!(
+                "function f{d}() {{ const w{d} = new A(); w{d}.run(); "
+            ));
+        }
+        src.push_str(&bindings);
+        src.push_str(&"}".repeat(depth));
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .expect("typescript grammar");
+        let tree = parser.parse(&src, None).expect("parse");
+        let mut scopes = ReceiverScopes::default();
+        let mut nodes = 0;
+        let mut hints = 0;
+        let mut stack = vec![tree.root_node()];
+        while let Some(n) = stack.pop() {
+            nodes += 1;
+            if n.kind() == "call_expression"
+                && !scopes.constructed_receiver_properties(&src, n).is_empty()
+            {
+                hints += 1;
+            }
+            let mut cursor = n.walk();
+            for c in n.children(&mut cursor) {
+                stack.push(c);
+            }
+        }
+        assert_eq!(hints, depth, "every w<d>.run carries A");
+        assert_eq!(scopes.builds, 1);
+        assert_eq!(scopes.visits, nodes, "each node visited once");
     }
 
     #[test]

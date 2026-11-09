@@ -101,7 +101,9 @@ pub(super) fn rust_local_receiver_gate(
 /// `new T(..)` the enclosing function proves (`parser::spec::ts_receiver`,
 /// issue #444): bound to `T::<m>` when the caller's own file defines the class
 /// `T` with a method `m`. The class is read in the caller's file only: an
-/// imported `T` is not traced through the import here.
+/// imported `T` is not traced through the import here. A `static m` of `T`,
+/// which the method rows do not mark, never reaches this gate: the parser
+/// emits no hint for it (`ts_receiver::FileFacts::instance_method_of`).
 ///
 /// postcondition: `None` when the gate does not apply (not TypeScript, no
 /// `constructed` hint, callee not `<ident>.<m>`-shaped) AND when the file holds no
