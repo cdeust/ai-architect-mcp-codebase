@@ -113,7 +113,8 @@ pub(crate) struct FileHunk {
     /// `+N,0` hunk, where it takes N, the line before: `removal_gaps` corrects
     /// that, this list keeps it). Read by the history module.
     pub(crate) changed_lines: Vec<u64>,
-    /// New-file positions of the non-blank `+` lines.
+    /// New-file positions of the `+` lines, blank ones excepted unless they
+    /// replace removed lines.
     pub(crate) added_lines: Vec<u64>,
     /// New-file positions just after a run of `-` lines that no `+` line
     /// replaces (a pure removal between lines p-1 and p).
@@ -229,11 +230,12 @@ fn hunk_line(line: &str, lists: &mut LineLists, current_line: &mut u64) -> Resul
         return Err("diff_too_large: line counter would overflow".to_string());
     }
     if let Some(body) = line.strip_prefix('+') {
-        lists.pending_removal = None;
+        let replaces_removal = lists.pending_removal.take().is_some();
         lists.changed.push(*current_line);
-        // A blank added line changes no behavior; it must not make a
-        // complete answer a lower bound (issue #446 review).
-        if !body.trim().is_empty() {
+        // A blank added line on its own changes no behavior and must not make
+        // a complete answer a lower bound; a blank line that replaces removed
+        // lines still carries that removal (issue #446 review).
+        if replaces_removal || !body.trim().is_empty() {
             lists.added.push(*current_line);
         }
     } else {
@@ -596,7 +598,10 @@ mod tests {
     #[test]
     fn added_lines_and_removal_gaps_per_hunk_shape() {
         // (hunk body, added_lines, removal_gaps)
-        let cases: [(&str, &[u64], &[u64]); 8] = [
+        let cases: [(&str, &[u64], &[u64]); 9] = [
+            // Codex review of PR #482: a statement replaced by a blank line
+            // is still a change at that line
+            ("@@ -1,3 +1,3 @@\n f() {\n-    do_work();\n+\n }\n", &[2], &[]),
             // an added `++i;` is the hunk line `+++i;`, not a header
             ("@@ -1,2 +1,3 @@\n a\n+++i;\n b\n", &[2], &[]),
             // a removed `-- note` is the hunk line `--- note`: a removal
