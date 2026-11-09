@@ -344,6 +344,7 @@ mod gap_tests {
             removal_gaps: gaps.to_vec(),
             blank_lines: Vec::new(),
             blank_gaps: Vec::new(),
+            malformed: false,
             is_new: false,
             is_deleted: false,
         }

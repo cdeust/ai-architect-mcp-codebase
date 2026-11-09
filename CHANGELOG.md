@@ -36,7 +36,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   removal, lies in no indexed symbol (a blank-only one excepted); when the diff
   names a path with no indexed File (an unsupported language, a path outside
   the indexed root, or a deleted file); when an added or deleted file holds no
-  indexed symbol; when the symbol load fails (one reason for the whole diff);
+  indexed symbol; when a hunk cannot be read (an unreadable or
+  combined-diff header, or lines past its announced counts); when the symbol
+  load fails (one reason for the whole diff);
   or when a changed symbol's impact query fails. `next_steps` suggests
   `lsp_resolve` only for dependency reasons, not for these coverage gaps.
   Tests: `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct

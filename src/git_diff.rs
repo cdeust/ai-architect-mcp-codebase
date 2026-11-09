@@ -170,6 +170,12 @@ fn map_lines_to_symbols(
 /// a kind without a line range).
 fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Option<String> {
     let path = &hunk.file_path;
+    if hunk.malformed {
+        return Some(format!(
+            "{path}: a hunk could not be read (unreadable header, or lines past its \
+             announced counts); some of its changes may be missing"
+        ));
+    }
     if !attribution.file_known {
         return Some(format!(
             "{path}: no indexed File at this path (unsupported language, outside the \
@@ -302,6 +308,7 @@ fn merge_by_path(hunks: Vec<FileHunk>) -> Vec<FileHunk> {
                 m.removal_gaps.extend(h.removal_gaps);
                 m.blank_lines.extend(h.blank_lines);
                 m.blank_gaps.extend(h.blank_gaps);
+                m.malformed |= h.malformed;
                 m.is_new |= h.is_new;
                 m.is_deleted |= h.is_deleted;
             }
@@ -525,6 +532,21 @@ mod tests {
 
     /// Plain `diff -u` output has no `diff --git` lines: each `---` header
     /// after a hunk starts the next file.
+    /// Claude review of PR #482: a hunk that cannot be read is flagged, not
+    /// dropped silently; the format-patch signature is not.
+    #[test]
+    fn unreadable_hunks_are_flagged() {
+        for body in [
+            "@@ -5,x +5,1 @@\n-old\n+new\n",
+            "@@ -1 +1 @@\n-a\n+A\n+B\n",
+            "@@@ -1,2 -1,2 +1,3 @@@\n  a\n++b\n",
+        ] {
+            assert!(one_file(body).malformed, "{body:?}");
+        }
+        let signed = one_file("@@ -1,1 +1,1 @@\n-a\n+A\n-- \n2.43.0\n");
+        assert!(!signed.malformed);
+    }
+
     #[test]
     fn plain_unified_diffs_split_at_each_file_header() {
         let diff = "--- a/x.rs\n+++ b/x.rs\n@@ -1,1 +1,1 @@\n-a\n+A\n\

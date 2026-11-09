@@ -38,6 +38,9 @@ pub(crate) struct FileHunk {
     /// gap.
     pub(crate) blank_lines: Vec<u64>,
     pub(crate) blank_gaps: Vec<u64>,
+    /// A hunk header could not be read, or `+`/`-`/context lines appeared
+    /// past a hunk's announced counts: some changes may be missing.
+    pub(crate) malformed: bool,
     pub(crate) is_new: bool,
     pub(crate) is_deleted: bool,
 }
@@ -71,6 +74,9 @@ struct FileSection {
     old_left: u64,
     new_left: u64,
     had_hunk: bool,
+    malformed: bool,
+    /// Past a `git format-patch` signature delimiter (`-- `): no more body.
+    in_trailer: bool,
 }
 
 impl FileSection {
@@ -93,6 +99,7 @@ impl FileSection {
         self.old_left = 0;
         self.new_left = 0;
         let Some(h) = HunkHeader::parse(header) else {
+            self.malformed = true;
             return Ok(());
         };
         if h.new_start >= DIFF_LINE_MAX {
@@ -141,10 +148,30 @@ impl FileSection {
             self.close_removal();
         }
         self.line += 1;
-        if !self.in_hunk() {
-            self.close_removal();
-        }
         Ok(())
+    }
+
+    /// A line outside every hunk that is not a header. After a hunk, a body
+    /// line (or a combined-diff `@@@` header) means the counts were wrong or
+    /// the header unreadable; the `-- ` signature of `git format-patch` and
+    /// what follows it are the only exception.
+    fn stray_line(&mut self, line: &str) {
+        if self.in_trailer {
+            return;
+        }
+        if line.starts_with("@@") {
+            // `@@@ … @@@` (a combined diff from `git show <merge>`).
+            self.malformed = true;
+            return;
+        }
+        if !self.had_hunk {
+            return;
+        }
+        if line == "-- " || line == "--" {
+            self.in_trailer = true;
+        } else if line.starts_with(['+', '-', ' ']) {
+            self.malformed = true;
+        }
     }
 
     fn into_hunk(mut self) -> Option<FileHunk> {
@@ -156,6 +183,7 @@ impl FileSection {
             removal_gaps: self.gaps,
             blank_lines: self.blank_lines,
             blank_gaps: self.blank_gaps,
+            malformed: self.malformed,
             is_new: self.is_new,
             is_deleted: self.is_deleted,
         })
@@ -236,6 +264,8 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
                 None if new.starts_with("/dev/null") => section.is_deleted = true,
                 None => {}
             }
+        } else {
+            section.stray_line(line);
         }
     }
     hunks.extend(section.into_hunk());
