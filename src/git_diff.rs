@@ -218,11 +218,14 @@ fn hunk_line(line: &str, lists: &mut LineLists, current_line: &mut u64) -> Resul
         // "\ No newline at end of file": no line in either file.
         return Ok(());
     }
-    if line.starts_with('-') {
+    if let Some(body) = line.strip_prefix('-') {
         // Deleted lines affect the old position; we record current_line
         // so we can match the surrounding context in the new file.
         lists.changed.push(*current_line);
-        lists.pending_removal.get_or_insert(*current_line);
+        // Removing a blank line changes no behavior, as adding one does not.
+        if !body.trim().is_empty() {
+            lists.pending_removal.get_or_insert(*current_line);
+        }
         // Don't increment — deleted lines don't exist in the new file
         return Ok(());
     }
@@ -598,7 +601,9 @@ mod tests {
     #[test]
     fn added_lines_and_removal_gaps_per_hunk_shape() {
         // (hunk body, added_lines, removal_gaps)
-        let cases: [(&str, &[u64], &[u64]); 9] = [
+        let cases: [(&str, &[u64], &[u64]); 10] = [
+            // removing a blank line is no change, like adding one
+            ("@@ -1,3 +1,2 @@\n a\n-\n b\n", &[], &[]),
             // Codex review of PR #482: a statement replaced by a blank line
             // is still a change at that line
             ("@@ -1,3 +1,3 @@\n f() {\n-    do_work();\n+\n }\n", &[2], &[]),
