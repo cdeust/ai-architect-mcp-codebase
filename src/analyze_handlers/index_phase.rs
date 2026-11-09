@@ -128,6 +128,12 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
             return Ok(None);
         }
     };
+    // A file saved between the change check and this pass was re-parsed
+    // (TOCTOU, review of #478): that graph is no longer one a reuse may keep.
+    if inc.changed + inc.added + inc.deleted + inc.renamed > 0 {
+        eprintln!("[ap] analyze_codebase: the tree changed during the refresh; rebuilding in full");
+        return Ok(None);
+    }
     if let Some(e) = inc.coverage_write_error {
         return Err(format!("coverage sidecar write failed: {e}"));
     }

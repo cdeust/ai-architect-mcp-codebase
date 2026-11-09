@@ -181,13 +181,21 @@ pub fn index_incremental(
         exclude_dirs: options.exclude_dirs.clone(),
     };
     let (current, walk_gaps, walk_pruned) = discover(codebase, walk_opts)?;
+    // The full index refuses a tree over the cap; so does this pass, before it
+    // hashes anything (review of #478).
+    check_total_bytes(&current, super::MAX_TOTAL_BYTES)?;
     let mut plan = classify(prior, &current);
-    // Issue #443: the refreshed manifest vouches for the settings only when
-    // the graph it extends was built with these same settings. A pass run with
-    // different ones leaves files the new settings would add or drop, so the
-    // scope becomes unknown and the next scope-checking caller rebuilds.
+    // Issue #443: the refreshed manifest vouches for the graph only when the
+    // graph it extends was built with these same settings AND this pass
+    // changed nothing. Different settings leave files the new ones would add
+    // or drop; an applied change leaves resolver rows `resolve_graph` cannot
+    // invalidate (#478 review). Either way the scope becomes unknown and the
+    // next scope-checking caller (`analyze_codebase`) rebuilds.
     let scope = options.scope();
-    plan.next_manifest.scope = (prior.scope.as_ref() == Some(&scope)).then_some(scope);
+    let c = &plan.change_set;
+    let unchanged =
+        c.changed.is_empty() && c.added.is_empty() && c.deleted.is_empty() && c.renamed.is_empty();
+    plan.next_manifest.scope = (unchanged && prior.scope.as_ref() == Some(&scope)).then_some(scope);
 
     let (reparsed, reparsed_gaps) =
         apply_changes(&store, codebase, &plan.change_set, &current, policy)?;

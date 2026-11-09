@@ -69,9 +69,12 @@ fn edge_rows(resp: &Value) -> Vec<String> {
     let mut rows = Vec::new();
     for &(rel, from, to) in crate::graph_store::REL_TABLES {
         let q = format!("MATCH (a:{from})-[r:{rel}]->(b:{to}) RETURN a.id, b.id");
-        if let Ok(qr) = store.execute_query(&q) {
-            rows.extend(qr.rows.iter().map(|r| format!("{rel}|{}|{}", r[0], r[1])));
-        }
+        // `expect`, not `if let Ok`: a failing query must not compare empty
+        // with empty (review of #478).
+        let qr = store
+            .execute_query(&q)
+            .unwrap_or_else(|e| panic!("{q}: {e}"));
+        rows.extend(qr.rows.iter().map(|r| format!("{rel}|{}|{}", r[0], r[1])));
     }
     rows.sort();
     rows
@@ -268,9 +271,16 @@ fn a_coverage_write_that_fails_on_reuse_fails_the_analysis() {
         "path": repo.to_string_lossy(),
         "output_dir": out.to_string_lossy(),
         "language": "rust",
+        "lsp": false,
     }))
     .expect_err("a coverage receipt that did not reach the sidecar must not be returned");
-    assert!(err.contains("coverage"), "{err}");
+    // The reuse path's own refusal, not a full rebuild's: the full path would
+    // have removed the manifest first (`forget_sidecars`).
+    assert!(err.starts_with("coverage sidecar write failed"), "{err}");
+    assert!(
+        crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out)).is_some(),
+        "the error came from the reuse path, which keeps the manifest"
+    );
 }
 
 #[test]
@@ -307,6 +317,10 @@ fn a_full_rebuild_that_fails_leaves_no_manifest_to_trust() {
     assert!(
         crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out)).is_none(),
         "the previous manifest must not survive a failed rebuild"
+    );
+    assert!(
+        !out.join("meta.json").exists(),
+        "nor the previous meta.json"
     );
     fs::remove_dir_all(cov.with_extension("json.tmp")).expect("unblock");
 
@@ -408,4 +422,78 @@ fn a_symlinked_graph_is_not_reused_and_its_target_is_left_alone() {
     );
     let after = edge_rows(&json!({ "graph_path": other.join("graph").to_string_lossy() }));
     assert_eq!(before, after, "the link target is untouched");
+}
+
+#[test]
+fn an_index_codebase_pass_that_applied_changes_makes_the_next_analysis_rebuild() {
+    // Claude review of #478: a same-settings `index_codebase` pass between two
+    // analyses applied an add and kept the scope, so the next analysis saw no
+    // change and reused a graph whose resolver rows were stale.
+    let (repo, base) = fixture("analyze443_index_between_");
+    let out = base.join("out");
+    fs::write(repo.join("src/a.rs"), "pub fn alpha() { beta(); }\n").expect("edit a.rs");
+    analyze(&repo, &out, json!({}));
+    fs::write(repo.join("src/c.rs"), "pub fn beta() {}\n").expect("add c.rs");
+    crate::indexing_handlers::do_index_codebase(&json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "language": "rust",
+    }))
+    .expect("index");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
+    assert_eq!(outcome(&resp), outcome(&fresh));
+}
+
+#[test]
+fn a_pure_add_delete_or_rename_rebuilds() {
+    // Each case touches one file that no `mod` declares, so only the matching
+    // arm of `tree_changed_since` can see it (review of #478).
+    let (repo, base) = fixture("analyze443_pure_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let extra = repo.join("src/extra");
+
+    fs::write(extra.join("added.rs"), "pub fn added() {}\n").expect("add");
+    assert_eq!(
+        analyze(&repo, &out, json!({}))["index"]["mode"],
+        "full",
+        "add"
+    );
+
+    fs::rename(extra.join("added.rs"), extra.join("renamed.rs")).expect("rename");
+    assert_eq!(
+        analyze(&repo, &out, json!({}))["index"]["mode"],
+        "full",
+        "rename"
+    );
+
+    fs::remove_file(extra.join("renamed.rs")).expect("delete");
+    assert_eq!(
+        analyze(&repo, &out, json!({}))["index"]["mode"],
+        "full",
+        "delete"
+    );
+}
+
+#[test]
+fn a_touched_file_with_identical_content_is_still_reused() {
+    // A moved mtime with the same bytes is not a change (the hash fallback);
+    // otherwise every `git checkout` would rebuild.
+    let (repo, base) = fixture("analyze443_touch_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let b = repo.join("src/b.rs");
+    let bytes = fs::read(&b).expect("read b.rs");
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
+    fs::write(&b, &bytes).expect("rewrite b.rs");
+    fs::File::options()
+        .write(true)
+        .open(&b)
+        .and_then(|f| f.set_modified(later))
+        .expect("move mtime");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
+    assert_eq!(resp["index"]["files_reparsed"], 0, "{resp}");
 }
