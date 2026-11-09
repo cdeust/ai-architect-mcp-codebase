@@ -89,6 +89,7 @@ impl AnalyzeRequest {
                 language_filter: lang_filter,
                 dependency_scope: parse_dependency_scope(args)?,
                 exclude_dirs: parse_exclude_dirs(args)?,
+                full_ast: parse_bool_arg(args, "full_ast", false)?,
             },
             lang_filter,
             gamma: args

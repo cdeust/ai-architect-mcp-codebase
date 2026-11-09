@@ -9,6 +9,7 @@ that need more than a sentence.
 
 - [Team-shared graph artifact](#team-shared-graph-artifact)
 - [Excluding directories from the walk](#excluding-directories-from-the-walk)
+- [Full syntax tree (`full_ast`)](#full-syntax-tree-full_ast)
 - [Database address-space reservation (`max_db_size`)](#database-address-space-reservation-max_db_size)
 - [Measured graph sizes](#measured-graph-sizes)
 
@@ -79,6 +80,36 @@ Separately from `exclude_dirs`, a directory the OS refuses to read
 (`EACCES` / `PermissionDenied`) does not abort the index. It is recorded in the
 coverage sidecar with reason `unreadable` and the walk continues, so one
 locked subdirectory cannot discard an otherwise successful index.
+
+## Full syntax tree (`full_ast`)
+
+Issue #448. `index_codebase` and `analyze_codebase` both accept `"full_ast"`
+(default `false`). With `true`, every parsed file also gets:
+
+- one `AstNode` row per tree-sitter node, named and anonymous, with a
+  `Defines_File_AstNode` edge from the file to the tree root and one
+  `AstChild_AstNode_AstNode` edge from each parent node to each of its
+  children;
+- one `FileContent` row holding the file's zstd-compressed source, so the
+  exact text of any `AstNode` is recoverable from its byte offsets.
+
+It is off by default because it dominates the graph and no typed tool reads
+it (raw `query_graph` Cypher is the only way to reach it): an audit of
+release v0.14.0 on django (7,008 files) found `AstNode` rows were 94.7 % of
+the graph's nodes. Symbols, calls, imports, communities and processes are
+indexed the same way with or without it.
+
+The flag applies to the files a call parses. `analyze_codebase` rebuilds the
+graph from scratch on every call, so its flag applies to every file.
+`index_codebase` is incremental by default and its manifest does not record
+the flag, so switching it on or off for an existing graph there takes
+`"full": true` (the same contract `full` already has for `language`,
+`dependency_scope` and `exclude_dirs`); until then, files not re-parsed since
+keep the layer they were indexed with. An artifact imported by
+`"bootstrap": true` keeps the layer it was exported with for the files it
+does not re-parse; a stale artifact's fill re-parses the changed files with
+the call's flag, so the result can mix both. `"full": true` does not stop that
+import: on a fresh clone, bootstrap runs before the full-index decision.
 
 ## Database address-space reservation (`max_db_size`)
 
