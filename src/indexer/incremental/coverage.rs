@@ -164,12 +164,23 @@ pub(in crate::indexer) fn apply_cargo_facts(
     }
 }
 
+/// What `save_incremental_coverage` produced: the Cargo facts to apply to the
+/// store, the report this pass computed, and why it could not be persisted.
+pub(super) struct IncrementalCoverage {
+    pub(super) facts: cargo_attribution::CargoFacts,
+    pub(super) report: coverage::CoverageReport,
+    /// `Some` when the sidecar on disk is NOT this report (review of #478:
+    /// a caller that reads the sidecar back would otherwise get the previous
+    /// pass's report and present it as this one's).
+    pub(super) write_error: Option<String>,
+}
+
 /// Builds and writes the coverage sidecar for an incremental pass or bootstrap
 /// fill: carry forward unchanged files' gaps, overlay the reparsed files'
 /// fresh gaps, drop gaps for vanished/now-clean files, then recompute
 /// outside-build-targets fresh over the whole current tree (issue #284).
-/// Best-effort — a failed write only degrades the honesty signal, never the
-/// index.
+/// Best-effort for the index — a failed write never fails the pass — but the
+/// failure is returned, so a caller that reports coverage can refuse to.
 pub(super) fn save_incremental_coverage(
     codebase: &Path,
     graph_dir: &Path,
@@ -178,10 +189,19 @@ pub(super) fn save_incremental_coverage(
     reparsed_gaps: BTreeMap<String, FileCoverage>,
     pruned_dirs: BTreeMap<String, String>,
     index_mode: &str,
-) -> cargo_attribution::CargoFacts {
+) -> IncrementalCoverage {
     let output_dir = match graph_dir.parent() {
         Some(p) => p,
-        None => return cargo_attribution::CargoFacts::default(),
+        None => {
+            return IncrementalCoverage {
+                facts: cargo_attribution::CargoFacts::default(),
+                report: coverage::CoverageReport::new(index_mode, current.len() as u64),
+                write_error: Some(format!(
+                    "graph dir {} has no parent to hold the coverage sidecar",
+                    graph_dir.display()
+                )),
+            }
+        }
     };
     let cov_path = coverage::coverage_path(output_dir);
     let prior = coverage::load(&cov_path);
@@ -208,10 +228,15 @@ pub(super) fn save_incremental_coverage(
     // added or removed. source: ADR-9841.
     report.pruned_dirs = pruned_dirs;
     let facts = overlay_cargo_attributions(&mut report, codebase, current);
-    if let Err(e) = coverage::save(&cov_path, &report) {
+    let write_error = coverage::save(&cov_path, &report).err();
+    if let Some(e) = &write_error {
         eprintln!("[ap] coverage sidecar write failed: {e}");
     }
-    facts
+    IncrementalCoverage {
+        facts,
+        report,
+        write_error,
+    }
 }
 
 #[cfg(test)]

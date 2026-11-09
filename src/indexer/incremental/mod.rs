@@ -201,7 +201,7 @@ pub fn index_incremental(
     // save.
     let mut merged_gaps = reparsed_gaps;
     merged_gaps.extend(walk_gaps);
-    let facts = save_incremental_coverage(
+    let cov = save_incremental_coverage(
         codebase,
         graph_dir,
         &current,
@@ -210,7 +210,7 @@ pub fn index_incremental(
         walk_pruned,
         "incremental",
     );
-    apply_cargo_facts(&store, &facts);
+    apply_cargo_facts(&store, &cov.facts);
 
     // Intentionally NO node_count()/edge_count() here — see `IncrementalResult`.
     Ok(IncrementalResult {
@@ -222,7 +222,35 @@ pub fn index_incremental(
         unchanged: plan.unchanged.len() as u64,
         files_reparsed: reparsed,
         elapsed_ms: start.elapsed().as_millis() as u64,
+        coverage: cov.report,
+        coverage_write_error: cov.write_error,
     })
+}
+
+/// True when the tree under `codebase`, walked with `options`, differs from
+/// `prior`: a file changed, added, deleted or renamed. Reads the tree and
+/// writes nothing — no graph, no sidecar.
+///
+/// Exists for `analyze_codebase` (#478 review): the resolver keeps the edges
+/// an earlier run wrote and has no invalidation for an unchanged file whose
+/// candidate set another file's edit changed, so analyze reuses a graph only
+/// when this returns `false`.
+pub fn tree_changed_since(
+    codebase: &Path,
+    options: &IndexOptions,
+    prior: &FileManifest,
+) -> Result<bool, String> {
+    let walk_opts = WalkOptions {
+        language_filter: options.language_filter,
+        dependency_scope: options.dependency_scope,
+        exclude_dirs: options.exclude_dirs.clone(),
+    };
+    let (current, _walk_gaps, _walk_pruned) = discover(codebase, walk_opts)?;
+    let c = classify(prior, &current).change_set;
+    Ok(!(c.changed.is_empty()
+        && c.added.is_empty()
+        && c.deleted.is_empty()
+        && c.renamed.is_empty()))
 }
 
 /// Applies a classified `ChangeSet` to the open graph: snapshot inbound

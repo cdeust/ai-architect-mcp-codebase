@@ -1,5 +1,6 @@
 //! Issue #443: a second `analyze_codebase` on the same `output_dir` reuses the
-//! graph incrementally, and the graph it leaves equals a from-scratch one.
+//! graph when nothing changed, rebuilds it otherwise, and either way leaves
+//! the graph a from-scratch analysis would.
 
 use crate::analyze_handlers::do_analyze_codebase;
 use crate::test_support::{TempDirExt, TestTempDir};
@@ -83,7 +84,7 @@ fn a_second_call_on_an_unchanged_tree_reparses_nothing() {
 }
 
 #[test]
-fn an_incremental_call_after_an_edit_matches_a_full_rebuild() {
+fn a_call_after_an_edit_rebuilds_and_matches_a_fresh_analysis() {
     let (repo, base) = fixture("analyze443_edit_");
     let out = base.join("out");
     analyze(&repo, &out, json!({}));
@@ -106,15 +107,13 @@ fn an_incremental_call_after_an_edit_matches_a_full_rebuild() {
     .expect("edit lib.rs");
     fs::remove_file(repo.join("src/extra/v.rs")).expect("delete");
 
-    let incremental = analyze(&repo, &out, json!({}));
-    assert_eq!(incremental["index"]["mode"], "incremental", "{incremental}");
-    assert_eq!(incremental["index"]["changed"], 2, "{incremental}");
-    assert_eq!(incremental["index"]["added"], 1, "{incremental}");
-    assert_eq!(incremental["index"]["deleted"], 1, "{incremental}");
+    // An edited tree is rebuilt: the resolver cannot invalidate edges of the
+    // unchanged files yet (see the module doc of `index_phase`).
+    let second = analyze(&repo, &out, json!({}));
+    assert_eq!(second["index"]["mode"], "full", "{second}");
 
     let fresh = analyze(&repo, &base.join("fresh"), json!({}));
-    assert_eq!(fresh["index"]["mode"], "full");
-    assert_eq!(outcome(&incremental), outcome(&fresh));
+    assert_eq!(outcome(&second), outcome(&fresh));
 }
 
 #[test]
@@ -202,4 +201,67 @@ fn exclusions_compare_by_content_not_by_spelling_or_order() {
     let path = ExcludeSet::new(&["./vendor".into()]);
     let name = ExcludeSet::new(&["vendor".into()]);
     assert_ne!(path.canonical_entries(), name.canonical_entries());
+}
+
+#[test]
+fn a_call_made_ambiguous_by_an_added_file_is_rebuilt() {
+    // Codex review of #478, P1: `a.rs` (unchanged) calls `beta()`, unique in
+    // the first run. An added file declares a second `beta`, so a fresh
+    // analysis no longer resolves the call by unique match. Reusing the graph
+    // kept the earlier edge (3 call-site targets against 2), so a change of
+    // the tree must rebuild.
+    let (repo, base) = fixture("analyze443_ambiguous_");
+    let out = base.join("out");
+    fs::write(repo.join("src/a.rs"), "pub fn alpha() { beta(); }\n").expect("edit a.rs");
+    analyze(&repo, &out, json!({}));
+    fs::write(repo.join("src/c.rs"), "pub fn beta() {}\n").expect("add c.rs");
+    fs::write(
+        repo.join("src/lib.rs"),
+        "mod a;\nmod b;\nmod c;\npub fn root() { a::alpha(); }\n",
+    )
+    .expect("edit lib.rs");
+
+    let second = analyze(&repo, &out, json!({}));
+    assert_eq!(second["index"]["mode"], "full", "{second}");
+    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
+    assert_eq!(outcome(&second), outcome(&fresh));
+}
+
+#[test]
+fn a_coverage_write_that_fails_on_reuse_fails_the_analysis() {
+    // Codex review of #478, P2: the reuse path read the sidecar back, so a
+    // failed write left the previous report on disk and presented it as this
+    // call's. Block the temporary file the save writes first; the previous
+    // sidecar stays readable.
+    let (repo, base) = fixture("analyze443_covfail_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let cov = crate::indexer::coverage::coverage_path(&out);
+    assert!(
+        crate::indexer::coverage::load(&cov).is_some(),
+        "precondition"
+    );
+    fs::create_dir_all(cov.with_extension("json.tmp")).expect("block the temp file");
+
+    let err = do_analyze_codebase(&json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "language": "rust",
+    }))
+    .expect_err("a coverage receipt that did not reach the sidecar must not be returned");
+    assert!(err.contains("coverage"), "{err}");
+}
+
+#[test]
+fn a_graph_built_by_another_version_is_rebuilt() {
+    let (repo, base) = fixture("analyze443_version_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let path = crate::indexer::manifest::manifest_path(&out);
+    let mut m: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("parse");
+    m["scope"]["indexer_version"] = json!("0.0.0-older");
+    fs::write(&path, m.to_string()).expect("write");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
 }

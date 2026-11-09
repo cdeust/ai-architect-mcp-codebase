@@ -162,10 +162,12 @@ query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep
 ```
 
-Re-run `analyze_codebase` after edits: on the same `output_dir` it re-parses only
-the files that changed, then re-resolves and re-clusters the whole graph. A change
-of `language`, `dependency_scope` or `exclude_dirs`, or `full: true`, rebuilds
-from scratch.
+Re-run `analyze_codebase` after edits. On the same `output_dir`, a tree with no
+changed file reuses the graph without re-parsing anything. Any edit, a change of
+`language`, `dependency_scope` or `exclude_dirs`, a new server version, or
+`full: true` rebuilds from scratch. Reusing an edited graph waits on resolver
+invalidation (#443); the three-stage `index_codebase` path re-parses only the
+changed files.
 
 ## 27 MCP Tools
 

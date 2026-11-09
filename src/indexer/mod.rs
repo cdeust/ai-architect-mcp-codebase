@@ -33,7 +33,8 @@ use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
 use coverage::{CoverageCollector, CoverageReport};
 pub use incremental::{
-    fill_after_bootstrap, index_incremental, write_full_manifest, FillMethod, FillResult,
+    fill_after_bootstrap, index_incremental, tree_changed_since, write_full_manifest, FillMethod,
+    FillResult,
 };
 use persist::{
     index_single_file, insert_ancestor_dirs, insert_dir_file_edge, insert_file_node, FileScope,
@@ -99,13 +100,15 @@ pub struct IndexOptions {
 }
 
 impl IndexOptions {
-    /// These options as the manifest records them (issue #443): two values are
+    /// These options, and this build's version, as the manifest records them
+    /// (issue #443): two values are
     /// equal exactly when a walk under either would select the same files and
     /// parse them the same way. The enums' `Debug` names are unit-variant
     /// identifiers, stable within a build; a rename across builds only makes
     /// the comparison fail, which costs a full rebuild, never a stale graph.
     pub fn scope(&self) -> manifest::IndexScope {
         manifest::IndexScope {
+            indexer_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             language: self.language_filter.map(|l| format!("{l:?}")),
             dependency_scope: format!("{:?}", self.dependency_scope),
             exclude_dirs: self.exclude_dirs.canonical_entries(),
@@ -144,6 +147,11 @@ pub struct IncrementalResult {
     pub unchanged: u64,
     pub files_reparsed: u64,
     pub elapsed_ms: u64,
+    /// The coverage report this pass computed (#478 review), whether or not
+    /// it reached the sidecar.
+    pub coverage: CoverageReport,
+    /// Why the sidecar write failed, when it did.
+    pub coverage_write_error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

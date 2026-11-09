@@ -57,6 +57,10 @@ pub struct FileState {
 /// value with its own settings and rebuilds in full on any difference.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexScope {
+    /// The version of the server that built the graph. A newer build may parse
+    /// or resolve differently, so its graph is not reused across versions.
+    #[serde(default)]
+    pub indexer_version: Option<String>,
     /// `None` for per-file auto-detection, else the forced language.
     pub language: Option<String>,
     pub dependency_scope: String,

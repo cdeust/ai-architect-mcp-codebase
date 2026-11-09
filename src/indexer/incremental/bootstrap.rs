@@ -127,7 +127,7 @@ pub fn fill_after_bootstrap(
     // plus this pass's walk-level excluded/unreadable directories, save.
     let mut merged_gaps = reparsed_gaps;
     merged_gaps.extend(walk_gaps);
-    let facts = save_incremental_coverage(
+    let cov = save_incremental_coverage(
         codebase,
         graph_dir,
         &current,
@@ -136,7 +136,7 @@ pub fn fill_after_bootstrap(
         walk_pruned,
         "bootstrap_fill",
     );
-    super::apply_cargo_facts(&store, &facts);
+    super::apply_cargo_facts(&store, &cov.facts);
 
     Ok(FillResult {
         result: IncrementalResult {
@@ -148,6 +148,8 @@ pub fn fill_after_bootstrap(
             unchanged: unchanged_count,
             files_reparsed: reparsed,
             elapsed_ms: start.elapsed().as_millis() as u64,
+            coverage: cov.report,
+            coverage_write_error: cov.write_error,
         },
         method,
     })
