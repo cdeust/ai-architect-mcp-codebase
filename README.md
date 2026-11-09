@@ -247,7 +247,11 @@ Cargo-derived buckets were determined: `known`, `unknown` (the `cargo
 metadata` call failed or `cargo` is missing, so an empty bucket means "not
 determined"), `not_applicable`, or `not_recorded` for an older record.
 `coverage.pruned_dirs` names every directory the walk skipped by policy, with
-its reason. An empty coverage report is still not proof of completeness.
+its reason. `coverage.no_extraction` counts, per extension, the files that are
+File nodes only because no parser handles them (PHP, C#, Lua, but also `.md` or
+`.json`): their symbols are not in the graph, so grep them before reading an
+empty search as absence. It is not a gap bucket and does not affect `exact`.
+An empty coverage report is still not proof of completeness.
 
 ### Epistemic boundary on impact
 

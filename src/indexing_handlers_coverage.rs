@@ -120,6 +120,32 @@ fn cargo_attribution_json(report: &indexer::coverage::CoverageReport) -> Value {
     }
 }
 
+/// The `no_extraction` block (issue #447): files that are File nodes only
+/// because no parser handles their extension, as an exact total plus a
+/// per-extension count. The `COVERAGE_LIST_CAP` largest extensions are kept
+/// (ties by name) and `extensions_omitted` says how many were left out, so a
+/// capped list never reads as the whole set. An empty map renders zero: an
+/// old sidecar has no tally, and a re-index records one.
+fn no_extraction_json(report: &indexer::coverage::CoverageReport) -> Value {
+    let mut by_count: Vec<(&String, &u64)> = report.no_extraction.iter().collect();
+    by_count.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    let total: u64 = report.no_extraction.values().sum();
+    let listed: serde_json::Map<String, Value> = by_count
+        .iter()
+        .take(COVERAGE_LIST_CAP)
+        .map(|(ext, n)| ((*ext).clone(), json!(n)))
+        .collect();
+    json!({
+        "count": total,
+        "by_extension": listed,
+        "extensions_omitted": by_count.len().saturating_sub(COVERAGE_LIST_CAP),
+        "note": "File nodes only: no parser handles these extensions, so their \
+                 symbols are not in the graph and a search that returns nothing \
+                 there is not evidence of absence — grep them. Not counted as a \
+                 gap: data and doc files land here too.",
+    })
+}
+
 pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Value {
     let counts = report.counts();
     let b = bucket_coverage_files(report);
@@ -143,6 +169,9 @@ pub(crate) fn coverage_summary(report: &indexer::coverage::CoverageReport) -> Va
             "files": b.feature_gated_files
         },
         "cargo_attribution": cargo_attribution_json(report),
+        // Declared limit of the parsers, NOT a gap (issue #447): outside the
+        // gap buckets for the reason `pruned_dirs` is.
+        "no_extraction": no_extraction_json(report),
         // Declared policy, NOT a gap: reported so a reader can see what the
         // walk refused to enter, and deliberately outside the gap buckets
         // so `.git`/`target` do not make every graph incomplete.
@@ -287,6 +316,25 @@ mod tests {
             })),
             json!({"status": "not_applicable", "detail": "no Cargo.toml at the analyzed root"})
         );
+    }
+
+    /// Issue #447: the tally is rendered with its exact total, the capped
+    /// list keeps the largest extensions, and it says how many it left out.
+    #[test]
+    fn no_extraction_renders_total_keeps_largest_and_counts_the_omitted() {
+        let mut report = CoverageReport::new("full", 1);
+        report.no_extraction = [("lua".to_string(), 1), ("php".to_string(), 3)]
+            .into_iter()
+            .collect();
+        for i in 0..COVERAGE_LIST_CAP {
+            report.no_extraction.insert(format!("x{i:02}"), 1);
+        }
+        let block = coverage_summary(&report)["no_extraction"].clone();
+        assert_eq!(block["count"], json!(4 + COVERAGE_LIST_CAP as u64));
+        let listed = block["by_extension"].as_object().expect("an object");
+        assert_eq!(listed.len(), COVERAGE_LIST_CAP);
+        assert_eq!(listed["php"], json!(3));
+        assert_eq!(block["extensions_omitted"], json!(2));
     }
 
     /// An old sidecar never claims `unknown`: it was not analysed for this.

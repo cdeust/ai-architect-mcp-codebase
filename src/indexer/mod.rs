@@ -31,7 +31,7 @@ mod walk;
 // `super::SymbolBatch` after the Extract Class move into `batch`.
 use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
-use coverage::{CoverageCollector, CoverageReport};
+use coverage::{no_extraction_by_extension, CoverageCollector, CoverageReport};
 pub use incremental::{
     fill_after_bootstrap, index_incremental, write_full_manifest, FillMethod, FillResult,
 };
@@ -315,6 +315,16 @@ pub fn index_codebase_with_language(
     coverage.pruned_dirs = collector.pruned_dirs().clone();
     coverage.cargo_attribution = collector.cargo_attribution();
     coverage.files = collector.into_files();
+    // Issue #447: which files got a File node and nothing else, by extension.
+    let walked_rels: Vec<String> = source_files
+        .iter()
+        .map(|f| {
+            relative_path(codebase_path, f)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    coverage.no_extraction = no_extraction_by_extension(walked_rels.iter().map(String::as_str));
 
     Ok(IndexResult {
         graph_path: graph_path.to_path_buf(),

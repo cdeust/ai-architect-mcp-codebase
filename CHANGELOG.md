@@ -8,6 +8,19 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Files in unsupported languages are counted in the coverage report** (#447,
+  first slice). A PHP, C# or Lua file became a File node with no symbols and
+  left no trace in `coverage` or in `query_graph(graph="missed")`, so an empty
+  search over it read as absence. The coverage sidecar now carries
+  `no_extraction`, extension → file count, over every file the walk yields
+  (the same `Language::from_extension` rule the indexer applies before it
+  parses), recomputed on full and incremental passes. `analyze_codebase`,
+  `index_codebase`, `index_status` and `missed` render it as
+  `coverage.no_extraction` `{count, by_extension, extensions_omitted, note}`.
+  It is a declared limit, not a gap bucket: `.md` and `.json` land there too,
+  so it does not turn `get_impact` into `lower-bound`. An older sidecar loads
+  with an empty tally. Not yet done: the zero-result note on `search_codebase`.
+
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to

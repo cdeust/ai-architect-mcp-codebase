@@ -475,6 +475,58 @@ fn callsite_column_is_persisted_not_zero() {
     );
 }
 
+/// Issue #447: PHP and Lua files are File nodes only. The full index tallies
+/// them by extension, outside the gap counts, and an incremental refresh that
+/// adds a C# file recomputes the tally over the whole tree (the untouched
+/// PHP and Lua files are still there) and writes it to the sidecar.
+#[test]
+fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let source = tmp.path().join("source");
+    std::fs::create_dir_all(source.join("lib")).unwrap();
+    std::fs::write(source.join("mod.py"), "def f():\n    return 1\n").unwrap();
+    std::fs::write(
+        source.join("lib/a.php"),
+        "<?php\nfunction a() { return 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(source.join("lib/b.php"), "<?php\nclass B {}\n").unwrap();
+    std::fs::write(source.join("init.lua"), "local function f() end\n").unwrap();
+    let graph = tmp.path().join("graph");
+    let manifest_path = tmp.path().join("manifest.json");
+    let tally = |pairs: &[(&str, u64)]| -> std::collections::BTreeMap<String, u64> {
+        pairs.iter().map(|(e, n)| (e.to_string(), *n)).collect()
+    };
+
+    let full = index_codebase(&source, &graph).expect("index");
+    assert_eq!(
+        full.coverage.no_extraction,
+        tally(&[("lua", 1), ("php", 2)])
+    );
+    assert_eq!(
+        full.coverage.counts(),
+        coverage::CoverageCounts::default(),
+        "a file no parser handles is a declared limit, not a gap"
+    );
+
+    write_full_manifest(&source, &manifest_path, &IndexOptions::default()).expect("manifest");
+    std::fs::write(source.join("lib/C.cs"), "class C {}\n").unwrap();
+    let prior = manifest::load(&manifest_path).expect("load manifest");
+    index_incremental(
+        &source,
+        &graph,
+        &manifest_path,
+        &IndexOptions::default(),
+        &prior,
+    )
+    .expect("incremental refresh");
+    let sidecar = coverage::load(&coverage::coverage_path(tmp.path())).expect("sidecar");
+    assert_eq!(
+        sidecar.no_extraction,
+        tally(&[("cs", 1), ("lua", 1), ("php", 2)])
+    );
+}
+
 #[cfg(test)]
 fn dir_size(path: &std::path::Path) -> u64 {
     // lbug may materialize the database as a single file OR a directory

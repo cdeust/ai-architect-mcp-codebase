@@ -207,6 +207,9 @@ pub(super) fn save_incremental_coverage(
     // than carried forward: the pruned set changes the moment a directory is
     // added or removed. source: ADR-9841.
     report.pruned_dirs = pruned_dirs;
+    // Issue #447: recomputed over the whole current tree, like `pruned_dirs`.
+    report.no_extraction =
+        coverage::no_extraction_by_extension(current.iter().map(|d| d.rel.as_str()));
     let facts = overlay_cargo_attributions(&mut report, codebase, current);
     if let Err(e) = coverage::save(&cov_path, &report) {
         eprintln!("[ap] coverage sidecar write failed: {e}");
