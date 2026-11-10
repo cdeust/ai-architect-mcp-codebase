@@ -123,9 +123,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   `edge_count` and `files_indexed` appear only when `mode` is `full` (whole-graph
   totals stay in `graph`); on analyze, `meta_write_error` also reports a failed
   manifest write, prefixed `manifest: ` (`meta: ` precedes a `meta.json` error
-  when both failed). **Added:** the `full` parameter. A full rebuild
-  removes the previous manifest and `meta.json` first, so a rebuild that fails
-  or is killed leaves nothing for the next call to reuse.
+  when both failed). **Added:** the `full` parameter. A full rebuild first
+  refuses any error taking its manifest snapshot (before removing anything),
+  then removes the previous manifest, `meta.json` and coverage sidecar, so a
+  rebuild that fails or is killed leaves nothing for the next call to reuse.
 
 - C++ follow-ups of #406 (#412, points 1 and 2; point 3, the suffix matching of a
   declared type, stays open on #412). Measured on ETLCPP 7d604f2e, `origin/main`

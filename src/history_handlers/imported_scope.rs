@@ -2,7 +2,9 @@
 //! (reviews of #478). The scope says "this graph was built from source with
 //! these settings"; an imported graph was built by whoever exported it, so a
 //! later `analyze_codebase` must not reuse it. The per-file states stay:
-//! `index_codebase` still fills incrementally from them.
+//! `index_codebase` still fills incrementally from them. A manifest that is
+//! not a regular file that loads (a symlink, dangling or not, or one that does
+//! not parse) is removed instead, since it could later read as a scoped one.
 
 use crate::indexer;
 use std::path::Path;

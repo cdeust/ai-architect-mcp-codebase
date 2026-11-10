@@ -30,6 +30,10 @@ fn graph_sidecars_intact(out: &Path) {
     );
     assert!(out.join("meta.json").exists(), "meta.json kept");
     assert!(
+        crate::indexer::coverage::load(&crate::indexer::coverage::coverage_path(out)).is_some(),
+        "coverage sidecar kept"
+    );
+    assert!(
         fs::symlink_metadata(out.join("graph")).is_ok(),
         "graph kept"
     );
@@ -85,7 +89,8 @@ fn refuse_release(_path: &Path) -> Result<(), String> {
 }
 
 /// Review of #478: handles are released before the sidecars are forgotten,
-/// so a busy graph fails while its manifest and meta.json still describe it.
+/// so a busy graph fails while its manifest, meta.json and coverage sidecar
+/// still describe it.
 /// The hook is per thread; each test runs on its own.
 fn busy_graph_keeps_its_sidecars(entry: Entry, prefix: &str) {
     let (repo, base) = fixture(prefix);
@@ -158,6 +163,19 @@ fn an_edit_during_a_full_index_codebase_is_seen_by_the_next_analysis() {
 }
 
 #[test]
+fn a_graph_from_a_full_index_codebase_is_reused_by_the_next_analysis() {
+    // Positive control for the `do_index_codebase` tests above (Claude review
+    // of #478): without the failure each of them injects, that path leaves a
+    // manifest analyze reuses, so their `mode == "full"` is the failure's doing.
+    let (repo, base) = fixture("analyze443_ix_reuse_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    do_index_codebase(&full_args(&repo, &out)).expect("full index");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
+}
+
+#[test]
 fn a_full_index_codebase_whose_coverage_write_fails_is_not_reused() {
     // Claude review of #478: that path only logs a failed coverage write. The
     // previous graph's report must not survive beside the new graph, or the
@@ -182,8 +200,10 @@ fn a_full_index_codebase_whose_coverage_write_fails_is_not_reused() {
 fn a_missing_coverage_report_is_not_turned_into_a_clean_one() {
     // Claude review of #478: after a full `index_codebase` whose coverage
     // write failed, an incremental pass on the unchanged tree found no report
-    // to carry forward, wrote one with no gaps and kept the scope, so the next
-    // analysis reused the graph as clean.
+    // to carry forward and wrote one with no gaps. This sequence is closed by
+    // the full path dropping its scope (asserted below); the incremental
+    // pass's own rule (`prior_loaded`) is pinned by
+    // `an_incremental_pass_without_a_prior_report_records_no_scope`.
     let (repo, base) = fixture("analyze443_cov_chain_");
     let out = base.join("out");
     analyze(&repo, &out, json!({}));
@@ -366,4 +386,74 @@ fn a_manifest_without_a_cargo_digest_is_not_reused() {
     fs::write(&path, m.to_string()).expect("write");
     let resp = analyze(&repo, &out, json!({}));
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+thread_local! {
+    /// The file `remove_on_first_release` removes, armed by the test.
+    static REMOVE_ON_RELEASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+fn remove_on_first_release(_path: &Path) -> Result<(), String> {
+    if let Some(file) = REMOVE_ON_RELEASE.with(|c| c.borrow_mut().take()) {
+        fs::remove_file(&file).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_report_that_vanishes_before_the_refresh_is_not_reused() {
+    // Claude review of #478: `reusable_manifest` loads the coverage sidecar,
+    // then the refresh loads it again. Removed in between (a concurrent full
+    // rebuild forgetting it), the refresh carries no gaps forward and drops
+    // the scope; this call must rebuild too, not present that report.
+    let (repo, base) = fixture("analyze443_cov_vanish_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let cov = crate::indexer::coverage::coverage_path(&out);
+    REMOVE_ON_RELEASE.with(|c| *c.borrow_mut() = Some(cov.clone()));
+    crate::graph_store::register_release_hook(remove_on_first_release);
+    let resp = analyze(&repo, &out, json!({}));
+    assert!(
+        REMOVE_ON_RELEASE.with(|c| c.borrow().is_none()),
+        "the report was removed during the call"
+    );
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+fn files_with_a_target_context(graph: &Path) -> usize {
+    let store = crate::graph_store::GraphStore::open_or_create(graph).expect("open graph");
+    store
+        .execute_query("MATCH (f:File) WHERE f.target_context <> '' RETURN f.id")
+        .expect("query")
+        .rows
+        .len()
+}
+
+#[test]
+fn an_unchanged_pass_rewrites_cargo_facts_a_failed_write_lost() {
+    // Claude review of #478: every pass writes the Cargo facts again, so one
+    // that a best-effort write lost is repaired by the next pass. Clearing a
+    // column stands in for that failed write.
+    if !cargo_available() {
+        return;
+    }
+    let (repo, base) = cargo_fixture("analyze443_facts_repair_", "old_name");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let graph = out.join("graph");
+    assert!(files_with_a_target_context(&graph) > 0, "precondition");
+    {
+        let store = crate::graph_store::GraphStore::open_or_create(&graph).expect("open graph");
+        store
+            .execute_query("MATCH (f:File) SET f.target_context = ''")
+            .expect("clear");
+    }
+    assert_eq!(files_with_a_target_context(&graph), 0);
+    let mut args = full_args(&repo, &out);
+    args["full"] = json!(false);
+    do_index_codebase(&args).expect("unchanged incremental pass");
+    assert!(
+        files_with_a_target_context(&graph) > 0,
+        "the facts are back"
+    );
 }

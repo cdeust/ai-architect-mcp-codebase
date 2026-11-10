@@ -78,10 +78,9 @@ pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
 /// graph in `output_dir`, before a full rebuild replaces it (reviews of #478).
 /// A rebuild that fails or is killed then leaves nothing that vouches for a new
 /// or partial graph: the next call starts from scratch instead of trusting the
-/// previous run's manifest. The coverage sidecar goes too: `index_codebase`
-/// only logs a failed coverage write, and the previous graph's report would
-/// otherwise still load beside the new graph and be carried forward by the
-/// next analysis. Absent is fine; a file that cannot be removed fails the
+/// previous run's manifest. The coverage sidecar goes too: a failed coverage
+/// write would otherwise leave the previous graph's report beside the new
+/// graph, to be carried forward by the next incremental pass or analysis. Absent is fine; a file that cannot be removed fails the
 /// call, since it would still be read.
 pub(crate) fn forget_graph_sidecars(output_dir: &Path) -> Result<(), String> {
     for path in [
@@ -107,7 +106,7 @@ pub(crate) fn forget_graph_sidecars(output_dir: &Path) -> Result<(), String> {
 ///    unreadable root. The index walks the tree the same way and would fail on
 ///    each of them, after the old graph was gone (Claude review of #478);
 /// 2. release cached handles on the graph — a busy graph fails here, while its
-///    manifest and `meta.json` still describe it;
+///    manifest, `meta.json` and coverage sidecar still describe it;
 /// 3. forget the old sidecars, then remove the old graph.
 ///
 /// Returns the snapshot, to save after the index.
@@ -182,13 +181,11 @@ pub(crate) fn prepare_full_rebuild_within(
 /// clock and a random suffix, which is what keeps two `index_codebase` calls
 /// aimed at one `output_dir` from interleaving through a shared temp path.
 ///
-/// The sibling `indexer::manifest::save` writes the other sidecar into this
-/// same directory with the same temp-file-plus-rename SHAPE, but not through
-/// this helper: its temp path is a fixed `file_manifest.json.tmp` and it does
-/// not fsync, so it still carries both exposures. Stated rather than glossed as
-/// parity, because an earlier revision of this comment claimed the two matched
-/// and they do not. Routing it through `atomic_write` too is agreed follow-up
-/// work, deliberately not done in this change.
+/// The sibling `indexer::manifest::save` now goes through the same helper
+/// (`atomic_file::write_json_atomic`), so the manifest has both guarantees too.
+/// The coverage sidecar (`indexer::coverage::save`) still writes through a fixed
+/// `index_coverage.json.tmp`, which the #478 tests block to simulate a failed
+/// write.
 ///
 /// Returns the failure instead of swallowing it (fleet-watch#112 review round
 /// 5). This used to `eprintln!` and carry on, which was defensible while the

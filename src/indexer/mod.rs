@@ -167,9 +167,9 @@ pub struct IncrementalResult {
     pub coverage: CoverageReport,
     /// Why the sidecar write failed, when it did.
     pub coverage_write_error: Option<String>,
-    /// `CargoFacts::digest` of this pass. `analyze_codebase` compares it with
-    /// the manifest's before reusing a graph (review of #478).
-    pub cargo_facts_digest: String,
+    /// Whether the saved manifest kept `prior`'s scope, so still vouches for
+    /// the graph; `analyze_codebase` reuses a graph only then (review of #478).
+    pub scope_kept: bool,
 }
 
 // ---------------------------------------------------------------------------

@@ -153,6 +153,10 @@ pub(super) struct Plan {
 /// files by class. Invariant preserved across the pass: for every unchanged
 /// file, none of its nodes or edges are touched (asserted by the integration
 /// test's per-file count check).
+///
+/// The refreshed manifest keeps `prior`'s scope only when this pass changed no
+/// file, ran with the same settings, computed the same Cargo map, and saved a
+/// coverage report built on the previous one (issue #443, reviews of #478).
 pub fn index_incremental(
     codebase: &Path,
     graph_dir: &Path,
@@ -197,7 +201,9 @@ pub fn index_incremental(
     // or drop; an applied change leaves resolver rows `resolve_graph` cannot
     // invalidate (#478 review). Either way the scope becomes unknown and the
     // next scope-checking caller (`analyze_codebase`) rebuilds. The same holds
-    // for a changed Cargo map, decided below once this pass has computed it.
+    // for a changed Cargo map, and for a coverage report that was not saved or
+    // was built without the previous one, decided below once this pass has
+    // computed them.
     let scope = options.scope();
     let c = &plan.change_set;
     let unchanged =
@@ -231,8 +237,9 @@ pub fn index_incremental(
     // forward by the next reuse as if it were; a report built without the
     // previous one lost the unchanged files' gaps (Claude reviews of #478).
     let coverage_saved = cov.write_error.is_none() && cov.prior_loaded;
-    plan.next_manifest.scope = (settings_match && facts_match && coverage_saved).then_some(scope);
-    plan.next_manifest.cargo_facts = Some(cargo_facts_digest.clone());
+    let scope_kept = settings_match && facts_match && coverage_saved;
+    plan.next_manifest.scope = scope_kept.then_some(scope);
+    plan.next_manifest.cargo_facts = Some(cargo_facts_digest);
     manifest::save(manifest_path, &plan.next_manifest)?;
     // Every pass writes the facts again, even an unchanged one: the digest
     // records what was computed, not that each best-effort write landed, so a
@@ -252,7 +259,7 @@ pub fn index_incremental(
         elapsed_ms: start.elapsed().as_millis() as u64,
         coverage: cov.report,
         coverage_write_error: cov.write_error,
-        cargo_facts_digest,
+        scope_kept,
     })
 }
 

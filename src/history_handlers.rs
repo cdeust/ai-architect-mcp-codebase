@@ -298,8 +298,9 @@ pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> R
 /// returns `Reindex(None)`. When `stale` is set, the response carries a
 /// `stale_artifact` object so a caller can never mistake an accepted-stale graph
 /// for a fresh one. The bundled per-file manifest unpacked alongside the graph
-/// keeps its per-file states but loses its scope (`imported_scope::forget`), so
-/// no `analyze_codebase` reuses the imported graph. For a fresh graph the states
+/// keeps its per-file states but loses its scope (`imported_scope::forget`;
+/// one that is a symlink or does not parse is removed), so no
+/// `analyze_codebase` reuses the imported graph. For a fresh graph the states
 /// let the next local `index_codebase` run incrementally; for an accepted-stale
 /// graph they are the baseline the next run diffs against to fill the skipped delta (so accepting stale never leaves
 /// the graph permanently, silently stale).

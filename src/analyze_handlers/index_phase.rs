@@ -26,10 +26,12 @@
 //!    finds no change (a save in between rebuilds). A failed refresh, or one
 //!    that finds a change, is logged and falls back to the full rebuild (§13 —
 //!    no silent path); a failed coverage-sidecar write fails the call;
-//! 6. that pass computes the same Cargo map (`FileManifest::cargo_facts`) as
-//!    the pass that built the graph. The map is read from manifests the walk
-//!    may not list — `Cargo.toml` under `language: "rust"`, a path dependency
-//!    outside the tree — so condition 4 cannot see it move.
+//! 6. that pass keeps the manifest's scope (`IncrementalResult::scope_kept`):
+//!    it computed the same Cargo map (`FileManifest::cargo_facts`) as the pass
+//!    that wrote the manifest, and built its coverage report on the previous
+//!    one. The map is read from manifests the walk may not list — `Cargo.toml`
+//!    under `language: "rust"`, a path dependency outside the tree — so
+//!    condition 4 cannot see it move.
 //!
 //! # Why an edited tree is still rebuilt in full
 //!
@@ -44,6 +46,16 @@
 //!
 //! The later phases (resolve, LSP, cluster, search index) run over the whole
 //! graph either way.
+//!
+//! # What a reused graph keeps that a fresh analysis lacks
+//!
+//! Rows other tools add to the graph and analyze never writes: the co-change
+//! edges `index_codebase` mines (`FILE_CHANGES_WITH`) and the rows
+//! `ingest_traces` records. A full analysis removes them with the graph; a
+//! reuse keeps them, so after `analyze` → `index_codebase` → `analyze` on an
+//! unchanged tree `get_impact` can read co-change edges a fresh analysis
+//! would not have (Claude review of #478). They are extra data, not a wrong
+//! resolution, so they do not block reuse; `full: true` drops them.
 
 use super::AnalyzeRequest;
 use crate::indexer;
@@ -64,9 +76,11 @@ pub(super) struct IndexPhase {
     pub(super) sidecar_err: Option<String>,
 }
 
-/// Runs phase 1. The coverage sidecar is on disk when this returns `Ok`; the
-/// manifest and `meta.json` are best-effort (`sidecar_err` says why one is
-/// missing), `meta.json` written last, on both paths.
+/// Runs phase 1. The coverage sidecar is on disk when this returns `Ok`, and
+/// `meta.json` is written last, best-effort, on both paths. On the full path
+/// the manifest is best-effort too (`sidecar_err` says why one is missing); on
+/// reuse a manifest that cannot be saved fails the refresh, which falls back
+/// to the full path.
 pub(super) fn run(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
     if let Some(phase) = try_reuse(req)? {
         return Ok(phase);
@@ -154,7 +168,7 @@ fn graph_has_lsp_rows(graph_dir: &std::path::Path) -> bool {
 }
 
 /// `Ok(None)`: not applicable, the refresh pass failed, the tree changed
-/// during it, or its Cargo map differs (each logged).
+/// during it, or it dropped the scope (each logged).
 /// `Err`: the pass ran but its coverage report did not reach the sidecar, so
 /// the response could not stand behind any coverage receipt (same rule as the
 /// full path, `persist_analyze_sidecars`).
@@ -186,18 +200,20 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
         eprintln!("[ap] analyze_codebase: the tree changed during the refresh; rebuilding in full");
         return Ok(None);
     }
-    // The Cargo map comes from manifests the walk may not list (`Cargo.toml`
-    // under `language: "rust"`), and `resolve_graph` keeps the
-    // `receiver-local-binding` rows an earlier map accepted (Codex review of
-    // #478): a different map is a rebuild, like a changed file.
-    if prior.cargo_facts.as_deref() != Some(inc.cargo_facts_digest.as_str()) {
-        eprintln!(
-            "[ap] analyze_codebase: the Cargo map changed or is unrecorded; rebuilding in full"
-        );
-        return Ok(None);
-    }
     if let Some(e) = inc.coverage_write_error {
         return Err(format!("coverage sidecar write failed: {e}"));
+    }
+    // The pass's own verdict on whether its manifest still vouches for the
+    // graph (Claude review of #478): a different or unrecorded Cargo map, or a
+    // report built without the previous one, for instance because the sidecar
+    // vanished after `reusable_manifest` loaded it. The Cargo map comes from
+    // manifests the walk may not list (`Cargo.toml` under `language: "rust"`),
+    // and `resolve_graph` keeps the rows an earlier map accepted.
+    if !inc.scope_kept {
+        eprintln!(
+            "[ap] analyze_codebase: the refresh could not vouch for the graph; rebuilding in full"
+        );
+        return Ok(None);
     }
     // The manifest was saved by the pass; `meta.json` lands last and names it.
     let sidecar_err = write_graph_meta(&req.output_dir, &req.codebase).err();

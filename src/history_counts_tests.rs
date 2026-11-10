@@ -30,7 +30,7 @@ fn incremental(graph: &Path) -> IncrementalResult {
         elapsed_ms: 1,
         coverage: crate::indexer::coverage::CoverageReport::new("incremental", 0),
         coverage_write_error: None,
-        cargo_facts_digest: String::new(),
+        scope_kept: false,
     }
 }
 

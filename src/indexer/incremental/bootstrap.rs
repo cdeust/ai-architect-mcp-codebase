@@ -137,7 +137,6 @@ pub fn fill_after_bootstrap(
         "bootstrap_fill",
     );
     super::apply_cargo_facts(&store, &cov.facts);
-    let cargo_facts_digest = cov.facts.digest();
 
     Ok(FillResult {
         result: IncrementalResult {
@@ -151,7 +150,8 @@ pub fn fill_after_bootstrap(
             elapsed_ms: start.elapsed().as_millis() as u64,
             coverage: cov.report,
             coverage_write_error: cov.write_error,
-            cargo_facts_digest,
+            // A bootstrap fill writes no scope (`manifest_from_discovered`).
+            scope_kept: false,
         },
         method,
     })

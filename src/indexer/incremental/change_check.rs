@@ -13,7 +13,8 @@ use super::Discovered;
 /// True when the tree under `codebase`, walked with `options`, differs from
 /// `prior`: a file changed, added, deleted or renamed, or `prior` records a
 /// file it could not read (empty hash). Reads the tree and writes nothing — no
-/// graph, no sidecar. `Err` for a tree over `MAX_TOTAL_BYTES`.
+/// graph, no sidecar. `Err` when the walk fails (too many files, too deep, an
+/// unreadable root) or the tree is over `MAX_TOTAL_BYTES`.
 ///
 /// Exists for `analyze_codebase` (#478 review): the resolver keeps the edges
 /// an earlier run wrote and has no invalidation for an unchanged file whose
