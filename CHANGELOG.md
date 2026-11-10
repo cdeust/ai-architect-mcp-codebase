@@ -37,6 +37,22 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **README: a supported-platforms table** (issue #449, first slice). The
+  README did not say which platforms the plugin installs on, nor that the Linux
+  aarch64 asset is built but never started by CI. The table lists each release
+  asset, whether the launcher installs or refuses the platform (macOS Intel,
+  and a Windows shell that reports arm64, are refused), and whether the
+  pipeline's `install` job starts the published asset there. `ReadmePlatformTable` in
+  `scripts/tests/test_claude_bootstrap_platforms.py` checks the table row by
+  row: the installed rows' assets are exactly those the launcher accepts and
+  `release.yml` builds; each installed platform's `uname` pair is run through
+  the launcher and must pick that row's asset; the row says "yes" exactly when
+  a runner of the pipeline's `install` job maps to that `uname` pair (a table
+  inferred from `install` passing on those images), and otherwise names the
+  asset's build runner; every `install` runner starts a listed row; each
+  refused platform is refused by the launcher; and `ci.json`'s `install`
+  command ends with the installed copy's smoke.
+
 - **The README no longer quotes the 14.26x token reduction (#451).** The
   figure is a mean of per-question ratios between the head-to-head graph leg,
   which serializes a benchmark-only envelope of symbol identities, and the
@@ -145,7 +161,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   released v0.14.0 binary lists 26 tools where HEAD's smoke expects 27, so
   `install` is red until the next release; Windows is refused by
   `bin/ensure-binary.sh`; line coverage is under 90 % (the previous CI floor
-  is 80 %, ci.yml).
+  is 80 %, ci.yml). Since then, `install` checks the release tag's catalog and
+  the launcher installs `windows-x86_64`: `install` passed on all three runners
+  in run 42697366993 (see "Supported platforms" in the README).
 
 - `check_doc_claims`, a read-only tool that checks what a document says about
   the code against the graph, one claim at a time (part 1 of 3 of the

@@ -1,13 +1,16 @@
 """Execute bootstrap shell branches with disposable archives, no network or Rust.
 
 OS detection and provenance CLI responses are fixtures; this is not native Windows
-execution. The installed macOS release is exercised separately by the CI smoke.
+execution. The installed release is exercised separately by the CI smoke (the
+pipeline's `install` job, on macOS, Linux and Windows runners).
 """
 
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +19,12 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def require(condition, message):
+    """An `assert` that `python -O` does not strip."""
+    if not condition:
+        raise AssertionError(message)
 
 
 def make_archive(base, name, target, checksum_ok):
@@ -57,7 +66,9 @@ exit "$PROVENANCE_STATUS"
     return tools
 
 
-class BootstrapPlatforms(unittest.TestCase):
+class BootstrapHarness(unittest.TestCase):
+    """The bootstrap exercise, shared by the test classes; it holds no tests."""
+
     def exercise(
         self,
         system,
@@ -163,6 +174,8 @@ class BootstrapPlatforms(unittest.TestCase):
             "verified cache unexpectedly redownloaded",
         )
 
+
+class BootstrapPlatforms(BootstrapHarness):
     def test_existing_macos_and_linux_and_windows_shell_mappings(self):
         cases = [
             ("Darwin", "arm64", "macos-aarch64"),
@@ -218,6 +231,197 @@ class BootstrapPlatforms(unittest.TestCase):
             "unsupported plugin platform",
             self.exercise("MINGW64_NT-10.0", "aarch64", "unsupported"),
         )
+
+
+# Issue #449: what each platform the README's table installs means to `uname`.
+INSTALLED_UNAME = {
+    "macOS arm64": ("Darwin", "arm64"),
+    "Linux x86_64": ("Linux", "x86_64"),
+    "Linux aarch64": ("Linux", "aarch64"),
+    "Windows x86_64": ("MINGW64_NT-10.0", "x86_64"),
+}
+
+# Issue #449: the `uname` pair the launcher matches on each runner label of
+# the `install` job. Inferred, not measured: `install` passed in run
+# 42697366993 on images macos-26-arm64, ubuntu-26.04 and windows-2025-vs2026,
+# and the launcher installs on these four platforms only. Git Bash reports
+# `MINGW64_NT-10.0-<build>`; the launcher matches its `MINGW*` prefix.
+RUNNER_UNAME = {
+    "macos-latest": ("Darwin", "arm64"),
+    "ubuntu-latest": ("Linux", "x86_64"),
+    "windows-latest": ("MINGW64_NT-10.0", "x86_64"),
+}
+
+# Issue #449: what each name in the README's "refuses" row means to `uname`.
+REFUSED_UNAME = {
+    "macOS x86_64 (Intel)": [("Darwin", "x86_64")],
+    "Windows arm64": [
+        ("MINGW64_NT-10.0", "aarch64"),
+        ("MSYS_NT-10.0", "aarch64"),
+        ("CYGWIN_NT-10.0", "aarch64"),
+    ],
+    # Samples, each one architecture away from an installed row: a catch-all
+    # such as `Linux-*)` in the launcher fails here.
+    "any other": [
+        ("FreeBSD", "amd64"),
+        ("Linux", "riscv64"),
+        ("Linux", "armv7l"),
+        ("Darwin", "i386"),
+    ],
+}
+
+
+def readme_platform_rows():
+    readme = (ROOT / "README.md").read_text()
+    start = readme.index("<!-- platforms:begin -->")
+    end = readme.index("<!-- platforms:end -->")
+    lines = [line for line in readme[start:end].splitlines() if line.startswith("|")]
+    return [[cell.strip() for cell in line.strip("|").split("|")] for line in lines[2:]]
+
+
+def release_runners():
+    """`{target_tag: runner}` of the `build:` job's matrix in `release.yml`."""
+    release = (ROOT / ".github/workflows/release.yml").read_text()
+    job = re.search(r"^  build:\n(.*?)(?=^  [^\s#]|\Z)", release, re.M | re.S)
+    require(job, "release.yml has no top-level `build:` job")
+    tags = re.findall(r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)", job.group(1), re.M)
+    pairs = re.findall(
+        r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)\n"
+        r"(?:\s+[a-z_]+:.*\n)*?"
+        r"\s+runner:\s*([a-z0-9.-]+)",
+        job.group(1),
+        re.M,
+    )
+    require(
+        len(pairs) == len(tags), "a `target_tag:` entry has no readable `runner:`"
+    )
+    require(len(set(tags)) == len(tags), "a `target_tag:` is listed twice")
+    require(
+        re.search(r"^    runs-on: \$\{\{ matrix\.runner \}\}$", job.group(1), re.M),
+        "the `build` job does not run on `matrix.runner`",
+    )
+    # source: release.yml's own comment on #176 — with `continue-on-error`,
+    # v0.8.3 shipped green with its windows asset missing.
+    require(
+        not re.search(r"^\s+continue-on-error:", job.group(1), re.M),
+        "a `build` leg may fail without failing the release",
+    )
+    return dict(pairs)
+
+
+def install_job_runners():
+    """The `os` matrix of the pipeline's `install` job, in matrix order."""
+    pipeline = (ROOT / ".github/workflows/pipeline.yml").read_text()
+    job = re.search(r"^  install:\n(.*?)(?=^  [^\s#]|\Z)", pipeline, re.M | re.S)
+    require(job, "pipeline.yml has no top-level `install:` job")
+    body = job.group(1)
+    matrix = re.search(r"^\s+os: \[([^\]]*)\]", body, re.M)
+    require(matrix, "the `install` job has no inline `os: [...]` matrix")
+    require(
+        not re.search(r"^\s+(include|exclude):", body, re.M),
+        "`include:`/`exclude:` matrix entries are not read",
+    )
+    require(
+        re.search(r"^    runs-on: \$\{\{ matrix\.os \}\}$", body, re.M),
+        "the `install` job does not run on `matrix.os`",
+    )
+    labels = [runner.strip() for runner in matrix.group(1).split(",")]
+    require(len(set(labels)) == len(labels), "an `install` runner is listed twice")
+    return labels
+
+
+class ReadmePlatformTable(BootstrapHarness):
+    """Issue #449: the README's supported-platforms table states what the
+    launcher installs or refuses, what `release.yml` builds, and which runners
+    of the pipeline's `install` job start the published asset (`ci.json`)."""
+
+    def test_release_assets_match_the_launcher_and_the_release_matrix(self):
+        listed = {
+            row[1].strip("`") for row in readme_platform_rows() if row[2] == "installs"
+        }
+        launcher = (ROOT / "bin/ensure-binary.sh").read_text()
+        accepted = set(
+            re.findall(r'^[^#\n]*release_target="([a-z0-9_-]+)"', launcher, re.M)
+        )
+        built = set(release_runners())
+        self.assertEqual(listed, accepted)
+        self.assertEqual(listed, built)
+
+    def test_every_refused_platform_is_refused_by_the_launcher(self):
+        names = [
+            name.strip()
+            for row in readme_platform_rows()
+            if row[2] == "refuses"
+            for name in row[0].split(",")
+        ]
+        self.assertTrue(names, "the table names no refused platform")
+        for row in readme_platform_rows():
+            self.assertIn(row[2], {"installs", "refuses"}, row)
+            if row[2] == "refuses":
+                self.assertEqual(row[1], "none", "a refused platform has no asset")
+                self.assertEqual(row[3], "no", "a refused platform is not started")
+        for name in names:
+            with self.subTest(name=name):
+                self.assertIn(name, REFUSED_UNAME, "no uname pair for this row")
+                for system, machine in REFUSED_UNAME[name]:
+                    self.assertIn(
+                        "unsupported plugin platform",
+                        self.exercise(system, machine, "unsupported"),
+                    )
+
+    def test_each_installed_row_is_its_own_asset_and_runner(self):
+        """Row by row, not as sets. A row is started by the `install` runner
+        whose `uname` picks that row's asset, not by the runner that builds it."""
+        built_on = release_runners()
+        started_by = {}
+        for label in install_job_runners():
+            self.assertIn(label, RUNNER_UNAME, f"no uname pair for runner {label}")
+            started_by.setdefault(RUNNER_UNAME[label], []).append(label)
+        seen_platforms, seen_assets = set(), set()
+        for row in readme_platform_rows():
+            if row[2] != "installs":
+                continue
+            # The name before any parenthetical: a wording edit is not a new row.
+            platform = row[0].split(" (", 1)[0]
+            asset, ci = row[1].strip("`"), row[3]
+            with self.subTest(platform=platform):
+                self.assertNotIn(platform, seen_platforms, "platform listed twice")
+                self.assertNotIn(asset, seen_assets, "asset listed twice")
+                seen_platforms.add(platform)
+                seen_assets.add(asset)
+                self.assertIn(platform, INSTALLED_UNAME, "no uname pair for this row")
+                pair = INSTALLED_UNAME[platform]
+                # Popped first, so a failure below does not also fail the
+                # unmatched-runner check after the loop.
+                labels = started_by.pop(pair, [])
+                self.exercise(*pair, asset)
+                self.assertIn(asset, built_on, "asset not built by release.yml")
+                if labels:
+                    expected = ", ".join(f"yes, on `{label}`" for label in labels)
+                    self.assertEqual(ci, expected)
+                else:
+                    self.assertEqual(
+                        ci, f"**no**: built on `{built_on[asset]}`, never started"
+                    )
+        self.assertFalse(
+            started_by, f"install runners that start no listed platform: {started_by}"
+        )
+
+    def test_started_by_ci_means_the_installed_smoke(self):
+        """"Started by CI" is the `install` command running the installed
+        copy's smoke with `--installed`, as the README says."""
+        install = json.loads((ROOT / "ci.json").read_text())["install"]
+        self.assertIn("claude plugin install", install)
+        # The installed copy (`$root`, from `claude plugin list`), last, with
+        # nothing that could swallow its failure.
+        self.assertTrue(
+            install.endswith(
+                '&& test -n "$root" '
+                '&& python3 "$root/scripts/smoke_claude_plugin.py" --installed'
+            ),
+            install,
+        )
+        self.assertNotIn("||", install)
 
 
 if __name__ == "__main__":
