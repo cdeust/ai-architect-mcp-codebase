@@ -332,7 +332,8 @@ def install_job_runners():
 
 class ReadmePlatformTable(BootstrapHarness):
     """Issue #449: the README's supported-platforms table states what the
-    launcher installs and what the release builds, nothing more."""
+    launcher installs or refuses, what `release.yml` builds, and which runners
+    of the pipeline's `install` job start the published asset (`ci.json`)."""
 
     def test_release_assets_match_the_launcher_and_the_release_matrix(self):
         listed = {

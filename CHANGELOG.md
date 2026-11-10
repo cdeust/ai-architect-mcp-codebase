@@ -11,9 +11,9 @@ adheres to [Semantic Versioning](https://semver.org/).
 - **README: a supported-platforms table** (issue #449, first slice). The
   README did not say which platforms the plugin installs on, nor that the Linux
   aarch64 asset is built but never started by CI. The table lists each release
-  asset, whether the launcher installs or refuses the platform (macOS Intel and
-  Windows arm64 are refused), and whether the pipeline's `install` job starts
-  the published asset there. `ReadmePlatformTable` in
+  asset, whether the launcher installs or refuses the platform (macOS Intel,
+  and a Windows shell that reports arm64, are refused), and whether the
+  pipeline's `install` job starts the published asset there. `ReadmePlatformTable` in
   `scripts/tests/test_claude_bootstrap_platforms.py` checks the table row by
   row: the installed rows' assets are exactly those the launcher accepts and
   `release.yml` builds; each installed platform's `uname` pair is run through
