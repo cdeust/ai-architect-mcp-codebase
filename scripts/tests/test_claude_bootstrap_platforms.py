@@ -234,6 +234,15 @@ INSTALLED_UNAME = {
     "`CYGWIN`, as Git Bash does)": ("MINGW64_NT-10.0", "x86_64"),
 }
 
+# Issue #449: what `uname` reports on each runner label of the `install` job.
+# source: the job logs of run 42697366993 (images macos-26-arm64,
+# ubuntu-24.04 x86_64, windows-2025-vs2026 with Git Bash).
+RUNNER_UNAME = {
+    "macos-latest": ("Darwin", "arm64"),
+    "ubuntu-latest": ("Linux", "x86_64"),
+    "windows-latest": ("MINGW64_NT-10.0", "x86_64"),
+}
+
 # Issue #449: what each name in the README's "refuses" row means to `uname`.
 REFUSED_UNAME = {
     "macOS x86_64 (Intel)": ("Darwin", "x86_64"),
@@ -251,15 +260,20 @@ def readme_platform_rows():
 
 
 def release_runners():
-    """`{target_tag: runner}` of the `include:` entries of `release.yml`."""
+    """`{target_tag: runner}` of the `build:` job's matrix in `release.yml`."""
     release = (ROOT / ".github/workflows/release.yml").read_text()
+    job = re.search(r"^  build:\n(.*?)(?=^  \S|\Z)", release, re.M | re.S)
+    assert job, "release.yml has no top-level `build:` job"
+    tags = re.findall(r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)", job.group(1), re.M)
     pairs = re.findall(
         r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)\n"
         r"(?:\s+[a-z_]+:.*\n)*?"
         r"\s+runner:\s*([a-z0-9.-]+)",
-        release,
+        job.group(1),
         re.M,
     )
+    assert len(pairs) == len(tags), "a `target_tag:` entry has no readable `runner:`"
+    assert len(set(tags)) == len(tags), "a `target_tag:` is listed twice"
     return dict(pairs)
 
 
@@ -286,8 +300,7 @@ class ReadmePlatformTable(BootstrapHarness):
         accepted = set(
             re.findall(r'^[^#\n]*release_target="([a-z0-9_-]+)"', launcher, re.M)
         )
-        release = (ROOT / ".github/workflows/release.yml").read_text()
-        built = set(re.findall(r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)", release, re.M))
+        built = set(release_runners())
         self.assertEqual(listed, accepted)
         self.assertEqual(listed, built)
 
@@ -312,27 +325,30 @@ class ReadmePlatformTable(BootstrapHarness):
                 )
 
     def test_each_installed_row_is_its_own_asset_and_runner(self):
-        """Row by row, not as sets: a runner or an asset moved to another row fails."""
-        runners = release_runners()
-        install = install_job_runners()
-        started = set()
+        """Row by row, not as sets. A row is started by the `install` runner
+        whose `uname` picks that row's asset, not by the runner that builds it."""
+        built_on = release_runners()
+        started_by = {}
+        for label in install_job_runners():
+            self.assertIn(label, RUNNER_UNAME, f"no uname pair for runner {label}")
+            started_by.setdefault(RUNNER_UNAME[label], []).append(label)
         for row in readme_platform_rows():
             if row[2] != "installs":
                 continue
             platform, asset, ci = row[0], row[1].strip("`"), row[3]
             with self.subTest(platform=platform):
                 self.assertIn(platform, INSTALLED_UNAME, "no uname pair for this row")
-                system, machine = INSTALLED_UNAME[platform]
-                self.assertIn(asset, runners, "asset not built by release.yml")
-                self.exercise(system, machine, asset)
-                runner = runners[asset]
-                if runner in install:
-                    self.assertEqual(ci, f"yes, on `{runner}`")
-                    started.add(runner)
+                pair = INSTALLED_UNAME[platform]
+                self.exercise(*pair, asset)
+                self.assertIn(asset, built_on, "asset not built by release.yml")
+                labels = started_by.pop(pair, [])
+                if labels:
+                    self.assertEqual(ci, ", ".join(f"yes, on `{label}`" for label in labels))
                 else:
-                    self.assertTrue(ci.startswith("**no**"), ci)
-                    self.assertIn(f"`{runner}`", ci)
-        self.assertEqual(started, install, "a started runner has no row")
+                    self.assertEqual(
+                        ci, f"**no**: built on `{built_on[asset]}`, never started"
+                    )
+        self.assertFalse(started_by, "an install runner starts no listed platform")
 
 
 if __name__ == "__main__":
