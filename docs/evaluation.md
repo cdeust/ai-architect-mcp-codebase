@@ -56,11 +56,16 @@ not measured.
 
 The payload token proxy is therefore not a session cost, and the README does
 not quote it as one. An independent audit of v0.14.0 (issue #451, macOS
-arm64) measured real `get_impact` answers at 400 to 1,070 tokens against 43
-for this envelope, found `git grep` smaller on 4 of 5 questions, and measured
-the tool prompt at 7.6k tokens (`core`) to 16.7k (`full`), a break-even
-against grep of about 15 to 33 questions per session. Those figures come from
-the audit and have not been reproduced by a script in this repository.
+arm64) measured real `get_impact` answers at 400 to 1,070 tokens on its own
+corpus (this envelope averages 43 over the benchmark questions, a different
+corpus and version, so the two are not a like-for-like ratio), found
+`git grep` smaller on 4 of 5 questions, and measured the tool prompt at 7.6k
+tokens (`core`) to 16.7k (`full`). The audit's break-even of 15 to 33
+questions per session divides that prompt by about 507 tokens per question,
+which is this benchmark's gap (550.36 − 43.14), not a measured saving; with
+grep smaller on 4 of 5 questions, the prompt cost is not recovered against
+grep. Those figures come from the audit and have not been reproduced by a
+script in this repository.
 
 ## Bulk insert strategies
 
