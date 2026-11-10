@@ -221,6 +221,15 @@ class BootstrapPlatforms(unittest.TestCase):
         )
 
 
+# Issue #449: what each platform the README's table installs means to `uname`.
+INSTALLED_UNAME = {
+    "macOS arm64": ("Darwin", "arm64"),
+    "Linux x86_64": ("Linux", "x86_64"),
+    "Linux aarch64": ("Linux", "aarch64"),
+    "Windows x86_64 (a shell whose `uname -s` starts with `MINGW`, `MSYS` or "
+    "`CYGWIN`, as Git Bash does)": ("MINGW64_NT-10.0", "x86_64"),
+}
+
 # Issue #449: what each name in the README's "refuses" row means to `uname`.
 REFUSED_UNAME = {
     "macOS x86_64 (Intel)": ("Darwin", "x86_64"),
@@ -235,6 +244,17 @@ def readme_platform_rows():
     end = readme.index("<!-- platforms:end -->")
     lines = [line for line in readme[start:end].splitlines() if line.startswith("|")]
     return [[cell.strip() for cell in line.strip("|").split("|")] for line in lines[2:]]
+
+
+def release_runners():
+    """`{target_tag: runner}` of the `include:` entries of `release.yml`."""
+    release = (ROOT / ".github/workflows/release.yml").read_text()
+    pairs = re.findall(
+        r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)\n(?:\s+[a-z_]+:.*\n)*?\s+runner:\s*([a-z0-9.-]+)",
+        release,
+        re.M,
+    )
+    return dict(pairs)
 
 
 def install_job_runners():
@@ -282,13 +302,28 @@ class ReadmePlatformTable(unittest.TestCase):
                     self.exercise(system, machine, "unsupported"),
                 )
 
-    def test_started_by_ci_names_the_install_matrix(self):
+    def test_each_installed_row_is_its_own_asset_and_runner(self):
+        """Row by row, not as sets: a runner or an asset moved to another row fails."""
+        runners = release_runners()
+        install = install_job_runners()
         started = set()
         for row in readme_platform_rows():
-            match = re.fullmatch(r"yes, on `([a-z0-9.-]+)`", row[3])
-            if match:
-                started.add(match.group(1))
-        self.assertEqual(started, install_job_runners())
+            if row[2] != "installs":
+                continue
+            platform, asset, ci = row[0], row[1].strip("`"), row[3]
+            with self.subTest(platform=platform):
+                self.assertIn(platform, INSTALLED_UNAME, "no uname pair for this row")
+                system, machine = INSTALLED_UNAME[platform]
+                self.assertIn(asset, runners, "asset not built by release.yml")
+                self.exercise(system, machine, asset)
+                runner = runners[asset]
+                if runner in install:
+                    self.assertEqual(ci, f"yes, on `{runner}`")
+                    started.add(runner)
+                else:
+                    self.assertTrue(ci.startswith("**no**"), ci)
+                    self.assertIn(f"`{runner}`", ci)
+        self.assertEqual(started, install, "a started runner has no row")
 
 
 if __name__ == "__main__":

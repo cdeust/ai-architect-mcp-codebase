@@ -90,7 +90,7 @@ pipeline's `install` job installs the published asset on that runner and runs
 | macOS arm64 | `macos-aarch64` | installs | yes, on `macos-latest` |
 | Linux x86_64 | `linux-x86_64` | installs | yes, on `ubuntu-latest` |
 | Linux aarch64 | `linux-aarch64` | installs | **no**: built on `ubuntu-24.04-arm`, never started |
-| Windows x86_64 (Git Bash, MSYS2, Cygwin) | `windows-x86_64` | installs | yes, on `windows-latest` |
+| Windows x86_64 (a shell whose `uname -s` starts with `MINGW`, `MSYS` or `CYGWIN`, as Git Bash does) | `windows-x86_64` | installs | yes, on `windows-latest` |
 | macOS x86_64 (Intel), Windows arm64, any other | none | refuses | no |
 <!-- platforms:end -->
 
