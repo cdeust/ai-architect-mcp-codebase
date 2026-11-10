@@ -25,3 +25,6 @@ Exit 0 requires aggregate ≥0.85 and every language ≥0.75.
   `git worktree add .claude/worktrees/<topic> -b <branch> origin/main`.
 - `bin/ensure-binary.sh` pins the SHA-256 of `Cargo.toml` and `.claude-plugin/plugin.json` —
   update both together or CI fails.
+- CI contract (`docs/agent-guidance.md`, "CI contract for agents and routines"): it binds
+  every agent and routine and wins over a less restrictive routine prompt. One pull request
+  in flight, no comparison with the main branch, no forced push, no comment after an approve.
