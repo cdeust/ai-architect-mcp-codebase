@@ -63,9 +63,10 @@ output smaller than the graph answer on 4 of 5 questions, and measured the
 tool prompt at 7.6k tokens (`core`) to 16.7k (`full`). The audit's break-even
 of 15 to 33 questions per session divides that prompt by about 507 tokens per
 question, which is this benchmark's gap (550.36 − 43.14), not a measured
-saving; with grep smaller on 4 of 5 questions, the prompt cost is not
-recovered against grep. Those figures come from the audit and have not been
-reproduced by a script in this repository.
+saving. On the audit's five questions grep output was smaller on four; the
+audit gives no summed difference, so whether the prompt cost is ever recovered
+against grep is not established. Those figures come from the audit and have
+not been reproduced by a script in this repository.
 
 ## Bulk insert strategies
 

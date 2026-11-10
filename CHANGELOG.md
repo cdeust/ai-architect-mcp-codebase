@@ -13,9 +13,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   which serializes a benchmark-only envelope of symbol identities, and the
   Grep/Glob/Read baseline; it was never a session cost. The README now says
   that no session token saving is claimed and cites the audit's measurements
-  (real `get_impact` answers of 400 to 1,070 tokens, a 7.6k to 16.7k token
-  tool prompt). `docs/evaluation.md` keeps the benchmark table with that
-  caveat.
+  (real `get_impact` answers of 400 to 1,070 tokens, `git grep` output smaller
+  than the graph answer on 4 of 5 questions, a 7.6k to 16.7k token tool
+  prompt). `docs/evaluation.md` keeps the benchmark table and adds a paragraph
+  showing that the audit's 15-to-33-question break-even rests on this
+  benchmark's payload gap, not on a measured saving.
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
