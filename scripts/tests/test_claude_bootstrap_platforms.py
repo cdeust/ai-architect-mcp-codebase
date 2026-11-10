@@ -244,7 +244,7 @@ INSTALLED_UNAME = {
 # Issue #449: the `uname` pair the launcher matches on each runner label of
 # the `install` job. Inferred, not measured: `install` passed in run
 # 42697366993 on images macos-26-arm64, ubuntu-26.04 and windows-2025-vs2026,
-# and the launcher installs only on these four pairs. Git Bash reports
+# and the launcher installs on these four platforms only. Git Bash reports
 # `MINGW64_NT-10.0-<build>`; the launcher matches its `MINGW*` prefix.
 RUNNER_UNAME = {
     "macos-latest": ("Darwin", "arm64"),
@@ -295,6 +295,12 @@ def release_runners():
     require(
         re.search(r"^    runs-on: \$\{\{ matrix\.runner \}\}$", job.group(1), re.M),
         "the `build` job does not run on `matrix.runner`",
+    )
+    # source: release.yml's own comment on #176 — with `continue-on-error`,
+    # v0.8.3 shipped green with its windows asset missing.
+    require(
+        not re.search(r"^\s+continue-on-error:", job.group(1), re.M),
+        "a `build` leg may fail without failing the release",
     )
     return dict(pairs)
 

@@ -82,7 +82,8 @@ binary is missing or older than the sources. The platform is read from
 `uname -s` and `uname -m` of the shell, so an x64 Git Bash emulated on Windows
 arm64 reports `x86_64` and installs `windows-x86_64`. "Started by CI" means the
 pipeline's `install` job installs the published asset on that runner and runs
-`initialize` and `health_check` against it (`scripts/smoke_claude_plugin.py
+`initialize`, `tools/list` (the exact tool catalog) and `health_check` against
+it (`scripts/smoke_claude_plugin.py
 --installed`).
 
 <!-- platforms:begin -->
