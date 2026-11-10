@@ -43,7 +43,7 @@
 use super::AnalyzeRequest;
 use crate::indexer;
 use crate::indexer::coverage::CoverageReport;
-use crate::query_handlers::{forget_graph_sidecars, remove_stale_graph_artifact, write_graph_meta};
+use crate::query_handlers::{prepare_full_rebuild, write_graph_meta};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -189,18 +189,12 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
 /// The from-scratch rebuild: remove whatever a prior run left, index, then
 /// write the sidecars.
 fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
-    // The manifest and `meta.json` go first (review of #478): they vouch for
-    // the graph about to be removed. A rebuild that fails or is killed before
-    // `persist_analyze_sidecars` would otherwise leave the old manifest, and
-    // its scope, beside a new or partial graph for the next call to trust.
-    forget_graph_sidecars(&req.output_dir)?;
-    if req.graph_dir.exists() {
-        // Prior run may have left a dir OR a single-file Kuzu db; remove either.
-        remove_stale_graph_artifact(&req.graph_dir)?;
-    }
-    // Snapshot first, save after (see `indexer::full_manifest`). A snapshot
-    // that cannot be taken leaves no manifest, so the next call rebuilds.
-    let snapshot = indexer::full_manifest(&req.codebase, &req.options);
+    // Snapshot, release, forget the old sidecars, remove the old graph — in
+    // that order (`prepare_full_rebuild`): a rebuild that fails or is killed
+    // leaves no manifest vouching for a new or partial graph, and the snapshot
+    // saved after the index makes a file saved during it read as changed.
+    let snapshot =
+        prepare_full_rebuild(&req.codebase, &req.output_dir, &req.graph_dir, &req.options)?;
     let result =
         indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
     let sidecar_err = super::persist_analyze_sidecars(req, &result.coverage, snapshot)?;

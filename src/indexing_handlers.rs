@@ -252,14 +252,10 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
 
     // lbug creates the database itself; a stale artifact from a prior run (a
     // directory OR a single-file db) must go first so it can initialise cleanly.
-    // Review of #478: the previous manifest and meta.json go first, so a
-    // rebuild that fails leaves nothing vouching for a partial graph, and the
-    // manifest is snapshotted before the walk (see `indexer::full_manifest`).
-    forget_graph_sidecars(&req.output_dir)?;
-    if req.graph_dir.exists() {
-        remove_stale_graph_artifact(&req.graph_dir)?;
-    }
-    let snapshot = indexer::full_manifest(&req.codebase, &req.options);
+    // Review of #478: snapshot, release, forget the old sidecars, then remove
+    // the old graph (`prepare_full_rebuild`), as analyze does.
+    let snapshot =
+        prepare_full_rebuild(&req.codebase, &req.output_dir, &req.graph_dir, &req.options)?;
     let result =
         indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
     Ok(full_index_response(

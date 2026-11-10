@@ -20,9 +20,12 @@ mod read_only_gate;
 mod row_limit_tests;
 
 pub(crate) use graph_paths::{
-    forget_graph_sidecars, remove_stale_graph_artifact, validate_graph_path_safe, write_graph_meta,
-    FORBIDDEN_GRAPH_PATH_PREFIXES,
+    prepare_full_rebuild, validate_graph_path_safe, write_graph_meta, FORBIDDEN_GRAPH_PATH_PREFIXES,
 };
+// Both full paths now go through `prepare_full_rebuild` (#478); only the
+// handle-cache tests still call this directly.
+#[cfg(test)]
+pub(crate) use graph_paths::remove_stale_graph_artifact;
 use read_only_gate::{
     forbidden_cypher_keyword, is_multi_statement, is_separator, keyword_token_positions,
     mask_non_executable, IdentifierExemption, READ_QUERY_TIMEOUT_MS,

@@ -438,6 +438,15 @@ pub fn write_full_manifest(
 /// instead of a manifest written after the index vouching for a file the
 /// graph never parsed.
 pub fn full_manifest(codebase: &Path, options: &IndexOptions) -> Result<FileManifest, String> {
+    full_manifest_within(codebase, options, super::MAX_TOTAL_BYTES)
+}
+
+/// `full_manifest` under an explicit byte cap, so a test can reach the refusal.
+fn full_manifest_within(
+    codebase: &Path,
+    options: &IndexOptions,
+    cap: u64,
+) -> Result<FileManifest, String> {
     let walk_opts = WalkOptions {
         language_filter: options.language_filter,
         dependency_scope: options.dependency_scope,
@@ -446,7 +455,7 @@ pub fn full_manifest(codebase: &Path, options: &IndexOptions) -> Result<FileMani
     let (current, _walk_gaps, _walk_pruned) = discover(codebase, walk_opts)?;
     // Taken before indexing, so the indexer's own cap has not run yet: refuse
     // a tree over it before hashing anything (Codex review of #478).
-    check_total_bytes(&current, super::MAX_TOTAL_BYTES)?;
+    check_total_bytes(&current, cap)?;
     let mut m = FileManifest::new();
     // A full index's manifest describes a graph built with exactly `options`.
     m.scope = Some(options.scope());
@@ -461,4 +470,21 @@ pub fn full_manifest(codebase: &Path, options: &IndexOptions) -> Result<FileMani
         );
     }
     Ok(m)
+}
+
+#[cfg(test)]
+mod full_manifest_tests {
+    use super::*;
+
+    #[test]
+    fn a_tree_over_the_cap_is_refused_before_the_snapshot_hashes_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.rs"), "pub fn a() {}\n").expect("write");
+        let opts = IndexOptions::default();
+        let err = full_manifest_within(dir.path(), &opts, 1).expect_err("14 bytes > 1");
+        assert!(err.starts_with("total_bytes_exceeded"), "{err}");
+        let m = full_manifest_within(dir.path(), &opts, 1 << 20).expect("under the cap");
+        assert_eq!(m.files.len(), 1);
+        assert!(!m.files["a.rs"].content_hash.is_empty());
+    }
 }

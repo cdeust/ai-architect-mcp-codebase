@@ -152,6 +152,40 @@ pub(crate) fn forget_graph_sidecars(output_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Everything a full rebuild does before indexing, in the order that keeps a
+/// failure harmless (reviews of #478), shared by `analyze_codebase` and
+/// `index_codebase`:
+/// 1. snapshot the manifest (`indexer::full_manifest`) — a tree over the byte
+///    cap is refused here, before anything is hashed or removed;
+/// 2. release cached handles on the graph — a busy graph fails here, while its
+///    manifest and `meta.json` still describe it;
+/// 3. forget the old sidecars, then remove the old graph.
+///
+/// The inner `Result` is the snapshot to save after the index; another
+/// snapshot error only means no manifest is written, so the next call rebuilds.
+pub(crate) fn prepare_full_rebuild(
+    codebase: &Path,
+    output_dir: &Path,
+    graph_dir: &Path,
+    options: &crate::indexer::IndexOptions,
+) -> Result<Result<crate::indexer::manifest::FileManifest, String>, String> {
+    let snapshot = crate::indexer::full_manifest(codebase, options);
+    if let Err(e) = &snapshot {
+        if e.starts_with("total_bytes_exceeded") {
+            return Err(e.clone());
+        }
+    }
+    if graph_dir.exists() {
+        crate::graph_store::release_open_handles(graph_dir)?;
+    }
+    forget_graph_sidecars(output_dir)?;
+    if graph_dir.exists() {
+        // Prior run may have left a dir OR a single-file db; remove either.
+        remove_stale_graph_artifact(graph_dir)?;
+    }
+    Ok(snapshot)
+}
+
 pub(crate) fn write_graph_meta(output_dir: &Path, root: &Path) -> Result<(), String> {
     // Schema 3 (fleet-watch#112 review round 4): record WHICH `file_manifest.json`
     // this sidecar accompanies. Both indexing paths write the manifest first and
