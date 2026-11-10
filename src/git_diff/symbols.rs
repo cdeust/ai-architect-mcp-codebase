@@ -71,7 +71,7 @@ pub(super) struct DiffSymbols {
     /// Indexed Files whose path extends a diff path with `::` (`a.rs::b.rs`
     /// next to `a.rs`): their symbols also match the `a.rs::` prefix and
     /// must not be credited to `a.rs` (Codex security review of PR #482).
-    nested_files: Vec<String>,
+    nested_files: HashSet<String>,
     by_file: HashMap<String, Vec<Candidate>>,
     /// Whether a graph query failed, so the candidates may be incomplete.
     query_failed: bool,
@@ -106,7 +106,7 @@ impl DiffSymbols {
     pub(super) fn load(store: &GraphStore, paths: &[&str]) -> Self {
         let mut loaded = DiffSymbols {
             known_files: HashSet::new(),
-            nested_files: Vec::new(),
+            nested_files: HashSet::new(),
             by_file: HashMap::new(),
             query_failed: false,
         };
@@ -146,7 +146,7 @@ impl DiffSymbols {
             if chunk.contains(&id.as_str()) {
                 self.known_files.insert(id);
             } else {
-                self.nested_files.push(id);
+                self.nested_files.insert(id);
             }
         }
     }
@@ -170,14 +170,7 @@ impl DiffSymbols {
             let Some(file) = owning_file(files, &id) else {
                 continue;
             };
-            // A longer indexed File owns it (`a.rs::b.rs::f`, not `a.rs`).
-            let nested = self.nested_files.iter().any(|n| {
-                n.len() > file.len()
-                    && id
-                        .strip_prefix(n.as_str())
-                        .is_some_and(|rest| rest.starts_with("::"))
-            });
-            if nested {
+            if self.owned_by_nested(file, &id) {
                 continue;
             }
             let start: u64 = start.parse().unwrap_or(0);
@@ -195,6 +188,17 @@ impl DiffSymbols {
                     overlap: 0,
                 });
         }
+    }
+
+    /// Whether a longer indexed File owns `id` (`a.rs::b.rs::f`, not
+    /// `a.rs`): each `::`-delimited prefix of the id longer than `file` is
+    /// looked up in a set, so the cost is linear in the id, not in the number
+    /// of nested Files (Codex security review of PR #482).
+    fn owned_by_nested(&self, file: &str, id: &str) -> bool {
+        !self.nested_files.is_empty()
+            && id
+                .match_indices("::")
+                .any(|(at, _)| at > file.len() && self.nested_files.contains(&id[..at]))
     }
 
     /// Attributes `hunk`'s added lines and pure removals to its file's
@@ -476,7 +480,7 @@ mod gap_tests {
     fn loaded(candidates: Vec<Candidate>) -> DiffSymbols {
         DiffSymbols {
             known_files: HashSet::from(["m.rs".to_string()]),
-            nested_files: Vec::new(),
+            nested_files: HashSet::new(),
             by_file: HashMap::from([("m.rs".to_string(), candidates)]),
             query_failed: false,
         }
@@ -604,5 +608,21 @@ mod gap_tests {
         let changed: Vec<u64> = (1..=lines).collect();
         let a = loaded(c).attribute(&hunk(&changed, &[]));
         assert!(a.budget_exceeded);
+    }
+
+    /// Codex security review of PR #482: tens of thousands of nested Files
+    /// (`a.rs::<n>.rs`) cost one set lookup per `::` of each symbol id.
+    #[test]
+    fn nested_owner_lookup_is_linear() {
+        let n = 50_000;
+        let mut d = loaded(Vec::new());
+        d.nested_files = (0..n).map(|k| format!("a.rs::{k}.rs")).collect();
+        let started = std::time::Instant::now();
+        let owned = (0..n)
+            .filter(|k| d.owned_by_nested("a.rs", &format!("a.rs::{k}.rs::f")))
+            .count();
+        assert_eq!(owned, n);
+        assert!(!d.owned_by_nested("a.rs", "a.rs::wide"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
     }
 }
