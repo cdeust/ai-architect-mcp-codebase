@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- A merge that waits no longer fails `Pipeline after merge` (Cortex ADR-1128). Each head wakes the resolver twice, once at the end of the Pipeline and once at the end of the review, and the first wake-up is held; it exited 1, so the default branch showed a failed run for every normal merge. A held merge, or a head that advanced, now ends green with a notice and writes no output, and `close-issues` requires a pull request number. Every other refusal still fails.
 - The review prompt puts the run's link just before the verdict line in every comment that carries it (Cortex ADR-1130). The resolver reads a verdict only from a comment that links the review run of the head; a review posted with `gh pr comment` carried the verdict without the link, and an approved, green pull request stayed unmerged (#495).
 - `docs/agent-guidance.md` states the CI contract for every agent and routine, and `CLAUDE.md` points to it: one pull request in flight, no comparison with the main branch and no forced push, one push per verdict, a refinement pull request on a new branch once the three reviews are spent, no comment after an approve. It wins over a less restrictive routine prompt written before the contract.
 - The resolver is also woken by the end of the Claude review, not only by the end of the Pipeline, so an approved pull request merges whichever finishes last (Cortex ADR-1127).
@@ -36,6 +37,22 @@ adheres to [Semantic Versioning](https://semver.org/).
   `"full": true`.
 
 ### Fixed
+
+- **README: a supported-platforms table** (issue #449, first slice). The
+  README did not say which platforms the plugin installs on, nor that the Linux
+  aarch64 asset is built but never started by CI. The table lists each release
+  asset, whether the launcher installs or refuses the platform (macOS Intel,
+  and a Windows shell that reports arm64, are refused), and whether the
+  pipeline's `install` job starts the published asset there. `ReadmePlatformTable` in
+  `scripts/tests/test_claude_bootstrap_platforms.py` checks the table row by
+  row: the installed rows' assets are exactly those the launcher accepts and
+  `release.yml` builds; each installed platform's `uname` pair is run through
+  the launcher and must pick that row's asset; the row says "yes" exactly when
+  a runner of the pipeline's `install` job maps to that `uname` pair (a table
+  inferred from `install` passing on those images), and otherwise names the
+  asset's build runner; every `install` runner starts a listed row; each
+  refused platform is refused by the launcher; and `ci.json`'s `install`
+  command ends with the installed copy's smoke.
 
 - **The README no longer quotes the 14.26x token reduction (#451).** The
   figure is a mean of per-question ratios between the head-to-head graph leg,
@@ -86,6 +103,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   rendering, in `get_impact`'s `unresolved_callsites_by_reason`, in
   `index_status`'s `unresolved_call_sites.by_reason`, and in the
   `open_by_reason` of `lsp_resolve` and `analyze_codebase`.
+- **`validate_prd_against_graph` no longer passes a fabricated class when the
+  stage-5 sidecar is absent** (issue #450, first slice). In regex-fallback
+  mode every unresolved token was an `info` finding, so a PRD naming a class
+  that does not exist validated as `ok` with zero hallucinated symbols. A
+  backticked token that matches no symbol by qualified name or by name is now
+  a `warning` (status `warning`), counted in the new `summary.absent_symbols`;
+  a token whose name exists stays `info`. `hallucinated_symbols` remains the
+  contract-backed critical count. `stages/stage-6.md` §4.3 states the rule.
 - **TypeScript/JavaScript: a call on a local built by `new` binds to the
   constructed class** (issue #444, first slice). `const w = new Worker();
   w.run()` reached the resolver as the bare name `w.run`: the local-receiver
@@ -168,7 +193,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   released v0.14.0 binary lists 26 tools where HEAD's smoke expects 27, so
   `install` is red until the next release; Windows is refused by
   `bin/ensure-binary.sh`; line coverage is under 90 % (the previous CI floor
-  is 80 %, ci.yml).
+  is 80 %, ci.yml). Since then, `install` checks the release tag's catalog and
+  the launcher installs `windows-x86_64`: `install` passed on all three runners
+  in run 42697366993 (see "Supported platforms" in the README).
 
 - `check_doc_claims`, a read-only tool that checks what a document says about
   the code against the graph, one claim at a time (part 1 of 3 of the
