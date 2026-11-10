@@ -7,10 +7,6 @@ import subprocess
 import tempfile
 import unittest
 
-# unittest discovers imported TestCases through the existing CI entry point.
-from ci_codex_current_findings_contract import CurrentFindingResolutionTests  # noqa: F401
-from ci_codex_editor_contract import SummaryEditorTests, SummaryGraphQLTests  # noqa: F401
-
 SCRIPT = Path(__file__).resolve().parents[1] / "ci_environment.sh"
 
 
@@ -77,8 +73,8 @@ class EnvironmentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             stub = Path(directory) / "cargo"
             stub.write_text(
-                '#!/usr/bin/env bash\nprintf "%s\\n" '
-                '"${LBUG_BUILD_FROM_SOURCE:-}${ZSTD_SYS_USE_PKG_CONFIG:-}" "$*"\n'
+                '#!/usr/bin/env bash\nprintf "L=%s Z=%s\\n%s\\n" '
+                '"${LBUG_BUILD_FROM_SOURCE:-}" "${ZSTD_SYS_USE_PKG_CONFIG:-}" "$*"\n'
             )
             stub.chmod(0o755)
             result = self.run_shell(
@@ -92,7 +88,7 @@ class EnvironmentTests(unittest.TestCase):
             [
                 "apt-get update -qq",
                 "apt-get install -y --no-install-recommends libzstd-dev pkg-config cmake",
-                "11",
+                "L=1 Z=1",
                 "run --release --locked --bin ai-architect-mcp-codebase -- install --dry-run",
             ],
         )
@@ -100,7 +96,10 @@ class EnvironmentTests(unittest.TestCase):
     def test_linux_apt_failure_stops_before_cargo(self):
         result = self.run_shell(
             "CI_OS=linux; CI_WORK=/unused; "
-            "sudo() { return 100; }; cargo() { echo UNREACHABLE; }; main"
+            # update succeeds, install fails: an `|| true` on the install line
+            # would let cargo run and fail this test.
+            'sudo() { [ "$2" = install ] && return 100; :; }; '
+            "cargo() { echo UNREACHABLE; }; main"
         )
         self.assertEqual(result.returncode, 100)
         self.assertNotIn("UNREACHABLE", result.stdout)

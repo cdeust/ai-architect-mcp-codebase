@@ -231,6 +231,7 @@ mod impact_next_steps_tests {
             unresolved_callsites_excluded_other_owner: 0,
             unresolved_callsite_outside_target_files: Vec::new(),
             unresolved_callsites_cfg_twins: 0,
+            unresolved_callsites: Vec::new(),
             cfg_twins: Vec::new(),
             code_context_basis: "absent",
         }

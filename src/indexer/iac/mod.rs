@@ -192,12 +192,16 @@ struct ParsedIac {
     kustomizations: Vec<(String, kustomize::Kustomization)>,
 }
 
+/// The detail of an IaC file the IaC pass could not read. Its File node was
+/// written by the main pass, so it counts as indexed: `merge_coverage` must not
+/// subtract it from `files_indexed` (Codex review of #478).
+pub(crate) const IAC_SKIP_DETAIL: &str = "unreadable/oversized";
+
 fn parse_dockerfile(path: &Path, rel: &str, parsed: &mut ParsedIac, gaps: &mut IacGaps) {
     let src = match read_text(path) {
         Some(s) => s,
         None => {
-            gaps.skipped
-                .push((rel.to_string(), "unreadable/oversized".into()));
+            gaps.skipped.push((rel.to_string(), IAC_SKIP_DETAIL.into()));
             return;
         }
     };
@@ -216,8 +220,7 @@ fn parse_kustomization(path: &Path, rel: &str, parsed: &mut ParsedIac, gaps: &mu
     let src = match read_text(path) {
         Some(s) => s,
         None => {
-            gaps.skipped
-                .push((rel.to_string(), "unreadable/oversized".into()));
+            gaps.skipped.push((rel.to_string(), IAC_SKIP_DETAIL.into()));
             return;
         }
     };

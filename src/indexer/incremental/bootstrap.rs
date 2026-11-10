@@ -12,7 +12,7 @@ use std::time::Instant;
 use crate::graph_store::GraphStore;
 
 use super::super::manifest::{self, FileManifest, FileState};
-use super::super::walk::{ParsePolicy, WalkOptions};
+use super::super::walk::WalkOptions;
 use super::classify::{classify, discover};
 use super::coverage::{save_incremental_coverage, PassGaps};
 use super::{apply_changes, ChangeSet, Discovered, Rename};
@@ -112,10 +112,7 @@ pub fn fill_after_bootstrap(
     let deleted = changes.deleted.len() as u64;
     let renamed = changes.renamed.len() as u64;
 
-    let policy = ParsePolicy {
-        dependency_scope,
-        language_filter: options.language_filter,
-    };
+    let policy = options.parse_policy();
     let (reparsed, reparsed_gaps) = apply_changes(&store, codebase, &changes, &current, policy)?;
     // Persist a local manifest reflecting the CURRENT tree so subsequent local
     // incrementals classify against this machine's mtimes/hashes, not the
@@ -128,7 +125,7 @@ pub fn fill_after_bootstrap(
     // plus this pass's walk-level excluded/unreadable directories, save.
     let mut merged_gaps = reparsed_gaps;
     merged_gaps.extend(walk_gaps);
-    let facts = save_incremental_coverage(
+    let cov = save_incremental_coverage(
         codebase,
         graph_dir,
         &store,
@@ -141,7 +138,7 @@ pub fn fill_after_bootstrap(
         },
         "bootstrap_fill",
     );
-    super::apply_cargo_facts(&store, &facts);
+    super::apply_cargo_facts(&store, &cov.facts);
 
     Ok(FillResult {
         result: IncrementalResult {
@@ -153,6 +150,10 @@ pub fn fill_after_bootstrap(
             unchanged: unchanged_count,
             files_reparsed: reparsed,
             elapsed_ms: start.elapsed().as_millis() as u64,
+            coverage: cov.report,
+            coverage_write_error: cov.write_error,
+            // A bootstrap fill writes no scope (`manifest_from_discovered`).
+            scope_kept: false,
         },
         method,
     })

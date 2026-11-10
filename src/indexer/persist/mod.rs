@@ -138,12 +138,15 @@ pub(super) enum ParseOutcome {
 }
 
 /// Per-file parse options: whether a dependency file keeps only its public
-/// API (ADR-4253701 §Decision 1), and the index's language filter, which
-/// picks the grammar of a `.h` header (#399).
+/// API (ADR-4253701 §Decision 1), the index's language filter, which picks
+/// the grammar of a `.h` header (#399), and whether the full-AST layer is
+/// persisted (#448).
 #[derive(Debug, Clone, Copy)]
 pub(in crate::indexer) struct FileScope {
     pub restrict_to_public_api: bool,
     pub language_filter: Option<Language>,
+    /// Issue #448: persist this file's full-AST layer (`ParsePolicy::full_ast`).
+    pub full_ast: bool,
 }
 
 impl FileScope {
@@ -154,6 +157,7 @@ impl FileScope {
             restrict_to_public_api: policy.dependency_scope == DependencyScope::PublicApi
                 && is_dependency_path(codebase, file),
             language_filter: policy.language_filter,
+            full_ast: policy.full_ast,
         }
     }
 }
@@ -174,7 +178,7 @@ pub(super) fn index_single_file(
     // are emitted in a dedicated post-pass. A non-code file is fully covered as
     // a File node (no symbols expected), so it is `Indexed`, not a gap.
     // source: all-file indexing — every file is a File node; only supported
-    // languages get a full AST.
+    // languages are parsed (and get the full-AST layer under `full_ast`).
     let ext = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let lang = match Language::from_extension(ext) {
         Some(l) => l,
@@ -228,8 +232,11 @@ pub(super) fn index_single_file(
     edges::accumulate_parsed_edges(batch, &parsed.refs, label_by_qn);
     // Full-AST persistence layer (additive, best-effort — see
     // `ast::persist_full_ast`'s doc comment for why a failure here never
-    // changes this file's `ParseOutcome`).
-    ast::persist_full_ast(store, rel_path, &source, lang);
+    // changes this file's `ParseOutcome`). Opt-in since issue #448: it is
+    // most of the graph's rows and no typed tool reads it (raw `query_graph` can).
+    if scope.full_ast {
+        ast::persist_full_ast(store, rel_path, &source, lang);
+    }
     if parsed.parse_errors > 0 {
         ParseOutcome::Partial(parsed.error_ranges)
     } else {
