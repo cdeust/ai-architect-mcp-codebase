@@ -16,6 +16,12 @@ import tarfile
 import tempfile
 import unittest
 
+
+def require(condition, message):
+    """An `assert` that `python -O` does not strip."""
+    if not condition:
+        raise AssertionError(message)
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -230,8 +236,7 @@ INSTALLED_UNAME = {
     "macOS arm64": ("Darwin", "arm64"),
     "Linux x86_64": ("Linux", "x86_64"),
     "Linux aarch64": ("Linux", "aarch64"),
-    "Windows x86_64 (a shell whose `uname -s` starts with `MINGW`, `MSYS` or "
-    "`CYGWIN`, as Git Bash does)": ("MINGW64_NT-10.0", "x86_64"),
+    "Windows x86_64": ("MINGW64_NT-10.0", "x86_64"),
 }
 
 # Issue #449: what `uname` reports on each runner label of the `install` job.
@@ -263,7 +268,7 @@ def release_runners():
     """`{target_tag: runner}` of the `build:` job's matrix in `release.yml`."""
     release = (ROOT / ".github/workflows/release.yml").read_text()
     job = re.search(r"^  build:\n(.*?)(?=^  \S|\Z)", release, re.M | re.S)
-    assert job, "release.yml has no top-level `build:` job"
+    require(job, "release.yml has no top-level `build:` job")
     tags = re.findall(r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)", job.group(1), re.M)
     pairs = re.findall(
         r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)\n"
@@ -272,8 +277,10 @@ def release_runners():
         job.group(1),
         re.M,
     )
-    assert len(pairs) == len(tags), "a `target_tag:` entry has no readable `runner:`"
-    assert len(set(tags)) == len(tags), "a `target_tag:` is listed twice"
+    require(
+        len(pairs) == len(tags), "a `target_tag:` entry has no readable `runner:`"
+    )
+    require(len(set(tags)) == len(tags), "a `target_tag:` is listed twice")
     return dict(pairs)
 
 
@@ -281,10 +288,10 @@ def install_job_runners():
     """The `os` matrix of the pipeline's `install` job."""
     pipeline = (ROOT / ".github/workflows/pipeline.yml").read_text()
     job = re.search(r"^  install:\n(.*?)(?=^  \S|\Z)", pipeline, re.M | re.S)
-    assert job, "pipeline.yml has no top-level `install:` job"
+    require(job, "pipeline.yml has no top-level `install:` job")
     matrix = re.search(r"^\s+os: \[([^\]]*)\]", job.group(1), re.M)
-    assert matrix, "the `install` job has no inline `os: [...]` matrix"
-    assert "include:" not in job.group(1), "`include:` entries are not read"
+    require(matrix, "the `install` job has no inline `os: [...]` matrix")
+    require("include:" not in job.group(1), "`include:` entries are not read")
     return {runner.strip() for runner in matrix.group(1).split(",")}
 
 
@@ -335,7 +342,9 @@ class ReadmePlatformTable(BootstrapHarness):
         for row in readme_platform_rows():
             if row[2] != "installs":
                 continue
-            platform, asset, ci = row[0], row[1].strip("`"), row[3]
+            # The name before any parenthetical: a wording edit is not a new row.
+            platform = row[0].split(" (", 1)[0]
+            asset, ci = row[1].strip("`"), row[3]
             with self.subTest(platform=platform):
                 self.assertIn(platform, INSTALLED_UNAME, "no uname pair for this row")
                 pair = INSTALLED_UNAME[platform]
@@ -343,7 +352,8 @@ class ReadmePlatformTable(BootstrapHarness):
                 self.assertIn(asset, built_on, "asset not built by release.yml")
                 labels = started_by.pop(pair, [])
                 if labels:
-                    self.assertEqual(ci, ", ".join(f"yes, on `{label}`" for label in labels))
+                    expected = ", ".join(f"yes, on `{label}`" for label in labels)
+                    self.assertEqual(ci, expected)
                 else:
                     self.assertEqual(
                         ci, f"**no**: built on `{built_on[asset]}`, never started"

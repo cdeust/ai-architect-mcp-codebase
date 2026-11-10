@@ -14,10 +14,12 @@ adheres to [Semantic Versioning](https://semver.org/).
   asset, whether the launcher installs or refuses the platform (macOS Intel and
   Windows arm64 are refused), and whether the pipeline's `install` job starts
   the published asset there. `ReadmePlatformTable` in
-  `scripts/tests/test_claude_bootstrap_platforms.py` fails when the table's
-  installed assets differ from the launcher's or the release matrix's targets,
-  when a refused platform is not refused by the launcher, or when the runners
-  the table says start the asset differ from the pipeline's `install` matrix.
+  `scripts/tests/test_claude_bootstrap_platforms.py` checks the table row by
+  row: each installed platform's `uname` pair is run through the launcher and
+  must pick that row's asset, which `release.yml` must build; the row says
+  "yes" exactly when a runner of the pipeline's `install` job reports that
+  `uname` pair, and otherwise names the asset's build runner; each refused
+  platform is refused by the launcher.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
