@@ -115,6 +115,22 @@ impl ExcludeSet {
         self.names.is_empty() && self.paths.is_empty()
     }
 
+    /// The set as sorted, kind-tagged strings (`name:<n>`, `path:<p>`), so two
+    /// sets compare equal exactly when they exclude the same directories,
+    /// independent of the `HashSet` iteration order. Recorded in the file
+    /// manifest (issue #443) so a later pass can tell whether the graph was
+    /// built with the same exclusions.
+    pub fn canonical_entries(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .names
+            .iter()
+            .map(|n| format!("name:{n}"))
+            .chain(self.paths.iter().map(|p| format!("path:{p}")))
+            .collect();
+        out.sort();
+        out
+    }
+
     /// True when the bare directory `name` or its walk-root-relative path
     /// `rel` (forward-slash) matches an excluded entry.
     fn matches(&self, name: &str, rel: &str) -> bool {
@@ -123,13 +139,16 @@ impl ExcludeSet {
 }
 
 /// What a parse needs from `IndexOptions` beyond the walk itself: the
-/// dependency tier (restricts dependency files to their public API) and the
-/// language filter, which decides the grammar of a `.h` header (#399). One
-/// `Copy` value so the full and incremental index paths pass the same thing.
-#[derive(Debug, Clone, Copy, Default)]
+/// dependency tier (restricts dependency files to their public API), the
+/// language filter, which decides the grammar of a `.h` header (#399), and
+/// whether the full-AST layer is persisted (#448). One `Copy` value so the
+/// full, incremental and artifact-fill paths pass the same thing; by
+/// convention built only by `IndexOptions::parse_policy` (no `Default`).
+#[derive(Debug, Clone, Copy)]
 pub struct ParsePolicy {
     pub dependency_scope: DependencyScope,
     pub language_filter: Option<Language>,
+    pub full_ast: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -377,8 +396,8 @@ fn visit_dir_entry(
 ///   * `language_filter = Some(L)`: collect ONLY files of language L (a
 ///     scoped re-index of a single language).
 ///   * `language_filter = None`: ALL-FILE indexing — collect every file
-///     regardless of extension. Code files in a supported language get a
-///     full AST; every other file still becomes a File node
+///     regardless of extension. Code files in a supported language are
+///     parsed; every other file still becomes a File node
 ///     (path/name/extension/size), and .js-family files are light-linked
 ///     (import/require → Imports_File_File) in a post-pass. Oversized files
 ///     are skipped here; build/dependency dirs are pruned by `should_skip`

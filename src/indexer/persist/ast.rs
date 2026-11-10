@@ -24,7 +24,7 @@ use super::{isolate, Isolated};
 /// Captures and persists the full AST for one file: a `FileContent` row (the
 /// zstd-compressed source), one `AstNode` row per tree-sitter node, a
 /// `Defines_File_AstNode` edge from the file to the tree root, and one
-/// `AstChild_AstNode_AstNode` edge per non-root node to its parent.
+/// `AstChild_AstNode_AstNode` edge per non-root node, directed parent -> child.
 ///
 /// Best-effort, mirroring the IaC pass (`indexer::iac::run_iac_pass`): a
 /// failure here (a capture panic, a store error) is logged and the file's
@@ -66,8 +66,8 @@ pub(super) fn persist_full_ast(store: &GraphStore, rel_path: &str, source: &str,
 /// zstd-compresses `source` (crate-default level — `zstd::DEFAULT_COMPRESSION_LEVEL`,
 /// the ratio/speed balance the zstd manual recommends as its default; the
 /// artifact-export path's level-9 "best ratio" tier is reserved for its
-/// one-shot whole-graph snapshot, not this per-file, every-indexed-file path)
-/// and inserts the `FileContent` row.
+/// one-shot whole-graph snapshot, not this per-file path, taken for every
+/// parsed file under `full_ast`) and inserts the `FileContent` row.
 fn persist_file_content(store: &GraphStore, rel_path: &str, source: &str) -> Result<(), String> {
     let bytes = source.as_bytes();
     let compressed = zstd::encode_all(bytes, zstd::DEFAULT_COMPRESSION_LEVEL)

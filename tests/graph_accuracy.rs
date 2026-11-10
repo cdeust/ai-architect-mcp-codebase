@@ -366,6 +366,7 @@ fn index_and_resolve_fixture(fixture_root: &Path, graph_path: &Path) -> GraphSto
             language_filter: Some(Language::Python),
             dependency_scope: indexer::DependencyScope::None,
             exclude_dirs: indexer::ExcludeSet::default(),
+            full_ast: false,
         },
     )
     .expect("indexer should succeed on a 1-file fixture");

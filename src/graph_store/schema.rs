@@ -74,10 +74,10 @@ pub const NODE_IAC_MODULE: &str = "IacModule";
 // the normalized reference string, never per-file, so it is not purged per file.
 pub const NODE_IAC_IMAGE: &str = "IacImage";
 
-// Full-AST layer — every tree-sitter node of every parsed file, not just the
-// symbols the language-spec walkers extract. source: full-AST persistence
-// contract — "a parsed file is entirely indexed and queryable without
-// tokens": the pre-existing schema above is a purely SEMANTIC projection
+// Full-AST layer (opt-in via `full_ast`, #448) — every tree-sitter node of
+// every parsed file, not just the spec walkers' symbols. source: full-AST
+// persistence contract — "a parsed file is entirely indexed and queryable
+// without tokens": the pre-existing schema above is a SEMANTIC projection
 // (Function/Struct/... only), so any node the spec walkers don't recognize
 // (a raw expression, a punctuation token, a comment) was silently dropped.
 // `AstNode` is the lossless layer underneath it — one row per tree-sitter

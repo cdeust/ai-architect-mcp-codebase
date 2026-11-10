@@ -28,6 +28,9 @@ fn incremental(graph: &Path) -> IncrementalResult {
         unchanged: 0,
         files_reparsed: 1,
         elapsed_ms: 1,
+        coverage: crate::indexer::coverage::CoverageReport::new("incremental", 0),
+        coverage_write_error: None,
+        scope_kept: false,
     }
 }
 

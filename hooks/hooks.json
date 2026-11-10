@@ -1,0 +1,29 @@
+{
+  "description": "Code-discovery nudge (issue #198): names the ai-architect graph tools at session start and in every subagent. Fail-open: the script exits 0 with no output on every failure path.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/discovery-nudge.sh\" session",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/discovery-nudge.sh\" subagent",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -67,9 +67,28 @@ fn merge_coverage(
     }
     // files_indexed = files with a covered surface = total minus not-indexed
     // (skipped/quarantined). Parse-partial and outside-build-targets files
-    // WERE indexed (declarations are in the graph), so they count.
-    let counts = report.counts();
-    report.files_indexed = files_indexed.saturating_sub(counts.skipped + counts.quarantined);
+    // WERE indexed (declarations are in the graph), so they count. Only
+    // entries for discovered files are subtracted: a pruned directory (e.g.
+    // `user_excluded`) is a `skipped` entry too, but it was never part of
+    // `files_indexed` (Codex review of #478: one file plus one excluded
+    // directory read 1 on the full run and 0 on reuse). Nor is an IaC file the
+    // IaC pass could not read: the main pass wrote its File node, and the full
+    // index counts it (`record_iac_skipped`).
+    let not_indexed = report
+        .files
+        .iter()
+        .filter(|(rel, c)| {
+            current_rels.contains(*rel)
+                && match c.kind {
+                    coverage::CoverageKind::Skipped => {
+                        c.detail != super::super::iac::IAC_SKIP_DETAIL
+                    }
+                    coverage::CoverageKind::Quarantined => true,
+                    _ => false,
+                }
+        })
+        .count() as u64;
+    report.files_indexed = files_indexed.saturating_sub(not_indexed);
     report
 }
 
@@ -164,12 +183,27 @@ pub(in crate::indexer) fn apply_cargo_facts(
     }
 }
 
+/// What `save_incremental_coverage` produced: the Cargo facts to apply to the
+/// store, the report this pass computed, and why it could not be persisted.
+pub(super) struct IncrementalCoverage {
+    pub(super) facts: cargo_attribution::CargoFacts,
+    pub(super) report: coverage::CoverageReport,
+    /// `Some` when the sidecar on disk is NOT this report (review of #478:
+    /// a caller that reads the sidecar back would otherwise get the previous
+    /// pass's report and present it as this one's).
+    pub(super) write_error: Option<String>,
+    /// Whether the previous pass's report loaded. Without it, nothing was
+    /// carried forward: an unchanged file's gaps are lost and the report reads
+    /// as clean, so it must not vouch for the graph (Claude review of #478).
+    pub(super) prior_loaded: bool,
+}
+
 /// Builds and writes the coverage sidecar for an incremental pass or bootstrap
 /// fill: carry forward unchanged files' gaps, overlay the reparsed files'
 /// fresh gaps, drop gaps for vanished/now-clean files, then recompute
 /// outside-build-targets fresh over the whole current tree (issue #284).
-/// Best-effort — a failed write only degrades the honesty signal, never the
-/// index.
+/// Best-effort for the index — a failed write never fails the pass — but the
+/// failure is returned, so a caller that reports coverage can refuse to.
 pub(super) fn save_incremental_coverage(
     codebase: &Path,
     graph_dir: &Path,
@@ -178,10 +212,20 @@ pub(super) fn save_incremental_coverage(
     reparsed_gaps: BTreeMap<String, FileCoverage>,
     pruned_dirs: BTreeMap<String, String>,
     index_mode: &str,
-) -> cargo_attribution::CargoFacts {
+) -> IncrementalCoverage {
     let output_dir = match graph_dir.parent() {
         Some(p) => p,
-        None => return cargo_attribution::CargoFacts::default(),
+        None => {
+            return IncrementalCoverage {
+                facts: cargo_attribution::CargoFacts::default(),
+                report: coverage::CoverageReport::new(index_mode, current.len() as u64),
+                prior_loaded: false,
+                write_error: Some(format!(
+                    "graph dir {} has no parent to hold the coverage sidecar",
+                    graph_dir.display()
+                )),
+            }
+        }
     };
     let cov_path = coverage::coverage_path(output_dir);
     let prior = coverage::load(&cov_path);
@@ -208,10 +252,16 @@ pub(super) fn save_incremental_coverage(
     // added or removed. source: ADR-9841.
     report.pruned_dirs = pruned_dirs;
     let facts = overlay_cargo_attributions(&mut report, codebase, current);
-    if let Err(e) = coverage::save(&cov_path, &report) {
+    let write_error = coverage::save(&cov_path, &report).err();
+    if let Some(e) = &write_error {
         eprintln!("[ap] coverage sidecar write failed: {e}");
     }
-    facts
+    IncrementalCoverage {
+        facts,
+        report,
+        write_error,
+        prior_loaded: prior.is_some(),
+    }
 }
 
 #[cfg(test)]

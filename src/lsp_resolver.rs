@@ -39,6 +39,9 @@ mod cfg_twin_pass_tests;
 #[cfg(test)]
 #[path = "lsp_resolver/purge_reset_tests.rs"]
 mod purge_reset_tests;
+#[cfg(test)]
+#[path = "lsp_resolver/retract_caller_tests.rs"]
+mod retract_caller_tests;
 
 #[cfg(test)]
 #[path = "lsp_resolver/health_gate_tests.rs"]
