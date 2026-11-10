@@ -55,6 +55,20 @@ run. These measurements establish file-retrieval results and protocol costs.
 AI-agent success, hallucination reduction and real-world token savings were
 not measured.
 
+The payload token proxy is therefore not a session cost, and the README does
+not quote it as one. An independent audit of v0.14.0 (issue #451, macOS arm64)
+measured real `get_impact` answers at 400 to 1,070 tokens on its own corpus
+(this envelope averages 43 over the benchmark questions, a different corpus
+and version, so the two are not a like-for-like ratio), found `git grep`
+output smaller than the graph answer on 4 of 5 questions, and measured the
+tool prompt at 7.6k tokens (`core`) to 16.7k (`full`). The audit's break-even
+of 15 to 33 questions per session divides that prompt by about 507 tokens per
+question, which is this benchmark's gap (550.36 − 43.14), not a measured
+saving. On the audit's five questions grep output was smaller on four; the
+audit gives no summed difference, so whether the prompt cost is ever recovered
+against grep is not established. Those figures come from the audit and have
+not been reproduced by a script in this repository.
+
 ## Indexing cost on a real repository
 
 Issue #448. Measured on 2026-11-10 at main `72bc505`, one run per row (n=1,

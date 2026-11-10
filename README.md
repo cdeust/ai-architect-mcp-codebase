@@ -134,7 +134,7 @@ The default stays `full` until the next major version, because shrinking the
 default tool surface is a breaking change. New agent setups should use the
 `core` profile (8 read-only tools): `analyze_codebase` already runs index,
 resolve and cluster in one call, and leaving out the 19 hidden tools keeps the
-tool prompt small.
+tool prompt smaller.
 
 ## A first session
 
@@ -349,24 +349,24 @@ inference spent re-reading files to answer a question a structural query could
 answer once; this binary's CPU is small next to it. Every token an agent does
 not process is compute that is never scheduled. The
 [Green Software Foundation](https://greensoftware.foundation/) calls this
-energy proportionality, and here it is applied where the constant is largest.
+energy proportionality, and this project aims to apply it where the constant
+is largest.
 
-The head-to-head evaluation measures that demand under a pre-registered
-protocol, n=20, reproducible offline with no API key:
-
-| Demand term | Graph tools | Grep/Glob/Read baseline | Reduction |
-|---|---:|---:|---:|
-| Payload token proxy | 43.14 ± 17.26 | 550.36 ± 330.28 | 14.26x (mean of per-question ratios) |
-| Modeled tool calls | 1.00 ± 0.00 | 5.20 ± 1.64 | 5.20x |
-
-Costs are modeled. Both legs use a payload-size / 4 token proxy, and indexing,
-client prompts, real MCP response envelopes and model reasoning are excluded.
-The corpus informed fixes #87 and #92, so this is a regression benchmark.
-Dividing aggregate payload volumes gives 12.76x, a different statistic. No
-energy or CO2 figure is derived from these numbers, because this repository
-measures no joules and a token count does not convert to watt-hours.
+This repository does not claim a token saving for real sessions. The
+head-to-head evaluation in
 [docs/evaluation.md](docs/evaluation.md#graph-tools-compared-with-a-grepglobread-baseline)
-has the full table, the protocol and the falsified first run.
+compares file retrieval against a Grep/Glob/Read baseline (n=20), but its
+graph leg serializes a benchmark-only envelope of symbol identities, not the
+responses the server sends, so its payload ratio is not a session cost. An
+independent audit of v0.14.0 (issue #451) measured real `get_impact` answers
+at 400 to 1,070 tokens, found `git grep` output smaller than the graph answer
+on 4 of 5 questions, and measured the tool prompt at 7.6k tokens (`core`
+profile) to 16.7k (`full`). `benchmarks/token_surface` renders representative
+responses through the handlers' own `token_surface::render_list`, but neither
+real end-to-end handler responses nor the tool prompt are measured in this
+repository yet. No energy or CO2 figure is derived either, because this
+repository measures no joules and a token count does not convert to
+watt-hours.
 
 On the server side, indexing has a cost of its own. Indexing django 5.1.3
 (6,748 files indexed) from scratch, measured once on 2026-11-10 at `72bc505`

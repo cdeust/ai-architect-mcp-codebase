@@ -37,6 +37,16 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The README no longer quotes the 14.26x token reduction (#451).** The
+  figure is a mean of per-question ratios between the head-to-head graph leg,
+  which serializes a benchmark-only envelope of symbol identities, and the
+  Grep/Glob/Read baseline; it was never a session cost. The README now says
+  that no session token saving is claimed and cites the audit's measurements
+  (real `get_impact` answers of 400 to 1,070 tokens, `git grep` output smaller
+  than the graph answer on 4 of 5 questions, a 7.6k to 16.7k token tool
+  prompt). `docs/evaluation.md` keeps the benchmark table and adds a paragraph
+  showing that the audit's 15-to-33-question break-even rests on this
+  benchmark's payload gap, not on a measured saving.
 - **The cost of indexing a real repository is published** (issue #448,
   second slice). README and `docs/evaluation.md` give wall time, peak RSS,
   graph size and node counts for django 5.1.3 with `full_ast` off and on
