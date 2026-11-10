@@ -9,7 +9,8 @@
 // enriched with community and process membership. A change no symbol holds (a
 // line or a pure removal outside every symbol, blank-only ones excepted; a path
 // with no indexed File; an added or deleted file with no symbol; an unreadable
-// or binary section) or a failed symbol load makes the answer `lower-bound`
+// or binary section; a rename with no hunk; `Only in` lines; diff text with no
+// readable section) or a failed symbol load makes the answer `lower-bound`
 // (issue #446).
 
 use crate::clustering;
@@ -24,7 +25,7 @@ mod symbols;
 
 #[cfg(test)]
 use parse::parse_hunk_header;
-pub(crate) use parse::{has_diff_structure, parse_unified_diff, FileHunk};
+pub(crate) use parse::{has_diff_structure, one_sided_entries, parse_unified_diff, FileHunk};
 
 /// Validates a git ref for safe use as a positional argument.
 /// Rejects refs starting with `-` (which git would treat as an option flag)
@@ -278,6 +279,17 @@ pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis,
              output?); its changes are not attributed"
                 .to_string(),
         );
+        analysis.coverage_gap_count += 1;
+    }
+    // `diff -r` without `-N` lists a file on one side only as an `Only in`
+    // line, with no hunk: its symbols are not in the diff.
+    let one_sided = one_sided_entries(diff_text);
+    if one_sided > 0 {
+        analysis.epistemic = crate::epistemic::Boundary::LowerBound.as_str();
+        analysis.epistemic_reasons.push(format!(
+            "{one_sided} `Only in` line(s): a file present on one side only is \
+             not in the diff (run `diff -N`, or `git diff`)"
+        ));
         analysis.coverage_gap_count += 1;
     }
     Ok(analysis)
@@ -628,6 +640,10 @@ mod tests {
         let log = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n\
                    commit 0123456789abcdef0123456789abcdef01234567\n\n    Fix bug\n";
         assert!(parse_unified_diff(log).unwrap()[0].malformed);
+        // A hunk past one side's count while the other still owes lines is
+        // caught by `take_count`, not by `stray_line`.
+        let over = "--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,2 @@\n-a\n-b\n+c\n+d\n";
+        assert!(parse_unified_diff(over).unwrap()[0].malformed);
         // A default `git format-patch --stdout` series: each patch ends with
         // the `-- ` signature, and the next `From ` line falls in it.
         let series = "From 1111 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 1/2] a\n---\n\
@@ -959,6 +975,19 @@ diff --git a/x b/x
         assert_eq!(result.epistemic, "lower-bound");
         assert_eq!(
             result.coverage_gap_count, 1,
+            "{:?}",
+            result.epistemic_reasons
+        );
+        // `diff -ru` without `-N`: a one-sided file is an `Only in` line.
+        let only = "--- old/m.rs\t2026-01-01\n+++ new/m.rs\t2026-01-02\n@@ -1 +1 @@\n-x\n+y\n\
+                    Only in new/src: added.rs\n";
+        let result = analyze_diff(&store, only).unwrap();
+        assert_eq!(result.epistemic, "lower-bound");
+        assert!(
+            result
+                .epistemic_reasons
+                .iter()
+                .any(|r| r.contains("Only in")),
             "{:?}",
             result.epistemic_reasons
         );

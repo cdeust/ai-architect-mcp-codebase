@@ -386,6 +386,17 @@ pub(crate) fn has_diff_structure(diff_text: &str) -> bool {
     })
 }
 
+/// The `Only in <dir>: <name>` lines of `diff -r` without `-N`: each is a
+/// file (or directory) present on one side only, printed with no hunk and no
+/// file header, whose changes the diff does not show. No hunk body line can
+/// start with `O`, so the count is exact.
+pub(crate) fn one_sided_entries(diff_text: &str) -> usize {
+    diff_text
+        .lines()
+        .filter(|l| l.starts_with("Only in "))
+        .count()
+}
+
 pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, String> {
     let mut hunks: Vec<FileHunk> = Vec::new();
     let mut section = FileSection::default();

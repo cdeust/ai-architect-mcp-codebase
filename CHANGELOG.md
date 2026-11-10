@@ -40,9 +40,12 @@ adheres to [Semantic Versioning](https://semver.org/).
   combined-diff header, a hunk cut short or overrun, body lines before any
   `@@`, file headers with no hunk, a missing, empty or out-of-place file
   header, several commits, a hunk with no `+`/`-` line (`--word-diff`), a
-  header that swallows the next file's headers, or sections of one path that
+  header that swallows the next file's headers, a `git format-patch` series
+  whose patches end with the `-- ` signature, or sections of one path that
   disagree on the change type); when a file is renamed or copied with no
-  content hunk; when a non-empty diff holds no readable section at all; when a
+  content hunk; when a non-empty diff holds no readable section at all (a diff
+  whose sections change no line, such as a chmod, stays `exact`); when `diff -r`
+  without `-N` lists a one-sided file as an `Only in` line; when a
   section is binary; or when the symbol load fails (one reason for the whole
   diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after
   a tab) name their file, and `git diff` also runs with `--no-renames
