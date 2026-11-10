@@ -33,8 +33,17 @@ use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
 use coverage::{CoverageCollector, CoverageReport};
 pub use incremental::{
-    fill_after_bootstrap, index_incremental, write_full_manifest, FillMethod, FillResult,
+    fill_after_bootstrap, full_manifest, index_incremental, tree_changed_since, FillMethod,
+    FillResult,
 };
+// For the bin's `prepare_full_rebuild_within`, a test seam; the lib has no caller.
+#[allow(unused_imports)]
+pub(crate) use incremental::full_manifest_within;
+// Both full paths now take `full_manifest` before indexing and save it after
+// (#478), so the bin no longer calls this; the integration tests (`tests/*.rs`),
+// the bin's unit tests and the `incremental_speed` benchmark still use it.
+#[allow(unused_imports)]
+pub use incremental::write_full_manifest;
 use persist::{
     index_single_file, insert_ancestor_dirs, insert_dir_file_edge, insert_file_node, FileScope,
     ParseOutcome,
@@ -60,6 +69,11 @@ const MAX_FILE_BYTES: u64 = 10_485_760;
 // source: heuristic — 2 GB total reads caps peak RSS during indexing.
 // macOS default ulimit -m is effectively unbounded, so we self-limit.
 const MAX_TOTAL_BYTES: u64 = 2_147_483_648;
+
+/// The prefix of every refusal of a tree over `MAX_TOTAL_BYTES` (the walk's,
+/// the change check's and the manifest snapshot's), so a caller can tell it
+/// from other errors without matching a free-form message (review of #478).
+pub const TOTAL_BYTES_EXCEEDED: &str = "total_bytes_exceeded";
 
 // source: heuristic — 64 is deeper than any realistic project tree
 // (node_modules pathologies rarely exceed 30). Prevents stack-exhaustion
@@ -116,6 +130,24 @@ impl IndexOptions {
     }
 }
 
+impl IndexOptions {
+    /// These options, and this build's version, as the manifest records them
+    /// (issue #443): two values are
+    /// equal exactly when a walk under either would select the same files and
+    /// parse them the same way. The enums' `Debug` names are unit-variant
+    /// identifiers, stable within a build; a rename across builds only makes
+    /// the comparison fail, which costs a full rebuild, never a stale graph.
+    pub fn scope(&self) -> manifest::IndexScope {
+        manifest::IndexScope {
+            indexer_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            language: self.language_filter.map(|l| format!("{l:?}")),
+            dependency_scope: format!("{:?}", self.dependency_scope),
+            exclude_dirs: self.exclude_dirs.canonical_entries(),
+            full_ast: self.full_ast,
+        }
+    }
+}
+
 pub struct IndexResult {
     pub graph_path: PathBuf,
     pub node_count: u64,
@@ -125,6 +157,8 @@ pub struct IndexResult {
     /// Coverage-honesty report (issue #57): which files were parse-incomplete,
     /// skipped, or quarantined. The composition root persists it to the sidecar.
     pub coverage: CoverageReport,
+    /// `CargoFacts::digest` of this pass, for `FileManifest::cargo_facts`.
+    pub cargo_facts_digest: String,
 }
 
 /// Outcome of an incremental (changed-files-only) re-index (issue #62).
@@ -147,6 +181,14 @@ pub struct IncrementalResult {
     pub unchanged: u64,
     pub files_reparsed: u64,
     pub elapsed_ms: u64,
+    /// The coverage report this pass computed (#478 review), whether or not
+    /// it reached the sidecar.
+    pub coverage: CoverageReport,
+    /// Why the sidecar write failed, when it did.
+    pub coverage_write_error: Option<String>,
+    /// Whether the saved manifest kept `prior`'s scope, so still vouches for
+    /// the graph; `analyze_codebase` reuses a graph only then (review of #478).
+    pub scope_kept: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +284,7 @@ pub fn index_codebase_with_language(
         total_bytes = total_bytes.saturating_add(file_bytes);
         if total_bytes > MAX_TOTAL_BYTES {
             return Err(format!(
-                "total_bytes_exceeded: aborting walk after {total_bytes} bytes \
+                "{TOTAL_BYTES_EXCEEDED}: aborting walk after {total_bytes} bytes \
                  (MAX_TOTAL_BYTES {MAX_TOTAL_BYTES})"
             ));
         }
@@ -312,6 +354,7 @@ pub fn index_codebase_with_language(
     // is `or_insert`, see `coverage.rs`. The same `cargo metadata` map also
     // drives the feature-gated attribution (issue #291).
     let facts = record_cargo_attributions(&mut collector, codebase_path, &source_files);
+    let cargo_facts_digest = facts.digest();
     // The workspace's crate names, read by the resolver to accept a receiver
     // type named through a `use` (issues #348, #349 and #358); every `#[cfg]`
     // twin learns whether the default build compiles it (issue #353).
@@ -338,6 +381,7 @@ pub fn index_codebase_with_language(
         files_indexed,
         elapsed_ms,
         coverage,
+        cargo_facts_digest,
     })
 }
 
@@ -413,7 +457,7 @@ fn fold_iac_gaps(collector: &mut CoverageCollector, gaps: iac::IacGaps) {
         collector.record_partial(&rel, ranges);
     }
     for (rel, reason) in gaps.skipped {
-        collector.record_skipped(&rel, reason);
+        collector.record_iac_skipped(&rel, reason);
     }
 }
 

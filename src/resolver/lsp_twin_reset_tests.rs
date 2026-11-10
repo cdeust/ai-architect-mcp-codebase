@@ -176,14 +176,26 @@ fn resolve_graph_drops_a_language_server_row_to_a_compiled_out_twin() {
         "the caller must reach the compiled twin: {caller:?}"
     );
 
-    // Rows to a compiled or an undecided twin, and a row of another method
-    // to the compiled-out twin, are untouched.
+    // Language-server rows to a compiled or an undecided twin are untouched.
     assert!(
         rows(&store, "Calls_CallSite_Function", TO_SLOW).contains(&pair(SLOW, "lsp-definition"))
     );
     assert!(
         rows(&store, "Calls_CallSite_Function", TO_UNIX).contains(&pair(UNIX, "lsp-definition"))
     );
+    // The `unique-match` row to the compiled-out twin is planted: no static
+    // tier decides `zzz` to `pick`, so the pass retracts it as a row it no
+    // longer decides (issue #443). That the language-server reset itself
+    // leaves another method's row alone is checked on the reset below.
+    assert_eq!(rows(&store, "Calls_CallSite_Function", STATIC_TO_FAST), []);
+}
+
+#[test]
+fn the_language_server_reset_leaves_a_row_of_another_method_to_the_compiled_out_twin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = stale_graph(dir.path());
+    super::cfg_verdict::reset_compiled_out_lsp_rows(&store).expect("reset");
+    assert!(rows(&store, "Calls_CallSite_Function", TO_FAST).is_empty());
     assert_eq!(
         rows(&store, "Calls_CallSite_Function", STATIC_TO_FAST),
         [pair(FAST, "unique-match")]

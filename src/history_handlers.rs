@@ -13,6 +13,8 @@ use crate::indexer;
 use crate::indexing_handlers::*;
 use crate::query_handlers::*;
 
+mod imported_scope;
+
 /// Node labels a runtime trace endpoint may resolve to (callables).
 pub(crate) const CALLABLE_LABELS: &[&str] = &["Function", "Method"];
 
@@ -281,7 +283,8 @@ pub(crate) fn attempt_bootstrap(
 /// obsolete. Refuse before publishing freshness or attempting an incremental
 /// fill: only a full reparse can recover discarded Rust harness attributes.
 pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> Result<(), String> {
-    artifact::import_artifact(codebase, graph_dir)?;
+    let imported = artifact::import_artifact(codebase, graph_dir);
+    imported_scope::forget(graph_dir, imported.map(|_| ()))?;
     let store = graph_store::GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
     store.require_cfg_gate_metadata()?;
@@ -295,9 +298,11 @@ pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> R
 /// returns `Reindex(None)`. When `stale` is set, the response carries a
 /// `stale_artifact` object so a caller can never mistake an accepted-stale graph
 /// for a fresh one. The bundled per-file manifest unpacked alongside the graph
-/// is left in place: for a fresh graph it lets the next local `index_codebase`
-/// run incrementally; for an accepted-stale graph it is the baseline the next
-/// run diffs against to fill the skipped delta (so accepting stale never leaves
+/// keeps its per-file states but loses its scope (`imported_scope::forget`;
+/// one that is a symlink or does not parse is removed), so no
+/// `analyze_codebase` reuses the imported graph. For a fresh graph the states
+/// let the next local `index_codebase` run incrementally; for an accepted-stale
+/// graph they are the baseline the next run diffs against to fill the skipped delta (so accepting stale never leaves
 /// the graph permanently, silently stale).
 pub(crate) fn bootstrap_import(
     codebase: &Path,
