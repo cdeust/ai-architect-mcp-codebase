@@ -8,6 +8,7 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -232,8 +233,15 @@ def readme_platform_rows():
     readme = (ROOT / "README.md").read_text()
     start = readme.index("<!-- platforms:begin -->")
     end = readme.index("<!-- platforms:end -->")
-    lines = [l for l in readme[start:end].splitlines() if l.startswith("|")]
-    return [[c.strip() for c in l.strip("|").split("|")] for l in lines[2:]]
+    lines = [line for line in readme[start:end].splitlines() if line.startswith("|")]
+    return [[cell.strip() for cell in line.strip("|").split("|")] for line in lines[2:]]
+
+
+def install_job_runners():
+    """The `os` matrix of the pipeline's `install` job."""
+    pipeline = (ROOT / ".github/workflows/pipeline.yml").read_text()
+    job = re.search(r"^  install:\n(.*?)(?=^  \S)", pipeline, re.M | re.S).group(1)
+    return set(re.search(r"^\s+os: \[([^\]]*)\]", job, re.M).group(1).replace(" ", "").split(","))
 
 
 class ReadmePlatformTable(unittest.TestCase):
@@ -245,15 +253,15 @@ class ReadmePlatformTable(unittest.TestCase):
     check_verified_cache = BootstrapPlatforms.check_verified_cache
 
     def test_release_assets_match_the_launcher_and_the_release_matrix(self):
-        import re
-
         listed = {
             row[1].strip("`") for row in readme_platform_rows() if row[2] == "installs"
         }
         launcher = (ROOT / "bin/ensure-binary.sh").read_text()
-        accepted = set(re.findall(r'release_target="([a-z0-9_-]+)"', launcher))
+        accepted = set(
+            re.findall(r'^[^#\n]*release_target="([a-z0-9_-]+)"', launcher, re.M)
+        )
         release = (ROOT / ".github/workflows/release.yml").read_text()
-        built = set(re.findall(r"target_tag: ([a-z0-9_-]+)", release))
+        built = set(re.findall(r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)", release, re.M))
         self.assertEqual(listed, accepted)
         self.assertEqual(listed, built)
 
@@ -273,6 +281,14 @@ class ReadmePlatformTable(unittest.TestCase):
                     "unsupported plugin platform",
                     self.exercise(system, machine, "unsupported"),
                 )
+
+    def test_started_by_ci_names_the_install_matrix(self):
+        started = set()
+        for row in readme_platform_rows():
+            match = re.fullmatch(r"yes, on `([a-z0-9.-]+)`", row[3])
+            if match:
+                started.add(match.group(1))
+        self.assertEqual(started, install_job_runners())
 
 
 if __name__ == "__main__":

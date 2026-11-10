@@ -14,8 +14,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   asset, whether the launcher installs or refuses the platform (macOS Intel and
   Windows arm64 are refused), and whether the pipeline's `install` job starts
   the published asset there. `ReadmePlatformTable` in
-  `scripts/tests/test_claude_bootstrap_platforms.py` fails when the table and
-  the launcher's or the release matrix's targets disagree.
+  `scripts/tests/test_claude_bootstrap_platforms.py` fails when the table's
+  installed assets differ from the launcher's or the release matrix's targets,
+  when a refused platform is not refused by the launcher, or when the runners
+  the table says start the asset differ from the pipeline's `install` matrix.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
@@ -58,7 +60,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   `ci.json`. The existing workflows are untouched. Red on day one: the
   released v0.14.0 binary lists 26 tools where HEAD's smoke expects 27, so
   `install` is red until the next release; Windows is refused by
-  `bin/ensure-binary.sh`; line coverage is under 90 % (the previous CI floor
+  `bin/ensure-binary.sh` (no longer: the launcher now installs
+  `windows-x86_64`, and `install` passed on all three runners in run
+  42697366993; see "Supported platforms" in the README); line coverage is under 90 % (the previous CI floor
   is 80 %, ci.yml).
 
 - `check_doc_claims`, a read-only tool that checks what a document says about
