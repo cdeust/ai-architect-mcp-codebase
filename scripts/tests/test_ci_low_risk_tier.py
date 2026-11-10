@@ -90,11 +90,11 @@ class LowRiskTierTests(unittest.TestCase):
 
     def test_a_workflow_or_any_other_file_is_not(self):
         self.assertFalse(self.low(files=(".github/workflows/scorecard.yml",)))
-        self.assertFalse(self.low(files=("Cargo.lock", "src/main.rs")))
+        self.assertFalse(self.low(files=("Cargo.lock", "src/main.x")))
         self.assertFalse(self.low(files=()))
 
-    def test_a_crate_manifest_counts_wherever_the_crate_lives(self):
-        self.assertTrue(self.low(files=("Cargo.lock", "crates/zera/Cargo.toml")))
+    def test_a_manifest_counts_wherever_the_package_lives(self):
+        self.assertTrue(self.low(files=("Cargo.lock", "packages/x/Cargo.toml")))
         self.assertFalse(self.low(files=(".github/actions/x/Cargo.toml",)))
 
     def test_another_author_or_an_unsigned_commit_is_not(self):

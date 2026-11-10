@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The resolver is also woken by the end of the Claude review, not only by the end of the Pipeline, so an approved pull request merges whichever finishes last (Cortex ADR-1127).
 - **The CI follows Cortex's: the Claude review decides the merge.** Codex is out
   of the pipeline (`Codex.yml`, the 800-line `review` job and its scripts are
   removed); `merge` is the aggregate of the test jobs. `claude-review.yml` caps
