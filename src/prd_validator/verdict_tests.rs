@@ -69,3 +69,23 @@ fn test_file_has_graph_node_escapes_adversarial_path() {
         "the benign node must survive — the adversarial path must not have executed DETACH DELETE"
     );
 }
+
+// source: PR #487 review. A failed probe must be `None` (-> `Unscored`), never
+// "no match" (-> `Absent`): a store with no schema fails every query. Once the
+// schema exists, `Some(false)` also proves every CFG_GATE_LABELS table has the
+// `name` column the probe reads; a label without one would fail the query.
+#[test]
+fn test_name_exists_probes_every_label_and_reports_failure() {
+    let dir = tempfile::Builder::new()
+        .prefix("prd_validator_name_exists")
+        .tempdir()
+        .expect("create temp dir");
+    let store = GraphStore::open_or_create(&dir.path().join("testdb")).expect("open_or_create");
+    assert_eq!(
+        name_exists(&store, "Anything"),
+        None,
+        "no tables: probe fails"
+    );
+    store.create_schema().expect("create_schema");
+    assert_eq!(name_exists(&store, "Anything"), Some(false));
+}

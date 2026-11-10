@@ -58,9 +58,9 @@ fn unverifiable(r: &ResolvedClaim, reason: &str) -> FindingParts {
 
 fn absent(r: &ResolvedClaim) -> FindingParts {
     let message = format!(
-        "backticked symbol '{}' matches nothing in the graph, by qualified \
-         name or by name: a hallucination unless the PRD adds it or it is \
-         external (no stage-5 contract, so its change_kind is unknown)",
+        "backticked symbol '{}' matches no code symbol in the graph, by \
+         qualified name or by name: a hallucination unless the PRD adds it or \
+         it is external (no stage-5 contract, so its change_kind is unknown)",
         r.claim.token
     );
     let extra = json!({ "extraction_mode": "regex_fallback", "matches_by_name": 0 });

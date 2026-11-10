@@ -143,7 +143,8 @@ Only triggered when `stage-5.affected_symbols.json` is missing.
 For each extracted token, attempt graph lookup by qualified_name (exact) → by name (exact, case-sensitive). Severity by outcome (issue #450):
 
 - **Backticked token, zero matches by qualified name AND its leaf names no code symbol of any label** (function, method, struct, enum, variant, trait, field, constant, type alias, module) → `warning`, counted in `summary.absent_symbols`. It is either (a) an external reference, (b) a symbol the PRD adds, or (c) a hallucination; without the contract the change_kind that would tell them apart is unknown, so it is a warning and not a §5 V1 `fail`. A PRD that names a fabricated class therefore never validates as `ok` with zero findings.
-- **Backticked token whose name exists but whose qualification does not resolve** → `info` (the graph shows the PRD names something real; `did_you_mean` lists the candidates).
+- **Backticked token whose name exists but whose qualification does not resolve** → `info` (the graph shows the PRD names something real; `did_you_mean` lists the candidates among functions, methods and types, and is empty when the name matches only a variant or a field).
+- **Backticked token whose leaf is not an identifier** (`Tool::`, `localhost:8080`) **or whose existence probe failed** → `info`: neither proves a symbol is missing.
 - **File-path token that does not resolve** → `info`.
 
 **Precision-recall stance.** Regex fallback is deliberately **low-precision, high-recall**. False positives land as `warning`/`info`-level findings the reviewer can dismiss; false negatives (missed hallucinations) are the catastrophic failure mode we must avoid. `hallucinated_symbols` stays the contract-backed count of §5 V1 failures.

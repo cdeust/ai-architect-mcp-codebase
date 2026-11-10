@@ -533,6 +533,18 @@ fn test_regex_fallback_does_not_flag_real_variant_or_field() {
             .collect::<Vec<_>>()
     );
     assert!(!report.findings.iter().any(|f| f.severity == "warning"));
+    // Both tokens must actually be extracted and judged, or this test proves
+    // nothing: each is an unresolved-but-real name, so exactly one `info`.
+    assert_eq!(report.summary.claimed_symbols, 2);
+    for tok in ["Status::Pending", "retry_count"] {
+        let sev: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.symbol.as_deref() == Some(tok))
+            .map(|f| f.severity.as_str())
+            .collect();
+        assert_eq!(sev, vec!["info"], "{tok}");
+    }
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -549,7 +561,8 @@ fn test_regex_fallback_absent_boundaries() {
     let store = build_fixture_graph(&root.join("fixture"), &root.join("graph"));
     let prd_path = write_prd(
         &root.join("prd"),
-        "Move `QuantumToolRegistry::handle_tool_call` into src/nonexistent.rs today",
+        "Move `QuantumToolRegistry::handle_tool_call` into src/nonexistent.rs \
+         and `src/other_missing.rs` today",
     );
     let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
     let severity_of = |tok: &str| {
@@ -566,6 +579,10 @@ fn test_regex_fallback_absent_boundaries() {
         "known limitation: a real leaf keeps a qualified token at info"
     );
     assert_eq!(severity_of("src/nonexistent.rs"), vec!["info".to_string()]);
+    assert_eq!(
+        severity_of("src/other_missing.rs"),
+        vec!["info".to_string()]
+    );
     assert_eq!(report.summary.absent_symbols, 0);
     assert_eq!(report.validation_status, "ok");
     let _ = fs::remove_dir_all(&root);

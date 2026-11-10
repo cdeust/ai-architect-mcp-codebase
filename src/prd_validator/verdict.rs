@@ -35,13 +35,15 @@ pub(super) enum ClaimVerdict {
     /// confirm or refute the claim. Info finding, not counted as hallucinated.
     Unverifiable(String),
     /// Regex fallback only (issue #450): a backticked token that resolves to
-    /// nothing AND whose leaf names no code symbol of any kind (function,
-    /// method, type, variant, field, trait, module, constant, alias) — the
-    /// shape of a fabricated class. Without the stage-5 contract its
+    /// nothing AND whose leaf names no code symbol of any kind (Function,
+    /// Method, Struct, Enum, Variant, Trait, Field, Module, Constant,
+    /// TypeAlias — `CFG_GATE_LABELS`) — the shape of a fabricated class. Without the stage-5 contract its
     /// change_kind is unknown (it may be a symbol the PRD adds, or an
     /// external name), so it is a warning, not a critical hallucination.
     /// A token whose name does exist (only its qualification failed) stays
     /// `Unscored`: the graph shows the PRD is talking about something real.
+    /// So does a token whose leaf is not an identifier, or whose existence
+    /// probe failed: neither proves anything is missing.
     Absent,
     /// Outside the structured-modify gate — not evaluated by this axis.
     Unscored,
@@ -67,7 +69,9 @@ fn classify_one(store: &GraphStore, r: &ResolvedClaim) -> ClaimVerdict {
         // The extractor accepts any `[A-Za-z0-9_:]` run, so `Tool::` (empty
         // leaf) or `localhost:8080` (a single `:`) reach here. Neither is a
         // symbol name, so neither can be judged absent (PR #487 review).
-        if !is_identifier(leaf) {
+        // A non-empty `did_you_mean` already proves the leaf names a symbol;
+        // the probe below could only say yes.
+        if !is_identifier(leaf) || !r.did_you_mean.is_empty() {
             return ClaimVerdict::Unscored;
         }
         return match name_exists(store, leaf) {
@@ -162,7 +166,9 @@ fn is_identifier(s: &str) -> bool {
 // SEARCHABLE_LABELS and drops query errors, so a backticked enum variant or
 // struct field (Variant/Field nodes) would read as absent, and so would any
 // name whose lookup errored (PR #487 review). CFG_GATE_LABELS is the set of
-// labels that are named code symbols; every one has a `name` column.
+// labels that are named code symbols; every one has a `name` column, which
+// verdict_tests::test_name_exists_probes_every_label_and_reports_failure
+// pins (a label without one would make every probe fail, i.e. `None`).
 fn name_exists(store: &GraphStore, leaf: &str) -> Option<bool> {
     let literal = cypher_str(leaf);
     for label in CFG_GATE_LABELS {
