@@ -69,18 +69,21 @@ files, of which `index_codebase` reported 6,748 as indexed), shallow clone.
 | `false` (default) | 53 s | 533 MiB | 111 MiB | 219,874 | 219,318 |
 | `true` | 747 s | 1,531 MiB | 1,091 MiB | 4,270,311 | 4,266,921 |
 
-The full-AST layer (`AstNode` and `FileContent` rows) adds 4,050,437 nodes,
-94.9 % of the `true` graph, which matches the 94.7 % the 2026-10-10 audit
-found on release v0.14.0 (macOS arm64: 480 s, 1.7 GB resident, 1.2 GB graph,
-with the layer always on). The two machines differ, so only the ratios
-between rows are comparable with the audit, not the absolute times.
+The full-AST layer adds 4,050,437 nodes, 94.9 % of the `true` graph:
+4,047,603 `AstNode` rows (94.8 %) and 2,834 `FileContent` rows, counted with
+`query_graph` (`MATCH (n:AstNode) RETURN count(n)`). The `AstNode` share
+matches the 94.7 % the 2026-10-10 audit found on release v0.14.0 (macOS
+arm64: 480 s, 1.7 GB resident, 1.2 GB graph, with the layer always on). The
+audit has no row without the layer and ran on another machine, so only that
+node share is comparable with it, not the times or sizes.
 
 Procedure: one MCP stdio session per row (`--profile full`), `initialize`,
 then one `tools/call` of `index_codebase` with `path` the django checkout,
 a fresh empty `output_dir`, `"full": true` and the row's `full_ast`. Wall
-time is measured around that call; peak RSS is the server process's
-`ru_maxrss` (`getrusage(RUSAGE_CHILDREN)` after it exits); disk is
-`du -sm <output_dir>/graph`. Nothing in CI re-runs this measurement yet, so
+time is measured around that call. Peak RSS is `ru_maxrss` from
+`getrusage(RUSAGE_CHILDREN)` in the driver after the server exits; each row
+ran in its own driver process whose only child was the server, so it is the
+server's peak. Disk is `du -sm <output_dir>/graph`. Nothing in CI re-runs this measurement yet, so
 it is correct for this commit and this machine only.
 
 ## Bulk insert strategies
