@@ -64,6 +64,12 @@ fn classify_one(store: &GraphStore, r: &ResolvedClaim) -> ClaimVerdict {
         // code symbol bears its leaf name. Only a definite "no" is `Absent`;
         // a failed probe (`None`) says nothing and stays `Unscored`.
         let leaf = r.claim.token.rsplit("::").next().unwrap_or(&r.claim.token);
+        // The extractor accepts any `[A-Za-z0-9_:]` run, so `Tool::` (empty
+        // leaf) or `localhost:8080` (a single `:`) reach here. Neither is a
+        // symbol name, so neither can be judged absent (PR #487 review).
+        if !is_identifier(leaf) {
+            return ClaimVerdict::Unscored;
+        }
         return match name_exists(store, leaf) {
             Some(false) => ClaimVerdict::Absent,
             Some(true) | None => ClaimVerdict::Unscored,
@@ -140,6 +146,14 @@ pub(crate) fn unverifiable_reason(store: &GraphStore, token: &str) -> Option<Str
         "file not present in the indexed graph: '{file_path}' \
          (outside indexed scope, or excluded by a language/dependency filter)"
     ))
+}
+
+// A symbol name as every indexed language spells one: a letter or `_`, then
+// letters, digits or `_`.
+fn is_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 // Whether any code symbol is named `leaf`: `Some(true)`/`Some(false)` when

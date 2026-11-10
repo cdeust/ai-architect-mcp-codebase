@@ -596,3 +596,30 @@ fn test_structured_add_of_new_symbol_stays_ok() {
     assert_eq!(report.validation_status, "ok");
     let _ = fs::remove_dir_all(&root);
 }
+
+// source: PR #487 review — the extractor keeps any `[A-Za-z0-9_:]` run, so a
+// token with a trailing `::` or a single `:` must not be judged by a leaf
+// that is not an identifier (`Tool::` would probe the empty name).
+#[test]
+fn test_regex_fallback_non_identifier_leaf_is_not_absent() {
+    let root = tmp("non_ident_leaf");
+    let _ = fs::remove_dir_all(&root);
+    let store = build_fixture_graph(&root.join("fixture"), &root.join("graph"));
+    let prd_path = write_prd(
+        &root.join("prd"),
+        "Extend the `Tool::` methods; bind `localhost:8080` behind `feature:fast`.",
+    );
+    let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
+    assert_eq!(
+        report.summary.absent_symbols,
+        0,
+        "findings: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.symbol.clone(), f.severity.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(report.validation_status, "ok");
+    let _ = fs::remove_dir_all(&root);
+}
