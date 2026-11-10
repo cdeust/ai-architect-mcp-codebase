@@ -77,9 +77,10 @@ before running it; this needs GitHub CLI 2.68 or newer. The plugin starts the
 
 Installed from the marketplace, the plugin launcher (`bin/ensure-binary.sh`)
 installs one release asset per platform below and refuses every other one; in
-a source checkout it runs `cargo build` instead, on any platform. The platform
-is read from `uname -s` and `uname -m` of the shell, so an x64 Git Bash
-emulated on Windows arm64 reports `x86_64` and installs `windows-x86_64`. "Started by CI" means the
+a source checkout it runs `cargo build` instead, on any platform, when the
+binary is missing or older than the sources. The platform is read from
+`uname -s` and `uname -m` of the shell, so an x64 Git Bash emulated on Windows
+arm64 reports `x86_64` and installs `windows-x86_64`. "Started by CI" means the
 pipeline's `install` job installs the published asset on that runner and runs
 `initialize` and `health_check` against it (`scripts/smoke_claude_plugin.py
 --installed`).

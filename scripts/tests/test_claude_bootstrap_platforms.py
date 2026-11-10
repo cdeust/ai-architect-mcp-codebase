@@ -58,7 +58,9 @@ exit "$PROVENANCE_STATUS"
     return tools
 
 
-class BootstrapPlatforms(unittest.TestCase):
+class BootstrapHarness(unittest.TestCase):
+    """The bootstrap exercise, shared by the test classes; it holds no tests."""
+
     def exercise(
         self,
         system,
@@ -164,6 +166,8 @@ class BootstrapPlatforms(unittest.TestCase):
             "verified cache unexpectedly redownloaded",
         )
 
+
+class BootstrapPlatforms(BootstrapHarness):
     def test_existing_macos_and_linux_and_windows_shell_mappings(self):
         cases = [
             ("Darwin", "arm64", "macos-aarch64"),
@@ -250,7 +254,9 @@ def release_runners():
     """`{target_tag: runner}` of the `include:` entries of `release.yml`."""
     release = (ROOT / ".github/workflows/release.yml").read_text()
     pairs = re.findall(
-        r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)\n(?:\s+[a-z_]+:.*\n)*?\s+runner:\s*([a-z0-9.-]+)",
+        r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)\n"
+        r"(?:\s+[a-z_]+:.*\n)*?"
+        r"\s+runner:\s*([a-z0-9.-]+)",
         release,
         re.M,
     )
@@ -260,17 +266,17 @@ def release_runners():
 def install_job_runners():
     """The `os` matrix of the pipeline's `install` job."""
     pipeline = (ROOT / ".github/workflows/pipeline.yml").read_text()
-    job = re.search(r"^  install:\n(.*?)(?=^  \S)", pipeline, re.M | re.S).group(1)
-    return set(re.search(r"^\s+os: \[([^\]]*)\]", job, re.M).group(1).replace(" ", "").split(","))
+    job = re.search(r"^  install:\n(.*?)(?=^  \S|\Z)", pipeline, re.M | re.S)
+    assert job, "pipeline.yml has no top-level `install:` job"
+    matrix = re.search(r"^\s+os: \[([^\]]*)\]", job.group(1), re.M)
+    assert matrix, "the `install` job has no inline `os: [...]` matrix"
+    assert "include:" not in job.group(1), "`include:` entries are not read"
+    return {runner.strip() for runner in matrix.group(1).split(",")}
 
 
-class ReadmePlatformTable(unittest.TestCase):
+class ReadmePlatformTable(BootstrapHarness):
     """Issue #449: the README's supported-platforms table states what the
     launcher installs and what the release builds, nothing more."""
-
-    # The same bootstrap exercise, without re-running BootstrapPlatforms' tests.
-    exercise = BootstrapPlatforms.exercise
-    check_verified_cache = BootstrapPlatforms.check_verified_cache
 
     def test_release_assets_match_the_launcher_and_the_release_matrix(self):
         listed = {
@@ -293,6 +299,9 @@ class ReadmePlatformTable(unittest.TestCase):
             for name in row[0].split(",")
         ]
         self.assertTrue(names, "the table names no refused platform")
+        for row in readme_platform_rows():
+            if row[2] == "refuses":
+                self.assertEqual(row[1], "none", "a refused platform has no asset")
         for name in names:
             with self.subTest(name=name):
                 self.assertIn(name, REFUSED_UNAME, "no uname pair for this row")

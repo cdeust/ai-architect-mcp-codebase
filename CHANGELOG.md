@@ -60,10 +60,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   `ci.json`. The existing workflows are untouched. Red on day one: the
   released v0.14.0 binary lists 26 tools where HEAD's smoke expects 27, so
   `install` is red until the next release; Windows is refused by
-  `bin/ensure-binary.sh` (no longer: the launcher now installs
-  `windows-x86_64`, and `install` passed on all three runners in run
-  42697366993; see "Supported platforms" in the README); line coverage is under 90 % (the previous CI floor
-  is 80 %, ci.yml).
+  `bin/ensure-binary.sh`; line coverage is under 90 % (the previous CI floor
+  is 80 %, ci.yml). Since then, `install` checks the release tag's catalog and
+  the launcher installs `windows-x86_64`: `install` passed on all three runners
+  in run 42697366993 (see "Supported platforms" in the README).
 
 - `check_doc_claims`, a read-only tool that checks what a document says about
   the code against the graph, one claim at a time (part 1 of 3 of the
