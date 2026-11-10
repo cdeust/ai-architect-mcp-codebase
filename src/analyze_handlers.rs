@@ -48,7 +48,7 @@ pub(crate) fn run_analyze_codebase(arguments: &Value) -> Value {
 /// The caller-supplied half of an `analyze_codebase` call, validated once and
 /// its output directory prepared.
 ///
-/// A parameter object (§4.4): the four settings and the three derived paths are
+/// A parameter object (§4.4): the settings and the three derived paths are
 /// resolved together and used together by all four phases.
 struct AnalyzeRequest {
     codebase: std::path::PathBuf,
@@ -58,15 +58,16 @@ struct AnalyzeRequest {
     lang_filter: Option<crate::parser::Language>,
     gamma: f64,
     enable_lsp: bool,
-    /// Issue #443: rebuild from scratch even when the previous graph could be
-    /// reused incrementally.
+    /// Issue #443: rebuild from scratch even when the previous graph would be
+    /// reused.
     want_full: bool,
 }
 
 impl AnalyzeRequest {
     /// Touches the filesystem deliberately — hence `prepare`, not `parse`:
-    /// `validate_graph_path_safe` must run before the stale-artifact removal
-    /// below it (source: H4 fix — see do_index_codebase).
+    /// `validate_graph_path_safe` must run before any stale-artifact removal,
+    /// which `index_phase::full` does later (source: H4 fix — see
+    /// do_index_codebase).
     fn prepare(args: &serde_json::Map<String, Value>) -> Result<Self, String> {
         let path_str = args
             .get("path")
@@ -212,7 +213,7 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let req = AnalyzeRequest::prepare(args)?;
     let total_start = std::time::Instant::now();
 
-    // Phase 1: index (incrementally when the previous graph allows it, issue
+    // Phase 1: index, or reuse the previous graph when nothing changed (issue
     // #443), with coverage + manifest written before the metadata commit point.
     let mut index_result = index_phase::run(&req)?;
     let sidecar_err = index_result.sidecar_err.take();
@@ -267,15 +268,21 @@ fn persist_analyze_sidecars(
     // or stale. A failed write must not return a successful coverage receipt.
     indexer::coverage::save(&indexer::coverage::coverage_path(&req.output_dir), coverage)?;
     let manifest_path = indexer::manifest::manifest_path(&req.output_dir);
-    if let Err(e) = snapshot.and_then(|m| indexer::manifest::save(&manifest_path, &m)) {
-        eprintln!("[ap] file manifest write failed (analyze succeeded): {e}");
-        return Ok(Some(e));
-    }
-    Ok(write_graph_meta(&req.output_dir, &req.codebase)
+    // A manifest that cannot be written (or a snapshot that could not be
+    // taken) still leaves `meta.json` behind, with null manifest fields as
+    // `index_codebase` writes it, and both errors are reported (review of #478).
+    let manifest_err = snapshot
+        .and_then(|m| indexer::manifest::save(&manifest_path, &m))
         .err()
-        .inspect(|e| {
-            eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}");
-        }))
+        .inspect(|e| eprintln!("[ap] file manifest write failed (analyze succeeded): {e}"));
+    let meta_err = write_graph_meta(&req.output_dir, &req.codebase)
+        .err()
+        .inspect(|e| eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}"));
+    Ok(match (manifest_err, meta_err) {
+        (Some(m), Some(e)) => Some(format!("manifest: {m}; meta: {e}")),
+        (Some(m), None) => Some(format!("manifest: {m}")),
+        (None, e) => e,
+    })
 }
 
 /// Issue #292: the sidecar was written before the LSP phase, so fold its

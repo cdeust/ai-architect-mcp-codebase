@@ -678,8 +678,43 @@ fn an_in_place_edit_of_the_same_size_rebuilds() {
     let after = before.replacen("beta", "bxta", 1);
     assert_eq!(before.len(), after.len(), "precondition: same size");
     fs::write(&b, after).expect("edit");
+    // Explicitly later: on a coarse-mtime filesystem the write could land in
+    // the same tick, and the test would never reach the hash arm.
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
+    fs::File::options()
+        .write(true)
+        .open(&b)
+        .and_then(|f| f.set_modified(later))
+        .expect("bump mtime");
     let resp = analyze(&repo, &out, json!({}));
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
     let fresh = analyze(&repo, &base.join("fresh"), json!({}));
     assert_eq!(outcome(&resp), outcome(&fresh));
+}
+
+#[test]
+fn a_snapshot_taken_before_an_index_sees_an_edit_made_during_it() {
+    // Review of #478: the contract behind both full paths' ordering. A file
+    // edited after the snapshot but before the save must read as changed;
+    // a snapshot taken after the index would record the edit and hide it.
+    let (repo, _base) = fixture("analyze443_snapshot_order_");
+    let opts = crate::indexer::IndexOptions::default();
+    let snapshot = crate::indexer::full_manifest(&repo, &opts).expect("snapshot");
+    let b = repo.join("src/b.rs");
+    fs::write(&b, "pub fn beta() { edited(); }\n").expect("edit during the index");
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
+    fs::File::options()
+        .write(true)
+        .open(&b)
+        .and_then(|f| f.set_modified(later))
+        .expect("bump mtime");
+    assert!(
+        crate::indexer::tree_changed_since(&repo, &opts, &snapshot).expect("check"),
+        "the pre-index snapshot must not vouch for the edited file"
+    );
+    let after = crate::indexer::full_manifest(&repo, &opts).expect("post-index manifest");
+    assert!(
+        !crate::indexer::tree_changed_since(&repo, &opts, &after).expect("check"),
+        "a manifest taken after the edit would hide it: the ordering is what matters"
+    );
 }
