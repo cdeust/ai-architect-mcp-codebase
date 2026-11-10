@@ -339,6 +339,7 @@ class ReadmePlatformTable(BootstrapHarness):
         for label in install_job_runners():
             self.assertIn(label, RUNNER_UNAME, f"no uname pair for runner {label}")
             started_by.setdefault(RUNNER_UNAME[label], []).append(label)
+        seen_platforms, seen_assets = set(), set()
         for row in readme_platform_rows():
             if row[2] != "installs":
                 continue
@@ -346,11 +347,17 @@ class ReadmePlatformTable(BootstrapHarness):
             platform = row[0].split(" (", 1)[0]
             asset, ci = row[1].strip("`"), row[3]
             with self.subTest(platform=platform):
+                self.assertNotIn(platform, seen_platforms, "platform listed twice")
+                self.assertNotIn(asset, seen_assets, "asset listed twice")
+                seen_platforms.add(platform)
+                seen_assets.add(asset)
                 self.assertIn(platform, INSTALLED_UNAME, "no uname pair for this row")
                 pair = INSTALLED_UNAME[platform]
+                # Popped first, so a failure below does not also fail the
+                # unmatched-runner check after the loop.
+                labels = started_by.pop(pair, [])
                 self.exercise(*pair, asset)
                 self.assertIn(asset, built_on, "asset not built by release.yml")
-                labels = started_by.pop(pair, [])
                 if labels:
                     expected = ", ".join(f"yes, on `{label}`" for label in labels)
                     self.assertEqual(ci, expected)
@@ -358,7 +365,9 @@ class ReadmePlatformTable(BootstrapHarness):
                     self.assertEqual(
                         ci, f"**no**: built on `{built_on[asset]}`, never started"
                     )
-        self.assertFalse(started_by, "an install runner starts no listed platform")
+        self.assertFalse(
+            started_by, f"install runners that start no listed platform: {started_by}"
+        )
 
 
 if __name__ == "__main__":
