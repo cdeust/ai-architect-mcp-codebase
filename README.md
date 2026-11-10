@@ -99,7 +99,9 @@ configure a host by hand, register the binary as a stdio server:
 [docs/install.md](docs/install.md) has the per-host snippets (Codex, Gemini,
 Cursor, Windsurf, VS Code, the OpenAI Agents SDK), the optional Grep/Glob
 hook, the plugin's release verification, and the developer escape hatch for
-running a local build inside the plugin.
+running a local build inside the plugin. That optional hook is separate from the
+code-discovery nudge the plugin itself registers in `hooks/hooks.json`; see
+[docs/configuration.md](docs/configuration.md#code-discovery-nudge-plugin-hooks).
 
 ### Build from source
 
@@ -450,6 +452,7 @@ ai-architect-mcp-codebase/
 ├── scripts/                       ← doc-claim and pin gates
 ├── bin/                           ← plugin launcher and release verification
 ├── skills/                        ← host-native workflows
+├── hooks/                         ← plugin hooks: the code-discovery nudge
 ├── plugins/                       ← Codex plugin package
 ├── mcp-contract.json
 └── Cargo.toml
