@@ -91,9 +91,11 @@ pipeline's `install` job installs the published asset on that runner and runs
 | macOS x86_64 (Intel), Windows arm64, any other | none | refuses | no |
 <!-- platforms:end -->
 
-A `cargo install` or a source build does not go through the launcher; CI runs
-the test suite from source on Linux x86_64 only, and builds (without running)
-Windows x86_64 on every pull request (`windows-build.yml`).
+A `cargo install` or a source build does not go through the launcher. CI runs
+the test suite from source on Linux x86_64 only; the pipeline's `environment`
+job also builds from source and runs `install --dry-run` on `ubuntu-latest`,
+`macos-latest` and `windows-latest` (`scripts/ci_environment.sh`), and
+`windows-build.yml` builds Windows x86_64 on every pull request.
 
 ### Other MCP hosts
 
