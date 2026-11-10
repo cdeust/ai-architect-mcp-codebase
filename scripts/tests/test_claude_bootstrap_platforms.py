@@ -255,7 +255,11 @@ RUNNER_UNAME = {
 # Issue #449: what each name in the README's "refuses" row means to `uname`.
 REFUSED_UNAME = {
     "macOS x86_64 (Intel)": [("Darwin", "x86_64")],
-    "Windows arm64": [("MINGW64_NT-10.0", "aarch64")],
+    "Windows arm64": [
+        ("MINGW64_NT-10.0", "aarch64"),
+        ("MSYS_NT-10.0", "aarch64"),
+        ("CYGWIN_NT-10.0", "aarch64"),
+    ],
     # Samples, each one architecture away from an installed row: a catch-all
     # such as `Linux-*)` in the launcher fails here.
     "any other": [
@@ -278,7 +282,7 @@ def readme_platform_rows():
 def release_runners():
     """`{target_tag: runner}` of the `build:` job's matrix in `release.yml`."""
     release = (ROOT / ".github/workflows/release.yml").read_text()
-    job = re.search(r"^  build:\n(.*?)(?=^  \S|\Z)", release, re.M | re.S)
+    job = re.search(r"^  build:\n(.*?)(?=^  [^\s#]|\Z)", release, re.M | re.S)
     require(job, "release.yml has no top-level `build:` job")
     tags = re.findall(r"^\s*-\s*target_tag:\s*([a-z0-9_-]+)", job.group(1), re.M)
     pairs = re.findall(
@@ -308,7 +312,7 @@ def release_runners():
 def install_job_runners():
     """The `os` matrix of the pipeline's `install` job, in matrix order."""
     pipeline = (ROOT / ".github/workflows/pipeline.yml").read_text()
-    job = re.search(r"^  install:\n(.*?)(?=^  \S|\Z)", pipeline, re.M | re.S)
+    job = re.search(r"^  install:\n(.*?)(?=^  [^\s#]|\Z)", pipeline, re.M | re.S)
     require(job, "pipeline.yml has no top-level `install:` job")
     body = job.group(1)
     matrix = re.search(r"^\s+os: \[([^\]]*)\]", body, re.M)
