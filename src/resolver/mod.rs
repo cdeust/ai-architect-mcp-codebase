@@ -262,6 +262,7 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     // Issue #443: the static call rows of earlier passes, so the ones this pass
     // does not decide again are retracted once it has run (see `retract`).
     let owned = retract::load_static_call_rows(store)?;
+    retract::reopen_static_sites(store, &owned)?;
     let mut buf = EdgeBuffer::new(existing);
 
     let tallies = phases::run_phases(store, &idx, &file_imports, &mut buf)?;

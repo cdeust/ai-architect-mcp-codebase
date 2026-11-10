@@ -10,10 +10,18 @@
 // first pass remained. A full index of the same tree has neither the rows nor
 // the flag.
 //
-// So the static tiers' `Calls_*` rows that existed before the pass and that no
-// phase of the pass staged or met again are deleted after the flush, and the
-// call sites that hold no per-site call row afterwards are set back to
-// `is_resolved = false` (the pass already wrote their open reason).
+// Sequence, around the pass:
+//   1. before it, read the static tiers' `Calls_*` rows (`load_static_call_rows`)
+//      and reopen the sites only those rows resolve (`reopen_static_sites`), so
+//      the pass writes the open reason of every site it leaves open (the reason
+//      writer skips a resolved site; Codex review of #496);
+//   2. the pass runs and flushes; it sets back to resolved every site it decides;
+//   3. after it, delete the rows of step 1 the pass did not stage or meet again
+//      (`retract_unmet`): per-site rows first, then caller-level rows, keeping a
+//      caller-level row that a surviving per-site row of the same caller and
+//      target still supports (a language-server site; Codex review of #496).
+// A crash between 1 and 3 leaves sites open whose rows still exist: the safe
+// side, which the next resolve repairs.
 //
 // Rows of every other writer are left alone: the language server
 // (`lsp-definition`), the macro layer (`macro-expansion*`, reset by
@@ -62,6 +70,10 @@ fn call_tables() -> impl Iterator<Item = &'static (&'static str, &'static str, &
         .filter(|(rel, _, _)| rel.starts_with("Calls_"))
 }
 
+fn site_tables() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)> {
+    call_tables().filter(|(_, from, _)| *from == NODE_CALL_SITE)
+}
+
 /// The static-tier `Calls_*` rows in the graph before the pass runs.
 pub(super) fn load_static_call_rows(store: &GraphStore) -> Result<HashSet<RowKey>, String> {
     let methods = method_list();
@@ -84,9 +96,27 @@ pub(super) fn load_static_call_rows(store: &GraphStore) -> Result<HashSet<RowKey
     Ok(rows)
 }
 
-/// Deletes the rows of `owned` absent from `met` (the persisted rows the pass
-/// decided again), then reopens the call sites left without a per-site call
-/// row. Returns the number of rows deleted.
+/// Step 1: sets `is_resolved = false` on the sites of `owned`'s per-site rows
+/// that hold no per-site call row of another writer, so the pass that follows
+/// writes the reason of each one it leaves open. A site a language-server row
+/// also resolves keeps its flag.
+pub(super) fn reopen_static_sites(
+    store: &GraphStore,
+    owned: &HashSet<RowKey>,
+) -> Result<(), String> {
+    let sites: BTreeSet<&str> = owned
+        .iter()
+        .filter(|(rel, _, _)| site_tables().any(|(t, _, _)| t == rel))
+        .map(|(_, from, _)| from.as_str())
+        .collect();
+    reopen_sites_without_row(store, &sites, Some(&method_list()))
+}
+
+/// Step 3: deletes the rows of `owned` absent from `met` (the persisted rows
+/// the pass decided again), per-site rows first, and keeps a caller-level row
+/// that a surviving per-site row of the same caller and target supports. Then
+/// reopens the sites left without any per-site call row. Returns the number of
+/// rows deleted.
 ///
 /// Precondition: `owned` was read by `load_static_call_rows` before the pass,
 /// and the pass's buffer has been flushed. Idempotent: a second call with the
@@ -103,32 +133,85 @@ pub(super) fn retract_unmet(
     let labels: BTreeMap<&str, (&str, &str)> = call_tables()
         .map(|&(rel, from, to)| (rel, (from, to)))
         .collect();
-    let methods = method_list();
-    let mut sites: BTreeSet<&str> = BTreeSet::new();
-    for (rel, from_id, to_id) in &stale {
-        let Some(&(from, to)) = labels.get(rel.as_str()) else {
+    let (per_site, caller_level): (Vec<&RowKey>, Vec<&RowKey>) = stale
+        .into_iter()
+        .filter(|(rel, _, _)| labels.contains_key(rel.as_str()))
+        .partition(|(rel, _, _)| labels[rel.as_str()].0 == NODE_CALL_SITE);
+    let mut deleted = 0u64;
+    for (rel, from_id, to_id) in &per_site {
+        delete_static_row(store, rel, labels[rel.as_str()], from_id, to_id)?;
+        deleted += 1;
+    }
+    for (rel, caller, to_id) in &caller_level {
+        let (from, to) = labels[rel.as_str()];
+        if supported_by_site(store, caller, to, to_id)? {
             continue;
-        };
-        store.execute_query(&format!(
-            "MATCH (a:{from})-[r:{rel}]->(b:{to}) WHERE a.id = {} AND b.id = {} \
-             AND r.resolution_method IN [{methods}] DELETE r",
-            cypher_str(from_id),
+        }
+        delete_static_row(store, rel, (from, to), caller, to_id)?;
+        deleted += 1;
+    }
+    let sites: BTreeSet<&str> = per_site.iter().map(|(_, from, _)| from.as_str()).collect();
+    reopen_sites_without_row(store, &sites, None)?;
+    Ok(deleted)
+}
+
+fn delete_static_row(
+    store: &GraphStore,
+    rel: &str,
+    (from, to): (&str, &str),
+    from_id: &str,
+    to_id: &str,
+) -> Result<(), String> {
+    store.execute_query(&format!(
+        "MATCH (a:{from})-[r:{rel}]->(b:{to}) WHERE a.id = {} AND b.id = {} \
+         AND r.resolution_method IN [{}] DELETE r",
+        cypher_str(from_id),
+        cypher_str(to_id),
+        method_list(),
+    ))?;
+    Ok(())
+}
+
+/// True when a site of `caller` (id `"<caller>::call@…"`, the form
+/// `extract_caller_from_callsite_id` reads) still holds a per-site call row,
+/// of any writer, to `to_id`.
+fn supported_by_site(
+    store: &GraphStore,
+    caller: &str,
+    to: &str,
+    to_id: &str,
+) -> Result<bool, String> {
+    let prefix = cypher_str(&format!("{caller}::call@"));
+    for &(rel, _, target) in site_tables() {
+        if target != to {
+            continue;
+        }
+        let qr = store.execute_query(&format!(
+            "MATCH (c:CallSite)-[r:{rel}]->(b:{to}) WHERE starts_with(c.id, {prefix}) \
+             AND b.id = {} RETURN c.id LIMIT 1",
             cypher_str(to_id),
         ))?;
-        if from == NODE_CALL_SITE {
-            sites.insert(from_id.as_str());
+        if !qr.rows.is_empty() {
+            return Ok(true);
         }
     }
-    reopen_sites_without_row(store, &sites)?;
-    Ok(stale.len() as u64)
+    Ok(false)
 }
 
 /// Sets `is_resolved = false` on the sites of `sites` that hold no per-site
-/// call row of any writer. A site another tier still resolves keeps its flag.
-fn reopen_sites_without_row(store: &GraphStore, sites: &BTreeSet<&str>) -> Result<(), String> {
+/// call row, ignoring rows whose method is in `ignored` (a quoted list) when
+/// given. A site another writer still resolves keeps its flag.
+fn reopen_sites_without_row(
+    store: &GraphStore,
+    sites: &BTreeSet<&str>,
+    ignored: Option<&str>,
+) -> Result<(), String> {
     if sites.is_empty() {
         return Ok(());
     }
+    let filter = ignored
+        .map(|m| format!(" AND NOT r.resolution_method IN [{m}]"))
+        .unwrap_or_default();
     let ids: Vec<&str> = sites.iter().copied().collect();
     let mut with_row: HashSet<String> = HashSet::new();
     for chunk in ids.chunks(500) {
@@ -137,12 +220,9 @@ fn reopen_sites_without_row(store: &GraphStore, sites: &BTreeSet<&str>) -> Resul
             .map(|id| cypher_str(id))
             .collect::<Vec<_>>()
             .join(", ");
-        for &(rel, from, _) in call_tables() {
-            if from != NODE_CALL_SITE {
-                continue;
-            }
+        for &(rel, _, _) in site_tables() {
             let qr = store.execute_query(&format!(
-                "MATCH (c:CallSite)-[r:{rel}]->() WHERE c.id IN [{list}] RETURN c.id"
+                "MATCH (c:CallSite)-[r:{rel}]->() WHERE c.id IN [{list}]{filter} RETURN c.id"
             ))?;
             with_row.extend(qr.rows.into_iter().filter_map(|r| r.into_iter().next()));
         }

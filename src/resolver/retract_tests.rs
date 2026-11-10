@@ -15,7 +15,7 @@ struct Repo {
     manifest: PathBuf,
 }
 
-/// (is_resolved of the `beta` sites, per-site rows, function-level rows into a
+/// (is_resolved and open reason of the `beta` sites, per-site rows, function-level rows into a
 /// `beta`), each sorted, for the graph at `graph`.
 type State = (Vec<String>, Vec<String>, Vec<String>);
 
@@ -33,7 +33,10 @@ fn state(graph: &Path) -> State {
         rows
     };
     (
-        column("MATCH (c:CallSite) WHERE c.callee_name = 'beta' RETURN c.id, c.is_resolved"),
+        column(
+            "MATCH (c:CallSite) WHERE c.callee_name = 'beta' \
+             RETURN c.id, c.is_resolved, c.unresolved_reason",
+        ),
         column(
             "MATCH (c:CallSite)-[r:Calls_CallSite_Function]->(t:Function) \
              WHERE t.name = 'beta' RETURN c.id, t.id, r.resolution_method",
