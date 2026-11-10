@@ -168,6 +168,17 @@ fn get_impact_pages_callers_through_everything() {
     .unwrap();
     assert_eq!(beyond["callers"].as_array().unwrap().len(), 0);
     assert!(beyond.get("next_offset").is_none());
+    // Issue #445: the fixture has no coverage record, so the answer is a lower
+    // bound; `callers_completeness` reads the full caller list, never the page,
+    // so a page past the end is not "none_found".
+    for out in [&full, &beyond] {
+        assert_eq!(out["epistemic"], json!("lower-bound"), "{out}");
+        assert_eq!(
+            out["callers_completeness"],
+            json!("found_more_may_exist"),
+            "{out}"
+        );
+    }
 
     // Stable order across identical calls.
     let a = do_get_impact(&json!({"graph_path": gp, "qualified_name": target})).unwrap();
@@ -241,6 +252,15 @@ fn get_impact_on_a_file_target_is_not_symbol_not_found() {
         json!(1),
         "the File target's file-level fan-in must be computed: {out}"
     );
+    // Issue #445: the clustering answer for this File is exact, and only the
+    // coverage check (no coverage record in this fixture) lowers it, so a
+    // completeness read before that check would say "exact" here.
+    let store = graph_store::GraphStore::open_or_create(&graph).unwrap();
+    let local = clustering::get_impact(&store, &helpers).expect("get_impact");
+    drop(store);
+    assert_eq!(local.epistemic, crate::epistemic::Boundary::Exact);
+    assert_eq!(out["epistemic"], json!("lower-bound"), "{out}");
+    assert_eq!(out["callers_completeness"], json!("none_found"), "{out}");
 
     // An unknown path is still refused — the resolve gate is widened, not removed.
     let missing =

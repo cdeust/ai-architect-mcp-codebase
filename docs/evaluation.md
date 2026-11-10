@@ -7,6 +7,7 @@ comparable with each other.
 ## Contents
 
 - [Graph tools compared with a Grep/Glob/Read baseline](#graph-tools-compared-with-a-grepglobread-baseline)
+- [Indexing cost on a real repository](#indexing-cost-on-a-real-repository)
 - [Bulk insert strategies](#bulk-insert-strategies)
 - [Search index size](#search-index-size)
 - [Synthetic 500-file fixture](#synthetic-500-file-fixture)
@@ -67,6 +68,37 @@ saving. On the audit's five questions grep output was smaller on four; the
 audit gives no summed difference, so whether the prompt cost is ever recovered
 against grep is not established. Those figures come from the audit and have
 not been reproduced by a script in this repository.
+
+## Indexing cost on a real repository
+
+Issue #448. Measured on 2026-11-10 at main `72bc505`, one run per row (n=1,
+no variance estimate), on a Linux x86_64 cloud container (4 vCPU Intel Xeon
+@ 2.10 GHz, 15 GiB RAM), rustc 1.95.0, release build with lbug 0.21.2 built
+from source (`LBUG_BUILD_FROM_SOURCE=1 ZSTD_SYS_USE_PKG_CONFIG=1`, as in
+`ci.json`). Corpus: django tag `5.1.3` (commit `69bf08e3`, 6,824 tracked
+files, of which `index_codebase` reported 6,748 as indexed), shallow clone.
+
+| `full_ast` | Wall time | Peak RSS | Graph on disk | Nodes | Edges |
+|---|---:|---:|---:|---:|---:|
+| `false` (default) | 53 s | 533 MiB | 111 MiB | 219,874 | 219,318 |
+| `true` | 747 s | 1,531 MiB | 1,091 MiB | 4,270,311 | 4,266,921 |
+
+The full-AST layer adds 4,050,437 nodes, 94.9 % of the `true` graph:
+4,047,603 `AstNode` rows (94.8 %) and 2,834 `FileContent` rows, counted with
+`query_graph` (`MATCH (n:AstNode) RETURN count(n)`). The `AstNode` share
+matches the 94.7 % the 2026-10-10 audit found on release v0.14.0 (macOS
+arm64: 480 s, 1.7 GB resident, 1.2 GB graph, with the layer always on). The
+audit has no row without the layer and ran on another machine, so only that
+node share is comparable with it, not the times or sizes.
+
+Procedure: one MCP stdio session per row (`--profile full`), `initialize`,
+then one `tools/call` of `index_codebase` with `path` the django checkout,
+a fresh empty `output_dir`, `"full": true` and the row's `full_ast`. Wall
+time is measured around that call. Peak RSS is `ru_maxrss` from
+`getrusage(RUSAGE_CHILDREN)` in the driver after the server exits; each row
+ran in its own driver process whose only child was the server, so it is the
+server's peak. Disk is `du -sm <output_dir>/graph`. Nothing in CI re-runs this measurement yet, so
+it is correct for this commit and this machine only.
 
 ## Bulk insert strategies
 

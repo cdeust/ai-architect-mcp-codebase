@@ -139,7 +139,19 @@ fn impact_response(
     // disclaims completeness. It must rest on a positive coverage signal rather
     // than on the absence of a negative one. source: ADR-9839.
     super::coverage_evidence::require_coverage_evidence(&mut out, graph_path);
+    attach_callers_completeness(&mut out, &impact);
     out
+}
+
+/// Issue #445: sets `callers_completeness` from the response as it stands, so
+/// it must run after every step that can lower `epistemic` (foreign callers,
+/// the coverage check). Cross-repo callers count as callers found (they lower
+/// `epistemic` too), so their presence is never reported as "none_found".
+pub(super) fn attach_callers_completeness(out: &mut Value, impact: &clustering::ImpactResult) {
+    let exact = out["epistemic"].as_str() == Some(crate::epistemic::Boundary::Exact.as_str());
+    let foreign = out["foreign_callers_total"].as_u64().unwrap_or(0);
+    let callers_empty = impact.callers.is_empty() && foreign == 0;
+    out["callers_completeness"] = json!(callers_completeness(exact, callers_empty));
 }
 
 /// Cursor stability: each reverse-dependency list is assembled in
@@ -285,7 +297,7 @@ fn impact_envelope(
         "epistemic": impact.epistemic.as_str(),
         "epistemic_reasons": impact.epistemic_reasons,
     });
-    attach_unresolved_callsites(&mut out, impact);
+    attach_unresolved_callsites(&mut out, impact, args);
     attach_cfg_twins(&mut out, impact, qn);
     attach_caller_contexts(&mut out, impact, sections.dependents_total);
     if views.callers.columns.is_some() {
@@ -308,14 +320,73 @@ fn dependents_counts(sections: &ImpactSections) -> Value {
 
 /// The open call sites that name the target, how they split by reason, and
 /// (issue #392) how many were left out because their spelling names another
-/// owner.
-fn attach_unresolved_callsites(out: &mut Value, impact: &clustering::ImpactResult) {
+/// owner. Issue #445: the sites themselves (file and line), capped by count
+/// and by bytes, rendered as `file:line` under `detail='ids'`.
+pub(super) fn attach_unresolved_callsites(
+    out: &mut Value,
+    impact: &clustering::ImpactResult,
+    args: &serde_json::Map<String, Value>,
+) {
     out["unresolved_callsites_naming_target"] = json!(impact.unresolved_callsites_naming_target);
+    let ids = matches!(
+        token_surface::parse_detail(args),
+        token_surface::Detail::Ids
+    );
+    let tabular = !ids
+        && matches!(
+            token_surface::parse_format(args),
+            token_surface::Format::Tabular
+        );
+    let rows: Vec<Value> = impact
+        .unresolved_callsites
+        .iter()
+        .map(|s| {
+            if ids {
+                json!(format!("{}:{}", s.file, s.line))
+            } else if tabular {
+                json!([s.id, s.file, s.line, s.callee_name, s.reason])
+            } else {
+                clustering::UnresolvedSite::to_json(s)
+            }
+        })
+        .collect();
+    if tabular {
+        out["unresolved_callsites_columns"] = json!(UNRESOLVED_SITE_COLUMNS);
+    }
+    let listed = response_budget::bound_values(rows, unresolved_sites_chars());
+    // The listing holds at most the counted sites, so a count cap and a byte
+    // cut both show as fewer items than the count.
+    out["unresolved_callsites_truncated"] =
+        json!((listed.items.len() as u64) < impact.unresolved_callsites_naming_target);
+    out["unresolved_callsites"] = json!(listed.items);
     out["unresolved_callsites_outside_targets"] =
         json!(impact.unresolved_callsites_outside_targets);
     out["unresolved_callsites_by_reason"] = json!(impact.unresolved_callsites_by_reason);
     out["unresolved_callsites_excluded_other_owner"] =
         json!(impact.unresolved_callsites_excluded_other_owner);
+}
+
+/// Row layout of `unresolved_callsites` under `format='tabular'`. Issue #445.
+const UNRESOLVED_SITE_COLUMNS: &[&str] = &["id", "file", "line", "callee_name", "reason"];
+
+/// Byte share of the response for the open-site list: a quarter of one
+/// section's share, so the list never outweighs the dependency sections it
+/// explains. Issue #445.
+fn unresolved_sites_chars() -> usize {
+    response_budget::per_section_chars() / 4
+}
+
+/// Issue #445: `exact` when the final boundary (after the coverage downgrade)
+/// is exact, else `none_found` (no caller resolved) or `found_more_may_exist`
+/// (some resolved, more may exist) — `epistemic` alone says `lower-bound` for
+/// both. `callers_empty` is over the full caller list (cross-repo callers
+/// included), not the page.
+pub(super) fn callers_completeness(exact: bool, callers_empty: bool) -> &'static str {
+    match (exact, callers_empty) {
+        (true, _) => "exact",
+        (false, true) => "none_found",
+        (false, false) => "found_more_may_exist",
+    }
 }
 
 /// Issue #353: when the target is one of several twins of one item under
@@ -394,3 +465,7 @@ impl SectionViews {
             || sections.references.truncated
     }
 }
+
+#[cfg(test)]
+#[path = "impact_sites_tests.rs"]
+mod sites_tests;
