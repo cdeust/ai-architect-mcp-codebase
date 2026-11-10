@@ -254,9 +254,16 @@ RUNNER_UNAME = {
 
 # Issue #449: what each name in the README's "refuses" row means to `uname`.
 REFUSED_UNAME = {
-    "macOS x86_64 (Intel)": ("Darwin", "x86_64"),
-    "Windows arm64": ("MINGW64_NT-10.0", "aarch64"),
-    "any other": ("FreeBSD", "amd64"),
+    "macOS x86_64 (Intel)": [("Darwin", "x86_64")],
+    "Windows arm64": [("MINGW64_NT-10.0", "aarch64")],
+    # Samples, each one architecture away from an installed row: a catch-all
+    # such as `Linux-*)` in the launcher fails here.
+    "any other": [
+        ("FreeBSD", "amd64"),
+        ("Linux", "riscv64"),
+        ("Linux", "armv7l"),
+        ("Darwin", "i386"),
+    ],
 }
 
 
@@ -345,11 +352,11 @@ class ReadmePlatformTable(BootstrapHarness):
         for name in names:
             with self.subTest(name=name):
                 self.assertIn(name, REFUSED_UNAME, "no uname pair for this row")
-                system, machine = REFUSED_UNAME[name]
-                self.assertIn(
-                    "unsupported plugin platform",
-                    self.exercise(system, machine, "unsupported"),
-                )
+                for system, machine in REFUSED_UNAME[name]:
+                    self.assertIn(
+                        "unsupported plugin platform",
+                        self.exercise(system, machine, "unsupported"),
+                    )
 
     def test_each_installed_row_is_its_own_asset_and_runner(self):
         """Row by row, not as sets. A row is started by the `install` runner
@@ -394,7 +401,16 @@ class ReadmePlatformTable(BootstrapHarness):
         copy's smoke with `--installed`, as the README says."""
         install = json.loads((ROOT / "ci.json").read_text())["install"]
         self.assertIn("claude plugin install", install)
-        self.assertIn('/scripts/smoke_claude_plugin.py" --installed', install)
+        # The installed copy (`$root`, from `claude plugin list`), last, with
+        # nothing that could swallow its failure.
+        self.assertTrue(
+            install.endswith(
+                '&& test -n "$root" '
+                '&& python3 "$root/scripts/smoke_claude_plugin.py" --installed'
+            ),
+            install,
+        )
+        self.assertNotIn("||", install)
 
 
 if __name__ == "__main__":
