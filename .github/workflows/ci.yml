@@ -41,14 +41,13 @@ jobs:
     # timed-out run failed to warm the cache, guaranteeing the next run was
     # cold too (a self-perpetuating deadlock). 60 min let one cold build
     # finish with the prebuilt lbug; warm-cache runs completed in ~6 min.
-    # With lbug compiled from source (below) this job compiles it twice, once
-    # for `cargo test` (dev profile) and once for the release build of the
-    # shipped commands; cargo keys OUT_DIR by profile, so the second build
-    # cannot reuse the first. Run 41662205171 passed the gate and the full
-    # suite on 26.04, then was cancelled at 60 min on the release build. The
-    # budget is 90 min: the coverage job, which builds lbug once, finished its
-    # cold source build plus the instrumented suite in 59 min on the same run.
-    # Replace this estimate with the measured duration of the first green run.
+    # With lbug compiled from source (below), run 41680032712 (cold cache, 26.04)
+    # measured 24 min to the gate and 30 min for the full suite, 54 min of
+    # compile-and-test before the release build. The release build of the
+    # shipped commands lives in its own job (release-smoke) with its own cache:
+    # cargo keys OUT_DIR by profile, so the two lbug builds cannot share work
+    # and in one job they summed to 84 min of a 90 min budget on that run.
+    # 90 min keeps a 36 min margin over the measured 54 for the cold case.
     timeout-minutes: 90
 
     # lbug is built from source on Linux. The crates.io prebuilt liblbug.a was
@@ -62,7 +61,8 @@ jobs:
     # LBUG_LOCALIZE_BUNDLED_SYMBOLS=1 on the prebuilt did not change it (#473
     # run 41623081637). Building from source compiles lbug with the runner's
     # own compiler and libstdc++; actions/cache keeps the cost to one cold
-    # run per Cargo.lock (two lbug builds in this job, one in the others).
+    # run per Cargo.lock (one lbug build per job; dev and release are separate
+    # jobs and caches).
     # ZSTD_SYS_USE_PKG_CONFIG=1 stays: zstd-sys (tantivy)
     # and lbug both carry a zstd and rust-lld refused the duplicate symbols
     # (run 26411205432); the system libzstd is the one copy zstd-sys links.
@@ -127,14 +127,58 @@ jobs:
       - name: Validate canonical distribution identity
         # Claude's CLI is not installed on GitHub's runner. The actual CLI
         # validation is performed before publishing; CI deterministically
-        # validates the same public identity fields and then executes the
-        # shipped Claude launcher in the following smoke step.
+        # validates the same public identity fields; the release-smoke job
+        # executes the shipped Claude launcher.
         run: |
           python3 scripts/check_distribution_identity.py
           python3 scripts/test_plugin_bootstrap.py
 
       - name: Check distribution launchers with ShellCheck
         run: shellcheck -S warning bin/ensure-binary.sh bin/launch-plugin.sh launch.sh
+
+      # Static claims (tool names and counts, language count, layout tree) need
+      # no run and are checked here too, so a stale README fails the fastest
+      # required job rather than waiting on the coverage build.
+      - name: Check README claims against the suite and the tool registry
+        run: python3 scripts/check_doc_claims.py --test-log test-output.log
+
+  release-smoke:
+    name: cargo build --release (shipped command smoke)
+    runs-on: ubuntu-latest
+    # Split out of the test job on run 41680032712: a cold release build of
+    # lbug plus every dependency at opt-level 3 took 25 min after the 54 min
+    # of dev-profile compile and tests (84 min in one job with setup, the
+    # smoke scripts and the validators). Its own cache key
+    # (release segment) so a slow release build never stops the test job's
+    # cache from being saved. 60 min: measured 25 cold, the cache saved.
+    timeout-minutes: 60
+    env:
+      LBUG_BUILD_FROM_SOURCE: "1"
+      ZSTD_SYS_USE_PKG_CONFIG: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libzstd-dev pkg-config cmake
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-lbug-source-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-lbug-source-v2-
 
       - name: Build and start the shipped Codex and Gemini commands
         # cargo install builds this release target for end users. The smoke
@@ -159,11 +203,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      # Static claims (tool names and counts, language count, layout tree) need
-      # no run and are checked here too, so a stale README fails the fastest
-      # required job rather than waiting on the coverage build.
-      - name: Check README claims against the suite and the tool registry
-        run: python3 scripts/check_doc_claims.py --test-log test-output.log
 
   clippy:
     name: cargo clippy (-D warnings, workspace-wide)

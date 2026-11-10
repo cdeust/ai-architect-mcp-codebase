@@ -182,6 +182,12 @@ pub struct CoverageCounts {
     pub feature_gated: u64,
 }
 
+/// A bound on the coverage sidecar, fail-safe rather than tight: a report is
+/// one entry per gap (at most `MAX_FILES` files and the pruned directories),
+/// each a path, a detail and its error ranges. An over-cap report reads as
+/// absent, so analyze rebuilds and rewrites it; it is never read whole.
+pub const MAX_COVERAGE_BYTES: u64 = 1 << 30;
+
 /// The coverage sidecar path for a given tool `output_dir` (sibling of `graph/`).
 pub fn coverage_path(output_dir: &Path) -> PathBuf {
     output_dir.join(COVERAGE_FILE)
@@ -190,9 +196,11 @@ pub fn coverage_path(output_dir: &Path) -> PathBuf {
 /// Loads the coverage report at `path`. Returns `None` when absent, unreadable,
 /// unparseable, or a newer schema — every "no usable coverage" case, so a caller
 /// treats it as "coverage unavailable" (which is itself honest: absence of
-/// coverage data is not a completeness claim).
+/// coverage data is not a completeness claim). A sidecar that is not a regular
+/// file, or is over `MAX_COVERAGE_BYTES`, is `None` without being read whole
+/// (Codex review of #478: analyze reads it before reusing a graph).
 pub fn load(path: &Path) -> Option<CoverageReport> {
-    let bytes = fs::read(path).ok()?;
+    let (bytes, _) = super::manifest::read_regular_capped(path, MAX_COVERAGE_BYTES)?;
     let report: CoverageReport = serde_json::from_slice(&bytes).ok()?;
     if report.schema_version > COVERAGE_SCHEMA_VERSION {
         return None;
@@ -251,6 +259,18 @@ impl CoverageCollector {
                 error_ranges: Vec::new(),
             },
         );
+    }
+
+    /// Records an IaC file the IaC pass could not read (`iac::IAC_SKIP_DETAIL`).
+    /// `or_insert`: a gap the main pass recorded (a skip or a quarantine that
+    /// kept the file out of the graph) wins, so the report keeps saying the
+    /// file was not indexed (Codex review of #478).
+    pub fn record_iac_skipped(&mut self, rel: &str, reason: String) {
+        self.files.entry(rel.to_string()).or_insert(FileCoverage {
+            kind: CoverageKind::Skipped,
+            detail: reason,
+            error_ranges: Vec::new(),
+        });
     }
 
     /// Records a file quarantined after its parser panicked.

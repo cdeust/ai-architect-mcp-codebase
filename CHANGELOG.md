@@ -6,8 +6,86 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The review prompt puts the run's link just before the verdict line in every comment that carries it (Cortex ADR-1130). The resolver reads a verdict only from a comment that links the review run of the head; a review posted with `gh pr comment` carried the verdict without the link, and an approved, green pull request stayed unmerged (#495).
+- `docs/agent-guidance.md` states the CI contract for every agent and routine, and `CLAUDE.md` points to it: one pull request in flight, no comparison with the main branch and no forced push, one push per verdict, a refinement pull request on a new branch once the three reviews are spent, no comment after an approve. It wins over a less restrictive routine prompt written before the contract.
+- The resolver is also woken by the end of the Claude review, not only by the end of the Pipeline, so an approved pull request merges whichever finishes last (Cortex ADR-1127).
+- **The CI follows Cortex's: the Claude review decides the merge.** Codex is out
+  of the pipeline (`Codex.yml`, the 800-line `review` job and its scripts are
+  removed); `merge` is the aggregate of the test jobs. `claude-review.yml` caps
+  automatic reviews at three per pull request and ends each with
+  `Verdict: approve` or `Verdict: block`. The post-merge resolver merges a pull
+  request only on an `approve` bound to the review run of its head, except a
+  Dependabot minor or patch update of `Cargo.lock` / `Cargo.toml`, which merges
+  on green required checks; it then closes the issues the pull request closes.
+  Source: Cortex ADR-1119, ADR-1120, ADR-1121, ADR-1126.
+
+- **The full-AST layer is opt-in (issue #448, first slice).** Every index used
+  to persist one `AstNode` row per tree-sitter node plus each file's
+  compressed source (`FileContent`); on django (7,008 files, release v0.14.0)
+  `AstNode` rows were 94.7 % of the graph's nodes, and no typed tool reads
+  them (raw `query_graph` Cypher can). `index_codebase` and
+  `analyze_codebase` now take `"full_ast"` (default `false`); with `true` the
+  layer is persisted as before. All three index paths (full, incremental,
+  artifact fill) build their parse policy from one
+  `IndexOptions::parse_policy`, so they cannot disagree on it. The flag
+  applies to the files a call parses: `analyze_codebase` rebuilds every
+  file with the call's flag; with an incremental `index_codebase`, files not
+  re-parsed since keep the layer they were indexed with until
+  `"full": true`.
+
 ### Fixed
 
+- **The README no longer quotes the 14.26x token reduction (#451).** The
+  figure is a mean of per-question ratios between the head-to-head graph leg,
+  which serializes a benchmark-only envelope of symbol identities, and the
+  Grep/Glob/Read baseline; it was never a session cost. The README now says
+  that no session token saving is claimed and cites the audit's measurements
+  (real `get_impact` answers of 400 to 1,070 tokens, `git grep` output smaller
+  than the graph answer on 4 of 5 questions, a 7.6k to 16.7k token tool
+  prompt). `docs/evaluation.md` keeps the benchmark table and adds a paragraph
+  showing that the audit's 15-to-33-question break-even rests on this
+  benchmark's payload gap, not on a measured saving.
+- **The cost of indexing a real repository is published** (issue #448,
+  second slice). README and `docs/evaluation.md` give wall time, peak RSS,
+  graph size and node counts for django 5.1.3 with `full_ast` off and on
+  (53 s / 533 MiB / 111 MiB against 747 s / 1,531 MiB / 1,091 MiB, one run
+  each, 2026-11-10, 4-vCPU Linux container), and the README's server-side
+  claim is no longer the 76x bulk-write ratio of a micro-benchmark on an
+  older database version (that table stays in `docs/evaluation.md`).
+- **`resolve_graph` retracts the call rows a pass no longer decides (issue
+  #443, first resolver slice).** The resolver decided every call site again on
+  every pass but only ever added rows, so after an incremental `index_codebase`
+  a call that an added file made ambiguous (a second `beta`) kept the
+  `unique-match` rows and the `is_resolved = true` of the earlier pass, which a
+  fresh index of the same tree does not have. The static tiers' `Calls_*` rows
+  that existed before a pass and that the pass did not stage or meet again are
+  now deleted after the flush. The sites only those rows resolve are reopened
+  before the pass, which resolves again the ones it decides and writes the
+  open reason of the others. A caller-level row that a surviving per-site row of the same caller
+  and target still supports (a language-server site) is kept. Language-server,
+  macro and structural rows are untouched, and a row the pass meets again keeps
+  its properties. A retracted caller-level row's runtime `observed_count` (from
+  `ingest_traces`) moves to the `OBSERVED_CALLS_*` row ingest writes when no
+  static row exists, so the runtime evidence survives. `Uses_*`, `Imports_*`,
+  `Implements_*` and `Extends_*` rows are still only added.
+
+- **`get_impact` names the call sites it could not resolve** (#445). An
+  incomplete answer gave only `unresolved_callsites_naming_target`, a count, so
+  an agent could not read the callers the resolver missed. It now returns
+  `unresolved_callsites` (id, file, line, callee spelling, reason; by file then
+  line, at most 50, with `unresolved_callsites_truncated`) and
+  `callers_completeness` (`exact`, `none_found`, `found_more_may_exist`), which
+  tells an empty lower-bound answer from a partial one, read from the final
+  `epistemic` and counting cross-repo callers. The list is byte-bounded,
+  renders as `file:line` under `detail='ids'` and as rows (header in
+  `unresolved_callsites_columns`) under `format='tabular'`, and is filled on
+  graphs without recorded reasons too. A site whose reason was never written is
+  now counted as `not_recorded` instead of under lbug's `Null(String)`
+  rendering, in `get_impact`'s `unresolved_callsites_by_reason`, in
+  `index_status`'s `unresolved_call_sites.by_reason`, and in the
+  `open_by_reason` of `lsp_resolve` and `analyze_codebase`.
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
@@ -20,13 +98,20 @@ adheres to [Semantic Versioning](https://semver.org/).
   prebuilt's bundled symbols (`LBUG_LOCALIZE_BUNDLED_SYMBOLS=1`) did not change
   it (PR #473, run 41623081637). `LBUG_BUILD_FROM_SOURCE=1` compiles lbug with
   the runner's own compiler and libstdc++ in `ci.yml`, `fuzz.yml`,
-  `release.yml`, `ci.json` and `scripts/ci_environment.sh` (tests updated);
+  `release.yml`, `ci.json`, `scripts/ci_environment.sh` (tests updated) and the
+  Linux source fallback of `bin/ensure-binary.sh`, which now needs `cmake`,
+  `pkg-config` and `libzstd-dev` on the host;
   `actions/cache` keeps the cost to one cold run per `Cargo.lock`
-  (`lbug-source-v2` key segment); the `cargo test` job builds lbug twice (dev
-  and release) and its timeout moves from 60 to 90 minutes. The Linux
-  environment probe installs `libzstd-dev`, `pkg-config` and `cmake` itself
-  (the same list as `ci.json` and `ci.yml`), since the ubuntu-latest 26.04
-  image carries no `libzstd-dev`. `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
+  (`lbug-source-v2` key segment); the `cargo test` job built lbug twice (dev
+  and release): measured cold on run 41680032712, 24 min to the gate, 30 min
+  for the suite, 25 min for the release build, 84 min in one job with setup,
+  the smoke scripts and the validators. The `cargo test` job built lbug twice
+  before this change. The release
+  build and the shipped-command smoke move to their own `release-smoke` job
+  with its own cache key; the `cargo test` job keeps a 90 minute budget over
+  its measured 54. The Linux environment probe installs `libzstd-dev`,
+  `pkg-config` and `cmake` itself (the list every other Linux build path
+  uses), since the ubuntu-latest 26.04 image carries no `libzstd-dev`. `ZSTD_SYS_USE_PKG_CONFIG=1` stays: zstd-sys
   and lbug both carry a zstd and rust-lld refuses the duplicate symbols (run
   26411205432). A Linux release binary carrying the prebuilt would crash the
   same way on GCC 15 hosts. `[profile.dev.package.lbug]` sets `opt-level = 3`,
@@ -37,6 +122,16 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Code-discovery nudge (#198).** The plugin ships `hooks/hooks.json`, which
+  registers `SessionStart` (startup, resume, clear, compact) and `SubagentStart`
+  hooks. They name the graph tools for structural questions and point at
+  `query_graph(graph="missed")` before a negative conclusion. Both are
+  registered in the plugin, never in the user's settings (`plugin.json` is
+  unchanged). Both are fail-open: exit 0 with no output on every failure path,
+  asserted by `scripts/tests/test_discovery_nudge_hooks.py` (wired into
+  `ci.json` regression). The text is 711 bytes (712 with the trailing newline
+  of the SessionStart output). There is no `PreToolUse` gate. See
+  `docs/configuration.md`.
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
   runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov
@@ -94,6 +189,39 @@ adheres to [Semantic Versioning](https://semver.org/).
   `not_recorded` for its open sites, with no error and no forced reindex.
 
 ### Fixed
+
+- **`analyze_codebase` reuses an unchanged graph (#443, first slice).** It
+  removed the graph and re-indexed every file on every call (ripgrep 62 s then
+  60 s, django 480 s then 486 s in the 2026-10-10 audit). A second call on the
+  same `output_dir` with no changed file now skips the index stage, then
+  resolves, clusters and rebuilds the search index over the whole graph;
+  `index.mode` says which path ran. The file manifest records the server
+  version and the `language`, `dependency_scope`, `exclude_dirs` and `full_ast`
+  the graph was built with; a different or unrecorded value, another codebase root,
+  language-server rows (`lsp: true` now or before), any changed file or one
+  unreadable at build time, a different Cargo map (a `Cargo.toml` edit that
+  changes crate names, targets or features, even one the `language: "rust"`
+  walk does not list; the manifest records a digest of that map as
+  `cargo_facts`, and a manifest without one is not trusted), a symlinked `graph`, a graph imported from an
+  artifact, a missing or unreadable coverage sidecar, `full: true`, or a failed
+  refresh rebuilds from scratch. An edited tree is
+  not reused yet: the resolver keeps edges of unchanged files whose candidate
+  set the edit changed (a call made ambiguous by an added function), so reuse
+  after edits waits on resolver invalidation. The README no longer claims
+  analyze is incremental after edits. On the analyze reuse path, a failed
+  coverage write now fails the call instead of only being logged
+  (`index_codebase` still logs it, but then writes its manifest without a
+  scope, so the graph is not reused). Both full paths snapshot the manifest
+  before indexing and save it after, so a file saved during a rebuild is seen
+  as changed by the next call.
+  **Changed:** the response's `index` block carries `mode`; `node_count`,
+  `edge_count` and `files_indexed` appear only when `mode` is `full` (whole-graph
+  totals stay in `graph`); on analyze, `meta_write_error` also reports a failed
+  manifest write, prefixed `manifest: ` (`meta: ` precedes a `meta.json` error
+  when both failed). **Added:** the `full` parameter. A full rebuild first
+  refuses any error taking its manifest snapshot (before removing anything),
+  then removes the previous manifest, `meta.json` and coverage sidecar, so a
+  rebuild that fails or is killed leaves nothing for the next call to reuse.
 
 - C++ follow-ups of #406 (#412, points 1 and 2; point 3, the suffix matching of a
   declared type, stays open on #412). Measured on ETLCPP 7d604f2e, `origin/main`

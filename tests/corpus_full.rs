@@ -176,6 +176,7 @@ fn index_target(target_root: &Path, graph_path: &Path) -> Result<(), String> {
             language_filter: Some(Language::Python),
             dependency_scope: indexer::DependencyScope::None,
             exclude_dirs: indexer::ExcludeSet::default(),
+            full_ast: false,
         },
     )?;
     let store = GraphStore::open_or_create(graph_path)?;
