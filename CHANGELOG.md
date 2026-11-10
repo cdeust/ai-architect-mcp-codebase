@@ -103,6 +103,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   rendering, in `get_impact`'s `unresolved_callsites_by_reason`, in
   `index_status`'s `unresolved_call_sites.by_reason`, and in the
   `open_by_reason` of `lsp_resolve` and `analyze_codebase`.
+- **`validate_prd_against_graph` no longer passes a fabricated class when the
+  stage-5 sidecar is absent** (issue #450, first slice). In regex-fallback
+  mode every unresolved token was an `info` finding, so a PRD naming a class
+  that does not exist validated as `ok` with zero hallucinated symbols. A
+  backticked token that matches no symbol by qualified name or by name is now
+  a `warning` (status `warning`), counted in the new `summary.absent_symbols`;
+  a token whose name exists stays `info`. `hallucinated_symbols` remains the
+  contract-backed critical count. `stages/stage-6.md` §4.3 states the rule.
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
