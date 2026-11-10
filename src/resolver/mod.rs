@@ -23,6 +23,9 @@ mod imports;
 mod nested_scope;
 mod phases;
 mod receiver;
+mod retract;
+#[cfg(test)]
+mod retract_tests;
 mod uses;
 #[cfg(test)]
 use extends::{resolve_one_extends_base, ExtendsCandidate, ExtendsContext};
@@ -256,10 +259,15 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     // (issue #366): the same verdict the LSP pass applies before writing.
     cfg_verdict::reset_compiled_out_lsp_rows(store)?;
     let existing = load_existing_edges(store)?;
+    // Issue #443: the static call rows of earlier passes, so the ones this pass
+    // does not decide again are retracted once it has run (see `retract`).
+    let owned = retract::load_static_call_rows(store)?;
     let mut buf = EdgeBuffer::new(existing);
 
     let tallies = phases::run_phases(store, &idx, &file_imports, &mut buf)?;
+    let met = std::mem::take(&mut buf.met);
     buf.flush(store)?;
+    retract::retract_unmet(store, &owned, &met)?;
     Ok(tallies.into_result(start))
 }
 
@@ -307,6 +315,10 @@ pub struct EdgeBuffer {
     /// Edges staged during this run (superset check happens against
     /// `persisted` first, so this set never overlaps it).
     staged: HashSet<(String, String, String)>,
+    /// The `persisted` edges this run decided again (`AlreadyPersisted`). A
+    /// persisted static call row outside this set is retracted after the
+    /// flush (issue #443, `retract`).
+    met: HashSet<(String, String, String)>,
 }
 
 impl EdgeBuffer {
@@ -315,6 +327,7 @@ impl EdgeBuffer {
             by_table: HashMap::new(),
             persisted: existing,
             staged: HashSet::new(),
+            met: HashSet::new(),
         }
     }
 
@@ -340,6 +353,7 @@ impl EdgeBuffer {
             to_id.to_string(),
         );
         if self.persisted.contains(&key) {
+            self.met.insert(key);
             return AddOutcome::AlreadyPersisted;
         }
         if self.staged.contains(&key) {

@@ -35,6 +35,18 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`resolve_graph` retracts the call rows a pass no longer decides (issue
+  #443, first resolver slice).** The resolver decided every call site again on
+  every pass but only ever added rows, so after an incremental `index_codebase`
+  a call that an added file made ambiguous (a second `beta`) kept the
+  `unique-match` rows and the `is_resolved = true` of the earlier pass, which a
+  fresh index of the same tree does not have. The static tiers' `Calls_*` rows
+  that existed before a pass and that the pass did not stage or meet again are
+  now deleted after the flush, and a call site left without a per-site call row
+  is reopened. Language-server, macro and structural rows are untouched, and a
+  row the pass meets again keeps its properties. `Uses_*`, `Imports_*`,
+  `Implements_*` and `Extends_*` rows are still only added.
+
 - **`get_impact` names the call sites it could not resolve** (#445). An
   incomplete answer gave only `unresolved_callsites_naming_target`, a count, so
   an agent could not read the callers the resolver missed. It now returns
