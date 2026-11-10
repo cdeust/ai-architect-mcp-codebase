@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-27-orange" alt="27 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-3200+_passing-brightgreen" alt="3200+ tests">
+  <img src="https://img.shields.io/badge/Tests-3300+_passing-brightgreen" alt="3300+ tests">
   <img src="https://img.shields.io/badge/Coverage-93%25-brightgreen" alt="93% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
@@ -162,7 +162,19 @@ query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep
 ```
 
-Re-run `analyze_codebase` after edits; indexing is incremental by default.
+Re-run `analyze_codebase` after edits. On the same `output_dir`, a tree with no
+changed file reuses the graph without re-parsing anything. Any edit, a change of
+`language`, `dependency_scope` or `exclude_dirs`, another codebase root, a new
+server version, `lsp: true` (now or on the run that built the graph), a
+symlinked or artifact-imported graph, a missing or unreadable coverage sidecar,
+a file that was unreadable when the graph was built, a `Cargo.toml`
+edit that changes the crate names, targets or features (even under
+`language: "rust"`, whose walk skips that file), or `full: true` rebuilds
+from scratch. Reusing an edited graph waits on resolver
+invalidation (#443). The three-stage `index_codebase` → `resolve_graph` path
+re-parses only the changed files, but it can keep a call edge a fresh analysis
+would drop (a call made ambiguous by an added function), so prefer
+`analyze_codebase` when the edges matter.
 
 ## 27 MCP Tools
 
@@ -358,7 +370,7 @@ On the server side, bulk graph writes through UNWIND with a typed struct cost
 0.127 ms per edge against 9.658 ms for the naive raw-string path, 76 times
 less work for the same output (measured 2026-07-28 on `lbug 0.18` with
 `tests/lbug_bulk_investigation.rs`). Tree-sitter extracts structure without a
-model, and indexing is incremental by default. The server-side measurements
+model, and `index_codebase` is incremental by default. The server-side measurements
 and their dates are in [docs/evaluation.md](docs/evaluation.md).
 
 ## The zetetic standard
@@ -399,7 +411,7 @@ In this codebase:
 
 ```bash
 cargo build --release
-cargo test                                            # full suite (3200+ tests)
+cargo test                                            # full suite (3300+ tests)
 cargo test --test graph_accuracy                      # structural accuracy gate
 cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
 python3 scripts/check_doc_claims.py                   # README numbers against their sources

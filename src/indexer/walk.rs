@@ -115,6 +115,22 @@ impl ExcludeSet {
         self.names.is_empty() && self.paths.is_empty()
     }
 
+    /// The set as sorted, kind-tagged strings (`name:<n>`, `path:<p>`), so two
+    /// sets compare equal exactly when they exclude the same directories,
+    /// independent of the `HashSet` iteration order. Recorded in the file
+    /// manifest (issue #443) so a later pass can tell whether the graph was
+    /// built with the same exclusions.
+    pub fn canonical_entries(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .names
+            .iter()
+            .map(|n| format!("name:{n}"))
+            .chain(self.paths.iter().map(|p| format!("path:{p}")))
+            .collect();
+        out.sort();
+        out
+    }
+
     /// True when the bare directory `name` or its walk-root-relative path
     /// `rel` (forward-slash) matches an excluded entry.
     fn matches(&self, name: &str, rel: &str) -> bool {

@@ -137,6 +137,39 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`analyze_codebase` reuses an unchanged graph (#443, first slice).** It
+  removed the graph and re-indexed every file on every call (ripgrep 62 s then
+  60 s, django 480 s then 486 s in the 2026-10-10 audit). A second call on the
+  same `output_dir` with no changed file now skips the index stage, then
+  resolves, clusters and rebuilds the search index over the whole graph;
+  `index.mode` says which path ran. The file manifest records the server
+  version and the `language`, `dependency_scope`, `exclude_dirs` and `full_ast`
+  the graph was built with; a different or unrecorded value, another codebase root,
+  language-server rows (`lsp: true` now or before), any changed file or one
+  unreadable at build time, a different Cargo map (a `Cargo.toml` edit that
+  changes crate names, targets or features, even one the `language: "rust"`
+  walk does not list; the manifest records a digest of that map as
+  `cargo_facts`, and a manifest without one is not trusted), a symlinked `graph`, a graph imported from an
+  artifact, a missing or unreadable coverage sidecar, `full: true`, or a failed
+  refresh rebuilds from scratch. An edited tree is
+  not reused yet: the resolver keeps edges of unchanged files whose candidate
+  set the edit changed (a call made ambiguous by an added function), so reuse
+  after edits waits on resolver invalidation. The README no longer claims
+  analyze is incremental after edits. On the analyze reuse path, a failed
+  coverage write now fails the call instead of only being logged
+  (`index_codebase` still logs it, but then writes its manifest without a
+  scope, so the graph is not reused). Both full paths snapshot the manifest
+  before indexing and save it after, so a file saved during a rebuild is seen
+  as changed by the next call.
+  **Changed:** the response's `index` block carries `mode`; `node_count`,
+  `edge_count` and `files_indexed` appear only when `mode` is `full` (whole-graph
+  totals stay in `graph`); on analyze, `meta_write_error` also reports a failed
+  manifest write, prefixed `manifest: ` (`meta: ` precedes a `meta.json` error
+  when both failed). **Added:** the `full` parameter. A full rebuild first
+  refuses any error taking its manifest snapshot (before removing anything),
+  then removes the previous manifest, `meta.json` and coverage sidecar, so a
+  rebuild that fails or is killed leaves nothing for the next call to reuse.
+
 - C++ follow-ups of #406 (#412, points 1 and 2; point 3, the suffix matching of a
   declared type, stays open on #412). Measured on ETLCPP 7d604f2e, `origin/main`
   f4f88ea against this branch, over all 262,724 / 263,091 call sites (260,219 in
