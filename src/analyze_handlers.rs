@@ -17,6 +17,7 @@ use crate::lsp_resolver;
 use crate::query_handlers::*;
 use crate::resolver;
 
+mod index_phase;
 mod lsp_coverage;
 mod lsp_durability;
 mod lsp_outcome;
@@ -46,7 +47,7 @@ pub(crate) fn run_analyze_codebase(arguments: &Value) -> Value {
 /// The caller-supplied half of an `analyze_codebase` call, validated once and
 /// its output directory prepared.
 ///
-/// A parameter object (§4.4): the four settings and the three derived paths are
+/// A parameter object (§4.4): the settings and the three derived paths are
 /// resolved together and used together by all four phases.
 struct AnalyzeRequest {
     codebase: std::path::PathBuf,
@@ -56,12 +57,16 @@ struct AnalyzeRequest {
     lang_filter: Option<crate::parser::Language>,
     gamma: f64,
     enable_lsp: bool,
+    /// Issue #443: rebuild from scratch even when the previous graph would be
+    /// reused.
+    want_full: bool,
 }
 
 impl AnalyzeRequest {
     /// Touches the filesystem deliberately — hence `prepare`, not `parse`:
-    /// `validate_graph_path_safe` must run before the stale-artifact removal
-    /// below it (source: H4 fix — see do_index_codebase).
+    /// `validate_graph_path_safe` must run before any stale-artifact removal,
+    /// which `index_phase::full` does later (source: H4 fix — see
+    /// do_index_codebase).
     fn prepare(args: &serde_json::Map<String, Value>) -> Result<Self, String> {
         let path_str = args
             .get("path")
@@ -88,6 +93,7 @@ impl AnalyzeRequest {
                 language_filter: lang_filter,
                 dependency_scope: parse_dependency_scope(args)?,
                 exclude_dirs: parse_exclude_dirs(args)?,
+                full_ast: parse_bool_arg(args, "full_ast", false)?,
             },
             lang_filter,
             gamma: args
@@ -95,6 +101,7 @@ impl AnalyzeRequest {
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1.0),
             enable_lsp: args.get("lsp").and_then(|v| v.as_bool()).unwrap_or(false),
+            want_full: parse_bool_arg(args, "full", false)?,
         })
     }
 }
@@ -144,8 +151,9 @@ fn confirm_lsp_rows(
 }
 
 /// Node and relationship totals of the finished graph, read after the last
-/// phase. `index.*` above is the snapshot the index phase took before resolve
-/// wrote its edges, so it is not the size of the graph `index_status` reports;
+/// phase. On a full rebuild `index.*` above is the snapshot the index phase
+/// took before resolve wrote its edges (an incremental `index` block carries
+/// change counts instead), so it is not the size of the graph `index_status` reports;
 /// this block is, field for field (issue #338). When the graph cannot be read
 /// back the block carries the reason under `error` instead of counts.
 fn graph_totals(graph_dir: &std::path::Path) -> Value {
@@ -161,7 +169,7 @@ fn graph_totals(graph_dir: &std::path::Path) -> Value {
 
 /// The four phases' counts, as one response.
 fn analyze_envelope(
-    index_result: &indexer::IndexResult,
+    index: &index_phase::IndexPhase,
     resolve_result: &resolver::ResolutionResult,
     cluster_result: &clustering::ClusteringResult,
     search_index_result: &search::SearchIndexResult,
@@ -172,13 +180,9 @@ fn analyze_envelope(
         "stage": 3,
         "status": "ok",
         "tool": "analyze_codebase",
-        "graph_path": index_result.graph_path.to_string_lossy(),
-        "index": {
-            "node_count": index_result.node_count,
-            "edge_count": index_result.edge_count,
-            "files_indexed": index_result.files_indexed,
-        },
-        "graph": graph_totals(&index_result.graph_path),
+        "graph_path": index.graph_path.to_string_lossy(),
+        "index": index.summary,
+        "graph": graph_totals(&index.graph_path),
         "resolve": {
             "phase": "static",
             "total_edges": resolve_result.total_edges,
@@ -207,16 +211,12 @@ fn analyze_envelope(
 pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let args = arguments.as_object().ok_or("arguments must be an object")?;
     let req = AnalyzeRequest::prepare(args)?;
-    if req.graph_dir.exists() {
-        // Prior run may have left a dir OR a single-file Kuzu db; remove either.
-        remove_stale_graph_artifact(&req.graph_dir)?;
-    }
     let total_start = std::time::Instant::now();
 
-    // Phase 1: index, then coverage + manifest before the metadata commit point.
-    let mut index_result =
-        indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
-    let sidecar_err = persist_analyze_sidecars(&req, &index_result.coverage)?;
+    // Phase 1: index, or reuse the previous graph when nothing changed (issue
+    // #443), with coverage + manifest written before the metadata commit point.
+    let mut index_result = index_phase::run(&req)?;
+    let sidecar_err = index_result.sidecar_err.take();
     // Phase 2: resolve, then optionally refine with an LSP.
     let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
     let resolve_result = resolver::resolve_graph(&store)?;
@@ -242,8 +242,9 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     Ok(response)
 }
 
-/// Writes coverage and the manifest before `meta.json`, the commit point.
-/// Coverage is replaced on every full analysis, including an empty gap map.
+/// Full-rebuild path only (`index_phase::full`): writes coverage and the
+/// manifest before `meta.json`, the commit point. Coverage is replaced on
+/// every full analysis, including an empty gap map.
 ///
 /// `analyze_codebase` used to write `meta.json` and NO manifest at all
 /// (fleet-watch#112 review round 6). It and `index_codebase` are documented as
@@ -260,21 +261,28 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
 fn persist_analyze_sidecars(
     req: &AnalyzeRequest,
     coverage: &indexer::coverage::CoverageReport,
+    snapshot: indexer::manifest::FileManifest,
 ) -> Result<Option<String>, String> {
     // Source: dy-wcet stdio reproduction (2026-09-06): analyze discarded
     // IndexResult.coverage, leaving query_graph(graph="missed") unavailable
     // or stale. A failed write must not return a successful coverage receipt.
     indexer::coverage::save(&indexer::coverage::coverage_path(&req.output_dir), coverage)?;
     let manifest_path = indexer::manifest::manifest_path(&req.output_dir);
-    if let Err(e) = indexer::write_full_manifest(&req.codebase, &manifest_path, &req.options) {
-        eprintln!("[ap] file manifest write failed (analyze succeeded): {e}");
-        return Ok(Some(e));
-    }
-    Ok(write_graph_meta(&req.output_dir, &req.codebase)
+    // A manifest that cannot be written still leaves `meta.json` behind, with
+    // null manifest fields as `index_codebase` writes it, and both errors are
+    // reported (review of #478).
+    let manifest_err = indexer::manifest::save(&manifest_path, &snapshot)
         .err()
-        .inspect(|e| {
-            eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}");
-        }))
+        .inspect(|e| eprintln!("[ap] file manifest write failed (analyze succeeded): {e}"));
+    let meta_err = write_graph_meta(&req.output_dir, &req.codebase)
+        .err()
+        .inspect(|e| eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}"));
+    Ok(match (manifest_err, meta_err) {
+        // `manifest::save` already prefixes its error with `manifest: `.
+        (Some(m), Some(e)) => Some(format!("{m}; meta: {e}")),
+        (Some(m), None) => Some(m),
+        (None, e) => e,
+    })
 }
 
 /// Issue #292: the sidecar was written before the LSP phase, so fold its
@@ -297,6 +305,10 @@ fn fold_lsp_coverage(
 /// Surfaces a failed sidecar write on the response rather than leaving the
 /// caller believing a complete, queryable graph landed (review round 6 finding
 /// 4: three of five `write_graph_meta` call sites swallowed this).
+///
+/// The key keeps its fleet-watch#112 name, but on `analyze_codebase` it also
+/// carries a failed manifest write, prefixed `manifest: ` (and `meta: ` when
+/// both failed); a bare message is a `meta.json` failure.
 fn report_sidecar_error(response: &mut Value, err: Option<String>) {
     if let Some(err) = err {
         response["meta_write_error"] = json!(err);
