@@ -111,9 +111,24 @@ pub(crate) fn prepare_full_rebuild(
     graph_dir: &Path,
     options: &crate::indexer::IndexOptions,
 ) -> Result<Result<crate::indexer::manifest::FileManifest, String>, String> {
-    let snapshot = crate::indexer::full_manifest(codebase, options);
+    prepare_full_rebuild_within(codebase, output_dir, graph_dir, options, None)
+}
+
+/// `prepare_full_rebuild` under an explicit byte cap (`None`: the indexer's),
+/// so a test can reach the refusal without a 2 GiB tree.
+pub(crate) fn prepare_full_rebuild_within(
+    codebase: &Path,
+    output_dir: &Path,
+    graph_dir: &Path,
+    options: &crate::indexer::IndexOptions,
+    cap: Option<u64>,
+) -> Result<Result<crate::indexer::manifest::FileManifest, String>, String> {
+    let snapshot = match cap {
+        Some(cap) => crate::indexer::full_manifest_within(codebase, options, cap),
+        None => crate::indexer::full_manifest(codebase, options),
+    };
     if let Err(e) = &snapshot {
-        if e.starts_with("total_bytes_exceeded") {
+        if e.starts_with(crate::indexer::TOTAL_BYTES_EXCEEDED) {
             return Err(e.clone());
         }
     }

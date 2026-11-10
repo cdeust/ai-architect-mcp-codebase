@@ -11,8 +11,9 @@ use super::classify::discover;
 use super::Discovered;
 
 /// True when the tree under `codebase`, walked with `options`, differs from
-/// `prior`: a file changed, added, deleted or renamed. Reads the tree and
-/// writes nothing — no graph, no sidecar.
+/// `prior`: a file changed, added, deleted or renamed, or `prior` records a
+/// file it could not read (empty hash). Reads the tree and writes nothing — no
+/// graph, no sidecar. `Err` for a tree over `MAX_TOTAL_BYTES`.
 ///
 /// Exists for `analyze_codebase` (#478 review): the resolver keeps the edges
 /// an earlier run wrote and has no invalidation for an unchanged file whose
@@ -67,7 +68,8 @@ pub(super) fn check_total_bytes(current: &[Discovered], cap: u64) -> Result<(), 
         .fold(0u64, |acc, d| acc.saturating_add(d.size));
     if total > cap {
         return Err(format!(
-            "total_bytes_exceeded: {total} bytes discovered (MAX_TOTAL_BYTES {cap})"
+            "{}: {total} bytes discovered (MAX_TOTAL_BYTES {cap})",
+            super::super::TOTAL_BYTES_EXCEEDED
         ));
     }
     Ok(())

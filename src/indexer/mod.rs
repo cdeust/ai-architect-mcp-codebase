@@ -33,8 +33,8 @@ use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
 use coverage::{CoverageCollector, CoverageReport};
 pub use incremental::{
-    fill_after_bootstrap, full_manifest, index_incremental, tree_changed_since, FillMethod,
-    FillResult,
+    fill_after_bootstrap, full_manifest, full_manifest_within, index_incremental,
+    tree_changed_since, FillMethod, FillResult,
 };
 // Both full paths now take `full_manifest` before indexing and save it after
 // (#478), so the bin no longer calls this; the integration tests (`tests/*.rs`)
@@ -66,6 +66,11 @@ const MAX_FILE_BYTES: u64 = 10_485_760;
 // source: heuristic — 2 GB total reads caps peak RSS during indexing.
 // macOS default ulimit -m is effectively unbounded, so we self-limit.
 const MAX_TOTAL_BYTES: u64 = 2_147_483_648;
+
+/// The prefix of every refusal of a tree over `MAX_TOTAL_BYTES` (the walk's,
+/// the change check's and the manifest snapshot's), so a caller can tell it
+/// from other errors without matching a free-form message (review of #478).
+pub const TOTAL_BYTES_EXCEEDED: &str = "total_bytes_exceeded";
 
 // source: heuristic — 64 is deeper than any realistic project tree
 // (node_modules pathologies rarely exceed 30). Prevents stack-exhaustion
@@ -255,7 +260,7 @@ pub fn index_codebase_with_language(
         total_bytes = total_bytes.saturating_add(file_bytes);
         if total_bytes > MAX_TOTAL_BYTES {
             return Err(format!(
-                "total_bytes_exceeded: aborting walk after {total_bytes} bytes \
+                "{TOTAL_BYTES_EXCEEDED}: aborting walk after {total_bytes} bytes \
                  (MAX_TOTAL_BYTES {MAX_TOTAL_BYTES})"
             ));
         }

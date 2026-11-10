@@ -59,8 +59,9 @@ pub(super) struct IndexPhase {
     pub(super) sidecar_err: Option<String>,
 }
 
-/// Runs phase 1. The sidecars (coverage, manifest, `meta.json`) are on disk
-/// when this returns `Ok`, `meta.json` last, on both paths.
+/// Runs phase 1. The coverage sidecar is on disk when this returns `Ok`; the
+/// manifest and `meta.json` are best-effort (`sidecar_err` says why one is
+/// missing), `meta.json` written last, on both paths.
 pub(super) fn run(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
     if let Some(phase) = try_reuse(req)? {
         return Ok(phase);

@@ -46,9 +46,11 @@
 //   * `edges`     — the inbound cross-file edge snapshot/re-link pair that
 //     keeps a resolved graph's edges into a changed file from being orphaned
 //     by its purge.
-// This file keeps the two entry points (`index_incremental`,
-// `write_full_manifest`) and `apply_changes`, the shared core both
-// `index_incremental` and `bootstrap::fill_after_bootstrap` call.
+// This file keeps the entry points (`index_incremental`, `full_manifest`,
+// whose snapshot both full paths take before indexing, and
+// `write_full_manifest`, which now only builds test fixtures) and
+// `apply_changes`, the shared core both `index_incremental` and
+// `bootstrap::fill_after_bootstrap` call.
 
 use crate::graph_store::GraphStore;
 use std::collections::HashSet;
@@ -407,8 +409,9 @@ fn record_reparse_outcome(
     }
 }
 
-/// Builds the manifest for a freshly full-indexed `codebase` and writes it to
-/// `manifest_path`, so the NEXT `index_codebase` call can run incrementally.
+/// Builds the manifest for `codebase` and writes it to `manifest_path`. Since
+/// #478 the full paths call `full_manifest` before indexing and save it after;
+/// this one-step form only builds fixtures for the tests.
 ///
 /// Preconditions: `codebase` is the tree just indexed with the same
 /// `options` (`language_filter`/`dependency_scope`/`exclude_dirs`);
@@ -441,8 +444,9 @@ pub fn full_manifest(codebase: &Path, options: &IndexOptions) -> Result<FileMani
     full_manifest_within(codebase, options, super::MAX_TOTAL_BYTES)
 }
 
-/// `full_manifest` under an explicit byte cap, so a test can reach the refusal.
-fn full_manifest_within(
+/// `full_manifest` under an explicit byte cap, so a caller's test can reach
+/// the refusal without a 2 GiB tree.
+pub fn full_manifest_within(
     codebase: &Path,
     options: &IndexOptions,
     cap: u64,

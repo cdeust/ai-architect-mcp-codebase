@@ -25,7 +25,7 @@ pub(crate) use graph_paths::{
 // Both full paths now go through `prepare_full_rebuild` (#478); only the
 // handle-cache tests still call this directly.
 #[cfg(test)]
-pub(crate) use graph_paths::remove_stale_graph_artifact;
+pub(crate) use graph_paths::{prepare_full_rebuild_within, remove_stale_graph_artifact};
 use read_only_gate::{
     forbidden_cypher_keyword, is_multi_statement, is_separator, keyword_token_positions,
     mask_non_executable, IdentifierExemption, READ_QUERY_TIMEOUT_MS,

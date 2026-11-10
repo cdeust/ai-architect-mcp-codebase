@@ -13,6 +13,8 @@ use crate::indexer;
 use crate::indexing_handlers::*;
 use crate::query_handlers::*;
 
+mod imported_scope;
+
 /// Node labels a runtime trace endpoint may resolve to (callables).
 pub(crate) const CALLABLE_LABELS: &[&str] = &["Function", "Method"];
 
@@ -281,45 +283,14 @@ pub(crate) fn attempt_bootstrap(
 /// obsolete. Refuse before publishing freshness or attempting an incremental
 /// fill: only a full reparse can recover discarded Rust harness attributes.
 pub(crate) fn import_compatible_artifact(codebase: &Path, graph_dir: &Path) -> Result<(), String> {
-    // The scope goes whether or not the import succeeds (review of #478): an
-    // imported graph was not built from source, so a later `analyze_codebase`
-    // must not reuse it, and a failed unpack's leftover manifest would
-    // otherwise be carried forward by `index_codebase`'s incremental fallback.
-    // If the scope cannot be dropped, the manifest goes instead.
     let imported = artifact::import_artifact(codebase, graph_dir);
-    if let Err(e) = forget_imported_scope(graph_dir) {
-        if let Some(output_dir) = graph_dir.parent() {
-            let _ = std::fs::remove_file(indexer::manifest::manifest_path(output_dir));
-        }
-        imported?;
-        return Err(e);
-    }
-    imported?;
+    imported_scope::forget(graph_dir, imported)?;
     let store = graph_store::GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
     store.require_cfg_gate_metadata()?;
     store.require_code_context_metadata()?;
     store.require_body_kind_metadata()?;
     store.require_crate_evidence_metadata()
-}
-
-/// Drops the `scope` of the manifest an artifact unpacked beside the graph
-/// (review of #478). The scope says "this graph was built from source with
-/// these settings"; an imported graph was built by whoever exported it, so
-/// `analyze_codebase` must rebuild it from source rather than reuse it. The
-/// per-file states stay: `index_codebase` still fills incrementally from them.
-fn forget_imported_scope(graph_dir: &Path) -> Result<(), String> {
-    let Some(output_dir) = graph_dir.parent() else {
-        return Ok(());
-    };
-    let path = indexer::manifest::manifest_path(output_dir);
-    match indexer::manifest::load(&path) {
-        Some(mut m) if m.scope.is_some() => {
-            m.scope = None;
-            indexer::manifest::save(&path, &m)
-        }
-        _ => Ok(()),
-    }
 }
 
 /// Imports the snapshot into `graph_dir` and builds the bootstrap response

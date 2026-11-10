@@ -693,10 +693,11 @@ fn an_in_place_edit_of_the_same_size_rebuilds() {
 }
 
 #[test]
-fn a_snapshot_taken_before_an_index_sees_an_edit_made_during_it() {
-    // Review of #478: the contract behind both full paths' ordering. A file
-    // edited after the snapshot but before the save must read as changed;
-    // a snapshot taken after the index would record the edit and hide it.
+fn full_manifest_and_the_change_check_see_an_edit_made_after_the_snapshot() {
+    // Review of #478: the property the full paths' ordering relies on (a
+    // snapshot taken before an edit reports it; one taken after hides it).
+    // The production ordering itself is pinned by
+    // `prepare_full_rebuild_snapshots_before_the_index_runs` below.
     let (repo, _base) = fixture("analyze443_snapshot_order_");
     let opts = crate::indexer::IndexOptions::default();
     let snapshot = crate::indexer::full_manifest(&repo, &opts).expect("snapshot");
@@ -717,4 +718,103 @@ fn a_snapshot_taken_before_an_index_sees_an_edit_made_during_it() {
         !crate::indexer::tree_changed_since(&repo, &opts, &after).expect("check"),
         "a manifest taken after the edit would hide it: the ordering is what matters"
     );
+}
+
+fn graph_sidecars_intact(out: &Path) {
+    assert!(
+        crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(out)).is_some(),
+        "manifest kept"
+    );
+    assert!(out.join("meta.json").exists(), "meta.json kept");
+    assert!(
+        fs::symlink_metadata(out.join("graph")).is_ok(),
+        "graph kept"
+    );
+}
+
+#[test]
+fn an_over_cap_tree_is_refused_before_the_old_graph_is_touched() {
+    // Review of #478: `prepare_full_rebuild` refuses a tree over the byte cap
+    // as its first step, so the previous graph and its sidecars survive.
+    let (repo, base) = fixture("analyze443_cap_keeps_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let opts = crate::indexer::IndexOptions {
+        language_filter: Some(crate::parser::Language::Rust),
+        ..Default::default()
+    };
+    let err = crate::query_handlers::prepare_full_rebuild_within(
+        &repo,
+        &out,
+        &out.join("graph"),
+        &opts,
+        Some(1),
+    )
+    .expect_err("1-byte cap");
+    assert!(
+        err.starts_with(crate::indexer::TOTAL_BYTES_EXCEEDED),
+        "{err}"
+    );
+    graph_sidecars_intact(&out);
+}
+
+fn refuse_release(_path: &Path) -> Result<(), String> {
+    Err("graph_handle_in_use: held by a running request (test)".into())
+}
+
+#[test]
+fn a_busy_graph_keeps_its_sidecars_when_the_rebuild_is_refused() {
+    // Review of #478: handles are released before the sidecars are forgotten,
+    // so a busy graph fails while its manifest and meta.json still describe
+    // it. The hook is per thread; each test runs on its own.
+    let (repo, base) = fixture("analyze443_busy_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    crate::graph_store::register_release_hook(refuse_release);
+    let err = do_analyze_codebase(&json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "language": "rust",
+        "full": true,
+    }))
+    .expect_err("the graph is busy");
+    assert!(err.contains("graph_handle_in_use"), "{err}");
+    graph_sidecars_intact(&out);
+}
+
+#[test]
+fn prepare_full_rebuild_snapshots_before_the_index_runs() {
+    // Review of #478: drive the production pieces in the order both full
+    // paths use them. A file edited after `prepare_full_rebuild` (that is,
+    // during the index) must make the next analysis rebuild.
+    let (repo, base) = fixture("analyze443_prod_order_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let opts = crate::indexer::IndexOptions {
+        language_filter: Some(crate::parser::Language::Rust),
+        ..Default::default()
+    };
+    let graph = out.join("graph");
+    let snapshot = crate::query_handlers::prepare_full_rebuild(&repo, &out, &graph, &opts)
+        .expect("prepare")
+        .expect("snapshot");
+    let b = repo.join("src/b.rs");
+    fs::write(&b, "pub fn beta() { edited(); }\n").expect("edit during the index");
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
+    fs::File::options()
+        .write(true)
+        .open(&b)
+        .and_then(|f| f.set_modified(later))
+        .expect("bump mtime");
+    let result = crate::indexer::index_codebase_with_language(&repo, &graph, &opts).expect("index");
+    crate::indexer::coverage::save(
+        &crate::indexer::coverage::coverage_path(&out),
+        &result.coverage,
+    )
+    .expect("coverage");
+    crate::indexer::manifest::save(&crate::indexer::manifest::manifest_path(&out), &snapshot)
+        .expect("save the pre-index snapshot");
+    crate::query_handlers::write_graph_meta(&out, &repo).expect("meta");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
 }

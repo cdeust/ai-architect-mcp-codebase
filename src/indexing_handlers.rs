@@ -138,19 +138,6 @@ fn try_incremental_index(req: &IndexRequest) -> Option<Value> {
     }
 }
 
-/// Writes the three sidecars a completed full index leaves beside the graph, in
-/// the one order every path uses, and mines temporal coupling.
-///
-/// ORDER IS LOAD-BEARING (fleet-watch#112 review round 4): the manifest is
-/// written BEFORE `meta.json`, matching the incremental path, so `meta.json` is
-/// the single commit point of an index and can record which manifest it
-/// accompanies. Written the other way round — as this path did — a query-time
-/// reader landing between the two got a fresh commit sha paired with the
-/// previous manifest and called a just-rebuilt graph stale, in a plain
-/// single-process run with no concurrent writer.
-///
-/// All three writes are best-effort: a failed sidecar costs the next run its
-/// incremental baseline or an honesty signal, never this index.
 /// Surfaces a failed `meta.json` write on the response instead of leaving the
 /// caller believing a complete index landed.
 ///
@@ -165,6 +152,20 @@ fn report_meta_error(response: &mut Value, err: Option<String>) {
     response["meta_write_error"] = json!(err);
 }
 
+/// Writes the three sidecars a completed full index leaves beside the graph,
+/// and mines temporal coupling. (Its doc sat on `report_meta_error` until the
+/// review of #478; analyze's full path writes coverage first, this one last.)
+///
+/// ORDER IS LOAD-BEARING (fleet-watch#112 review round 4): the manifest is
+/// written BEFORE `meta.json`, matching the incremental path, so `meta.json` is
+/// the single commit point of an index and can record which manifest it
+/// accompanies. Written the other way round — as this path did — a query-time
+/// reader landing between the two got a fresh commit sha paired with the
+/// previous manifest and called a just-rebuilt graph stale, in a plain
+/// single-process run with no concurrent writer.
+///
+/// All three writes are best-effort: a failed sidecar costs the next run its
+/// incremental baseline or an honesty signal, never this index.
 fn persist_full_index_sidecars(
     req: &IndexRequest,
     result: &indexer::IndexResult,

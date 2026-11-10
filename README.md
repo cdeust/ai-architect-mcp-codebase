@@ -169,8 +169,10 @@ server version, `lsp: true` (now or on the run that built the graph), a
 symlinked or artifact-imported graph, a missing or unreadable coverage sidecar,
 a file that was unreadable when the graph was built, or `full: true` rebuilds
 from scratch. Reusing an edited graph waits on resolver
-invalidation (#443); the three-stage `index_codebase` path re-parses only the
-changed files.
+invalidation (#443). The three-stage `index_codebase` → `resolve_graph` path
+re-parses only the changed files, but it can keep a call edge a fresh analysis
+would drop (a call made ambiguous by an added function), so prefer
+`analyze_codebase` when the edges matter.
 
 ## 27 MCP Tools
 
