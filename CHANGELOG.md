@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - The review prompt puts the run's link just before the verdict line in every comment that carries it (Cortex ADR-1130). The resolver reads a verdict only from a comment that links the review run of the head; a review posted with `gh pr comment` carried the verdict without the link, and an approved, green pull request stayed unmerged (#495).
+- `docs/agent-guidance.md` states the CI contract for every agent and routine, and `CLAUDE.md` points to it: one pull request in flight, no comparison with the main branch and no forced push, one push per verdict, a refinement pull request on a new branch once the three reviews are spent, no comment after an approve. It wins over a less restrictive routine prompt written before the contract.
 - The resolver is also woken by the end of the Claude review, not only by the end of the Pipeline, so an approved pull request merges whichever finishes last (Cortex ADR-1127).
 - **The CI follows Cortex's: the Claude review decides the merge.** Codex is out
   of the pipeline (`Codex.yml`, the 800-line `review` job and its scripts are
