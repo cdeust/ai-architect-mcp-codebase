@@ -103,17 +103,34 @@ pub struct DiffAnalysis {
 // Symbol mapping — lines to graph nodes
 // ---------------------------------------------------------------------------
 
+/// Most distinct qualified names whose `get_impact` one diff expands. Each
+/// expansion runs several graph queries, and an indexed file can hold tens of
+/// thousands of symbols on one line (Codex security review of PR #482), so the
+/// work per call is bounded. Past it, a symbol is still reported, without its
+/// community, processes or dependents, and the answer is `lower-bound`.
+const IMPACT_BUDGET: usize = 256;
+
 /// `get_impact` per qualified name, computed once per diff: the symbol mapping
 /// and `assess_dependency_confidence` both read it. `None` mirrors its `Err`
-/// signature; it reports no inner query failure today.
-type ImpactCache = HashMap<String, Option<clustering::ImpactResult>>;
+/// signature (it reports no inner query failure today), or a name past
+/// `IMPACT_BUDGET`, counted in `over_budget`.
+#[derive(Default)]
+struct ImpactCache {
+    expanded: HashMap<String, Option<clustering::ImpactResult>>,
+    over_budget: HashSet<String>,
+}
 
 fn impact_of<'c>(
     store: &GraphStore,
     cache: &'c mut ImpactCache,
     qualified_name: &str,
 ) -> Option<&'c clustering::ImpactResult> {
+    if !cache.expanded.contains_key(qualified_name) && cache.expanded.len() >= IMPACT_BUDGET {
+        cache.over_budget.insert(qualified_name.to_string());
+        return None;
+    }
     cache
+        .expanded
         .entry(qualified_name.to_string())
         .or_insert_with(|| clustering::get_impact(store, qualified_name).ok())
         .as_ref()
@@ -406,7 +423,7 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
     let files_changed = hunks.len() as u64;
     let mut all_symbols: Vec<ChangedSymbol> = Vec::new();
 
-    let mut impacts = ImpactCache::new();
+    let mut impacts = ImpactCache::default();
     let coverage_gaps = map_all_hunks(store, hunks, &mut impacts, &mut all_symbols);
 
     let communities: Vec<String> = all_symbols
@@ -427,6 +444,15 @@ fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis
     let risk_score = compute_risk_score(&all_symbols, total_communities);
     let (mean_dependency_confidence, mut epistemic, mut epistemic_reasons) =
         assess_dependency_confidence(store, &mut impacts, &all_symbols);
+    if !impacts.over_budget.is_empty() {
+        epistemic = crate::epistemic::Boundary::LowerBound.as_str();
+        epistemic_reasons.push(format!(
+            "{} changed symbols past the first {IMPACT_BUDGET} have no community, \
+             process or dependent data (impact budget); run get_impact on the ones \
+             that matter",
+            impacts.over_budget.len()
+        ));
+    }
     // A change no symbol carries is a change the risk does not see: the answer
     // is a lower bound, never `exact` (issue #446).
     let coverage_gap_count = coverage_gaps.len();

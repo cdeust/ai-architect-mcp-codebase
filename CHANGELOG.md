@@ -24,7 +24,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   symbol only when that symbol spans the lines on both sides of it (deleting
   `fn foo` just above `fn bar` no longer reports `bar`). Per diff, the symbols
   are read with one File query and one query per label for each chunk of 64
-  paths, and `get_impact` runs once per changed symbol. A blank line added or
+  paths, and `get_impact` runs once per changed symbol, for at most
+  256 per diff (past that, the answer is `lower-bound`). A blank line added or
   removed on its own is no coverage gap outside every symbol, but inside one
   it still counts (it can change a multiline string). Each hunk is read for
   the line counts its header announces: a `+++i;` or `--- note` body line is a

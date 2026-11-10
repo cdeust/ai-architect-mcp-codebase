@@ -293,3 +293,36 @@ fn binary_and_unreadable_sections_of_an_indexed_file_are_lower_bounds() {
         );
     }
 }
+
+/// Codex security review of PR #482: `get_impact` runs for at most
+/// `IMPACT_BUDGET` (256) distinct symbols per diff. Every changed symbol is
+/// still reported, and the answer past the budget is `lower-bound`.
+#[test]
+fn impact_expansion_is_bounded_for_many_symbols_on_one_line() {
+    let root = tempfile::Builder::new()
+        .prefix("detect_changes_446_budget_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create src");
+    let line: String = (0..300)
+        .map(|n| format!("pub const C{n}: u32 = {n}; "))
+        .collect();
+    fs::write(src.join("lib.rs"), format!("{line}\n")).expect("write fixture");
+    let graph_dir = root.join("graph");
+    indexer::index_codebase(&src, &graph_dir).expect("index_codebase");
+    let store = GraphStore::open_or_create(&graph_dir).expect("open graph");
+
+    let analysis = analyze_diff(&store, &diff_at("lib.rs", 1)).expect("analyze_diff");
+    assert_eq!(analysis.symbols_affected.len(), 300);
+    assert_eq!(analysis.epistemic, "lower-bound");
+    assert!(
+        analysis
+            .epistemic_reasons
+            .iter()
+            .any(|r| r.starts_with("44 changed symbols past the first 256")),
+        "{:?}",
+        analysis.epistemic_reasons
+    );
+}
