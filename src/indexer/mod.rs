@@ -110,6 +110,24 @@ pub struct IndexOptions {
     /// addition to the built-in build/dependency skip list. Wins over every
     /// `dependency_scope` tier.
     pub exclude_dirs: ExcludeSet,
+    /// Issue #448 — persist the full-AST layer (one `AstNode` row per
+    /// tree-sitter node plus the file's compressed source as `FileContent`).
+    /// Off by default: on django (7,008 files) `AstNode` rows were 94.7 % of
+    /// the graph's nodes, and no typed tool reads them (raw `query_graph` can).
+    pub full_ast: bool,
+}
+
+impl IndexOptions {
+    /// The per-file parse half of these options. The single place a
+    /// `ParsePolicy` is built, so the full, incremental and artifact-fill
+    /// paths cannot disagree on what a parse persists.
+    pub(crate) fn parse_policy(&self) -> ParsePolicy {
+        ParsePolicy {
+            dependency_scope: self.dependency_scope,
+            language_filter: self.language_filter,
+            full_ast: self.full_ast,
+        }
+    }
 }
 
 impl IndexOptions {
@@ -125,6 +143,7 @@ impl IndexOptions {
             language: self.language_filter.map(|l| format!("{l:?}")),
             dependency_scope: format!("{:?}", self.dependency_scope),
             exclude_dirs: self.exclude_dirs.canonical_entries(),
+            full_ast: self.full_ast,
         }
     }
 }
@@ -242,10 +261,7 @@ pub fn index_codebase_with_language(
         collector.record_pruned(rel, reason);
     }
     let source_files = walk_outcome.files;
-    let policy = ParsePolicy {
-        dependency_scope: options.dependency_scope,
-        language_filter: options.language_filter,
-    };
+    let policy = options.parse_policy();
     // label_by_qn: qualified_name/id -> label, populated as nodes are created.
     // Used to resolve edge tables without probing the database.
     // source: Fermi audit — probe_node_label was firing up to 9 MATCH queries
@@ -469,5 +485,7 @@ fn record_outcome(collector: &mut CoverageCollector, rel: &str, outcome: ParseOu
 // Tests
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+mod full_ast_tests;
 #[cfg(test)]
 mod tests;

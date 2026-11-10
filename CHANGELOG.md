@@ -6,8 +6,50 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The resolver is also woken by the end of the Claude review, not only by the end of the Pipeline, so an approved pull request merges whichever finishes last (Cortex ADR-1127).
+- **The CI follows Cortex's: the Claude review decides the merge.** Codex is out
+  of the pipeline (`Codex.yml`, the 800-line `review` job and its scripts are
+  removed); `merge` is the aggregate of the test jobs. `claude-review.yml` caps
+  automatic reviews at three per pull request and ends each with
+  `Verdict: approve` or `Verdict: block`. The post-merge resolver merges a pull
+  request only on an `approve` bound to the review run of its head, except a
+  Dependabot minor or patch update of `Cargo.lock` / `Cargo.toml`, which merges
+  on green required checks; it then closes the issues the pull request closes.
+  Source: Cortex ADR-1119, ADR-1120, ADR-1121, ADR-1126.
+
+- **The full-AST layer is opt-in (issue #448, first slice).** Every index used
+  to persist one `AstNode` row per tree-sitter node plus each file's
+  compressed source (`FileContent`); on django (7,008 files, release v0.14.0)
+  `AstNode` rows were 94.7 % of the graph's nodes, and no typed tool reads
+  them (raw `query_graph` Cypher can). `index_codebase` and
+  `analyze_codebase` now take `"full_ast"` (default `false`); with `true` the
+  layer is persisted as before. All three index paths (full, incremental,
+  artifact fill) build their parse policy from one
+  `IndexOptions::parse_policy`, so they cannot disagree on it. The flag
+  applies to the files a call parses: `analyze_codebase` rebuilds every
+  file with the call's flag; with an incremental `index_codebase`, files not
+  re-parsed since keep the layer they were indexed with until
+  `"full": true`.
+
 ### Fixed
 
+- **`get_impact` names the call sites it could not resolve** (#445). An
+  incomplete answer gave only `unresolved_callsites_naming_target`, a count, so
+  an agent could not read the callers the resolver missed. It now returns
+  `unresolved_callsites` (id, file, line, callee spelling, reason; by file then
+  line, at most 50, with `unresolved_callsites_truncated`) and
+  `callers_completeness` (`exact`, `none_found`, `found_more_may_exist`), which
+  tells an empty lower-bound answer from a partial one, read from the final
+  `epistemic` and counting cross-repo callers. The list is byte-bounded,
+  renders as `file:line` under `detail='ids'` and as rows (header in
+  `unresolved_callsites_columns`) under `format='tabular'`, and is filled on
+  graphs without recorded reasons too. A site whose reason was never written is
+  now counted as `not_recorded` instead of under lbug's `Null(String)`
+  rendering, in `get_impact`'s `unresolved_callsites_by_reason`, in
+  `index_status`'s `unresolved_call_sites.by_reason`, and in the
+  `open_by_reason` of `lsp_resolve` and `analyze_codebase`.
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
@@ -101,8 +143,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   same `output_dir` with no changed file now skips the index stage, then
   resolves, clusters and rebuilds the search index over the whole graph;
   `index.mode` says which path ran. The file manifest records the server
-  version and the `language`, `dependency_scope` and `exclude_dirs` the graph
-  was built with; a different or unrecorded value, another codebase root,
+  version and the `language`, `dependency_scope`, `exclude_dirs` and `full_ast`
+  the graph was built with; a different or unrecorded value, another codebase root,
   language-server rows (`lsp: true` now or before), any changed file or one
   unreadable at build time, a different Cargo map (a `Cargo.toml` edit that
   changes crate names, targets or features, even one the `language: "rust"`

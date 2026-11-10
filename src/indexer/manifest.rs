@@ -66,6 +66,10 @@ pub struct IndexScope {
     pub dependency_scope: String,
     /// `ExcludeSet::canonical_entries`: sorted, kind-tagged.
     pub exclude_dirs: Vec<String>,
+    /// Issue #448 — whether the full-AST layer was persisted. Absent in a
+    /// manifest written before the flag existed, when no graph carried it.
+    #[serde(default)]
+    pub full_ast: bool,
 }
 
 /// The whole sidecar: schema tag + rel_path → state map. `BTreeMap` keeps the

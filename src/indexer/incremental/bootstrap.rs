@@ -12,7 +12,7 @@ use std::time::Instant;
 use crate::graph_store::GraphStore;
 
 use super::super::manifest::{self, FileManifest, FileState};
-use super::super::walk::{ParsePolicy, WalkOptions};
+use super::super::walk::WalkOptions;
 use super::classify::{classify, discover};
 use super::{apply_changes, ChangeSet, Discovered, Rename};
 use super::{coverage::save_incremental_coverage, IncrementalResult, IndexOptions};
@@ -111,10 +111,7 @@ pub fn fill_after_bootstrap(
     let deleted = changes.deleted.len() as u64;
     let renamed = changes.renamed.len() as u64;
 
-    let policy = ParsePolicy {
-        dependency_scope,
-        language_filter: options.language_filter,
-    };
+    let policy = options.parse_policy();
     let (reparsed, reparsed_gaps) = apply_changes(&store, codebase, &changes, &current, policy)?;
     // Persist a local manifest reflecting the CURRENT tree so subsequent local
     // incrementals classify against this machine's mtimes/hashes, not the

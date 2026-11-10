@@ -235,3 +235,18 @@ fn an_iac_file_the_iac_pass_cannot_read_keeps_its_count_on_reuse() {
         "{second}"
     );
 }
+
+/// Issue #448 met #443 on merge: `full_ast` decides what a parse persists, so
+/// a graph built without the layer must not answer a call that asks for it.
+#[test]
+fn a_changed_full_ast_rebuilds() {
+    let (repo, base) = fixture("analyze443_full_ast_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let with_ast = analyze(&repo, &out, json!({ "full_ast": true }));
+    assert_eq!(with_ast["index"]["mode"], "full", "{with_ast}");
+    let same = analyze(&repo, &out, json!({ "full_ast": true }));
+    assert_eq!(same["index"]["mode"], "incremental", "{same}");
+    let without = analyze(&repo, &out, json!({}));
+    assert_eq!(without["index"]["mode"], "full", "{without}");
+}

@@ -181,10 +181,7 @@ pub fn index_incremental(
     // the redundant CREATE TABLE IF NOT EXISTS pass is the single largest
     // incremental speedup on small change sets.
 
-    let policy = ParsePolicy {
-        dependency_scope: options.dependency_scope,
-        language_filter: options.language_filter,
-    };
+    let policy = options.parse_policy();
     let walk_opts = WalkOptions {
         language_filter: options.language_filter,
         dependency_scope: options.dependency_scope,

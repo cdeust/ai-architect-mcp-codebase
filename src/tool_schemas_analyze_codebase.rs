@@ -7,7 +7,7 @@
 //! packing every tool into one 900-line file rather than to compress the prose
 //! a caller depends on.
 
-use super::shared_params::{dependency_scope_param, include_dependencies_param};
+use super::shared_params::{dependency_scope_param, full_ast_param, include_dependencies_param};
 use serde_json::{json, Value};
 
 pub(super) fn analyze_codebase_schema() -> Value {
@@ -47,10 +47,11 @@ pub(super) fn analyze_codebase_schema() -> Value {
                 "full": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Issue #443 — rebuild the graph from scratch even when the previous one at <output_dir>/graph would be reused (unchanged tree, same server version, root and settings, no language-server rows). Not needed after changing language, dependency_scope, exclude_dirs, the root, any file or the Cargo map, or with lsp=true: each of those already forces a full rebuild."
+                    "description": "Issue #443 — rebuild the graph from scratch even when the previous one at <output_dir>/graph would be reused (unchanged tree, same server version, root and settings, no language-server rows). Not needed after changing language, dependency_scope, exclude_dirs, full_ast, the root, any file or the Cargo map, or with lsp=true: each of those already forces a full rebuild."
                 },
                 "dependency_scope": dependency_scope_param(),
                 "include_dependencies": include_dependencies_param(),
+                "full_ast": full_ast_param("analyze_codebase rebuilds the graph from scratch when this flag differs from the one the previous graph was built with (#443), so the flag applies to every file; a later incremental index_codebase re-parses changed files with its own full_ast value."),
                 "exclude_dirs": exclude_dirs_param()
             }
         }

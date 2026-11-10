@@ -347,7 +347,7 @@ fn test_public_api_scope_filters_dependency_symbols_only() {
     let options = IndexOptions {
         language_filter: None,
         dependency_scope: DependencyScope::PublicApi,
-        exclude_dirs: ExcludeSet::default(),
+        ..IndexOptions::default()
     };
     index_codebase_with_language(&root, &graph_path, &options).expect("index should succeed");
 
@@ -397,7 +397,11 @@ fn measure_full_ast_cost_on_own_src() {
     let _ = std::fs::remove_file(&scratch);
 
     let start = std::time::Instant::now();
-    let result = super::index_codebase(Path::new("src"), &scratch).expect("index");
+    let opts = IndexOptions {
+        full_ast: true,
+        ..IndexOptions::default()
+    }; // #448: opt-in
+    let result = index_codebase_with_language(Path::new("src"), &scratch, &opts).expect("index");
     let elapsed = start.elapsed();
     let du_bytes = dir_size(&scratch);
     eprintln!(

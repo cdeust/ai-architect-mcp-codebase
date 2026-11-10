@@ -67,6 +67,7 @@ impl IndexRequest {
             language_filter: parse_language_filter(args)?,
             dependency_scope: parse_dependency_scope(args)?,
             exclude_dirs: parse_exclude_dirs(args)?,
+            full_ast: parse_bool_arg(args, "full_ast", false)?,
         };
         let codebase = require_absolute(path_str, "path")?;
         if !codebase.exists() {
