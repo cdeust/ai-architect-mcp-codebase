@@ -220,23 +220,35 @@ class BootstrapPlatforms(unittest.TestCase):
         )
 
 
+# Issue #449: what each name in the README's "refuses" row means to `uname`.
+REFUSED_UNAME = {
+    "macOS x86_64 (Intel)": ("Darwin", "x86_64"),
+    "Windows arm64": ("MINGW64_NT-10.0", "aarch64"),
+    "any other": ("FreeBSD", "amd64"),
+}
+
+
+def readme_platform_rows():
+    readme = (ROOT / "README.md").read_text()
+    start = readme.index("<!-- platforms:begin -->")
+    end = readme.index("<!-- platforms:end -->")
+    lines = [l for l in readme[start:end].splitlines() if l.startswith("|")]
+    return [[c.strip() for c in l.strip("|").split("|")] for l in lines[2:]]
+
+
 class ReadmePlatformTable(unittest.TestCase):
     """Issue #449: the README's supported-platforms table states what the
     launcher installs and what the release builds, nothing more."""
 
-    @staticmethod
-    def rows():
-        readme = (ROOT / "README.md").read_text()
-        start = readme.index("<!-- platforms:begin -->")
-        end = readme.index("<!-- platforms:end -->")
-        lines = [l for l in readme[start:end].splitlines() if l.startswith("|")]
-        return [[c.strip() for c in l.strip("|").split("|")] for l in lines[2:]]
+    # The same bootstrap exercise, without re-running BootstrapPlatforms' tests.
+    exercise = BootstrapPlatforms.exercise
+    check_verified_cache = BootstrapPlatforms.check_verified_cache
 
     def test_release_assets_match_the_launcher_and_the_release_matrix(self):
         import re
 
         listed = {
-            row[1].strip("`") for row in self.rows() if row[2] == "installs"
+            row[1].strip("`") for row in readme_platform_rows() if row[2] == "installs"
         }
         launcher = (ROOT / "bin/ensure-binary.sh").read_text()
         accepted = set(re.findall(r'release_target="([a-z0-9_-]+)"', launcher))
@@ -245,13 +257,22 @@ class ReadmePlatformTable(unittest.TestCase):
         self.assertEqual(listed, accepted)
         self.assertEqual(listed, built)
 
-    def test_refused_rows_are_refused_by_the_launcher(self):
-        refused = [row for row in self.rows() if row[2] == "refuses"]
-        self.assertEqual(len(refused), 1)
-        self.assertIn(
-            "unsupported plugin platform",
-            BootstrapPlatforms().exercise("Darwin", "x86_64", "unsupported"),
-        )
+    def test_every_refused_platform_is_refused_by_the_launcher(self):
+        names = [
+            name.strip()
+            for row in readme_platform_rows()
+            if row[2] == "refuses"
+            for name in row[0].split(",")
+        ]
+        self.assertTrue(names, "the table names no refused platform")
+        for name in names:
+            with self.subTest(name=name):
+                self.assertIn(name, REFUSED_UNAME, "no uname pair for this row")
+                system, machine = REFUSED_UNAME[name]
+                self.assertIn(
+                    "unsupported plugin platform",
+                    self.exercise(system, machine, "unsupported"),
+                )
 
 
 if __name__ == "__main__":
