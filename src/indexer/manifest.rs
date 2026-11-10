@@ -76,6 +76,8 @@ pub struct IndexScope {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileManifest {
     pub schema_version: u32,
+    /// At most `MAX_FILES` entries when read back (`bounded_files`).
+    #[serde(deserialize_with = "bounded_files")]
     pub files: BTreeMap<String, FileState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<IndexScope>,
@@ -127,13 +129,47 @@ pub fn load(path: &Path) -> Option<FileManifest> {
     load_within(path, MAX_MANIFEST_BYTES)
 }
 
-/// The largest manifest any index can write: `MAX_FILES` entries, each a
-/// root-relative path (at most `PATH_MAX`, 4096 bytes) plus its pretty-printed
-/// `FileState` (under 512 bytes), about 461 MB. A larger file was not written
-/// by an index; it can only be an imported or planted one, and reading it
-/// whole would exhaust memory (Codex security review of #478: a compressible
-/// archive entry expands to gigabytes).
-pub const MAX_MANIFEST_BYTES: u64 = super::MAX_FILES as u64 * (4096 + 512);
+/// A practical byte budget for a manifest: `MAX_FILES` entries averaging 1280
+/// bytes (a root-relative path plus its pretty-printed `FileState`, about 200
+/// bytes of which are fixed), about 128 MB. A real tree averages a fraction of
+/// that. A larger file reads as absent, so the caller rebuilds; it is never
+/// read whole (Codex security reviews of #478: a compressible archive entry
+/// expands to gigabytes). The entry count is bounded separately while parsing,
+/// because short entries under this budget would still number in millions.
+pub const MAX_MANIFEST_BYTES: u64 = super::MAX_FILES as u64 * 1280;
+
+/// Deserializes `files`, failing at the first entry past `MAX_FILES`, before
+/// the map grows further: no index writes more, and a planted manifest of
+/// millions of short entries would otherwise allocate far more than its bytes.
+fn bounded_files<'de, D>(deserializer: D) -> Result<BTreeMap<String, FileState>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct Bounded;
+    impl<'de> serde::de::Visitor<'de> for Bounded {
+        type Value = BTreeMap<String, FileState>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a map of at most {} file states", super::MAX_FILES)
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut files = BTreeMap::new();
+            while let Some((rel, state)) = map.next_entry::<String, FileState>()? {
+                if files.len() >= super::MAX_FILES {
+                    return Err(serde::de::Error::custom(format!(
+                        "more than {} file states",
+                        super::MAX_FILES
+                    )));
+                }
+                files.insert(rel, state);
+            }
+            Ok(files)
+        }
+    }
+    deserializer.deserialize_map(Bounded)
+}
 
 /// `load` under an explicit cap, so a test can reach the refusal.
 fn load_within(path: &Path, cap: u64) -> Option<FileManifest> {
@@ -259,6 +295,29 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_manifest_with_more_entries_than_max_files_is_refused() {
+        // Codex security review of #478: short entries under the byte budget
+        // could number in millions; parsing stops at the first past MAX_FILES.
+        let entry = r#"{"mtime_ns":0,"size":0,"content_hash":""}"#;
+        let body = |n: usize| {
+            let files: Vec<String> = (0..n).map(|i| format!("\"{i}\":{entry}")).collect();
+            format!(r#"{{"schema_version":1,"files":{{{}}}}}"#, files.join(","))
+        };
+        let max = super::super::MAX_FILES;
+        assert_eq!(
+            parse(body(max).as_bytes())
+                .expect("at the limit")
+                .files
+                .len(),
+            max
+        );
+        assert!(
+            parse(body(max + 1).as_bytes()).is_none(),
+            "one past it is refused"
+        );
+    }
 
     #[test]
     fn a_manifest_over_the_cap_is_refused() {
