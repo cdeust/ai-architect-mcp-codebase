@@ -154,7 +154,12 @@ fn report_meta_error(response: &mut Value, err: Option<String>) {
 
 /// Writes the three sidecars a completed full index leaves beside the graph,
 /// and mines temporal coupling. (Its doc sat on `report_meta_error` until the
-/// review of #478; analyze's full path writes coverage first, this one last.)
+/// review of #478.)
+///
+/// Coverage goes first, as on analyze's full path (Claude review of #478): a
+/// manifest saved after a failed coverage write carries no scope, so no
+/// `analyze_codebase` reuses a graph whose report is missing, and no later
+/// incremental pass can turn that missing report into a clean one.
 ///
 /// ORDER IS LOAD-BEARING (fleet-watch#112 review round 4): the manifest is
 /// written BEFORE `meta.json`, matching the incremental path, so `meta.json` is
@@ -171,19 +176,26 @@ fn persist_full_index_sidecars(
     result: &indexer::IndexResult,
     snapshot: indexer::manifest::FileManifest,
 ) -> (std::path::PathBuf, Value, Option<String>) {
-    let snapshot = snapshot.with_cargo_facts(&result.cargo_facts_digest);
+    // Issue #57: the coverage-honesty sidecar (parse-incomplete, skipped, and
+    // quarantined files).
+    let coverage_path = indexer::coverage::coverage_path(&req.output_dir);
+    let coverage_saved = match indexer::coverage::save(&coverage_path, &result.coverage) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("[ap] coverage sidecar write failed (index succeeded): {e}");
+            false
+        }
+    };
+    let mut snapshot = snapshot.with_cargo_facts(&result.cargo_facts_digest);
+    if !coverage_saved {
+        snapshot.scope = None;
+    }
     if let Err(e) = indexer::manifest::save(&req.manifest_path, &snapshot) {
         eprintln!("[ap] file manifest write failed (index succeeded): {e}");
     }
     // Records the absolute source root beside the graph; relative file paths
     // stay in the graph, and the root lets consumers rebuild absolute ones.
     let meta_err = write_graph_meta(&req.output_dir, &req.codebase).err();
-    // Issue #57: the coverage-honesty sidecar (parse-incomplete, skipped, and
-    // quarantined files).
-    let coverage_path = indexer::coverage::coverage_path(&req.output_dir);
-    if let Err(e) = indexer::coverage::save(&coverage_path, &result.coverage) {
-        eprintln!("[ap] coverage sidecar write failed (index succeeded): {e}");
-    }
     // Issue #58: full index → full re-mine of the co-change window.
     let cochange_summary = if req.want_cochange {
         run_cochange(

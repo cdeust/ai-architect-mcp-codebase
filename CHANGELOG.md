@@ -115,7 +115,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   after edits waits on resolver invalidation. The README no longer claims
   analyze is incremental after edits. On the analyze reuse path, a failed
   coverage write now fails the call instead of only being logged
-  (`index_codebase` still logs it). Both full paths snapshot the manifest
+  (`index_codebase` still logs it, but then writes its manifest without a
+  scope, so the graph is not reused). Both full paths snapshot the manifest
   before indexing and save it after, so a file saved during a rebuild is seen
   as changed by the next call.
   **Changed:** the response's `index` block carries `mode`; `node_count`,

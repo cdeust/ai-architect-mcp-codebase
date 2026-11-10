@@ -179,6 +179,65 @@ fn a_full_index_codebase_whose_coverage_write_fails_is_not_reused() {
 }
 
 #[test]
+fn a_missing_coverage_report_is_not_turned_into_a_clean_one() {
+    // Claude review of #478: after a full `index_codebase` whose coverage
+    // write failed, an incremental pass on the unchanged tree found no report
+    // to carry forward, wrote one with no gaps and kept the scope, so the next
+    // analysis reused the graph as clean.
+    let (repo, base) = fixture("analyze443_cov_chain_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let blocker = crate::indexer::coverage::coverage_path(&out).with_extension("json.tmp");
+    fs::create_dir_all(&blocker).expect("block the temp file");
+    do_index_codebase(&full_args(&repo, &out)).expect("full index");
+    let path = crate::indexer::manifest::manifest_path(&out);
+    let m = crate::indexer::manifest::load(&path).expect("manifest");
+    assert!(m.scope.is_none(), "no scope beside a missing report");
+    fs::remove_dir(&blocker).expect("unblock");
+    let mut args = full_args(&repo, &out);
+    args["full"] = json!(false);
+    do_index_codebase(&args).expect("incremental index");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+#[test]
+fn an_incremental_pass_without_a_prior_report_records_no_scope() {
+    // The same rule inside `index_incremental`: with no report to carry
+    // forward, the one it writes lost the unchanged files' gaps.
+    let (repo, base) = fixture("analyze443_no_prior_cov_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    fs::remove_file(crate::indexer::coverage::coverage_path(&out)).expect("drop the report");
+    let mut args = full_args(&repo, &out);
+    args["full"] = json!(false);
+    do_index_codebase(&args).expect("incremental index");
+    let m = crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out))
+        .expect("manifest");
+    assert!(m.scope.is_none(), "{:?}", m.scope);
+}
+
+#[test]
+fn an_edit_between_the_change_check_and_the_refresh_rebuilds() {
+    // Claude review of #478: the TOCTOU fallback in `try_reuse`. The reuse
+    // check opens the graph (`graph_has_lsp_rows`) after the change check and
+    // before the refresh; the release hook edits a file there.
+    let (repo, base) = fixture("analyze443_toctou_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    EDIT_ON_RELEASE.with(|c| *c.borrow_mut() = Some(repo.join("src/b.rs")));
+    crate::graph_store::register_release_hook(edit_on_first_release);
+    let resp = analyze(&repo, &out, json!({}));
+    assert!(
+        EDIT_ON_RELEASE.with(|c| c.borrow().is_none()),
+        "the edit ran during the call"
+    );
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
+    assert_eq!(outcome(&resp), outcome(&fresh));
+}
+
+#[test]
 fn an_incremental_pass_whose_coverage_write_fails_records_no_scope() {
     // The same rule on `index_codebase`'s incremental path: a manifest that
     // vouches for the graph must not sit beside another pass's report.

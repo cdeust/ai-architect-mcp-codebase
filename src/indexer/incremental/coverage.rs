@@ -187,6 +187,10 @@ pub(super) struct IncrementalCoverage {
     /// a caller that reads the sidecar back would otherwise get the previous
     /// pass's report and present it as this one's).
     pub(super) write_error: Option<String>,
+    /// Whether the previous pass's report loaded. Without it, nothing was
+    /// carried forward: an unchanged file's gaps are lost and the report reads
+    /// as clean, so it must not vouch for the graph (Claude review of #478).
+    pub(super) prior_loaded: bool,
 }
 
 /// Builds and writes the coverage sidecar for an incremental pass or bootstrap
@@ -210,6 +214,7 @@ pub(super) fn save_incremental_coverage(
             return IncrementalCoverage {
                 facts: cargo_attribution::CargoFacts::default(),
                 report: coverage::CoverageReport::new(index_mode, current.len() as u64),
+                prior_loaded: false,
                 write_error: Some(format!(
                     "graph dir {} has no parent to hold the coverage sidecar",
                     graph_dir.display()
@@ -250,6 +255,7 @@ pub(super) fn save_incremental_coverage(
         facts,
         report,
         write_error,
+        prior_loaded: prior.is_some(),
     }
 }
 

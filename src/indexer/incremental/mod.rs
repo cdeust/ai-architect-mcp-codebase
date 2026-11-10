@@ -228,16 +228,17 @@ pub fn index_incremental(
     let cargo_facts_digest = cov.facts.digest();
     let facts_match = prior.cargo_facts.as_deref() == Some(cargo_facts_digest.as_str());
     // A coverage sidecar that is not this pass's report would be carried
-    // forward by the next reuse as if it were (Claude review of #478).
-    let coverage_saved = cov.write_error.is_none();
+    // forward by the next reuse as if it were; a report built without the
+    // previous one lost the unchanged files' gaps (Claude reviews of #478).
+    let coverage_saved = cov.write_error.is_none() && cov.prior_loaded;
     plan.next_manifest.scope = (settings_match && facts_match && coverage_saved).then_some(scope);
     plan.next_manifest.cargo_facts = Some(cargo_facts_digest.clone());
     manifest::save(manifest_path, &plan.next_manifest)?;
-    // Nothing was rewritten and the map is the one the graph already holds:
-    // writing it again would only rescan every File node (Claude review of #478).
-    if !(unchanged && facts_match) {
-        apply_cargo_facts(&store, &cov.facts);
-    }
+    // Every pass writes the facts again, even an unchanged one: the digest
+    // records what was computed, not that each best-effort write landed, so a
+    // pass that skipped them would make a failed write permanent (Claude
+    // review of #478).
+    apply_cargo_facts(&store, &cov.facts);
 
     // Intentionally NO node_count()/edge_count() here — see `IncrementalResult`.
     Ok(IncrementalResult {
