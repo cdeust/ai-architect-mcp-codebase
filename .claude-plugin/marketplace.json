@@ -5,7 +5,7 @@
     "email": "admin@ai-architect.tools"
   },
   "metadata": {
-    "description": "AI Architect Codebase — Rust MCP that indexes ANY codebase (every file type: source in 11 languages with full AST, plus docs/config/binaries as File nodes) into a LadybugDB property graph and exposes 27 tools (index_codebase, query_graph, get_impact, get_context, semantic-diff) to agents.",
+    "description": "AI Architect Codebase — Rust MCP that indexes ANY codebase (every file type: source in 11 languages, plus docs/config/binaries as File nodes) into a LadybugDB property graph and exposes 27 tools (index_codebase, query_graph, get_impact, get_context, semantic-diff) to agents.",
     "version": "0.14.0"
   },
   "plugins": [

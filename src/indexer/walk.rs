@@ -123,13 +123,16 @@ impl ExcludeSet {
 }
 
 /// What a parse needs from `IndexOptions` beyond the walk itself: the
-/// dependency tier (restricts dependency files to their public API) and the
-/// language filter, which decides the grammar of a `.h` header (#399). One
-/// `Copy` value so the full and incremental index paths pass the same thing.
-#[derive(Debug, Clone, Copy, Default)]
+/// dependency tier (restricts dependency files to their public API), the
+/// language filter, which decides the grammar of a `.h` header (#399), and
+/// whether the full-AST layer is persisted (#448). One `Copy` value so the
+/// full, incremental and artifact-fill paths pass the same thing; by
+/// convention built only by `IndexOptions::parse_policy` (no `Default`).
+#[derive(Debug, Clone, Copy)]
 pub struct ParsePolicy {
     pub dependency_scope: DependencyScope,
     pub language_filter: Option<Language>,
+    pub full_ast: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -377,8 +380,8 @@ fn visit_dir_entry(
 ///   * `language_filter = Some(L)`: collect ONLY files of language L (a
 ///     scoped re-index of a single language).
 ///   * `language_filter = None`: ALL-FILE indexing — collect every file
-///     regardless of extension. Code files in a supported language get a
-///     full AST; every other file still becomes a File node
+///     regardless of extension. Code files in a supported language are
+///     parsed; every other file still becomes a File node
 ///     (path/name/extension/size), and .js-family files are light-linked
 ///     (import/require → Imports_File_File) in a post-pass. Oversized files
 ///     are skipped here; build/dependency dirs are pruned by `should_skip`

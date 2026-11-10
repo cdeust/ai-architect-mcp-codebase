@@ -7,7 +7,7 @@
 //! packing every tool into one 900-line file rather than to compress the prose
 //! a caller depends on.
 
-use super::shared_params::{dependency_scope_param, include_dependencies_param};
+use super::shared_params::{dependency_scope_param, full_ast_param, include_dependencies_param};
 use serde_json::{json, Value};
 
 pub(super) fn analyze_codebase_schema() -> Value {
@@ -46,6 +46,7 @@ pub(super) fn analyze_codebase_schema() -> Value {
                 },
                 "dependency_scope": dependency_scope_param(),
                 "include_dependencies": include_dependencies_param(),
+                "full_ast": full_ast_param("analyze_codebase rebuilds the graph from scratch on every call, so the flag applies to every file; a later incremental index_codebase re-parses changed files with its own full_ast value."),
                 "exclude_dirs": exclude_dirs_param()
             }
         }

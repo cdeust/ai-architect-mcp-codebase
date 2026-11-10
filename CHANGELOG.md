@@ -19,6 +19,20 @@ adheres to [Semantic Versioning](https://semver.org/).
   on green required checks; it then closes the issues the pull request closes.
   Source: Cortex ADR-1119, ADR-1120, ADR-1121, ADR-1126.
 
+- **The full-AST layer is opt-in (issue #448, first slice).** Every index used
+  to persist one `AstNode` row per tree-sitter node plus each file's
+  compressed source (`FileContent`); on django (7,008 files, release v0.14.0)
+  `AstNode` rows were 94.7 % of the graph's nodes, and no typed tool reads
+  them (raw `query_graph` Cypher can). `index_codebase` and
+  `analyze_codebase` now take `"full_ast"` (default `false`); with `true` the
+  layer is persisted as before. All three index paths (full, incremental,
+  artifact fill) build their parse policy from one
+  `IndexOptions::parse_policy`, so they cannot disagree on it. The flag
+  applies to the files a call parses: `analyze_codebase` rebuilds every
+  file with the call's flag; with an incremental `index_codebase`, files not
+  re-parsed since keep the layer they were indexed with until
+  `"full": true`.
+
 ### Fixed
 
 - **`get_impact` names the call sites it could not resolve** (#445). An
