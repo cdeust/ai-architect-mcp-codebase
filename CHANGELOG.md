@@ -86,6 +86,66 @@ adheres to [Semantic Versioning](https://semver.org/).
   rendering, in `get_impact`'s `unresolved_callsites_by_reason`, in
   `index_status`'s `unresolved_call_sites.by_reason`, and in the
   `open_by_reason` of `lsp_resolve` and `analyze_codebase`.
+- **`detect_changes` reports a modified method as the method, and never calls
+  an incomplete answer `exact`** (issue #446). Methods were looked up through
+  `Defines_File_Method`, a table that does not exist: the query failed, the
+  error was skipped, and no Method was ever a candidate, so a change inside a
+  TypeScript or Python method was reported as its class and a change inside a
+  Rust `impl` method (whose type is defined in another file) as nothing. Every
+  symbol label is now read by the `<File.id>::` prefix every symbol id carries,
+  which also reaches functions whose `Defines` edge is dropped (C++ namespace,
+  Rust inline `mod`; a symbol of an indexed `a.rs::b.rs` is not credited to
+  `a.rs`), and Constant and TypeAlias are candidates too. Each
+  changed line goes to the innermost symbols whose range holds it (on one line,
+  the deeper id wins; siblings it cannot tell apart all keep it; a sorted
+  sweep, so many symbols on one line stay linear-logarithmic; one sweep over
+  the changed lines, with a work budget past which the file is a
+  `lower-bound`), and a
+  modified line counts once (`git_diff::symbols`). A pure removal counts for a
+  symbol only when that symbol spans the lines on both sides of it (deleting
+  `fn foo` just above `fn bar` no longer reports `bar`). Per diff, the symbols
+  are read with one File query and one query per label for each chunk of 64
+  paths, and `get_impact` runs once per changed symbol, for at most
+  256 per diff (past that, the answer is `lower-bound`). A blank line added or
+  removed on its own is no coverage gap outside every symbol, but inside one
+  it still counts (it can change a multiline string). Each hunk is read for
+  the line counts its header announces: a `+++i;` or `--- note` body line is a
+  change, not a file header, the `git format-patch` trailer is no removal, and
+  a plain `diff -u` with several files is split at each file header. The
+  `\ No newline at end of file` marker is no line of either file. Sections
+  that repeat a path are merged, and `git diff` runs with `--no-color
+  --no-ext-diff` and pinned `a/`/`b/` prefixes. The answer is `lower-bound`,
+  with a reason, when a changed line of a modified or added file, or a pure
+  removal, lies in no indexed symbol (a blank-only one excepted); when the diff
+  names a path with no indexed File (an unsupported language, a path outside
+  the indexed root, or a deleted file); when an added or deleted file holds no
+  indexed symbol; when part of a file's diff cannot be read (an unreadable or
+  combined-diff header, a hunk cut short or overrun, body lines before any
+  `@@`, file headers with no hunk, a deleted file with no hunk (`git diff
+  -D`), a missing, empty or out-of-place file header, several commits (also
+  `git log -p --oneline`: after a hunk, only what diff tools print between
+  files is expected), a hunk
+  with no `+`/`-` line (`--word-diff`), a
+  header that swallows the next file's headers, a `git format-patch` series
+  whose patches end with the `-- ` signature, or sections of one path that
+  disagree on the change type); when a file is renamed or copied with no
+  content hunk; when a non-empty diff holds no readable section at all (a diff
+  whose sections change no line, such as a chmod, stays `exact`); when `diff -r`
+  without `-N` lists a one-sided file as an `Only in` line (or `-q` a changed
+  one as `Files … differ`); when a
+  section is binary (also `hg diff` and `svn diff` binary notices); or when
+  the symbol load fails (one reason for the whole
+  diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after
+  a tab) name their file, and `git diff` also runs with `--find-renames
+  --no-textconv -c core.quotePath=false`. The response lists are bounded by the
+  response budget (`*_count` keeps the total, `*_truncated` marks a cut, and a
+  cut symbol list is `lower-bound`). `next_steps` suggests `lsp_resolve`
+  only for dependency reasons, not for these coverage gaps. Tests:
+  `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
+  a change in `Shape::area`, and `exact` for a diff of an
+  unsupported file), unit tests in `git_diff`, `git_diff::parse` behaviour and
+  `git_diff::symbols`, and `detect_changes_next_steps_tests`.
+
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
