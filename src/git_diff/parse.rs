@@ -209,10 +209,11 @@ impl FileSection {
         }
     }
 
-    /// A line outside every hunk that is not a header. After a hunk, a body
-    /// line (or a combined-diff `@@@` header) means the counts were wrong or
-    /// the header unreadable; the `-- ` signature of `git format-patch` and
-    /// what follows it are the only exception.
+    /// A line outside every hunk that is not a header. After a hunk, only the
+    /// lines a diff tool prints between files are expected (`BETWEEN_FILES`);
+    /// anything else is a body line past the counts, a commit boundary
+    /// (`git log -p`, `--oneline`, `--format`) or text that is no diff. The
+    /// `-- ` signature of `git format-patch` and what follows it are skipped.
     fn stray_line(&mut self, line: &str) {
         // Several commits (`git log -p`, a patch series) hold line numbers of
         // different revisions: they cannot all be matched against one index.
@@ -226,6 +227,12 @@ impl FileSection {
             return;
         }
         if self.in_trailer {
+            return;
+        }
+        if line == "-- " {
+            // The format-patch signature, after a hunk or after a section
+            // with none (a chmod-only patch): what follows is no diff.
+            self.in_trailer = true;
             return;
         }
         if line.starts_with("@@") {
@@ -260,10 +267,7 @@ impl FileSection {
             }
             return;
         }
-        if line == "-- " {
-            // The format-patch signature: what follows is no diff.
-            self.in_trailer = true;
-        } else if line.starts_with(['+', '-', ' ']) {
+        if !line.is_empty() && !BETWEEN_FILES.iter().any(|p| line.starts_with(p)) {
             self.malformed = true;
         }
     }
@@ -314,6 +318,20 @@ impl FileSection {
         })
     }
 }
+
+/// Lines a diff tool prints after a file's last hunk and before the next
+/// file's headers: a blank line, the `\ No newline` marker, the command line
+/// of `diff -r`/`hg diff`, `diff -r` notices, and the `Index:`/`====` lines of
+/// `svn diff`. Any other line there marks the section `malformed`.
+const BETWEEN_FILES: &[&str] = &[
+    "\\",
+    "diff ",
+    "Only in ",
+    "Common subdirectories: ",
+    "Files ",
+    "Index: ",
+    "====",
+];
 
 /// Only ASCII spaces and tabs: a line of U+00A0 is code that can break the
 /// build (issue #446 review).
@@ -392,17 +410,13 @@ fn git_header_path(line: &str) -> Option<String> {
     Some(new.to_string())
 }
 
-/// Whether `diff_text` holds any line that starts a unified-diff section or
-/// hunk (`diff --git `, `--- `, `+++ `, `@@`). A diff whose sections all
-/// change no line (a mode change, an empty new file) parses to no hunk but
-/// is still readable; a colored or reformatted paste has no such line.
+/// Whether `diff_text` holds a `diff --git ` section header. A git diff whose
+/// sections all change no line (a mode change, an empty new file) parses to
+/// no hunk but is still readable; a colored or reformatted paste has no such
+/// line. (Any `---`/`+++`/`@@` line already yields a section, so only this
+/// header can tell an empty readable diff from an unreadable one.)
 pub(crate) fn has_diff_structure(diff_text: &str) -> bool {
-    diff_text.lines().any(|l| {
-        l.starts_with("diff --git ")
-            || l.starts_with("--- ")
-            || l.starts_with("+++ ")
-            || l.starts_with("@@")
-    })
+    diff_text.lines().any(|l| l.starts_with("diff --git "))
 }
 
 /// The `Only in <dir>: <name>` lines of `diff -r` without `-N`: each is a

@@ -270,9 +270,15 @@ fn count_total_communities(store: &GraphStore) -> u64 {
 pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis, String> {
     let hunks = merge_by_path(parse_unified_diff(diff_text)?);
     let mut analysis = build_analysis(store, &hunks)?;
+    let one_sided = one_sided_entries(diff_text);
     // A non-empty diff with no readable section at all (a colored paste, a
-    // reformatted diff) is not an empty change.
-    if hunks.is_empty() && !diff_text.trim().is_empty() && !has_diff_structure(diff_text) {
+    // reformatted diff) is not an empty change. `Only in` lines have their
+    // own reason below.
+    if hunks.is_empty()
+        && one_sided == 0
+        && !diff_text.trim().is_empty()
+        && !has_diff_structure(diff_text)
+    {
         analysis.epistemic = crate::epistemic::Boundary::LowerBound.as_str();
         analysis.epistemic_reasons.push(
             "the diff text holds no readable file section (colored or reformatted \
@@ -283,7 +289,6 @@ pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis,
     }
     // `diff -r` without `-N` lists a file on one side only as an `Only in`
     // line, with no hunk: its symbols are not in the diff.
-    let one_sided = one_sided_entries(diff_text);
     if one_sided > 0 {
         analysis.epistemic = crate::epistemic::Boundary::LowerBound.as_str();
         analysis.epistemic_reasons.push(format!(
@@ -651,6 +656,33 @@ mod tests {
         assert!(h.malformed && h.file_path == "src/old.rs");
         let empty = "diff --git a/e.rs b/e.rs\ndeleted file mode 100644\nindex e69de29..0000000\n";
         assert!(parse_unified_diff(empty).unwrap().is_empty());
+        // `git log -p --oneline`: a `<sha> <subject>` line after a hunk is a
+        // commit boundary.
+        let oneline = "3c8718b second\ndiff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n\
+                       @@ -10 +10 @@\n-a\n+b\n4b0bcba first\ndiff --git a/m.rs b/m.rs\n\
+                       --- a/m.rs\n+++ b/m.rs\n@@ -40 +40 @@\n-c\n+d\n";
+        assert!(merge_by_path(parse_unified_diff(oneline).unwrap())[0].malformed);
+        // `git log -p` of a commit with no message body: `commit ` alone.
+        let bare = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+b\n\
+                    commit 0123456789abcdef0123456789abcdef01234567\nAuthor: A <a@b>\n";
+        assert!(parse_unified_diff(bare).unwrap()[0].malformed);
+        // What diff tools print between files stays readable: `diff -ru`
+        // command lines, `\ No newline`, blank lines, `svn diff` headers.
+        let ru = "diff -ru old/a.rs new/a.rs\n--- old/a.rs\t2026-01-01\n+++ new/a.rs\t2026-01-02\n\
+                  @@ -1 +1 @@\n-x\n+y\n\\ No newline at end of file\n\n\
+                  diff -ru old/b.rs new/b.rs\n--- old/b.rs\t2026-01-01\n+++ new/b.rs\t2026-01-02\n\
+                  @@ -1 +1 @@\n-x\n+y\nIndex: c.rs\n=====\n--- c.rs\t(revision 1)\n\
+                  +++ c.rs\t(working copy)\n@@ -1 +1 @@\n-x\n+y\n";
+        let hs = parse_unified_diff(ru).unwrap();
+        assert_eq!(hs.len(), 3);
+        assert!(
+            hs.iter().all(|h| !h.malformed),
+            "{:?}",
+            hs.iter().map(|h| &h.file_path).collect::<Vec<_>>()
+        );
+        // A signed `format-patch` whose last section has no hunk (chmod).
+        let chmod = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n-- \n2.43.0\n";
+        assert!(parse_unified_diff(chmod).unwrap().is_empty());
         // A default `git format-patch --stdout` series: each patch ends with
         // the `-- ` signature, and the next `From ` line falls in it.
         let series = "From 1111 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 1/2] a\n---\n\
@@ -998,6 +1030,16 @@ diff --git a/x b/x
             "{:?}",
             result.epistemic_reasons
         );
+        // A `diff -r` made only of `Only in` lines: one reason, `lower-bound`.
+        let result = analyze_diff(&store, "Only in new/src: added.rs\n").unwrap();
+        assert_eq!(result.epistemic, "lower-bound");
+        assert_eq!(
+            result.epistemic_reasons.len(),
+            1,
+            "{:?}",
+            result.epistemic_reasons
+        );
+        assert!(result.epistemic_reasons[0].contains("Only in"));
         // Real `git diff` output whose sections change no line is readable:
         // a chmod, an empty new file, and the empty diff are all `exact`.
         for text in [

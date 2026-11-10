@@ -39,7 +39,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   indexed symbol; when part of a file's diff cannot be read (an unreadable or
   combined-diff header, a hunk cut short or overrun, body lines before any
   `@@`, file headers with no hunk, a deleted file with no hunk (`git diff
-  -D`), a missing, empty or out-of-place file header, several commits, a hunk
+  -D`), a missing, empty or out-of-place file header, several commits (also
+  `git log -p --oneline`: after a hunk, only what diff tools print between
+  files is expected), a hunk
   with no `+`/`-` line (`--word-diff`), a
   header that swallows the next file's headers, a `git format-patch` series
   whose patches end with the `-- ` signature, or sections of one path that
