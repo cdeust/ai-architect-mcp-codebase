@@ -282,8 +282,10 @@ impl FileSection {
             // After a hunk elsewhere in the diff, a hunk-less git section holds
             // only extended headers: anything else is a commit boundary
             // (`git log -p --oneline`) or text that is no diff.
-            if named
-                && self.prior_hunk
+            // `prior_hunk` is only set on a section opened by a split, so the
+            // section need not be named (a quoted `diff --git "a/…"` path
+            // leaves `git_path` empty).
+            if self.prior_hunk
                 && !line.is_empty()
                 && !EXTENDED_HEADERS.iter().any(|p| line.starts_with(p))
                 && !BETWEEN_FILES.iter().any(|p| line.starts_with(p))
@@ -469,8 +471,9 @@ pub(crate) fn has_diff_structure(diff_text: &str) -> bool {
 
 /// The `diff -r` lines that name a changed file without showing its lines:
 /// `Only in <dir>: <name>` (a file on one side only, without `-N`) and
-/// `Files X and Y differ` (`-q`/`--brief`). No hunk body line can start with
-/// `O` or `F`, so the count is exact.
+/// `Files X and Y differ` (`-q`/`--brief`). A line-prefix count over the
+/// whole text: no hunk body line can start with `O` or `F`, but an unindented
+/// commit-message line can, which gives a false `lower-bound` (safe side).
 pub(crate) fn one_sided_entries(diff_text: &str) -> usize {
     diff_text
         .lines()

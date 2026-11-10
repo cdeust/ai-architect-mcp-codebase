@@ -294,7 +294,7 @@ pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis,
         analysis.epistemic_reasons.push(format!(
             "{one_sided} `Only in` or `Files … differ` line(s): a file present on \
              one side only, or whose lines are not shown, is not in the diff \
-             (run `diff -N` without `-q`, or `git diff`)"
+             (run `diff -ruN`, or `git diff`)"
         ));
         analysis.coverage_gap_count += 1;
     }
@@ -701,6 +701,14 @@ mod tests {
                              diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\nb2 two\n\
                              diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -40 +40 @@\n-b\n+B\n";
         let merged = merge_by_path(parse_unified_diff(oneline_chmod).unwrap());
+        assert!(merged.iter().any(|h| h.malformed));
+        // The same with a quoted (non-ASCII) path in the hunk-less section.
+        let quoted =
+            "a1 two\ndiff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+A\n\
+                      diff --git \"a/caf\\303\\251.sh\" \"b/caf\\303\\251.sh\"\nold mode 100644\n\
+                      new mode 100755\nb2 one\ndiff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n\
+                      @@ -40 +40 @@\n-b\n+B\n";
+        let merged = merge_by_path(parse_unified_diff(quoted).unwrap());
         assert!(merged.iter().any(|h| h.malformed));
         // A git diff with several hunk-less sections after a hunk stays readable.
         let modes = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+A\n\
