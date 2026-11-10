@@ -644,6 +644,13 @@ mod tests {
         // caught by `take_count`, not by `stray_line`.
         let over = "--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,2 @@\n-a\n-b\n+c\n+d\n";
         assert!(parse_unified_diff(over).unwrap()[0].malformed);
+        // `git diff -D`: a deleted file with no hunk is unreadable; an empty
+        // file deleted (empty-blob pre-image) changes no line.
+        let d = "diff --git a/src/old.rs b/src/old.rs\ndeleted file mode 100644\nindex 3b18e51..0000000\n";
+        let h = &parse_unified_diff(d).unwrap()[0];
+        assert!(h.malformed && h.file_path == "src/old.rs");
+        let empty = "diff --git a/e.rs b/e.rs\ndeleted file mode 100644\nindex e69de29..0000000\n";
+        assert!(parse_unified_diff(empty).unwrap().is_empty());
         // A default `git format-patch --stdout` series: each patch ends with
         // the `-- ` signature, and the next `From ` line falls in it.
         let series = "From 1111 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 1/2] a\n---\n\

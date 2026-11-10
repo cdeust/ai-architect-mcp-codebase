@@ -99,6 +99,11 @@ struct FileSection {
     malformed: bool,
     /// Past a `git format-patch` signature delimiter (`-- `): no more body.
     in_trailer: bool,
+    /// `deleted file mode`, and an `index` line whose pre-image is not the
+    /// empty blob: with no hunk (`git diff -D`), the file's removed lines
+    /// are not in the diff.
+    deleted_mode: bool,
+    empty_pre_image: bool,
 }
 
 impl FileSection {
@@ -236,6 +241,15 @@ impl FileSection {
             self.binary = true;
             return;
         }
+        if line.starts_with("deleted file mode ") {
+            self.deleted_mode = true;
+            return;
+        }
+        if line.starts_with("index e69de29") {
+            // The pre-image is the empty blob: an empty file was deleted.
+            self.empty_pre_image = true;
+            return;
+        }
         if !self.had_hunk {
             // A `+`/`-`/context line after a file header but before any `@@`
             // (a pasted diff whose hunk header was stripped). Diffstat and
@@ -267,6 +281,11 @@ impl FileSection {
             self.malformed = true;
         }
         if self.had_hunk && !self.saw_change {
+            self.malformed = true;
+        }
+        // `git diff -D` / `--irreversible-delete`: a deleted file with no
+        // hunk. Its symbols were all removed, but its lines are not shown.
+        if !self.had_hunk && self.deleted_mode && !self.empty_pre_image {
             self.malformed = true;
         }
         let renamed = self.renamed && !self.had_hunk;
