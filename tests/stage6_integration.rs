@@ -624,7 +624,7 @@ fn test_regex_fallback_non_identifier_leaf_is_not_absent() {
     let store = build_fixture_graph(&root.join("fixture"), &root.join("graph"));
     let prd_path = write_prd(
         &root.join("prd"),
-        "Extend the `Tool::` methods; bind `localhost:8080` behind `feature:fast`.",
+        "Extend the `Tool::` methods; bind `localhost:8080` behind `feature:fast` for `9lives`.",
     );
     let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
     assert_eq!(
@@ -638,5 +638,16 @@ fn test_regex_fallback_non_identifier_leaf_is_not_absent() {
             .collect::<Vec<_>>()
     );
     assert_eq!(report.validation_status, "ok");
+    // Every token must be extracted and judged, or the guard goes unexercised.
+    assert_eq!(report.summary.claimed_symbols, 4);
+    for tok in ["Tool::", "localhost:8080", "feature:fast", "9lives"] {
+        let sev: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.symbol.as_deref() == Some(tok))
+            .map(|f| f.severity.as_str())
+            .collect();
+        assert_eq!(sev, vec!["info"], "{tok}");
+    }
     let _ = fs::remove_dir_all(&root);
 }

@@ -89,3 +89,36 @@ fn test_name_exists_probes_every_label_and_reports_failure() {
     store.create_schema().expect("create_schema");
     assert_eq!(name_exists(&store, "Anything"), Some(false));
 }
+
+// source: PR #487 review. `classify_one` must map a failed probe to
+// `Unscored`, never `Absent`: a store with no schema fails every probe.
+#[test]
+fn test_classify_one_failed_probe_is_unscored_not_absent() {
+    let dir = tempfile::Builder::new()
+        .prefix("prd_validator_classify_failed_probe")
+        .tempdir()
+        .expect("create temp dir");
+    let store = GraphStore::open_or_create(&dir.path().join("testdb")).expect("open_or_create");
+    let claim = super::super::SymbolClaim {
+        token: "FabricatedThing".into(),
+        change_kind: "unknown".into(),
+        origin: ClaimOrigin::Backticked,
+        rationale: "regex_fallback".into(),
+    };
+    let r = ResolvedClaim {
+        claim: &claim,
+        resolved_qn: None,
+        did_you_mean: Vec::new(),
+    };
+    assert_eq!(classify_one(&store, &r), ClaimVerdict::Unscored);
+}
+
+#[test]
+fn test_is_identifier() {
+    for ok in ["Tool", "_x", "retry_count", "A1"] {
+        assert!(is_identifier(ok), "{ok}");
+    }
+    for bad in ["", "9lives", "localhost:8080", "a-b", "a.b"] {
+        assert!(!is_identifier(bad), "{bad}");
+    }
+}

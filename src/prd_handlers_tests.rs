@@ -409,9 +409,11 @@ fn validate_prd_checks_a_prd_against_a_real_graph() {
     ] {
         assert!(out["summary"][field].is_number(), "{field} missing: {out}");
     }
-    // `svc.rs::…` tokens carry a `.`, which the fallback extractor never
-    // takes as a backticked name; `NotARealType` is the one absent symbol.
-    // An exact count catches a handler that hardcodes the field.
+    // `svc.rs::…` tokens carry a `.` and no `/`, so the fallback extractor
+    // takes them neither as backticked names nor as file paths: they yield no
+    // claim. `NotARealType` is the only claim, and it is absent. Exact counts
+    // catch a handler that hardcodes either field.
+    assert_eq!(out["summary"]["claimed_symbols"], 1, "{out}");
     assert_eq!(out["summary"]["absent_symbols"], 1, "{out}");
     // No run_id/finding_id/output_dir triple, so nothing is persisted.
     assert!(out["artifact_path"].is_null(), "{out}");
