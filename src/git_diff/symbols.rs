@@ -88,11 +88,13 @@ pub(super) struct FileAttribution {
     pub(super) budget_exceeded: bool,
 }
 
-/// Most (line, holding symbol) pairs one file's attribution visits. A sweep
-/// visits each pair once, so real files stay far below it; it bounds only
-/// pathological nesting (thousands of symbols each spanning thousands of
-/// changed lines; Codex security review of PR #482).
-const ATTRIBUTION_BUDGET: usize = 4_000_000;
+/// Most work one file's attribution does, in units of one holding symbol or
+/// one identifier byte: the innermost symbols are recomputed only when the
+/// set of symbols holding the line changes, and each recomputation is charged
+/// for its symbols and their id bytes; each line is charged for its owners.
+/// Real files stay far below it; it bounds crafted ones (Codex security
+/// review of PR #482: huge ids, deep nesting, many changed lines).
+const ATTRIBUTION_BUDGET: usize = 64_000_000;
 
 impl DiffSymbols {
     /// Whether a File or symbol query failed while loading, so some
@@ -243,25 +245,40 @@ impl DiffSymbols {
         let mut active: BTreeSet<(u64, usize)> = BTreeSet::new();
         let mut work = 0usize;
         let mut budget_exceeded = false;
+        // The innermost symbols depend only on `active`: recompute them when
+        // it changes, not for every line.
+        let mut changed = true;
+        let mut owners: Vec<usize> = Vec::new();
         for (from, to, nonblank) in queries {
             while next < by_start.len() && candidates[by_start[next]].start <= from {
                 let i = by_start[next];
                 active.insert((candidates[i].end, i));
                 next += 1;
+                changed = true;
             }
             while active.first().is_some_and(|&(end, _)| end < to) {
                 active.pop_first();
+                changed = true;
             }
-            work += active.len();
+            if changed {
+                let id_bytes: usize = active.iter().map(|&(_, i)| candidates[i].id.len()).sum();
+                work = work.saturating_add(active.len() + id_bytes);
+                if work > ATTRIBUTION_BUDGET {
+                    budget_exceeded = true;
+                    break;
+                }
+                owners = innermost_of(&candidates, active.iter().map(|&(_, i)| i).collect());
+                changed = false;
+            }
+            work = work.saturating_add(owners.len());
             if work > ATTRIBUTION_BUDGET {
                 budget_exceeded = true;
                 break;
             }
-            let owners = innermost_of(&candidates, active.iter().map(|&(_, i)| i).collect());
             if owners.is_empty() && nonblank {
                 unattributed_lines += 1;
             }
-            for i in owners {
+            for &i in &owners {
                 candidates[i].overlap += 1;
             }
         }
@@ -336,7 +353,10 @@ fn innermost_of(candidates: &[Candidate], mut holding: Vec<usize>) -> Vec<usize>
         (candidates[a].start, candidates[a].end) == (candidates[b].start, candidates[b].end)
     }) {
         let end = candidates[group[0]].end;
-        if min_end > end {
+        if min_end > end && group.len() == 1 {
+            // A range held by one symbol has no deeper id to compare with.
+            kept.push(group[0]);
+        } else if min_end > end {
             let mut ids: Vec<&str> = group.iter().map(|&i| candidates[i].id.as_str()).collect();
             ids.sort_unstable();
             kept.extend(
@@ -596,18 +616,40 @@ mod gap_tests {
         assert!(a.candidates.iter().all(|c| c.overlap == 1));
     }
 
-    /// Deep nesting over many changed lines runs out of the work budget and
-    /// says so, instead of running unbounded.
+    /// Deep nesting over many changed lines is one recomputation, not one
+    /// per line; a holding set that changes on every line runs out of the
+    /// work budget and says so, instead of running unbounded.
     #[test]
-    fn deep_nesting_over_many_lines_hits_the_work_budget() {
+    fn deep_nesting_is_cheap_and_churn_hits_the_work_budget() {
         let depth = 3_000u64;
-        let lines = 2_000u64;
-        let c: Vec<Candidate> = (0..depth)
+        let lines = 4_000u64;
+        let nested: Vec<Candidate> = (0..depth)
             .map(|d| function(&format!("m.rs::N{d}"), 1, lines + depth - d))
             .collect();
         let changed: Vec<u64> = (1..=lines).collect();
-        let a = loaded(c).attribute(&hunk(&changed, &[]));
+        let a = loaded(nested.clone()).attribute(&hunk(&changed, &[]));
+        assert!(!a.budget_exceeded);
+        assert_eq!(a.unattributed_lines, 0);
+        // One extra symbol per line makes the holding set change each time.
+        let mut churn = nested;
+        churn.extend((1..=lines).map(|l| function(&format!("m.rs::N0::L{l}"), l, l)));
+        let a = loaded(churn).attribute(&hunk(&changed, &[]));
         assert!(a.budget_exceeded);
+    }
+
+    /// Codex security review of PR #482: one huge identifier over many
+    /// changed lines costs its bytes once, not once per line.
+    #[test]
+    fn a_huge_identifier_over_many_lines_is_charged_once() {
+        let id = format!("m.rs::{}", "x".repeat(512 * 1024));
+        let lines = 500_000u64;
+        let c = vec![function(&id, 1, lines)];
+        let changed: Vec<u64> = (1..=lines).collect();
+        let started = std::time::Instant::now();
+        let a = loaded(c).attribute(&hunk(&changed, &[]));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert!(!a.budget_exceeded);
+        assert_eq!(a.candidates[0].overlap, lines);
     }
 
     /// Codex security review of PR #482: tens of thousands of nested Files
