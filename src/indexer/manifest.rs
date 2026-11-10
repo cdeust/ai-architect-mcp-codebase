@@ -121,10 +121,39 @@ pub fn manifest_path(output_dir: &Path) -> PathBuf {
 /// `None` for every other case (absent, unreadable, unparseable, or a newer
 /// schema). `None` is the caller's signal that no incremental baseline exists,
 /// so it must fall back to a full index — never a hard error, so a corrupt
-/// sidecar degrades to a full rebuild instead of failing the tool.
+/// sidecar degrades to a full rebuild instead of failing the tool. A file over
+/// `MAX_MANIFEST_BYTES` is `None` too, and is read no further than that.
 pub fn load(path: &Path) -> Option<FileManifest> {
-    let bytes = fs::read(path).ok()?;
-    parse(&bytes)
+    load_within(path, MAX_MANIFEST_BYTES)
+}
+
+/// The largest manifest any index can write: `MAX_FILES` entries, each a
+/// root-relative path (at most `PATH_MAX`, 4096 bytes) plus its pretty-printed
+/// `FileState` (under 512 bytes), about 461 MB. A larger file was not written
+/// by an index; it can only be an imported or planted one, and reading it
+/// whole would exhaust memory (Codex security review of #478: a compressible
+/// archive entry expands to gigabytes).
+pub const MAX_MANIFEST_BYTES: u64 = super::MAX_FILES as u64 * (4096 + 512);
+
+/// `load` under an explicit cap, so a test can reach the refusal.
+fn load_within(path: &Path, cap: u64) -> Option<FileManifest> {
+    let file = fs::File::open(path).ok()?;
+    parse(&read_capped(file, cap)?)
+}
+
+/// Reads at most `cap` bytes; `None` when the source holds more, so an
+/// oversized file is refused without being read to its end.
+fn read_capped(file: fs::File, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > cap {
+        eprintln!("[ap] file manifest over {cap} bytes; treated as absent");
+        return None;
+    }
+    Some(bytes)
 }
 
 /// Loads the manifest at `path` together with the identity of the exact file
@@ -137,11 +166,9 @@ pub fn load(path: &Path) -> Option<FileManifest> {
 /// to accompany, so a mismatch there must mean "the pair is wrong", never "the
 /// pair was re-read at the wrong moment" (fleet-watch#112 review round 6).
 pub fn load_with_identity(path: &Path) -> Option<(FileManifest, u64, i64)> {
-    use std::io::Read;
-    let mut file = fs::File::open(path).ok()?;
+    let file = fs::File::open(path).ok()?;
     let meta = file.metadata().ok()?;
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
-    file.read_to_end(&mut bytes).ok()?;
+    let bytes = read_capped(file, MAX_MANIFEST_BYTES)?;
     Some((parse(&bytes)?, meta.len(), mtime_ns(&meta)))
 }
 
@@ -216,6 +243,24 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_manifest_over_the_cap_is_refused() {
+        // Codex security review of #478: an oversized manifest is treated as
+        // absent rather than read whole.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(MANIFEST_FILE);
+        save(&path, &FileManifest::new()).expect("save");
+        let size = fs::metadata(&path).expect("stat").len();
+        assert!(
+            load_within(&path, size).is_some(),
+            "the cap itself is allowed"
+        );
+        assert!(
+            load_within(&path, size - 1).is_none(),
+            "one byte over is refused"
+        );
+    }
 
     #[test]
     fn round_trips_through_disk() {
