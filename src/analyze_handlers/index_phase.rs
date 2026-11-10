@@ -151,11 +151,16 @@ fn is_own_graph(graph_dir: &std::path::Path) -> bool {
 /// pass the change check (review of #478). `write_graph_meta` records the root
 /// exactly as this compares it.
 fn same_root(req: &AnalyzeRequest) -> bool {
-    std::fs::read_to_string(req.output_dir.join("meta.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    // A regular file of a sane size only (Codex security review of #478): a
+    // FIFO here would block, and a link to `/dev/zero` would never end.
+    indexer::manifest::read_regular_capped(&req.output_dir.join("meta.json"), META_MAX_BYTES)
+        .and_then(|(bytes, _)| serde_json::from_slice::<Value>(&bytes).ok())
         .is_some_and(|m| m["root"].as_str() == Some(&*req.codebase.to_string_lossy()))
 }
+
+/// `meta.json` holds a root path, a commit sha and the manifest's identity: a
+/// few kilobytes. 1 MiB is a fail-safe bound; over it the graph is rebuilt.
+const META_MAX_BYTES: u64 = 1 << 20;
 
 /// True when the graph holds language-server rows, or cannot say. A fresh
 /// analysis without `lsp` has none, and `resolve_graph` does not drop them, so

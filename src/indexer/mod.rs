@@ -441,7 +441,7 @@ fn fold_iac_gaps(collector: &mut CoverageCollector, gaps: iac::IacGaps) {
         collector.record_partial(&rel, ranges);
     }
     for (rel, reason) in gaps.skipped {
-        collector.record_skipped(&rel, reason);
+        collector.record_iac_skipped(&rel, reason);
     }
 }
 

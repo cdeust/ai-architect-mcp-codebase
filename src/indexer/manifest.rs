@@ -137,23 +137,41 @@ pub const MAX_MANIFEST_BYTES: u64 = super::MAX_FILES as u64 * (4096 + 512);
 
 /// `load` under an explicit cap, so a test can reach the refusal.
 fn load_within(path: &Path, cap: u64) -> Option<FileManifest> {
-    let file = fs::File::open(path).ok()?;
-    parse(&read_capped(file, cap)?)
+    parse(&read_regular_capped(path, cap)?.0)
 }
 
-/// Reads at most `cap` bytes; `None` when the source holds more, so an
-/// oversized file is refused without being read to its end.
-fn read_capped(file: fs::File, cap: u64) -> Option<Vec<u8>> {
+/// The bytes of the sidecar at `path` and the metadata of the handle they came
+/// from, or `None` when `path` is not a regular file or holds more than `cap`
+/// bytes (reviews of #478). A sidecar can arrive from an artifact, so a FIFO
+/// (whose `open` blocks), a link to `/dev/zero` (endless) or a compressible
+/// entry that expands to gigabytes must not be read: the type is checked
+/// before `open` and again on the handle, and the read stops past `cap`.
+pub(crate) fn read_regular_capped(path: &Path, cap: u64) -> Option<(Vec<u8>, fs::Metadata)> {
     use std::io::Read;
+    if !fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        eprintln!(
+            "[ap] sidecar {} is not a regular file; treated as absent",
+            path.display()
+        );
+        return None;
+    }
+    let file = fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() {
+        return None;
+    }
     let mut bytes = Vec::new();
     file.take(cap.saturating_add(1))
         .read_to_end(&mut bytes)
         .ok()?;
     if bytes.len() as u64 > cap {
-        eprintln!("[ap] file manifest over {cap} bytes; treated as absent");
+        eprintln!(
+            "[ap] sidecar {} is over {cap} bytes; treated as absent",
+            path.display()
+        );
         return None;
     }
-    Some(bytes)
+    Some((bytes, meta))
 }
 
 /// Loads the manifest at `path` together with the identity of the exact file
@@ -166,9 +184,7 @@ fn read_capped(file: fs::File, cap: u64) -> Option<Vec<u8>> {
 /// to accompany, so a mismatch there must mean "the pair is wrong", never "the
 /// pair was re-read at the wrong moment" (fleet-watch#112 review round 6).
 pub fn load_with_identity(path: &Path) -> Option<(FileManifest, u64, i64)> {
-    let file = fs::File::open(path).ok()?;
-    let meta = file.metadata().ok()?;
-    let bytes = read_capped(file, MAX_MANIFEST_BYTES)?;
+    let (bytes, meta) = read_regular_capped(path, MAX_MANIFEST_BYTES)?;
     Some((parse(&bytes)?, meta.len(), mtime_ns(&meta)))
 }
 
@@ -260,6 +276,22 @@ mod tests {
             load_within(&path, size - 1).is_none(),
             "one byte over is refused"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_manifest_that_is_not_a_regular_file_is_not_opened() {
+        // Codex review of #478: a FIFO with no writer blocks `open` forever,
+        // so reaching the assertions means nothing opened it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(MANIFEST_FILE);
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo");
+        assert!(made.success());
+        assert!(load(&path).is_none());
+        assert!(load_with_identity(&path).is_none());
     }
 
     #[test]

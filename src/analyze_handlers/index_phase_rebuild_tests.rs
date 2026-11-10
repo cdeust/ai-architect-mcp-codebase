@@ -457,3 +457,42 @@ fn an_unchanged_pass_rewrites_cargo_facts_a_failed_write_lost() {
         "the facts are back"
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn a_coverage_sidecar_that_is_not_a_regular_file_is_rebuilt_not_read() {
+    // Codex review of #478: the reuse check reads the coverage sidecar. A FIFO
+    // with no writer would block that read forever; it must read as absent,
+    // so the call rebuilds (and the rebuild removes it).
+    let (repo, base) = fixture("analyze443_cov_fifo_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let cov = crate::indexer::coverage::coverage_path(&out);
+    fs::remove_file(&cov).expect("drop the report");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&cov)
+        .status()
+        .expect("mkfifo");
+    assert!(made.success());
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_meta_json_that_is_not_a_regular_file_is_rebuilt_not_read() {
+    // Codex security review of #478: `same_root` reads `meta.json` before
+    // reusing a graph. A FIFO with no writer would block that read forever.
+    let (repo, base) = fixture("analyze443_meta_fifo_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let meta = out.join("meta.json");
+    fs::remove_file(&meta).expect("drop meta.json");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&meta)
+        .status()
+        .expect("mkfifo");
+    assert!(made.success());
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}

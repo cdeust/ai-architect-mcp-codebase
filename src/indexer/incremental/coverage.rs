@@ -71,16 +71,21 @@ fn merge_coverage(
     // entries for discovered files are subtracted: a pruned directory (e.g.
     // `user_excluded`) is a `skipped` entry too, but it was never part of
     // `files_indexed` (Codex review of #478: one file plus one excluded
-    // directory read 1 on the full run and 0 on reuse).
+    // directory read 1 on the full run and 0 on reuse). Nor is an IaC file the
+    // IaC pass could not read: the main pass wrote its File node, and the full
+    // index counts it (`record_iac_skipped`).
     let not_indexed = report
         .files
         .iter()
         .filter(|(rel, c)| {
             current_rels.contains(*rel)
-                && matches!(
-                    c.kind,
-                    coverage::CoverageKind::Skipped | coverage::CoverageKind::Quarantined
-                )
+                && match c.kind {
+                    coverage::CoverageKind::Skipped => {
+                        c.detail != super::super::iac::IAC_SKIP_DETAIL
+                    }
+                    coverage::CoverageKind::Quarantined => true,
+                    _ => false,
+                }
         })
         .count() as u64;
     report.files_indexed = files_indexed.saturating_sub(not_indexed);

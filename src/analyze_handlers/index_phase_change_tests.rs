@@ -2,6 +2,7 @@
 //! `analyze_codebase` rebuild, and which do not.
 
 use super::tests::{analyze, fixture, outcome};
+use crate::test_support::TempDirExt;
 use serde_json::{json, Value};
 use std::fs;
 
@@ -203,5 +204,34 @@ fn full_manifest_and_the_change_check_see_an_edit_made_after_the_snapshot() {
     assert!(
         !crate::indexer::tree_changed_since(&repo, &opts, &after).expect("check"),
         "a manifest taken after the edit would hide it: the ordering is what matters"
+    );
+}
+
+#[test]
+fn an_iac_file_the_iac_pass_cannot_read_keeps_its_count_on_reuse() {
+    // Codex review of #478: the main pass indexes a Dockerfile that is not
+    // UTF-8 (its File node is written), the IaC pass records it as skipped,
+    // and the full receipt counts it. The reused receipt counted it out.
+    let base = tempfile::Builder::new()
+        .prefix("analyze443_iac_skip_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let repo = base.join("repo");
+    fs::create_dir_all(&repo).expect("mk repo");
+    fs::write(repo.join("Dockerfile"), b"FROM \xff\xfe scratch\n").expect("write Dockerfile");
+    let out = base.join("out");
+    let args = json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+    });
+    let first = crate::analyze_handlers::do_analyze_codebase(&args).expect("first");
+    assert_eq!(first["index"]["mode"], "full", "{first}");
+    assert_eq!(first["coverage"]["files_indexed"], 1, "{first}");
+    let second = crate::analyze_handlers::do_analyze_codebase(&args).expect("second");
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert_eq!(
+        second["coverage"]["files_indexed"], first["coverage"]["files_indexed"],
+        "{second}"
     );
 }
