@@ -54,6 +54,14 @@ run. These measurements establish file-retrieval results and protocol costs.
 AI-agent success, hallucination reduction and real-world token savings were
 not measured.
 
+The payload token proxy is therefore not a session cost, and the README does
+not quote it as one. An independent audit of v0.14.0 (issue #451, macOS
+arm64) measured real `get_impact` answers at 400 to 1,070 tokens against 43
+for this envelope, found `git grep` smaller on 4 of 5 questions, and measured
+the tool prompt at 7.6k tokens (`core`) to 16.7k (`full`), a break-even
+against grep of about 15 to 33 questions per session. Those figures come from
+the audit and have not been reproduced by a script in this repository.
+
 ## Bulk insert strategies
 
 Re-measured on 2026-07-28 with `lbug 0.18`, rustc 1.95.0, macOS 26.5.1 arm64,
