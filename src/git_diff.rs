@@ -683,6 +683,43 @@ mod tests {
         // A signed `format-patch` whose last section has no hunk (chmod).
         let chmod = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n-- \n2.43.0\n";
         assert!(parse_unified_diff(chmod).unwrap().is_empty());
+        // A series whose first patch ends with a hunk-less section (chmod):
+        // the next `From ` falls in that section's trailer.
+        let chmod_end = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+A\n\
+                         diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n-- \n2.43.0\n\n\
+                         From 2222 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 2/2] b\n---\n m.rs | 2 +-\n\n\
+                         diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -40 +40 @@\n-b\n+B\n";
+        let merged = merge_by_path(parse_unified_diff(chmod_end).unwrap());
+        assert!(
+            merged.iter().any(|h| h.malformed),
+            "{:?}",
+            merged.iter().map(|h| &h.file_path).collect::<Vec<_>>()
+        );
+        // The same with `git log -p --oneline`.
+        let oneline_chmod = "a1 one\ndiff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+A\n\
+                             diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\nb2 two\n\
+                             diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -40 +40 @@\n-b\n+B\n";
+        let merged = merge_by_path(parse_unified_diff(oneline_chmod).unwrap());
+        assert!(merged.iter().any(|h| h.malformed));
+        // A git diff with several hunk-less sections after a hunk stays readable.
+        let modes = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+A\n\
+                     diff --git a/a.sh b/a.sh\nold mode 100644\nnew mode 100755\n\
+                     diff --git a/e.rs b/e.rs\nnew file mode 100644\nindex 0000000..e69de29\n\
+                     diff --git a/o.rs b/n.rs\nsimilarity index 100%\nrename from o.rs\nrename to n.rs\n\
+                     diff --git a/i.png b/i.png\nindex 1..2 100644\nGIT binary patch\nliteral 3\nzcmV\n\nliteral 0\nKcmV+b0RR6000031\n\n";
+        let hs = parse_unified_diff(modes).unwrap();
+        assert!(
+            hs.iter().all(|h| !h.malformed),
+            "{:?}",
+            hs.iter()
+                .map(|h| (&h.file_path, h.malformed))
+                .collect::<Vec<_>>()
+        );
+        // `hg diff` and `svn diff` binary notices are binary.
+        let hg = "diff -r 0123abcd img.png\nBinary file img.png has changed\n";
+        assert!(parse_unified_diff(hg).unwrap()[0].binary);
+        let svn = "Index: img.png\n=====\nCannot display: file marked as a binary type.\n";
+        assert!(parse_unified_diff(svn).unwrap()[0].binary);
         // A default `git format-patch --stdout` series: each patch ends with
         // the `-- ` signature, and the next `From ` line falls in it.
         let series = "From 1111 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 1/2] a\n---\n\

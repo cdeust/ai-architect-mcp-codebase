@@ -49,7 +49,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   content hunk; when a non-empty diff holds no readable section at all (a diff
   whose sections change no line, such as a chmod, stays `exact`); when `diff -r`
   without `-N` lists a one-sided file as an `Only in` line; when a
-  section is binary; or when the symbol load fails (one reason for the whole
+  section is binary (also `hg diff` and `svn diff` binary notices); or when
+  the symbol load fails (one reason for the whole
   diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after
   a tab) name their file, and `git diff` also runs with `--no-renames
   --no-textconv -c core.quotePath=false`. `next_steps` suggests `lsp_resolve`

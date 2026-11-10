@@ -104,6 +104,10 @@ struct FileSection {
     /// are not in the diff.
     deleted_mode: bool,
     empty_pre_image: bool,
+    /// An earlier section of this diff had a hunk: a commit boundary or
+    /// stray text can come after a hunk-less section too (a series whose
+    /// patch ends with a chmod).
+    prior_hunk: bool,
 }
 
 impl FileSection {
@@ -221,7 +225,8 @@ impl FileSection {
         // `git format-patch --stdout` series ends with a `-- ` signature, and
         // the next patch's `From ` line comes inside that trailer. The `From `
         // line before the first patch comes before any hunk and is exempt.
-        if self.had_hunk && (line.starts_with("commit ") || line.starts_with("From ")) {
+        let after_hunk = self.had_hunk || self.prior_hunk;
+        if after_hunk && (line.starts_with("commit ") || line.starts_with("From ")) {
             self.malformed = true;
             self.in_trailer = true;
             return;
@@ -244,7 +249,16 @@ impl FileSection {
             self.renamed = true;
             return;
         }
-        if line.starts_with("Binary files ") || line.starts_with("GIT binary patch") {
+        if self.binary {
+            // `GIT binary patch` data (`literal`, base85 lines).
+            return;
+        }
+        // GNU `Binary files … differ`, `hg diff` `Binary file … has changed`,
+        // `svn diff` `Cannot display: file marked as a binary type.`
+        if line.starts_with("Binary file")
+            || line.starts_with("GIT binary patch")
+            || line.starts_with("Cannot display: ")
+        {
             self.binary = true;
             return;
         }
@@ -263,6 +277,17 @@ impl FileSection {
             // commit-message lines come before any file header.
             let named = self.path.is_some() || self.git_path.is_some();
             if named && line.starts_with(['+', '-', ' ']) {
+                self.malformed = true;
+            }
+            // After a hunk elsewhere in the diff, a hunk-less git section holds
+            // only extended headers: anything else is a commit boundary
+            // (`git log -p --oneline`) or text that is no diff.
+            if named
+                && self.prior_hunk
+                && !line.is_empty()
+                && !EXTENDED_HEADERS.iter().any(|p| line.starts_with(p))
+                && !BETWEEN_FILES.iter().any(|p| line.starts_with(p))
+            {
                 self.malformed = true;
             }
             return;
@@ -318,6 +343,22 @@ impl FileSection {
         })
     }
 }
+
+/// The extended header lines `git diff` prints between `diff --git` and the
+/// first hunk (`git help diff`, "generating patch text with -p").
+const EXTENDED_HEADERS: &[&str] = &[
+    "old mode ",
+    "new mode ",
+    "deleted file mode ",
+    "new file mode ",
+    "copy from ",
+    "copy to ",
+    "rename from ",
+    "rename to ",
+    "similarity index ",
+    "dissimilarity index ",
+    "index ",
+];
 
 /// Lines a diff tool prints after a file's last hunk and before the next
 /// file's headers: a blank line, the `\ No newline` marker, the command line
@@ -441,7 +482,9 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
         if section.in_hunk() && !header {
             section.body_line(line)?;
         } else if line.starts_with("diff --git") {
+            let prior = section.had_hunk || section.prior_hunk;
             hunks.extend(std::mem::take(&mut section).into_hunk());
+            section.prior_hunk = prior;
             section.git_path = git_header_path(line);
         } else if line.starts_with("@@ ") {
             section.start_hunk(line)?;
@@ -457,7 +500,9 @@ pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, Strin
             // (plain `diff -u`) starts a new section, even after a hunk that
             // could not be read.
             if section.seen_new_header {
+                let prior = section.had_hunk || section.prior_hunk;
                 hunks.extend(std::mem::take(&mut section).into_hunk());
+                section.prior_hunk = prior;
             }
             match header_path(old, "a/") {
                 // For a deleted file, this is the only place the path appears.
