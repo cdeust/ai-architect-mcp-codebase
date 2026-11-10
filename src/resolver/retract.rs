@@ -20,6 +20,11 @@
 //      (`retract_unmet`): per-site rows first, then caller-level rows, keeping a
 //      caller-level row that a surviving per-site row of the same caller and
 //      target still supports (a language-server site; Codex review of #496).
+//      No site is reopened here: the sites these rows alone resolved were
+//      reopened in step 1 and the pass resolved again the ones it decides (a
+//      site that now reaches an Enum, Trait or alias holds no per-site row yet
+//      stays resolved; Claude review of #496), and a site another writer also
+//      resolves keeps that writer's row.
 // A crash between 1 and 3 leaves sites open whose rows still exist: the safe
 // side, which the next resolve repairs.
 //
@@ -109,18 +114,17 @@ pub(super) fn reopen_static_sites(
         .filter(|(rel, _, _)| site_tables().any(|(t, _, _)| t == rel))
         .map(|(_, from, _)| from.as_str())
         .collect();
-    reopen_sites_without_row(store, &sites, Some(&method_list()))
+    reopen_sites_without_row(store, &sites, &method_list())
 }
 
 /// Step 3: deletes the rows of `owned` absent from `met` (the persisted rows
 /// the pass decided again), per-site rows first, and keeps a caller-level row
-/// that a surviving per-site row of the same caller and target supports. Then
-/// reopens the sites left without any per-site call row. Returns the number of
-/// rows deleted.
+/// that a surviving per-site row of the same caller and target supports.
+/// Returns the number of rows deleted.
 ///
 /// Precondition: `owned` was read by `load_static_call_rows` before the pass,
 /// and the pass's buffer has been flushed. Idempotent: a second call with the
-/// same arguments finds nothing left to delete and reopens the same sites.
+/// same arguments finds nothing left to delete.
 pub(super) fn retract_unmet(
     store: &GraphStore,
     owned: &HashSet<RowKey>,
@@ -150,8 +154,6 @@ pub(super) fn retract_unmet(
         delete_static_row(store, rel, (from, to), caller, to_id)?;
         deleted += 1;
     }
-    let sites: BTreeSet<&str> = per_site.iter().map(|(_, from, _)| from.as_str()).collect();
-    reopen_sites_without_row(store, &sites, None)?;
     Ok(deleted)
 }
 
@@ -199,19 +201,17 @@ fn supported_by_site(
 }
 
 /// Sets `is_resolved = false` on the sites of `sites` that hold no per-site
-/// call row, ignoring rows whose method is in `ignored` (a quoted list) when
-/// given. A site another writer still resolves keeps its flag.
+/// call row other than rows whose method is in `ignored` (a quoted list). A
+/// site another writer also resolves keeps its flag.
 fn reopen_sites_without_row(
     store: &GraphStore,
     sites: &BTreeSet<&str>,
-    ignored: Option<&str>,
+    ignored: &str,
 ) -> Result<(), String> {
     if sites.is_empty() {
         return Ok(());
     }
-    let filter = ignored
-        .map(|m| format!(" AND NOT r.resolution_method IN [{m}]"))
-        .unwrap_or_default();
+    let filter = format!(" AND NOT r.resolution_method IN [{ignored}]");
     let ids: Vec<&str> = sites.iter().copied().collect();
     let mut with_row: HashSet<String> = HashSet::new();
     for chunk in ids.chunks(500) {

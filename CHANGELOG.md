@@ -42,10 +42,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   `unique-match` rows and the `is_resolved = true` of the earlier pass, which a
   fresh index of the same tree does not have. The static tiers' `Calls_*` rows
   that existed before a pass and that the pass did not stage or meet again are
-  now deleted after the flush, and a call site left without a per-site call row
-  is reopened, with its open reason (the sites only those rows resolve are
-  reopened before the pass, so it writes the reason of each one it leaves
-  open). A caller-level row that a surviving per-site row of the same caller
+  now deleted after the flush. The sites only those rows resolve are reopened
+  before the pass, which resolves again the ones it decides and writes the
+  open reason of the others. A caller-level row that a surviving per-site row of the same caller
   and target still supports (a language-server site) is kept. Language-server,
   macro and structural rows are untouched, and a row the pass meets again keeps
   its properties. `Uses_*`, `Imports_*`,
