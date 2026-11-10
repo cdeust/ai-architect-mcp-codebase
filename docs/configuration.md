@@ -9,8 +9,10 @@ that need more than a sentence.
 
 - [Team-shared graph artifact](#team-shared-graph-artifact)
 - [Excluding directories from the walk](#excluding-directories-from-the-walk)
+- [Full syntax tree (`full_ast`)](#full-syntax-tree-full_ast)
 - [Database address-space reservation (`max_db_size`)](#database-address-space-reservation-max_db_size)
 - [Measured graph sizes](#measured-graph-sizes)
+- [Code-discovery nudge (plugin hooks)](#code-discovery-nudge-plugin-hooks)
 
 ## Team-shared graph artifact
 
@@ -72,13 +74,45 @@ included: it is checked first, independently of dependency-directory descent.
 Each pruned directory appears in the coverage sidecar as `skipped` with reason
 `user_excluded`, and the response's `coverage.skipped.user_excluded_count`
 carries the exact count. Changing `exclude_dirs` on an existing graph requires
-`"full": true`, because the incremental-index manifest does not record it (the
-same holds for `dependency_scope`).
+`"full": true` on `index_codebase`, whose incremental pass does not compare
+settings (the same holds for `dependency_scope`). `analyze_codebase` needs no
+flag: the manifest records both, with `language` and the server version, and
+analyze rebuilds when any of them differs.
 
 Separately from `exclude_dirs`, a directory the OS refuses to read
 (`EACCES` / `PermissionDenied`) does not abort the index. It is recorded in the
 coverage sidecar with reason `unreadable` and the walk continues, so one
 locked subdirectory cannot discard an otherwise successful index.
+
+## Full syntax tree (`full_ast`)
+
+Issue #448. `index_codebase` and `analyze_codebase` both accept `"full_ast"`
+(default `false`). With `true`, every parsed file also gets:
+
+- one `AstNode` row per tree-sitter node, named and anonymous, with a
+  `Defines_File_AstNode` edge from the file to the tree root and one
+  `AstChild_AstNode_AstNode` edge from each parent node to each of its
+  children;
+- one `FileContent` row holding the file's zstd-compressed source, so the
+  exact text of any `AstNode` is recoverable from its byte offsets.
+
+It is off by default because it dominates the graph and no typed tool reads
+it (raw `query_graph` Cypher is the only way to reach it): an audit of
+release v0.14.0 on django (7,008 files) found `AstNode` rows were 94.7 % of
+the graph's nodes. Symbols, calls, imports, communities and processes are
+indexed the same way with or without it.
+
+The flag applies to the files a call parses. `analyze_codebase` rebuilds the
+graph from scratch on every call, so its flag applies to every file.
+`index_codebase` is incremental by default and its manifest does not record
+the flag, so switching it on or off for an existing graph there takes
+`"full": true` (the same contract `full` already has for `language`,
+`dependency_scope` and `exclude_dirs`); until then, files not re-parsed since
+keep the layer they were indexed with. An artifact imported by
+`"bootstrap": true` keeps the layer it was exported with for the files it
+does not re-parse; a stale artifact's fill re-parses the changed files with
+the call's flag, so the result can mix both. `"full": true` does not stop that
+import: on a fresh clone, bootstrap runs before the full-index decision.
 
 ## Database address-space reservation (`max_db_size`)
 
@@ -135,3 +169,37 @@ Measured on 2026-07-15 with `du -k` on every `graph` file found under
 
 The 75 graphs totalled about 4.87 GiB. Every graph outside the top three
 (which include `node_modules`) was under 150 MiB.
+
+## Code-discovery nudge (plugin hooks)
+
+The Claude Code plugin registers two hooks in `hooks/hooks.json` (issue #198).
+Nothing is written to `~/.claude/settings.json`.
+
+| Event | Matcher | Output |
+| --- | --- | --- |
+| `SessionStart` | `startup\|resume\|clear\|compact` | the nudge as plain text |
+| `SubagentStart` | `*` | `hookSpecificOutput.additionalContext` JSON carrying the same text |
+
+The nudge names the graph tools for structural questions (`search_codebase`,
+`get_symbol`, `get_context`, `get_impact`, `detect_changes`, `query_graph`),
+says to run `analyze_codebase` on a repository that is not indexed yet, and
+points at `query_graph(graph="missed")` before a negative conclusion. It does
+not claim the graph is complete. There is no `PreToolUse` hook: the plugin
+never sits in front of `Grep` or `Glob`.
+
+**Cost.** The text is 711 bytes, 91 words, paid on every session start and every
+subagent spawn. At the usual 3–4 bytes per token for English that is about 180
+to 240 tokens; this range is an estimate, not a tokenizer measurement.
+`scripts/tests/test_discovery_nudge_hooks.py` caps the text at 900 bytes.
+
+**Fail-open.** `hooks/discovery-nudge.sh` exits 0 with no output when the mode
+is missing or unknown, when stdout is closed or full, and when the reader has
+gone away (SIGPIPE is ignored). It runs no external command: both payloads are
+constants written with the `printf` builtin, so it works with an empty `PATH`.
+The tests assert each of these under `sh` (required, as `hooks.json` runs it),
+and under `dash` and `bash` where installed; on Ubuntu `sh` is dash.
+The hook needs a POSIX `sh` on `PATH`. On Windows that means `sh` from Git Bash.
+The hook has not been run on Windows.
+
+**Turning it off.** Claude Code has no per-plugin hook switch. To drop the
+nudge, disable the plugin or set `"disableAllHooks": true` in your settings.

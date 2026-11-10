@@ -48,12 +48,51 @@ pub struct FileState {
     pub content_hash: String,
 }
 
+/// The walk and parse settings a graph was built with (issue #443).
+///
+/// The per-file states say WHICH files changed; they cannot say whether the
+/// caller now asks for a different language filter, dependency tier or set of
+/// excluded directories, any of which changes which files belong in the graph
+/// at all. A pass that wants to reuse the graph incrementally compares this
+/// value with its own settings and rebuilds in full on any difference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexScope {
+    /// The version of the server that built the graph. A newer build may parse
+    /// or resolve differently, so its graph is not reused across versions.
+    #[serde(default)]
+    pub indexer_version: Option<String>,
+    /// `None` for per-file auto-detection, else the forced language.
+    pub language: Option<String>,
+    pub dependency_scope: String,
+    /// `ExcludeSet::canonical_entries`: sorted, kind-tagged.
+    pub exclude_dirs: Vec<String>,
+    /// Issue #448 — whether the full-AST layer was persisted. Absent in a
+    /// manifest written before the flag existed, when no graph carried it.
+    #[serde(default)]
+    pub full_ast: bool,
+}
+
 /// The whole sidecar: schema tag + rel_path → state map. `BTreeMap` keeps the
 /// serialized order stable so the JSON diffs cleanly across re-indexes.
+///
+/// `scope` is optional so a manifest written before issue #443 still loads; an
+/// absent scope means "settings unknown", never "settings match".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileManifest {
     pub schema_version: u32,
+    /// At most `MAX_FILES` entries when read back (`bounded_files`).
+    #[serde(deserialize_with = "bounded_files")]
     pub files: BTreeMap<String, FileState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<IndexScope>,
+    /// `CargoFacts::digest` of the pass that last wrote this manifest (review of
+    /// #478), which a reuse requires to be the map the graph holds:
+    /// the Cargo map the resolver reads comes from manifests the walk may not
+    /// list (`Cargo.toml` under `language: "rust"`, a path dependency outside
+    /// the tree), so the per-file states cannot see it change. Absent means
+    /// "unknown", never "unchanged".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo_facts: Option<String>,
 }
 
 impl FileManifest {
@@ -62,7 +101,17 @@ impl FileManifest {
         FileManifest {
             schema_version: MANIFEST_SCHEMA_VERSION,
             files: BTreeMap::new(),
+            scope: None,
+            cargo_facts: None,
         }
+    }
+
+    /// This manifest, recording `digest` as the Cargo map of the pass that
+    /// built the graph. A full index takes its snapshot before it runs (so a
+    /// file saved during it reads as changed) and only knows the map after.
+    pub fn with_cargo_facts(mut self, digest: &str) -> Self {
+        self.cargo_facts = Some(digest.to_string());
+        self
     }
 }
 
@@ -78,10 +127,91 @@ pub fn manifest_path(output_dir: &Path) -> PathBuf {
 /// `None` for every other case (absent, unreadable, unparseable, or a newer
 /// schema). `None` is the caller's signal that no incremental baseline exists,
 /// so it must fall back to a full index — never a hard error, so a corrupt
-/// sidecar degrades to a full rebuild instead of failing the tool.
+/// sidecar degrades to a full rebuild instead of failing the tool. A file over
+/// `MAX_MANIFEST_BYTES` is `None` too, and is read no further than that.
 pub fn load(path: &Path) -> Option<FileManifest> {
-    let bytes = fs::read(path).ok()?;
-    parse(&bytes)
+    load_within(path, MAX_MANIFEST_BYTES)
+}
+
+/// A practical byte budget for a manifest: `MAX_FILES` entries averaging 1280
+/// bytes (a root-relative path plus its pretty-printed `FileState`, about 200
+/// bytes of which are fixed), about 128 MB. A real tree averages a fraction of
+/// that. A larger file reads as absent, so the caller rebuilds; it is never
+/// read whole (Codex security reviews of #478: a compressible archive entry
+/// expands to gigabytes). The entry count is bounded separately while parsing,
+/// because short entries under this budget would still number in millions.
+pub const MAX_MANIFEST_BYTES: u64 = super::MAX_FILES as u64 * 1280;
+
+/// Deserializes `files`, failing at the first entry past `MAX_FILES`, before
+/// the map grows further: no index writes more, and a planted manifest of
+/// millions of short entries would otherwise allocate far more than its bytes.
+fn bounded_files<'de, D>(deserializer: D) -> Result<BTreeMap<String, FileState>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct Bounded;
+    impl<'de> serde::de::Visitor<'de> for Bounded {
+        type Value = BTreeMap<String, FileState>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a map of at most {} file states", super::MAX_FILES)
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut files = BTreeMap::new();
+            while let Some((rel, state)) = map.next_entry::<String, FileState>()? {
+                if files.len() >= super::MAX_FILES {
+                    return Err(serde::de::Error::custom(format!(
+                        "more than {} file states",
+                        super::MAX_FILES
+                    )));
+                }
+                files.insert(rel, state);
+            }
+            Ok(files)
+        }
+    }
+    deserializer.deserialize_map(Bounded)
+}
+
+/// `load` under an explicit cap, so a test can reach the refusal.
+fn load_within(path: &Path, cap: u64) -> Option<FileManifest> {
+    parse(&read_regular_capped(path, cap)?.0)
+}
+
+/// The bytes of the sidecar at `path` and the metadata of the handle they came
+/// from, or `None` when `path` is not a regular file or holds more than `cap`
+/// bytes (reviews of #478). A sidecar can arrive from an artifact, so a FIFO
+/// (whose `open` blocks), a link to `/dev/zero` (endless) or a compressible
+/// entry that expands to gigabytes must not be read: the type is checked
+/// before `open` and again on the handle, and the read stops past `cap`.
+pub(crate) fn read_regular_capped(path: &Path, cap: u64) -> Option<(Vec<u8>, fs::Metadata)> {
+    use std::io::Read;
+    if !fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        eprintln!(
+            "[ap] sidecar {} is not a regular file; treated as absent",
+            path.display()
+        );
+        return None;
+    }
+    let file = fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > cap {
+        eprintln!(
+            "[ap] sidecar {} is over {cap} bytes; treated as absent",
+            path.display()
+        );
+        return None;
+    }
+    Some((bytes, meta))
 }
 
 /// Loads the manifest at `path` together with the identity of the exact file
@@ -94,11 +224,7 @@ pub fn load(path: &Path) -> Option<FileManifest> {
 /// to accompany, so a mismatch there must mean "the pair is wrong", never "the
 /// pair was re-read at the wrong moment" (fleet-watch#112 review round 6).
 pub fn load_with_identity(path: &Path) -> Option<(FileManifest, u64, i64)> {
-    use std::io::Read;
-    let mut file = fs::File::open(path).ok()?;
-    let meta = file.metadata().ok()?;
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
-    file.read_to_end(&mut bytes).ok()?;
+    let (bytes, meta) = read_regular_capped(path, MAX_MANIFEST_BYTES)?;
     Some((parse(&bytes)?, meta.len(), mtime_ns(&meta)))
 }
 
@@ -149,10 +275,14 @@ pub fn mtime_ns(meta: &fs::Metadata) -> i64 {
 /// source: the RustCrypto `sha2` crate already vendored for stage-2
 /// transcript digests (Cargo.toml) — same primitive, reused; no new dependency.
 pub fn hash_file(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
+    fs::read(path).ok().map(|bytes| hash_bytes(&bytes))
+}
+
+/// Lowercase hex SHA-256 of `bytes`.
+pub fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Some(hex_lower(&hasher.finalize()))
+    hasher.update(bytes);
+    hex_lower(&hasher.finalize())
 }
 
 /// Encodes bytes as a lowercase hex string.
@@ -169,6 +299,63 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_manifest_with_more_entries_than_max_files_is_refused() {
+        // Codex security review of #478: short entries under the byte budget
+        // could number in millions; parsing stops at the first past MAX_FILES.
+        let entry = r#"{"mtime_ns":0,"size":0,"content_hash":""}"#;
+        let body = |n: usize| {
+            let files: Vec<String> = (0..n).map(|i| format!("\"{i}\":{entry}")).collect();
+            format!(r#"{{"schema_version":1,"files":{{{}}}}}"#, files.join(","))
+        };
+        let max = super::super::MAX_FILES;
+        assert_eq!(
+            parse(body(max).as_bytes())
+                .expect("at the limit")
+                .files
+                .len(),
+            max
+        );
+        assert!(
+            parse(body(max + 1).as_bytes()).is_none(),
+            "one past it is refused"
+        );
+    }
+
+    #[test]
+    fn a_manifest_over_the_cap_is_refused() {
+        // Codex security review of #478: an oversized manifest is treated as
+        // absent rather than read whole.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(MANIFEST_FILE);
+        save(&path, &FileManifest::new()).expect("save");
+        let size = fs::metadata(&path).expect("stat").len();
+        assert!(
+            load_within(&path, size).is_some(),
+            "the cap itself is allowed"
+        );
+        assert!(
+            load_within(&path, size - 1).is_none(),
+            "one byte over is refused"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_manifest_that_is_not_a_regular_file_is_not_opened() {
+        // Codex review of #478: a FIFO with no writer blocks `open` forever,
+        // so reaching the assertions means nothing opened it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(MANIFEST_FILE);
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo");
+        assert!(made.success());
+        assert!(load(&path).is_none());
+        assert!(load_with_identity(&path).is_none());
+    }
 
     #[test]
     fn round_trips_through_disk() {

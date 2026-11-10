@@ -7,7 +7,8 @@
 // walk→parse→persist machinery the full index uses, and re-derives the
 // light-link edges out of them. It depends inward on `graph_store` (the store
 // port), `parser`, and its sibling indexer submodules; nothing depends on it
-// except the composition root (`do_index_codebase`) and its tests.
+// except the composition roots (`do_index_codebase`, and `analyze_codebase`'s
+// reuse check and refresh, issue #443) and their tests.
 //
 // Reference: DeusData/codebase-memory-mcp `src/pipeline/pipeline_incremental.c`.
 // Their design, adapted to AP's store and improved:
@@ -45,9 +46,11 @@
 //   * `edges`     — the inbound cross-file edge snapshot/re-link pair that
 //     keeps a resolved graph's edges into a changed file from being orphaned
 //     by its purge.
-// This file keeps the two entry points (`index_incremental`,
-// `write_full_manifest`) and `apply_changes`, the shared core both
-// `index_incremental` and `bootstrap::fill_after_bootstrap` call.
+// This file keeps the entry points (`index_incremental`, `full_manifest`,
+// whose snapshot both full paths take before indexing, and
+// `write_full_manifest`, which now only builds test fixtures) and
+// `apply_changes`, the shared core both `index_incremental` and
+// `bootstrap::fill_after_bootstrap` call.
 
 use crate::graph_store::GraphStore;
 use std::collections::HashSet;
@@ -62,6 +65,7 @@ use super::{light_link, IncrementalResult, IndexOptions};
 use std::collections::BTreeMap;
 
 mod bootstrap;
+mod change_check;
 mod classify;
 mod coverage;
 mod edges;
@@ -69,6 +73,8 @@ mod mutate;
 mod stale_sites;
 
 pub use bootstrap::{fill_after_bootstrap, FillMethod, FillResult};
+use change_check::check_total_bytes;
+pub use change_check::tree_changed_since;
 use classify::{classify, discover};
 pub(super) use coverage::apply_cargo_facts;
 use coverage::save_incremental_coverage;
@@ -147,6 +153,10 @@ pub(super) struct Plan {
 /// files by class. Invariant preserved across the pass: for every unchanged
 /// file, none of its nodes or edges are touched (asserted by the integration
 /// test's per-file count check).
+///
+/// The refreshed manifest keeps `prior`'s scope only when this pass changed no
+/// file, ran with the same settings, computed the same Cargo map, and saved a
+/// coverage report built on the previous one (issue #443, reviews of #478).
 pub fn index_incremental(
     codebase: &Path,
     graph_dir: &Path,
@@ -166,28 +176,39 @@ pub fn index_incremental(
     // No create_schema() here: the graph already exists (this path is reached
     // only when a prior full index built it with the current schema), and the
     // DDL pass is ~0.4s of pure fixed cost that would defeat the whole point of
-    // an incremental re-index. A schema mismatch is instead the caller's cue to
-    // pass `full: true` (documented on the tool). source: measured — skipping
+    // an incremental re-index. A schema mismatch fails this pass instead, and
+    // both callers then fall back to a full rebuild on their own. source: measured — skipping
     // the redundant CREATE TABLE IF NOT EXISTS pass is the single largest
     // incremental speedup on small change sets.
 
-    let policy = ParsePolicy {
-        dependency_scope: options.dependency_scope,
-        language_filter: options.language_filter,
-    };
+    let policy = options.parse_policy();
     let walk_opts = WalkOptions {
         language_filter: options.language_filter,
         dependency_scope: options.dependency_scope,
         exclude_dirs: options.exclude_dirs.clone(),
     };
     let (current, walk_gaps, walk_pruned) = discover(codebase, walk_opts)?;
-    let plan = classify(prior, &current);
+    // The full index refuses a tree over the cap; so does this pass, before it
+    // hashes anything (review of #478).
+    check_total_bytes(&current, super::MAX_TOTAL_BYTES)?;
+    let mut plan = classify(prior, &current);
+    // Issue #443: the refreshed manifest vouches for the graph only when the
+    // graph it extends was built with these same settings AND this pass
+    // changed nothing. Different settings leave files the new ones would add
+    // or drop; an applied change leaves resolver rows `resolve_graph` cannot
+    // invalidate (#478 review). Either way the scope becomes unknown and the
+    // next scope-checking caller (`analyze_codebase`) rebuilds. The same holds
+    // for a changed Cargo map, and for a coverage report that was not saved or
+    // was built without the previous one, decided below once this pass has
+    // computed them.
+    let scope = options.scope();
+    let c = &plan.change_set;
+    let unchanged =
+        c.changed.is_empty() && c.added.is_empty() && c.deleted.is_empty() && c.renamed.is_empty();
+    let settings_match = unchanged && prior.scope.as_ref() == Some(&scope);
 
     let (reparsed, reparsed_gaps) =
         apply_changes(&store, codebase, &plan.change_set, &current, policy)?;
-
-    // Persist the refreshed manifest (built by classify, hashes reused).
-    manifest::save(manifest_path, &plan.next_manifest)?;
 
     // Coverage (issue #57/#249): carry forward unchanged files' gaps, overlay
     // the freshly-reparsed files' gaps (clearing any that are now clean), plus
@@ -195,7 +216,7 @@ pub fn index_incremental(
     // save.
     let mut merged_gaps = reparsed_gaps;
     merged_gaps.extend(walk_gaps);
-    let facts = save_incremental_coverage(
+    let cov = save_incremental_coverage(
         codebase,
         graph_dir,
         &current,
@@ -204,7 +225,24 @@ pub fn index_incremental(
         walk_pruned,
         "incremental",
     );
-    apply_cargo_facts(&store, &facts);
+    // Persist the refreshed manifest (built by classify, hashes reused), now
+    // that this pass's Cargo map is known: an edit to a `Cargo.toml` the walk
+    // does not list changes no file state, only this digest (review of #478).
+    let cargo_facts_digest = cov.facts.digest();
+    let facts_match = prior.cargo_facts.as_deref() == Some(cargo_facts_digest.as_str());
+    // A coverage sidecar that is not this pass's report would be carried
+    // forward by the next reuse as if it were; a report built without the
+    // previous one lost the unchanged files' gaps (Claude reviews of #478).
+    let coverage_saved = cov.write_error.is_none() && cov.prior_loaded;
+    let scope_kept = settings_match && facts_match && coverage_saved;
+    plan.next_manifest.scope = scope_kept.then_some(scope);
+    plan.next_manifest.cargo_facts = Some(cargo_facts_digest);
+    manifest::save(manifest_path, &plan.next_manifest)?;
+    // Every pass writes the facts again, even an unchanged one: the digest
+    // records what was computed, not that each best-effort write landed, so a
+    // pass that skipped them would make a failed write permanent (Claude
+    // review of #478).
+    apply_cargo_facts(&store, &cov.facts);
 
     // Intentionally NO node_count()/edge_count() here — see `IncrementalResult`.
     Ok(IncrementalResult {
@@ -216,6 +254,9 @@ pub fn index_incremental(
         unchanged: plan.unchanged.len() as u64,
         files_reparsed: reparsed,
         elapsed_ms: start.elapsed().as_millis() as u64,
+        coverage: cov.report,
+        coverage_write_error: cov.write_error,
+        scope_kept,
     })
 }
 
@@ -387,12 +428,16 @@ fn record_reparse_outcome(
     }
 }
 
-/// Builds the manifest for a freshly full-indexed `codebase` and writes it to
-/// `manifest_path`, so the NEXT `index_codebase` call can run incrementally.
+/// Builds the manifest for `codebase` and writes it to `manifest_path`. Since
+/// #478 the full paths call `full_manifest` before indexing and save it after;
+/// this one-step form builds fixtures for the tests and the baseline of the
+/// `incremental_speed` benchmark (`benchmarks/incremental_speed`). Like any
+/// manifest written outside a full index, it records no Cargo map, so an
+/// `analyze_codebase` over it rebuilds.
 ///
-/// Preconditions: `codebase` is the tree just indexed with the same
-/// `options` (`language_filter`/`dependency_scope`/`exclude_dirs`);
-/// `manifest_path`'s parent exists. Postcondition on `Ok`: the manifest
+/// Preconditions: `codebase` is the tree a full index under the same
+/// `options` (`language_filter`/`dependency_scope`/`exclude_dirs`) built the
+/// graph from, unchanged since; `manifest_path`'s parent exists. Postcondition on `Ok`: the manifest
 /// records (mtime, size, content_hash) for every file the full index visited,
 /// keyed by the File node id. Best-effort per file: a stat/read failure
 /// records a zeroed/empty state rather than aborting the whole index (the
@@ -402,18 +447,44 @@ fn record_reparse_outcome(
 /// discarded here — the caller (a just-completed full index) already wrote
 /// the coverage sidecar from its own walk; this re-walk exists only to build
 /// the manifest baseline for the NEXT incremental call.
+#[allow(dead_code)] // see the re-export in `indexer/mod.rs`
 pub fn write_full_manifest(
     codebase: &Path,
     manifest_path: &Path,
     options: &IndexOptions,
 ) -> Result<(), String> {
+    manifest::save(manifest_path, &full_manifest(codebase, options)?)
+}
+
+/// The manifest a full index of `codebase` under `options` leaves, built from
+/// the tree as it is now. A full rebuild takes it BEFORE indexing and saves it
+/// after (review of #478): a file added, edited or deleted while the index
+/// runs then differs from this snapshot, so the next reuse check sees it,
+/// instead of a manifest written after the index vouching for a file the
+/// graph never parsed.
+pub fn full_manifest(codebase: &Path, options: &IndexOptions) -> Result<FileManifest, String> {
+    full_manifest_within(codebase, options, super::MAX_TOTAL_BYTES)
+}
+
+/// `full_manifest` under an explicit byte cap, so a caller's test can reach
+/// the refusal without a 2 GiB tree.
+pub fn full_manifest_within(
+    codebase: &Path,
+    options: &IndexOptions,
+    cap: u64,
+) -> Result<FileManifest, String> {
     let walk_opts = WalkOptions {
         language_filter: options.language_filter,
         dependency_scope: options.dependency_scope,
         exclude_dirs: options.exclude_dirs.clone(),
     };
     let (current, _walk_gaps, _walk_pruned) = discover(codebase, walk_opts)?;
+    // Taken before indexing, so the indexer's own cap has not run yet: refuse
+    // a tree over it before hashing anything (Codex review of #478).
+    check_total_bytes(&current, cap)?;
     let mut m = FileManifest::new();
+    // A full index's manifest describes a graph built with exactly `options`.
+    m.scope = Some(options.scope());
     for d in &current {
         m.files.insert(
             d.rel.clone(),
@@ -424,5 +495,9 @@ pub fn write_full_manifest(
             },
         );
     }
-    manifest::save(manifest_path, &m)
+    Ok(m)
 }
+
+#[cfg(test)]
+#[path = "full_manifest_tests.rs"]
+mod full_manifest_tests;

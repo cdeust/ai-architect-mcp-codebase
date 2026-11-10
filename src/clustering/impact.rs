@@ -1,7 +1,7 @@
 use crate::epistemic::{self, Boundary};
 use crate::graph_store::{community_ids, cypher_str, process_names, GraphStore, SymbolMatch};
 
-use super::{impact_context, impact_reasons};
+use super::{impact_context, impact_reasons, impact_sites};
 
 /// A reverse-dependency edge endpoint, carried as a re-queryable handle
 /// (id + qualified_name + label) rather than a flattened name string, so a
@@ -86,6 +86,12 @@ pub struct ImpactResult {
     /// a struct or enum of the repository is filtered; a site with an unknown
     /// receiver is kept. Issue #392.
     pub unresolved_callsites_excluded_other_owner: u64,
+    /// Where the sites of `unresolved_callsites_naming_target` are (id, file,
+    /// line, spelling, reason), by file then line, at most
+    /// `impact_sites::UNRESOLVED_SITES_LISTED` of them: what the agent reads
+    /// when `callers` is incomplete. On a graph without the `unresolved_reason`
+    /// column every site carries `not_recorded`. Issue #445.
+    pub unresolved_callsites: Vec<impact_sites::UnresolvedSite>,
     /// The twins of the target, itself included, with their gate and whether the
     /// default build compiles them; empty when the target is not a twin.
     /// Issue #353.
@@ -132,6 +138,7 @@ pub fn get_impact(store: &GraphStore, qualified_name: &str) -> Result<ImpactResu
         unresolved_callsites_cfg_twins: attribution.cfg_twins,
         unresolved_callsites_by_reason: attribution.by_reason,
         unresolved_callsites_excluded_other_owner: attribution.excluded_other_owner,
+        unresolved_callsites: attribution.sites,
         cfg_twins,
         code_context_basis,
     })
@@ -384,3 +391,7 @@ mod tests;
 #[cfg(test)]
 #[path = "impact_outside_targets_tests.rs"]
 mod outside_targets_tests;
+
+#[cfg(test)]
+#[path = "impact_sites_tests.rs"]
+mod sites_tests;

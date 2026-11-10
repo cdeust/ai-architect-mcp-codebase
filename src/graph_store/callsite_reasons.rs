@@ -111,8 +111,12 @@ pub(crate) fn count_by_reason(reasons: impl Iterator<Item = String>) -> BTreeMap
     by_reason
 }
 
-fn reason_or_not_recorded(reason: &str) -> String {
-    if reason.is_empty() {
+/// The reason a site carries, or `not_recorded` when the cell is empty or the
+/// engine's NULL sentinel (`Null(String)`, how lbug renders an unset STRING
+/// cell; see `resolver::extends`). Issue #445: a site with no reason written
+/// was counted under the literal `Null(String)`.
+pub(crate) fn reason_or_not_recorded(reason: &str) -> String {
+    if reason.is_empty() || reason == "Null(String)" {
         REASON_NOT_RECORDED.to_string()
     } else {
         reason.to_string()
@@ -308,5 +312,19 @@ impl GraphStore {
             by_reason,
             reasons_recorded: self.has_callsite_reasons(),
         })
+    }
+}
+
+#[cfg(test)]
+mod reason_tests {
+    use super::*;
+
+    /// Issue #445: an empty cell and lbug's NULL rendering both read as not
+    /// recorded; a real reason passes through.
+    #[test]
+    fn reason_or_not_recorded_maps_empty_and_null_and_keeps_reasons() {
+        assert_eq!(reason_or_not_recorded(""), REASON_NOT_RECORDED);
+        assert_eq!(reason_or_not_recorded("Null(String)"), REASON_NOT_RECORDED);
+        assert_eq!(reason_or_not_recorded(REASON_NOT_FOUND), REASON_NOT_FOUND);
     }
 }

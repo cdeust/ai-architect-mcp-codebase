@@ -154,6 +154,7 @@ fn test_language_filter_rust_only() {
             language_filter: Some(Language::Rust),
             dependency_scope: indexer::DependencyScope::None,
             exclude_dirs: indexer::ExcludeSet::default(),
+            full_ast: false,
         },
     )
     .expect("index should succeed");

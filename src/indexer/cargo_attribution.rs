@@ -96,6 +96,14 @@ pub(crate) struct CargoFacts {
 }
 
 impl CargoFacts {
+    /// A fingerprint of every fact, for telling whether a later pass sees the
+    /// same Cargo map (review of #478). Every field is a `BTreeMap`/`BTreeSet`
+    /// or a scalar, so the `Debug` form is deterministic; a change of that form
+    /// comes with a new server version, which rebuilds anyway (`IndexScope`).
+    pub(crate) fn digest(&self) -> String {
+        super::manifest::hash_bytes(format!("{self:?}").as_bytes())
+    }
+
     /// What the resolver reads to accept a receiver type named through a `use`
     /// (issues #348, #349 and #358).
     pub(crate) fn crate_evidence(&self) -> crate::graph_store::import_roots::CrateEvidence {
