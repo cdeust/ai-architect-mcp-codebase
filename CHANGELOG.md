@@ -59,7 +59,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   the symbol load fails (one reason for the whole
   diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after
   a tab) name their file, and `git diff` also runs with `--find-renames
-  --no-textconv -c core.quotePath=false`. `next_steps` suggests `lsp_resolve`
+  --no-textconv -c core.quotePath=false`. The response lists are bounded by the
+  response budget (`*_count` keeps the total, `*_truncated` marks a cut, and a
+  cut symbol list is `lower-bound`). `next_steps` suggests `lsp_resolve`
   only for dependency reasons, not for these coverage gaps. Tests:
   `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
   a change in `Shape::area`, and `exact` for a diff of an

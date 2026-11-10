@@ -353,27 +353,61 @@ pub(crate) fn do_detect_changes(arguments: &Value) -> Result<Value, String> {
         return Err("either 'diff_text' or 'codebase_path' must be provided".to_string());
     };
 
+    // Every list is bounded by the per-section response budget: a dense file
+    // of constants can change thousands of symbols (Codex security review of
+    // PR #482). `*_count` keeps the full total; `*_truncated` says the list
+    // was cut, and a truncated symbol list makes the answer a lower bound.
+    let bound = |values: Vec<Value>| {
+        crate::response_budget::bound_values(values, crate::response_budget::per_section_chars())
+    };
+    let symbols = bound(to_values(&analysis.symbols_affected));
+    let communities = bound(to_values(&analysis.communities_affected));
+    let processes = bound(to_values(&analysis.processes_affected));
+    let mut epistemic = analysis.epistemic;
+    let mut reasons_list = analysis.epistemic_reasons.clone();
+    if symbols.truncated {
+        epistemic = crate::epistemic::Boundary::LowerBound.as_str();
+        reasons_list.push(format!(
+            "symbols_affected lists {} of {} changed symbols (response budget); \
+             narrow the diff to see the rest",
+            symbols.items.len(),
+            symbols.total_count
+        ));
+    }
+    let reasons = bound(to_values(&reasons_list));
+
     Ok(json!({
         "stage": 3,
         "status": "ok",
         "tool": "detect_changes",
         "files_changed": analysis.files_changed,
-        "symbols_affected": analysis.symbols_affected,
-        "symbols_affected_count": analysis.symbols_affected.len(),
-        "communities_affected": analysis.communities_affected,
-        "communities_affected_count": analysis.communities_affected.len(),
-        "processes_affected": analysis.processes_affected,
-        "processes_affected_count": analysis.processes_affected.len(),
+        "symbols_affected": symbols.items,
+        "symbols_affected_count": symbols.total_count,
+        "symbols_affected_truncated": symbols.truncated,
+        "communities_affected": communities.items,
+        "communities_affected_count": communities.total_count,
+        "communities_affected_truncated": communities.truncated,
+        "processes_affected": processes.items,
+        "processes_affected_count": processes.total_count,
+        "processes_affected_truncated": processes.truncated,
         "risk_score": format!("{:.4}", analysis.risk_score),
         // Epistemic qualification of risk_score: the mean confidence of the
         // reverse-dependency edges the risk rests on, and whether any changed
         // symbol's blast radius is a lower bound (true risk may exceed score).
         // source: git_diff::assess_dependency_confidence.
         "mean_dependency_confidence": format!("{:.2}", analysis.mean_dependency_confidence),
-        "epistemic": analysis.epistemic,
-        "epistemic_reasons": analysis.epistemic_reasons,
+        "epistemic": epistemic,
+        "epistemic_reasons": reasons.items,
+        "epistemic_reasons_count": reasons.total_count,
+        "epistemic_reasons_truncated": reasons.truncated,
         "next_steps": detect_changes_next_steps(&analysis),
     }))
+}
+
+fn to_values<T: serde::Serialize>(v: &[T]) -> Vec<Value> {
+    v.iter()
+        .filter_map(|x| serde_json::to_value(x).ok())
+        .collect()
 }
 
 /// Suggests follow-up tools after a `detect_changes` result. Graph-grounded:
@@ -413,6 +447,43 @@ pub(crate) fn detect_changes_next_steps(analysis: &git_diff::DiffAnalysis) -> Va
 #[cfg(test)]
 mod detect_changes_next_steps_tests {
     use super::*;
+
+    /// Codex security review of PR #482: a dense file of constants changes
+    /// thousands of symbols; the response lists what fits the budget, keeps
+    /// the full count, and says the answer is a lower bound.
+    #[test]
+    fn a_huge_symbol_list_is_bounded_by_the_response_budget() {
+        let root = tempfile::Builder::new()
+            .prefix("detect_changes_budget_")
+            .tempdir()
+            .unwrap();
+        let src = root.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let line: String = (0..3000)
+            .map(|n| format!("pub const C{n}: u32 = {n}; "))
+            .collect();
+        fs::write(src.join("lib.rs"), format!("{line}\n")).unwrap();
+        let graph = root.path().join("graph");
+        indexer::index_codebase(&src, &graph).unwrap();
+        let diff = "diff --git a/lib.rs b/lib.rs\n--- a/lib.rs\n+++ b/lib.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+        let out = do_detect_changes(&json!({
+            "graph_path": graph.to_str().unwrap(),
+            "diff_text": diff,
+        }))
+        .unwrap();
+        assert_eq!(out["symbols_affected_count"], 3000);
+        assert_eq!(out["symbols_affected_truncated"], true);
+        let listed = out["symbols_affected"].as_array().unwrap().len();
+        assert!(listed < 3000, "{listed}");
+        assert_eq!(out["epistemic"], "lower-bound");
+        let size = serde_json::to_string(&out["symbols_affected"])
+            .unwrap()
+            .len();
+        assert!(
+            size <= crate::response_budget::per_section_chars() + 1024,
+            "{size}"
+        );
+    }
 
     fn analysis(reasons: usize, gaps: usize) -> git_diff::DiffAnalysis {
         git_diff::DiffAnalysis {
