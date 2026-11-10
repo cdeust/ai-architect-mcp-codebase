@@ -338,12 +338,16 @@ pub fn analyze_git_diff(
         // The parser reads `a/`/`b/` paths and plain `+`/`-` lines: pin them
         // against `diff.noprefix`, `color.diff=always` and `diff.external`, under
         // which every file would be dropped (issue #446 review).
-        // A rename would be a section with no hunk, and a textconv driver
-        // would shift the line numbers away from the indexed file.
+        // A textconv driver would shift the line numbers away from the
+        // indexed file. Renames stay detected (`--find-renames`, whatever
+        // `diff.renames` says): a pure rename is one hunk-less section that is
+        // reported as a `lower-bound` reason, where `--no-renames` would print
+        // the whole file twice, and a large renamed file would inflate the
+        // buffered output (Codex security review of PR #482).
         .args([
             "--no-color",
             "--no-ext-diff",
-            "--no-renames",
+            "--find-renames",
             "--no-textconv",
             "--src-prefix=a/",
             "--dst-prefix=b/",

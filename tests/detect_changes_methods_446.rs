@@ -326,3 +326,53 @@ fn impact_expansion_is_bounded_for_many_symbols_on_one_line() {
         analysis.epistemic_reasons
     );
 }
+
+/// Codex security review of PR #482: `analyze_git_diff` keeps rename
+/// detection, so a pure rename is one hunk-less section (not the whole file
+/// deleted and added) and is reported as a `lower-bound` reason.
+#[test]
+fn git_diff_of_a_pure_rename_is_one_small_lower_bound_section() {
+    let (store, root) = indexed();
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    let body: String = (0..2000).map(|n| format!("line {n}\n")).collect();
+    fs::write(repo.join("old.txt"), &body).expect("write");
+    git(&["add", "old.txt"]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["mv", "old.txt", "new.txt"]);
+    git(&["commit", "-q", "-m", "rename"]);
+
+    let analysis = ai_architect_mcp::git_diff::analyze_git_diff(&store, &repo, "HEAD~1", "HEAD")
+        .expect("analyze_git_diff");
+    assert_eq!(analysis.files_changed, 1);
+    assert_eq!(analysis.epistemic, "lower-bound");
+    assert!(
+        analysis
+            .epistemic_reasons
+            .iter()
+            .any(|r| r.starts_with("new.txt: renamed or copied")),
+        "{:?}",
+        analysis.epistemic_reasons
+    );
+}

@@ -55,7 +55,7 @@ adheres to [Semantic Versioning](https://semver.org/).
   section is binary (also `hg diff` and `svn diff` binary notices); or when
   the symbol load fails (one reason for the whole
   diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after
-  a tab) name their file, and `git diff` also runs with `--no-renames
+  a tab) name their file, and `git diff` also runs with `--find-renames
   --no-textconv -c core.quotePath=false`. `next_steps` suggests `lsp_resolve`
   only for dependency reasons, not for these coverage gaps. Tests:
   `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
