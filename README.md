@@ -132,7 +132,7 @@ The default stays `full` until the next major version, because shrinking the
 default tool surface is a breaking change. New agent setups should use the
 `core` profile (8 read-only tools): `analyze_codebase` already runs index,
 resolve and cluster in one call, and leaving out the 19 hidden tools keeps the
-tool prompt small.
+tool prompt smaller.
 
 ## A first session
 
@@ -335,7 +335,8 @@ inference spent re-reading files to answer a question a structural query could
 answer once; this binary's CPU is small next to it. Every token an agent does
 not process is compute that is never scheduled. The
 [Green Software Foundation](https://greensoftware.foundation/) calls this
-energy proportionality, and here it is applied where the constant is largest.
+energy proportionality, and this project aims to apply it where the constant
+is largest.
 
 This repository does not claim a token saving for real sessions. The
 head-to-head evaluation in
@@ -344,13 +345,13 @@ compares file retrieval against a Grep/Glob/Read baseline (n=20), but its
 graph leg serializes a benchmark-only envelope of symbol identities, not the
 responses the server sends, so its payload ratio is not a session cost. An
 independent audit of v0.14.0 (issue #451) measured real `get_impact` answers
-at 400 to 1,070 tokens, found `git grep` smaller on 4 of 5 questions, and
-measured the tool prompt at 7.6k tokens (`core` profile) to 16.7k (`full`).
+at 400 to 1,070 tokens, found `git grep` output smaller than the graph
+answer on 4 of 5 questions, and measured the tool prompt at 7.6k tokens (`core` profile) to 16.7k (`full`).
 `benchmarks/token_surface` renders representative responses through the
 handlers' own `token_surface::render_list`, but neither real end-to-end
-handler responses nor the tool prompt are measured in this repository yet. No energy or CO2 figure is derived either, because this
-repository measures no joules and a token count does not convert to
-watt-hours.
+handler responses nor the tool prompt are measured in this repository yet.
+No energy or CO2 figure is derived either, because this repository measures
+no joules and a token count does not convert to watt-hours.
 
 On the server side, bulk graph writes through UNWIND with a typed struct cost
 0.127 ms per edge against 9.658 ms for the naive raw-string path, 76 times
