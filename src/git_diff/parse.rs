@@ -46,6 +46,9 @@ pub(crate) struct FileHunk {
     pub(crate) malformed: bool,
     /// A `Binary files … differ` or `GIT binary patch` section.
     pub(crate) binary: bool,
+    /// A rename or copy with no content hunk (`similarity index 100%`): the
+    /// file's symbols moved path.
+    pub(crate) renamed: bool,
     pub(crate) is_new: bool,
     pub(crate) is_deleted: bool,
 }
@@ -85,6 +88,14 @@ struct FileSection {
     had_hunk: bool,
     /// A `+++` header was read: the next `---` starts another file.
     seen_new_header: bool,
+    /// A `+` or `-` body line was read. A real unified hunk always has one;
+    /// hunks of context only are `--word-diff` (or similar) output.
+    saw_change: bool,
+    /// `rename from` / `copy from`: the file moved, with or without a hunk.
+    renamed: bool,
+    /// The last body line was `--- a/…`: if `+++ b/…` follows, the hunk
+    /// swallowed the next file's headers (a header count one line too long).
+    after_old_header_line: bool,
     malformed: bool,
     /// Past a `git format-patch` signature delimiter (`-- `): no more body.
     in_trailer: bool,
@@ -141,8 +152,11 @@ impl FileSection {
             // "\ No newline at end of file": no line in either file.
             return Ok(());
         }
+        let follows_old_header = std::mem::take(&mut self.after_old_header_line);
         if let Some(body) = line.strip_prefix('-') {
-            self.old_left = self.old_left.saturating_sub(1);
+            self.after_old_header_line = line.starts_with("--- a/");
+            self.take_count(true, false);
+            self.saw_change = true;
             self.changed.push(self.line);
             let blank = is_blank(body);
             let pending = self.pending.get_or_insert(PendingRemoval {
@@ -156,7 +170,11 @@ impl FileSection {
             return Err(TOO_LARGE.to_string());
         }
         if let Some(body) = line.strip_prefix('+') {
-            self.new_left = self.new_left.saturating_sub(1);
+            if follows_old_header && line.starts_with("+++ b/") {
+                self.malformed = true;
+            }
+            self.take_count(false, true);
+            self.saw_change = true;
             let replaced_code = self.pending.take().is_some_and(|p| !p.all_blank);
             self.changed.push(self.line);
             self.added.push(self.line);
@@ -164,12 +182,26 @@ impl FileSection {
                 self.nonblank_lines.push(self.line);
             }
         } else {
-            self.old_left = self.old_left.saturating_sub(1);
-            self.new_left = self.new_left.saturating_sub(1);
+            self.take_count(true, true);
             self.close_removal();
         }
         self.line += 1;
         Ok(())
+    }
+
+    /// Uses up one line of the old and/or new side; a side whose count is
+    /// already 0 means the header understated it (a hunk that swallows the
+    /// next file's headers in a plain `diff -u`).
+    fn take_count(&mut self, old: bool, new: bool) {
+        if (old && self.old_left == 0) || (new && self.new_left == 0) {
+            self.malformed = true;
+        }
+        if old {
+            self.old_left = self.old_left.saturating_sub(1);
+        }
+        if new {
+            self.new_left = self.new_left.saturating_sub(1);
+        }
     }
 
     /// A line outside every hunk that is not a header. After a hunk, a body
@@ -183,6 +215,10 @@ impl FileSection {
         if line.starts_with("@@") {
             // `@@@ … @@@` (a combined diff from `git show <merge>`).
             self.malformed = true;
+            return;
+        }
+        if line.starts_with("rename from ") || line.starts_with("copy from ") {
+            self.renamed = true;
             return;
         }
         if line.starts_with("Binary files ") || line.starts_with("GIT binary patch") {
@@ -224,7 +260,11 @@ impl FileSection {
         if !self.had_hunk && (self.seen_new_header || self.path.is_some()) {
             self.malformed = true;
         }
-        if !self.had_hunk && !self.malformed && !self.binary {
+        if self.had_hunk && !self.saw_change {
+            self.malformed = true;
+        }
+        let renamed = self.renamed && !self.had_hunk;
+        if !self.had_hunk && !self.malformed && !self.binary && !renamed {
             return None;
         }
         let file_path = match self.path.take().or(self.git_path.take()) {
@@ -243,6 +283,7 @@ impl FileSection {
             nonblank_gaps: self.nonblank_gaps,
             malformed: self.malformed,
             binary: self.binary,
+            renamed,
             is_new: self.is_new,
             is_deleted: self.is_deleted,
         })

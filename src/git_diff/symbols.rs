@@ -350,6 +350,7 @@ mod gap_tests {
             nonblank_gaps: gaps.to_vec(),
             malformed: false,
             binary: false,
+            renamed: false,
             is_new: false,
             is_deleted: false,
         }

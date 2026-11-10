@@ -39,13 +39,15 @@ adheres to [Semantic Versioning](https://semver.org/).
   indexed symbol; when part of a file's diff cannot be read (an unreadable or
   combined-diff header, a hunk cut short or overrun, body lines before any
   `@@`, file headers with no hunk, a missing, empty or out-of-place file
-  header, several commits, or sections of one path that disagree on the
-  change type); when a section is binary; or
-  when the symbol load fails (one reason for the whole diff). Headers without
-  `a/`/`b/` prefixes (plain `diff -u`, timestamps after a tab) name their file,
-  and `git diff` also runs with `--no-renames --no-textconv -c
-  core.quotePath=false`. `next_steps` suggests `lsp_resolve` only for
-  dependency reasons, not for these coverage gaps. Tests:
+  header, several commits, a hunk with no `+`/`-` line (`--word-diff`), a
+  header that swallows the next file's headers, or sections of one path that
+  disagree on the change type); when a file is renamed or copied with no
+  content hunk; when a non-empty diff holds no readable section at all; when a
+  section is binary; or when the symbol load fails (one reason for the whole
+  diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after
+  a tab) name their file, and `git diff` also runs with `--no-renames
+  --no-textconv -c core.quotePath=false`. `next_steps` suggests `lsp_resolve`
+  only for dependency reasons, not for these coverage gaps. Tests:
   `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
   a change in `Shape::area`, and `exact` for a diff of an
   unsupported file), unit tests in `git_diff`, `git_diff::parse` behaviour and

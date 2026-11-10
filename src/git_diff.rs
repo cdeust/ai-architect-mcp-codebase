@@ -180,6 +180,12 @@ fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Opti
              a file<->symlink change does); some of its changes may be missing"
         ));
     }
+    if hunk.renamed {
+        return Some(format!(
+            "{path}: renamed or copied with no content hunk; its symbols moved \
+             path and are not attributed"
+        ));
+    }
     if hunk.binary {
         return Some(format!(
             "{path}: binary content; its changes are not attributed to any symbol"
@@ -262,7 +268,19 @@ fn count_total_communities(store: &GraphStore) -> u64 {
 
 pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis, String> {
     let hunks = merge_by_path(parse_unified_diff(diff_text)?);
-    build_analysis(store, &hunks)
+    let mut analysis = build_analysis(store, &hunks)?;
+    // A non-empty diff with no readable section at all (a colored paste, a
+    // reformatted diff) is not an empty change.
+    if hunks.is_empty() && !diff_text.trim().is_empty() {
+        analysis.epistemic = crate::epistemic::Boundary::LowerBound.as_str();
+        analysis.epistemic_reasons.push(
+            "the diff text holds no readable file section (colored or reformatted \
+             output?); its changes are not attributed"
+                .to_string(),
+        );
+        analysis.coverage_gap_count += 1;
+    }
+    Ok(analysis)
 }
 
 pub fn analyze_git_diff(
@@ -333,6 +351,7 @@ fn merge_by_path(hunks: Vec<FileHunk>) -> Vec<FileHunk> {
         // added or deleted) cannot all be right.
         m.malformed |= h.malformed || m.is_new != h.is_new || m.is_deleted != h.is_deleted;
         m.binary |= h.binary;
+        m.renamed |= h.renamed;
         m.is_new |= h.is_new;
         m.is_deleted |= h.is_deleted;
     }
@@ -617,6 +636,19 @@ mod tests {
         let h = &parse_unified_diff(late).unwrap()[0];
         assert!(h.malformed);
         assert_eq!(h.file_path, "real.rs");
+        // A pasted pure rename is kept and reported, not dropped.
+        let rename = "diff --git a/old.rs b/new.rs\nsimilarity index 100%\n\
+                      rename from old.rs\nrename to new.rs\n";
+        let h = &parse_unified_diff(rename).unwrap()[0];
+        assert!(h.renamed && h.file_path == "new.rs");
+        // `--word-diff` output: a hunk with no `+`/`-` line.
+        let word =
+            "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n    [-a-]{+b+}\n";
+        assert!(parse_unified_diff(word).unwrap()[0].malformed);
+        // A header one line too long swallows the next file of a plain diff.
+        let swallow = "--- a/x.rs\n+++ b/x.rs\n@@ -1,3 +1,3 @@\n fn a() {\n-    1\n+    2\n\
+                       --- a/y.rs\n+++ b/y.rs\n@@ -10,1 +10,1 @@\n-old\n+new\n";
+        assert!(parse_unified_diff(swallow).unwrap()[0].malformed);
         // A file<->symlink type change: a deleted then a new section of one path.
         let typechange = "diff --git a/l b/l\n--- a/l\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n\
                           diff --git a/l b/l\n--- /dev/null\n+++ b/l\n@@ -0,0 +1 @@\n+y\n";
@@ -899,6 +931,26 @@ diff --git a/x b/x
         let huge = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +9223372036854775807 @@\n+a\n";
         let err = parse_unified_diff(huge).err().expect("header past the cap");
         assert!(err.starts_with("diff_too_large"), "{err}");
+    }
+
+    /// Claude review of PR #482: a non-empty diff with no readable section
+    /// (a colored paste) is no empty change.
+    #[test]
+    fn unreadable_diff_text_is_a_lower_bound() {
+        let dir = tempfile::Builder::new()
+            .prefix("git_diff_color")
+            .tempdir()
+            .unwrap();
+        let store = GraphStore::open_or_create(&dir.path().join("db")).unwrap();
+        store.create_schema().unwrap();
+        let colored = "\u{1b}[1mdiff --git a/m.rs b/m.rs\u{1b}[m\n\u{1b}[36m@@ -1 +1 @@\u{1b}[m\n";
+        let result = analyze_diff(&store, colored).unwrap();
+        assert_eq!(result.epistemic, "lower-bound");
+        assert_eq!(
+            result.coverage_gap_count, 1,
+            "{:?}",
+            result.epistemic_reasons
+        );
     }
 
     /// Claude review of PR #482: `analyze_diff` merges repeated paths.
