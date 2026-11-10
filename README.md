@@ -73,6 +73,35 @@ The plugin downloads the release binary and verifies its Sigstore provenance
 before running it; this needs GitHub CLI 2.68 or newer. The plugin starts the
 `full` profile unless `AP_PROFILE=core` is set.
 
+### Supported platforms
+
+Installed from the marketplace, the plugin launcher (`bin/ensure-binary.sh`)
+installs one release asset per platform below and refuses every other one; in
+a source checkout it runs `cargo build` instead, on any platform, when the
+binary is missing or older than the sources. The platform is read from
+`uname -s` and `uname -m` of the shell, so an x64 Git Bash emulated on Windows
+arm64 reports `x86_64` and installs `windows-x86_64`. "Started by CI" means the
+pipeline's `install` job installs the published asset on that runner and runs
+`initialize`, `tools/list` (the exact tool catalog) and `health_check` against
+it (`scripts/smoke_claude_plugin.py
+--installed`).
+
+<!-- platforms:begin -->
+| Platform | Release asset | Plugin launcher | Started by CI |
+|---|---|---|---|
+| macOS arm64 | `macos-aarch64` | installs | yes, on `macos-latest` |
+| Linux x86_64 | `linux-x86_64` | installs | yes, on `ubuntu-latest` |
+| Linux aarch64 | `linux-aarch64` | installs | **no**: built on `ubuntu-24.04-arm`, never started |
+| Windows x86_64 (a shell whose `uname -s` starts with `MINGW`, `MSYS` or `CYGWIN`, as Git Bash does) | `windows-x86_64` | installs | yes, on `windows-latest` |
+| macOS x86_64 (Intel), Windows arm64, any other | none | refuses | no |
+<!-- platforms:end -->
+
+A `cargo install` or a source build does not go through the launcher. CI runs
+the test suite from source on Linux x86_64 only; the pipeline's `environment`
+job also builds from source and runs `install --dry-run` on `ubuntu-latest`,
+`macos-latest` and `windows-latest` (`scripts/ci_environment.sh`), and
+`windows-build.yml` builds Windows x86_64 on every pull request.
+
 ### Other MCP hosts
 
 ```bash

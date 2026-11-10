@@ -386,7 +386,7 @@ fn validate_prd_checks_a_prd_against_a_real_graph() {
     let prd = dir.join("prd.md");
     fs::write(
         &prd,
-        "# PRD\n\nChange `svc.rs::run_a` and `svc.rs::not_a_real_symbol`.\n",
+        "# PRD\n\nChange `svc.rs::run_a` and `svc.rs::not_a_real_symbol`, via `NotARealType`.\n",
     )
     .expect("write prd");
 
@@ -403,11 +403,18 @@ fn validate_prd_checks_a_prd_against_a_real_graph() {
         "resolved_symbols",
         "hallucinated_symbols",
         "unverifiable_symbols",
+        "absent_symbols",
         "communities_spanned",
         "processes_impacted",
     ] {
         assert!(out["summary"][field].is_number(), "{field} missing: {out}");
     }
+    // `svc.rs::…` tokens carry a `.` and no `/`, so the fallback extractor
+    // takes them neither as backticked names nor as file paths: they yield no
+    // claim. `NotARealType` is the only claim, and it is absent. Exact counts
+    // catch a handler that hardcodes either field.
+    assert_eq!(out["summary"]["claimed_symbols"], 1, "{out}");
+    assert_eq!(out["summary"]["absent_symbols"], 1, "{out}");
     // No run_id/finding_id/output_dir triple, so nothing is persisted.
     assert!(out["artifact_path"].is_null(), "{out}");
 }
