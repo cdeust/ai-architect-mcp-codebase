@@ -32,7 +32,8 @@
 // (`lsp-definition`), the macro layer (`macro-expansion*`, reset by
 // `reset_macro_expansion` before the pass), and the structural rows. Only rows
 // whose `resolution_method` is a static tier label are owned here; a row the
-// pass meets again keeps its properties (trace ingest's `observed_count`).
+// pass meets again keeps its properties (trace ingest's `observed_count`), and
+// the count of a retracted caller-level row moves to `OBSERVED_CALLS_*`.
 // Known gap, accepted for this slice: `Uses_*`, `Imports_*`, `Implements_*` and
 // `Extends_*` rows are still only added.
 
@@ -151,10 +152,69 @@ pub(super) fn retract_unmet(
         if supported_by_site(store, caller, to, to_id)? {
             continue;
         }
+        if !carry_observed_count(store, rel, (from, to), caller, to_id)? {
+            continue;
+        }
         delete_static_row(store, rel, (from, to), caller, to_id)?;
         deleted += 1;
     }
     Ok(deleted)
+}
+
+/// Moves the runtime `observed_count` that trace ingest put on a caller-level
+/// row onto the `OBSERVED_CALLS_*` row ingest writes when no static row exists
+/// (Codex review of #496), so retracting the static row keeps the evidence.
+/// Returns false, and keeps the row, when there is a count and no
+/// `OBSERVED_CALLS_*` table for the label pair to carry it.
+fn carry_observed_count(
+    store: &GraphStore,
+    rel: &str,
+    (from, to): (&str, &str),
+    caller: &str,
+    to_id: &str,
+) -> Result<bool, String> {
+    let qr = store.execute_query(&format!(
+        "MATCH (a:{from})-[r:{rel}]->(b:{to}) WHERE a.id = {} AND b.id = {} \
+         AND r.observed_count > 0 RETURN r.observed_count",
+        cypher_str(caller),
+        cypher_str(to_id),
+    ));
+    // A graph without the column has no count to carry.
+    let Ok(qr) = qr else {
+        return Ok(true);
+    };
+    let count: i64 = qr
+        .rows
+        .iter()
+        .filter_map(|r| r.first().and_then(|c| c.parse::<i64>().ok()))
+        .sum();
+    if count == 0 {
+        return Ok(true);
+    }
+    let observed = format!("OBSERVED_CALLS_{from}_{to}");
+    if !REL_TABLES.iter().any(|(t, _, _)| *t == observed) {
+        return Ok(false);
+    }
+    // The same create-or-accumulate as trace ingest's `upsert_observed_call`
+    // (binary crate, `history_handlers`), which this library cannot call.
+    let (a, b) = (cypher_str(caller), cypher_str(to_id));
+    let existing = store.execute_query(&format!(
+        "MATCH (x:{from})-[r:{observed}]->(y:{to}) WHERE x.id = {a} AND y.id = {b} RETURN r.observed_count"
+    ))?;
+    if existing.rows.is_empty() {
+        store.insert_edge(
+            &observed,
+            caller,
+            to_id,
+            &[("observed_count", &count.to_string())],
+        )?;
+    } else {
+        store.execute_query(&format!(
+            "MATCH (x:{from})-[r:{observed}]->(y:{to}) WHERE x.id = {a} AND y.id = {b} \
+             SET r.observed_count = coalesce(r.observed_count, 0) + {count}"
+        ))?;
+    }
+    Ok(true)
 }
 
 fn delete_static_row(

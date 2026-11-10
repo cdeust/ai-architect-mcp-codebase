@@ -48,7 +48,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   open reason of the others. A caller-level row that a surviving per-site row of the same caller
   and target still supports (a language-server site) is kept. Language-server,
   macro and structural rows are untouched, and a row the pass meets again keeps
-  its properties. `Uses_*`, `Imports_*`,
+  its properties. A retracted caller-level row's runtime `observed_count` (from
+  `ingest_traces`) moves to the `OBSERVED_CALLS_*` row ingest writes when no
+  static row exists, so the runtime evidence survives. `Uses_*`, `Imports_*`,
   `Implements_*` and `Extends_*` rows are still only added.
 
 - **`get_impact` names the call sites it could not resolve** (#445). An
