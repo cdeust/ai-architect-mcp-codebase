@@ -1,11 +1,13 @@
 """Execute bootstrap shell branches with disposable archives, no network or Rust.
 
 OS detection and provenance CLI responses are fixtures; this is not native Windows
-execution. The installed macOS release is exercised separately by the CI smoke.
+execution. The installed release is exercised separately by the CI smoke (the
+pipeline's `install` job, on macOS, Linux and Windows runners).
 """
 
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -16,13 +18,13 @@ import tarfile
 import tempfile
 import unittest
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 def require(condition, message):
     """An `assert` that `python -O` does not strip."""
     if not condition:
         raise AssertionError(message)
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def make_archive(base, name, target, checksum_ok):
@@ -239,9 +241,11 @@ INSTALLED_UNAME = {
     "Windows x86_64": ("MINGW64_NT-10.0", "x86_64"),
 }
 
-# Issue #449: what `uname` reports on each runner label of the `install` job.
-# source: the job logs of run 42697366993 (images macos-26-arm64,
-# ubuntu-24.04 x86_64, windows-2025-vs2026 with Git Bash).
+# Issue #449: the `uname` pair the launcher matches on each runner label of
+# the `install` job. Inferred, not measured: `install` passed in run
+# 42697366993 on images macos-26-arm64, ubuntu-26.04 and windows-2025-vs2026,
+# and the launcher installs only on these four pairs. Git Bash reports
+# `MINGW64_NT-10.0-<build>`; the launcher matches its `MINGW*` prefix.
 RUNNER_UNAME = {
     "macos-latest": ("Darwin", "arm64"),
     "ubuntu-latest": ("Linux", "x86_64"),
@@ -281,18 +285,32 @@ def release_runners():
         len(pairs) == len(tags), "a `target_tag:` entry has no readable `runner:`"
     )
     require(len(set(tags)) == len(tags), "a `target_tag:` is listed twice")
+    require(
+        re.search(r"^    runs-on: \$\{\{ matrix\.runner \}\}$", job.group(1), re.M),
+        "the `build` job does not run on `matrix.runner`",
+    )
     return dict(pairs)
 
 
 def install_job_runners():
-    """The `os` matrix of the pipeline's `install` job."""
+    """The `os` matrix of the pipeline's `install` job, in matrix order."""
     pipeline = (ROOT / ".github/workflows/pipeline.yml").read_text()
     job = re.search(r"^  install:\n(.*?)(?=^  \S|\Z)", pipeline, re.M | re.S)
     require(job, "pipeline.yml has no top-level `install:` job")
-    matrix = re.search(r"^\s+os: \[([^\]]*)\]", job.group(1), re.M)
+    body = job.group(1)
+    matrix = re.search(r"^\s+os: \[([^\]]*)\]", body, re.M)
     require(matrix, "the `install` job has no inline `os: [...]` matrix")
-    require("include:" not in job.group(1), "`include:` entries are not read")
-    return {runner.strip() for runner in matrix.group(1).split(",")}
+    require(
+        not re.search(r"^\s+(include|exclude):", body, re.M),
+        "`include:`/`exclude:` matrix entries are not read",
+    )
+    require(
+        re.search(r"^    runs-on: \$\{\{ matrix\.os \}\}$", body, re.M),
+        "the `install` job does not run on `matrix.os`",
+    )
+    labels = [runner.strip() for runner in matrix.group(1).split(",")]
+    require(len(set(labels)) == len(labels), "an `install` runner is listed twice")
+    return labels
 
 
 class ReadmePlatformTable(BootstrapHarness):
@@ -320,8 +338,10 @@ class ReadmePlatformTable(BootstrapHarness):
         ]
         self.assertTrue(names, "the table names no refused platform")
         for row in readme_platform_rows():
+            self.assertIn(row[2], {"installs", "refuses"}, row)
             if row[2] == "refuses":
                 self.assertEqual(row[1], "none", "a refused platform has no asset")
+                self.assertEqual(row[3], "no", "a refused platform is not started")
         for name in names:
             with self.subTest(name=name):
                 self.assertIn(name, REFUSED_UNAME, "no uname pair for this row")
@@ -368,6 +388,13 @@ class ReadmePlatformTable(BootstrapHarness):
         self.assertFalse(
             started_by, f"install runners that start no listed platform: {started_by}"
         )
+
+    def test_started_by_ci_means_the_installed_smoke(self):
+        """"Started by CI" is the `install` command running the installed
+        copy's smoke with `--installed`, as the README says."""
+        install = json.loads((ROOT / "ci.json").read_text())["install"]
+        self.assertIn("claude plugin install", install)
+        self.assertIn('/scripts/smoke_claude_plugin.py" --installed', install)
 
 
 if __name__ == "__main__":

@@ -17,9 +17,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   `scripts/tests/test_claude_bootstrap_platforms.py` checks the table row by
   row: each installed platform's `uname` pair is run through the launcher and
   must pick that row's asset, which `release.yml` must build; the row says
-  "yes" exactly when a runner of the pipeline's `install` job reports that
-  `uname` pair, and otherwise names the asset's build runner; each refused
-  platform is refused by the launcher.
+  "yes" exactly when a runner of the pipeline's `install` job maps to that
+  `uname` pair (a table inferred from `install` passing on those images), and
+  otherwise names the asset's build runner; each refused platform is refused
+  by the launcher; and `ci.json`'s `install` command runs the installed copy's
+  smoke.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
