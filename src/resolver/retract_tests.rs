@@ -157,3 +157,33 @@ fn a_call_made_unique_again_by_a_deleted_duplicate_is_resolved_as_a_fresh_index_
     repo.refresh("c.rs", "pub fn gamma() {}\n");
     assert_eq!(state(&repo.graph), repo.fresh_state());
 }
+
+#[test]
+fn a_retracted_caller_row_keeps_its_runtime_count_as_an_observed_call() {
+    // Codex review of #496: trace ingest's `observed_count` lives on the static
+    // row; retracting the row moves it to the row ingest writes when there is
+    // no static one.
+    let repo = Repo::new(&[
+        ("a.rs", "pub fn alpha() {\n    beta();\n}\n"),
+        ("b.rs", "pub fn beta() {}\n"),
+    ]);
+    {
+        let store = GraphStore::open_or_create(&repo.graph).expect("open");
+        store
+            .execute_query(
+                "MATCH (a:Function {id: 'a.rs::alpha'})-[r:Calls_Function_Function]->\
+                 (b:Function {id: 'b.rs::beta'}) SET r.observed_count = 7",
+            )
+            .expect("annotate, as trace ingest does");
+    }
+    repo.refresh("c.rs", "pub fn beta() {}\n");
+    let store = GraphStore::open_or_create(&repo.graph).expect("open");
+    let observed = store
+        .execute_query(
+            "MATCH (a:Function {id: 'a.rs::alpha'})-[r:OBSERVED_CALLS_Function_Function]->\
+             (b:Function {id: 'b.rs::beta'}) RETURN r.observed_count",
+        )
+        .expect("observed")
+        .rows;
+    assert_eq!(observed, [["7".to_string()]]);
+}
