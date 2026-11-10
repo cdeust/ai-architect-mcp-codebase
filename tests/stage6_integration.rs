@@ -122,6 +122,8 @@ fn test_hallucinated_symbol_produces_critical_finding() {
     );
     assert_eq!(report.validation_status, "fail");
     assert_eq!(report.summary.hallucinated_symbols, 1);
+    // `Absent` is a regex-fallback verdict only; the contract decides here.
+    assert_eq!(report.summary.absent_symbols, 0);
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -531,5 +533,66 @@ fn test_regex_fallback_does_not_flag_real_variant_or_field() {
             .collect::<Vec<_>>()
     );
     assert!(!report.findings.iter().any(|f| f.severity == "warning"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+// source: PR #487 review — the boundaries of the `Absent` verdict.
+//   * A qualified token is judged by its leaf only, so a fabricated owner with
+//     a real leaf (`QuantumToolRegistry::handle_tool_call`) is NOT absent. This
+//     pins the known limitation: tightening it must be a deliberate test change.
+//   * An unresolved file-path token stays `info`: only backticked identifiers
+//     are names an author writes as code.
+#[test]
+fn test_regex_fallback_absent_boundaries() {
+    let root = tmp("absent_bounds");
+    let _ = fs::remove_dir_all(&root);
+    let store = build_fixture_graph(&root.join("fixture"), &root.join("graph"));
+    let prd_path = write_prd(
+        &root.join("prd"),
+        "Move `QuantumToolRegistry::handle_tool_call` into src/nonexistent.rs today",
+    );
+    let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
+    let severity_of = |tok: &str| {
+        report
+            .findings
+            .iter()
+            .filter(|f| f.symbol.as_deref() == Some(tok))
+            .map(|f| f.severity.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        severity_of("QuantumToolRegistry::handle_tool_call"),
+        vec!["info".to_string()],
+        "known limitation: a real leaf keeps a qualified token at info"
+    );
+    assert_eq!(severity_of("src/nonexistent.rs"), vec!["info".to_string()]);
+    assert_eq!(report.summary.absent_symbols, 0);
+    assert_eq!(report.validation_status, "ok");
+    let _ = fs::remove_dir_all(&root);
+}
+
+// source: PR #487 review — in structured mode a claim that ADDS a new name is
+// legitimately absent from the graph and must not warn.
+#[test]
+fn test_structured_add_of_new_symbol_stays_ok() {
+    let root = tmp("structured_add");
+    let _ = fs::remove_dir_all(&root);
+    let store = build_fixture_graph(&root.join("fixture"), &root.join("graph"));
+    let prd_dir = root.join("prd");
+    let prd_path = write_prd(&prd_dir, "add `QuantumToolRegistry`");
+    let affected = write_affected(
+        &prd_dir,
+        json!({
+            "affected_symbols": [
+                { "qualified_name": "main.rs::QuantumToolRegistry", "change_kind": "add", "rationale": "new type" }
+            ],
+            "scope_claims": []
+        }),
+    );
+    let report = prd_validator::validate_prd(&store, &prd_path, Some(&affected)).expect("validate");
+    assert_eq!(report.extraction_mode, "structured");
+    assert_eq!(report.summary.absent_symbols, 0);
+    assert_eq!(report.summary.hallucinated_symbols, 0);
+    assert_eq!(report.validation_status, "ok");
     let _ = fs::remove_dir_all(&root);
 }

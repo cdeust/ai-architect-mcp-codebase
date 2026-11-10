@@ -367,7 +367,8 @@ fn looks_like_file_path(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Claim resolution — use search::resolve_qualified_name for strip-prefix + fuzz
+// Claim resolution — use search::resolve_qualified_name (exact, strip-prefix,
+// cfg twins, then exact-leaf suggestions)
 // ---------------------------------------------------------------------------
 
 struct ResolvedClaim<'a> {

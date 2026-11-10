@@ -212,7 +212,13 @@ Five axes. Each produces a `finding` with a severity.
     ...
   ],
   "validation_status": "fail",  // "ok" | "warning" | "fail"
-  "summary_counts": { "fail": 1, "warning": 2, "info": 3 }
+  "summary": {
+    "claimed_symbols": 7, "resolved_symbols": 6,
+    "hallucinated_symbols": 1,  // §5 V1 failures (contract-backed)
+    "unverifiable_symbols": 0,  // claim's file outside indexed coverage
+    "absent_symbols": 0,        // §4.3: regex-fallback backticked token naming no code symbol
+    "communities_spanned": 2, "processes_impacted": 1
+  }
 }
 ```
 

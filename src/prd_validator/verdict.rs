@@ -1,6 +1,7 @@
 // prd_validator::verdict — the claim-verdict cluster from issue #13's fix:
 // classifying a resolved-or-not claim into Resolved / Hallucinated /
-// Unverifiable / Unscored, and the graph-coverage lookups it depends on.
+// Unverifiable / Absent (issue #450) / Unscored, and the graph lookups it
+// depends on.
 //
 // Split out of prd_validator::mod so the "is this claim real, hallucinated,
 // or simply unverifiable" question lives in one small, reviewable place
