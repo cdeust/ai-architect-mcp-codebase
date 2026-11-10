@@ -368,12 +368,22 @@ measures no joules and a token count does not convert to watt-hours.
 [docs/evaluation.md](docs/evaluation.md#graph-tools-compared-with-a-grepglobread-baseline)
 has the full table, the protocol and the falsified first run.
 
-On the server side, bulk graph writes through UNWIND with a typed struct cost
-0.127 ms per edge against 9.658 ms for the naive raw-string path, 76 times
-less work for the same output (measured 2026-07-28 on `lbug 0.18` with
-`tests/lbug_bulk_investigation.rs`). Tree-sitter extracts structure without a
-model, and `index_codebase` is incremental by default. The server-side measurements
-and their dates are in [docs/evaluation.md](docs/evaluation.md).
+On the server side, indexing has a cost of its own. Indexing django 5.1.3
+(6,748 files indexed) from scratch, measured once on 2026-11-10 at `72bc505`
+on a 4-vCPU Linux x86_64 container:
+
+| `full_ast` | Wall time | Peak RSS | Graph on disk | Nodes |
+|---|---:|---:|---:|---:|
+| `false` (default) | 53 s | 533 MiB | 111 MiB | 219,874 |
+| `true` | 747 s | 1,531 MiB | 1,091 MiB | 4,270,311 |
+
+The optional full syntax tree is 94.9 % of the nodes, which is why it is off
+by default ([docs/configuration.md](docs/configuration.md#full-syntax-tree-full_ast)).
+These are single runs on one machine, not yet re-checked in CI. Tree-sitter
+extracts structure without a model, and `index_codebase` is incremental by
+default.
+The procedure and the other server-side measurements, with their dates, are
+in [docs/evaluation.md](docs/evaluation.md#indexing-cost-on-a-real-repository).
 
 ## The zetetic standard
 

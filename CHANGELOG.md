@@ -37,6 +37,13 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The cost of indexing a real repository is published** (issue #448,
+  second slice). README and `docs/evaluation.md` give wall time, peak RSS,
+  graph size and node counts for django 5.1.3 with `full_ast` off and on
+  (53 s / 533 MiB / 111 MiB against 747 s / 1,531 MiB / 1,091 MiB, one run
+  each, 2026-11-10, 4-vCPU Linux container), and the README's server-side
+  claim is no longer the 76x bulk-write ratio of a micro-benchmark on an
+  older database version (that table stays in `docs/evaluation.md`).
 - **`resolve_graph` retracts the call rows a pass no longer decides (issue
   #443, first resolver slice).** The resolver decided every call site again on
   every pass but only ever added rows, so after an incremental `index_codebase`
