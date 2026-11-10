@@ -209,6 +209,17 @@ impl FileSection {
     /// the header unreadable; the `-- ` signature of `git format-patch` and
     /// what follows it are the only exception.
     fn stray_line(&mut self, line: &str) {
+        // Several commits (`git log -p`, a patch series) hold line numbers of
+        // different revisions: they cannot all be matched against one index.
+        // Checked before the trailer test: each patch of a default
+        // `git format-patch --stdout` series ends with a `-- ` signature, and
+        // the next patch's `From ` line comes inside that trailer. The `From `
+        // line before the first patch comes before any hunk and is exempt.
+        if self.had_hunk && (line.starts_with("commit ") || line.starts_with("From ")) {
+            self.malformed = true;
+            self.in_trailer = true;
+            return;
+        }
         if self.in_trailer {
             return;
         }
@@ -235,12 +246,7 @@ impl FileSection {
             }
             return;
         }
-        // Several commits (`git log -p`, a patch series) hold line numbers of
-        // different revisions: they cannot all be matched against one index.
-        if line.starts_with("commit ") || line.starts_with("From ") {
-            self.malformed = true;
-            self.in_trailer = true;
-        } else if line == "-- " {
+        if line == "-- " {
             // The format-patch signature: what follows is no diff.
             self.in_trailer = true;
         } else if line.starts_with(['+', '-', ' ']) {
@@ -365,6 +371,19 @@ fn git_header_path(line: &str) -> Option<String> {
     }
     let (_, new) = rest.rsplit_once(" b/")?;
     Some(new.to_string())
+}
+
+/// Whether `diff_text` holds any line that starts a unified-diff section or
+/// hunk (`diff --git `, `--- `, `+++ `, `@@`). A diff whose sections all
+/// change no line (a mode change, an empty new file) parses to no hunk but
+/// is still readable; a colored or reformatted paste has no such line.
+pub(crate) fn has_diff_structure(diff_text: &str) -> bool {
+    diff_text.lines().any(|l| {
+        l.starts_with("diff --git ")
+            || l.starts_with("--- ")
+            || l.starts_with("+++ ")
+            || l.starts_with("@@")
+    })
 }
 
 pub(crate) fn parse_unified_diff(diff_text: &str) -> Result<Vec<FileHunk>, String> {

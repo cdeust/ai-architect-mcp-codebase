@@ -24,7 +24,7 @@ mod symbols;
 
 #[cfg(test)]
 use parse::parse_hunk_header;
-pub(crate) use parse::{parse_unified_diff, FileHunk};
+pub(crate) use parse::{has_diff_structure, parse_unified_diff, FileHunk};
 
 /// Validates a git ref for safe use as a positional argument.
 /// Rejects refs starting with `-` (which git would treat as an option flag)
@@ -271,7 +271,7 @@ pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis,
     let mut analysis = build_analysis(store, &hunks)?;
     // A non-empty diff with no readable section at all (a colored paste, a
     // reformatted diff) is not an empty change.
-    if hunks.is_empty() && !diff_text.trim().is_empty() {
+    if hunks.is_empty() && !diff_text.trim().is_empty() && !has_diff_structure(diff_text) {
         analysis.epistemic = crate::epistemic::Boundary::LowerBound.as_str();
         analysis.epistemic_reasons.push(
             "the diff text holds no readable file section (colored or reformatted \
@@ -628,6 +628,17 @@ mod tests {
         let log = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-a\n+b\n\
                    commit 0123456789abcdef0123456789abcdef01234567\n\n    Fix bug\n";
         assert!(parse_unified_diff(log).unwrap()[0].malformed);
+        // A default `git format-patch --stdout` series: each patch ends with
+        // the `-- ` signature, and the next `From ` line falls in it.
+        let series = "From 1111 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 1/2] a\n---\n\
+                      diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,1 +1,1 @@\n-a\n+A\n\
+                      -- \n2.43.0\n\nFrom 2222 Mon Sep 17 00:00:00 2001\nSubject: [PATCH 2/2] b\n---\n\
+                      diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -40,1 +40,1 @@\n-b\n+B\n";
+        let merged = merge_by_path(parse_unified_diff(series).unwrap());
+        assert!(merged[0].malformed);
+        // One signed patch alone stays readable.
+        let one = series.split("\nFrom 2222").next().unwrap();
+        assert!(!parse_unified_diff(one).unwrap()[0].malformed);
         // File headers with no hunk: the `@@` lines were cut off.
         let cut = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n";
         assert!(parse_unified_diff(cut).unwrap()[0].malformed);
@@ -951,6 +962,20 @@ diff --git a/x b/x
             "{:?}",
             result.epistemic_reasons
         );
+        // Real `git diff` output whose sections change no line is readable:
+        // a chmod, an empty new file, and the empty diff are all `exact`.
+        for text in [
+            "",
+            "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n",
+            "diff --git a/e.rs b/e.rs\nnew file mode 100644\nindex 0000000..e69de29\n",
+        ] {
+            let result = analyze_diff(&store, text).unwrap();
+            assert_eq!(
+                result.epistemic, "exact",
+                "{text:?}: {:?}",
+                result.epistemic_reasons
+            );
+        }
     }
 
     /// Claude review of PR #482: `analyze_diff` merges repeated paths.
