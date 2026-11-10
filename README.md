@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-27-orange" alt="27 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-3200+_passing-brightgreen" alt="3200+ tests">
+  <img src="https://img.shields.io/badge/Tests-3300+_passing-brightgreen" alt="3300+ tests">
   <img src="https://img.shields.io/badge/Coverage-93%25-brightgreen" alt="93% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
@@ -128,7 +128,9 @@ configure a host by hand, register the binary as a stdio server:
 [docs/install.md](docs/install.md) has the per-host snippets (Codex, Gemini,
 Cursor, Windsurf, VS Code, the OpenAI Agents SDK), the optional Grep/Glob
 hook, the plugin's release verification, and the developer escape hatch for
-running a local build inside the plugin.
+running a local build inside the plugin. That optional hook is separate from the
+code-discovery nudge the plugin itself registers in `hooks/hooks.json`; see
+[docs/configuration.md](docs/configuration.md#code-discovery-nudge-plugin-hooks).
 
 ### Build from source
 
@@ -161,7 +163,7 @@ The default stays `full` until the next major version, because shrinking the
 default tool surface is a breaking change. New agent setups should use the
 `core` profile (8 read-only tools): `analyze_codebase` already runs index,
 resolve and cluster in one call, and leaving out the 19 hidden tools keeps the
-tool prompt small.
+tool prompt smaller.
 
 ## A first session
 
@@ -191,7 +193,19 @@ query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep
 ```
 
-Re-run `analyze_codebase` after edits; indexing is incremental by default.
+Re-run `analyze_codebase` after edits. On the same `output_dir`, a tree with no
+changed file reuses the graph without re-parsing anything. Any edit, a change of
+`language`, `dependency_scope` or `exclude_dirs`, another codebase root, a new
+server version, `lsp: true` (now or on the run that built the graph), a
+symlinked or artifact-imported graph, a missing or unreadable coverage sidecar,
+a file that was unreadable when the graph was built, a `Cargo.toml`
+edit that changes the crate names, targets or features (even under
+`language: "rust"`, whose walk skips that file), or `full: true` rebuilds
+from scratch. Reusing an edited graph waits on resolver
+invalidation (#443). The three-stage `index_codebase` → `resolve_graph` path
+re-parses only the changed files, but it can keep a call edge a fresh analysis
+would drop (a call made ambiguous by an added function), so prefer
+`analyze_codebase` when the edges matter.
 
 ## 27 MCP Tools
 
@@ -364,31 +378,41 @@ inference spent re-reading files to answer a question a structural query could
 answer once; this binary's CPU is small next to it. Every token an agent does
 not process is compute that is never scheduled. The
 [Green Software Foundation](https://greensoftware.foundation/) calls this
-energy proportionality, and here it is applied where the constant is largest.
+energy proportionality, and this project aims to apply it where the constant
+is largest.
 
-The head-to-head evaluation measures that demand under a pre-registered
-protocol, n=20, reproducible offline with no API key:
-
-| Demand term | Graph tools | Grep/Glob/Read baseline | Reduction |
-|---|---:|---:|---:|
-| Payload token proxy | 43.14 ± 17.26 | 550.36 ± 330.28 | 14.26x (mean of per-question ratios) |
-| Modeled tool calls | 1.00 ± 0.00 | 5.20 ± 1.64 | 5.20x |
-
-Costs are modeled. Both legs use a payload-size / 4 token proxy, and indexing,
-client prompts, real MCP response envelopes and model reasoning are excluded.
-The corpus informed fixes #87 and #92, so this is a regression benchmark.
-Dividing aggregate payload volumes gives 12.76x, a different statistic. No
-energy or CO2 figure is derived from these numbers, because this repository
-measures no joules and a token count does not convert to watt-hours.
+This repository does not claim a token saving for real sessions. The
+head-to-head evaluation in
 [docs/evaluation.md](docs/evaluation.md#graph-tools-compared-with-a-grepglobread-baseline)
-has the full table, the protocol and the falsified first run.
+compares file retrieval against a Grep/Glob/Read baseline (n=20), but its
+graph leg serializes a benchmark-only envelope of symbol identities, not the
+responses the server sends, so its payload ratio is not a session cost. An
+independent audit of v0.14.0 (issue #451) measured real `get_impact` answers
+at 400 to 1,070 tokens, found `git grep` output smaller than the graph answer
+on 4 of 5 questions, and measured the tool prompt at 7.6k tokens (`core`
+profile) to 16.7k (`full`). `benchmarks/token_surface` renders representative
+responses through the handlers' own `token_surface::render_list`, but neither
+real end-to-end handler responses nor the tool prompt are measured in this
+repository yet. No energy or CO2 figure is derived either, because this
+repository measures no joules and a token count does not convert to
+watt-hours.
 
-On the server side, bulk graph writes through UNWIND with a typed struct cost
-0.127 ms per edge against 9.658 ms for the naive raw-string path, 76 times
-less work for the same output (measured 2026-07-28 on `lbug 0.18` with
-`tests/lbug_bulk_investigation.rs`). Tree-sitter extracts structure without a
-model, and indexing is incremental by default. The server-side measurements
-and their dates are in [docs/evaluation.md](docs/evaluation.md).
+On the server side, indexing has a cost of its own. Indexing django 5.1.3
+(6,748 files indexed) from scratch, measured once on 2026-11-10 at `72bc505`
+on a 4-vCPU Linux x86_64 container:
+
+| `full_ast` | Wall time | Peak RSS | Graph on disk | Nodes |
+|---|---:|---:|---:|---:|
+| `false` (default) | 53 s | 533 MiB | 111 MiB | 219,874 |
+| `true` | 747 s | 1,531 MiB | 1,091 MiB | 4,270,311 |
+
+The optional full syntax tree is 94.9 % of the nodes, which is why it is off
+by default ([docs/configuration.md](docs/configuration.md#full-syntax-tree-full_ast)).
+These are single runs on one machine, not yet re-checked in CI. Tree-sitter
+extracts structure without a model, and `index_codebase` is incremental by
+default.
+The procedure and the other server-side measurements, with their dates, are
+in [docs/evaluation.md](docs/evaluation.md#indexing-cost-on-a-real-repository).
 
 ## The zetetic standard
 
@@ -428,7 +452,7 @@ In this codebase:
 
 ```bash
 cargo build --release
-cargo test                                            # full suite (3200+ tests)
+cargo test                                            # full suite (3300+ tests)
 cargo test --test graph_accuracy                      # structural accuracy gate
 cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
 python3 scripts/check_doc_claims.py                   # README numbers against their sources
@@ -467,6 +491,7 @@ ai-architect-mcp-codebase/
 ├── scripts/                       ← doc-claim and pin gates
 ├── bin/                           ← plugin launcher and release verification
 ├── skills/                        ← host-native workflows
+├── hooks/                         ← plugin hooks: the code-discovery nudge
 ├── plugins/                       ← Codex plugin package
 ├── mcp-contract.json
 └── Cargo.toml
