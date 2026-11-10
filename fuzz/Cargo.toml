@@ -51,3 +51,9 @@ path = "fuzz_targets/parse_file_utf8.rs"
 test = false
 doc = false
 bench = false
+
+# fuzz/ is its own workspace, so the root [profile.dev.package.lbug] does not
+# reach it; with debug = 1 above the `cmake` crate would build lbug's C++ as
+# RelWithDebInfo. Debug info stays on for the fuzzed Rust code only.
+[profile.release.package.lbug]
+debug = false

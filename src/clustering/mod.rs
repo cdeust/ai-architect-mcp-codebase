@@ -14,6 +14,7 @@ mod impact;
 mod impact_context;
 mod impact_other_owner;
 mod impact_reasons;
+mod impact_sites;
 mod process;
 
 // ---------------------------------------------------------------------------
@@ -46,5 +47,6 @@ pub use community::{
 pub use impact::{get_impact, ImpactNode, ImpactResult};
 pub use impact_context::summarize as summarize_caller_contexts;
 pub use impact_reasons::outside_target_sites_query;
+pub use impact_sites::UnresolvedSite;
 #[allow(unused_imports)]
 pub use process::{get_processes, trace_processes, ProcessInfo};

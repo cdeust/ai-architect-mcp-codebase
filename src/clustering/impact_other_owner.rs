@@ -238,7 +238,7 @@ impl<'a> OtherOwnerFilter<'a> {
 
 /// Splits the open sites naming the target into those that could still be it and
 /// the count of those that provably name another owner. A row is
-/// `[id, unresolved_reason, callee_name, language, receiver_hint?]`.
+/// `[id, unresolved_reason, callee_name, language, line, receiver_hint?]`.
 ///
 /// postcondition: kept rows are a sub-sequence of `rows` in order; `kept.len() +
 /// excluded == rows.len()`; when `for_target` gives no filter, nothing is dropped.
@@ -256,7 +256,7 @@ pub(super) fn drop_other_owner_sites(
         .into_iter()
         .filter(|row| {
             let (reason, callee, language, hint) =
-                (cell(row, 1), cell(row, 2), cell(row, 3), cell(row, 4));
+                (cell(row, 1), cell(row, 2), cell(row, 3), cell(row, 5));
             !filter.excludes(&SiteSpelling {
                 callee: &callee,
                 receiver_hint: &hint,

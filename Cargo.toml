@@ -119,3 +119,14 @@ zera = { path = "crates/zera" }
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# lbug built from source (Linux CI, see .github/workflows/ci.yml) is compiled by
+# the `cmake` crate with CMAKE_BUILD_TYPE taken from the Rust profile: opt-level 0
+# gives Debug, opt-level 3 with debug=false gives Release (cmake 0.1.58
+# src/lib.rs get_profile). A Debug liblbug.a, linked into every one of the
+# integration test binaries, filled the runner disk ("No space left on device",
+# PR #473 run 41644233337); the prebuilt archive it replaces was a Release build.
+# source: https://docs.rs/cmake/0.1.58/cmake/struct.Config.html#method.profile
+[profile.dev.package.lbug]
+opt-level = 3
+debug = false

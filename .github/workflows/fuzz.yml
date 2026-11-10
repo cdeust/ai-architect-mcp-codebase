@@ -35,15 +35,18 @@ jobs:
   fuzz:
     name: fuzz ${{ matrix.target }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60: lbug is compiled from source here too (see ci.yml); a cold C++ build
+    # plus the fuzz run does not fit 30.
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
       matrix:
         target: [parse_file, parse_file_utf8]
 
-    # Same zstd/lbug static-link conflict the other jobs hit — see ci.yml.
+    # Same lbug source build and zstd linkage as ci.yml (libstdc++ ABI of the prebuilt).
     env:
+      LBUG_BUILD_FROM_SOURCE: "1"
       ZSTD_SYS_USE_PKG_CONFIG: "1"
 
     steps:
@@ -59,6 +62,7 @@ jobs:
       # from the workspace (see the root Cargo.toml) so this nightly requirement
       # never reaches the stable build.
       - name: Install nightly toolchain
+        id: toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: nightly
@@ -70,9 +74,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             fuzz/target
-          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          # `nightly` floats and cargo fingerprints include the rustc version, so
+          # the key carries the toolchain's cachekey output (a hash of rustc -vV):
+          # a nightly bump gets a fresh key and a saved cache instead of an exact
+          # match that restores a useless target/ and never saves (Claude review
+          # on #474). Source: dtolnay/rust-toolchain README, outputs.cachekey.
+          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-lbug-source-v2-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-fuzz-${{ matrix.target }}-
+            ${{ runner.os }}-fuzz-${{ matrix.target }}-lbug-source-v2-${{ steps.toolchain.outputs.cachekey }}-
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked

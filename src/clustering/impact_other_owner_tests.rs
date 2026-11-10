@@ -125,6 +125,15 @@ fn a_path_to_another_type_leaves_the_count_and_is_counted_apart() {
     assert_eq!(r.unresolved_callsites_excluded_other_owner, 2);
     assert_eq!(r.unresolved_callsites_naming_target, 3);
     assert_eq!(r.unresolved_callsites_by_reason.values().sum::<u64>(), 3);
+    // Issue #445: the listed sites are the counted ones; the two other-owner
+    // sites stay out of the list as they stay out of the count.
+    let mut listed: Vec<&str> = r
+        .unresolved_callsites
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect();
+    listed.sort_unstable();
+    assert_eq!(listed, ["c", "d", "e"]);
     assert!(
         r.epistemic_reasons
             .iter()
