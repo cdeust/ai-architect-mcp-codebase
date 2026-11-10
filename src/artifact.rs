@@ -344,16 +344,10 @@ pub fn import_artifact(repo_path: &Path, graph_path: &Path) -> Result<ArtifactMe
     crate::graph_store::release_open_handles(graph_path)?;
     // Cap the decoded stream so a crafted artifact cannot exhaust disk.
     let mut archive = tar::Archive::new(decoder.take(MAX_DECOMPRESSED_BYTES));
-    // tar-rs rejects absolute paths and `..` components on unpack by default,
-    // so a malicious archive cannot escape `dest_parent` (path-traversal safe).
+    // tar-rs refuses absolute and `..` paths on unpack: no escape from `dest_parent`.
     archive.unpack(dest_parent).map_err(|e| {
-        // A single-file graph is not a directory: `remove_dir_all` alone failed
-        // on it and left the partial graph behind (review of #478).
-        let _ = match fs::symlink_metadata(graph_path) {
-            Ok(m) if m.is_dir() => fs::remove_dir_all(graph_path),
-            Ok(_) => fs::remove_file(graph_path),
-            Err(e) => Err(e),
-        };
+        // A single-file graph is no directory (review of #478); neither call follows a symlink.
+        let _ = fs::remove_dir_all(graph_path).or_else(|_| fs::remove_file(graph_path));
         format!("artifact import: unpack: {e}")
     })?;
 

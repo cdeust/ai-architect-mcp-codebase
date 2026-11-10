@@ -227,10 +227,17 @@ pub fn index_incremental(
     // does not list changes no file state, only this digest (review of #478).
     let cargo_facts_digest = cov.facts.digest();
     let facts_match = prior.cargo_facts.as_deref() == Some(cargo_facts_digest.as_str());
-    plan.next_manifest.scope = (settings_match && facts_match).then_some(scope);
+    // A coverage sidecar that is not this pass's report would be carried
+    // forward by the next reuse as if it were (Claude review of #478).
+    let coverage_saved = cov.write_error.is_none();
+    plan.next_manifest.scope = (settings_match && facts_match && coverage_saved).then_some(scope);
     plan.next_manifest.cargo_facts = Some(cargo_facts_digest.clone());
     manifest::save(manifest_path, &plan.next_manifest)?;
-    apply_cargo_facts(&store, &cov.facts);
+    // Nothing was rewritten and the map is the one the graph already holds:
+    // writing it again would only rescan every File node (Claude review of #478).
+    if !(unchanged && facts_match) {
+        apply_cargo_facts(&store, &cov.facts);
+    }
 
     // Intentionally NO node_count()/edge_count() here — see `IncrementalResult`.
     Ok(IncrementalResult {
@@ -418,11 +425,14 @@ fn record_reparse_outcome(
 
 /// Builds the manifest for `codebase` and writes it to `manifest_path`. Since
 /// #478 the full paths call `full_manifest` before indexing and save it after;
-/// this one-step form only builds fixtures for the tests.
+/// this one-step form builds fixtures for the tests and the baseline of the
+/// `incremental_speed` benchmark (`benchmarks/incremental_speed`). Like any
+/// manifest written outside a full index, it records no Cargo map, so an
+/// `analyze_codebase` over it rebuilds.
 ///
-/// Preconditions: `codebase` is the tree just indexed with the same
-/// `options` (`language_filter`/`dependency_scope`/`exclude_dirs`);
-/// `manifest_path`'s parent exists. Postcondition on `Ok`: the manifest
+/// Preconditions: `codebase` is the tree a full index under the same
+/// `options` (`language_filter`/`dependency_scope`/`exclude_dirs`) built the
+/// graph from, unchanged since; `manifest_path`'s parent exists. Postcondition on `Ok`: the manifest
 /// records (mtime, size, content_hash) for every file the full index visited,
 /// keyed by the File node id. Best-effort per file: a stat/read failure
 /// records a zeroed/empty state rather than aborting the whole index (the
@@ -484,18 +494,5 @@ pub fn full_manifest_within(
 }
 
 #[cfg(test)]
-mod full_manifest_tests {
-    use super::*;
-
-    #[test]
-    fn a_tree_over_the_cap_is_refused_before_the_snapshot_hashes_it() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("a.rs"), "pub fn a() {}\n").expect("write");
-        let opts = IndexOptions::default();
-        let err = full_manifest_within(dir.path(), &opts, 1).expect_err("14 bytes > 1");
-        assert!(err.starts_with("total_bytes_exceeded"), "{err}");
-        let m = full_manifest_within(dir.path(), &opts, 1 << 20).expect("under the cap");
-        assert_eq!(m.files.len(), 1);
-        assert!(!m.files["a.rs"].content_hash.is_empty());
-    }
-}
+#[path = "full_manifest_tests.rs"]
+mod full_manifest_tests;

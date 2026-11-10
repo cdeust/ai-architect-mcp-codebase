@@ -79,7 +79,8 @@ pub struct FileManifest {
     pub files: BTreeMap<String, FileState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<IndexScope>,
-    /// `CargoFacts::digest` of the pass that built the graph (review of #478):
+    /// `CargoFacts::digest` of the pass that last wrote this manifest (review of
+    /// #478), which a reuse requires to be the map the graph holds:
     /// the Cargo map the resolver reads comes from manifests the walk may not
     /// list (`Cargo.toml` under `language: "rust"`, a path dependency outside
     /// the tree), so the per-file states cannot see it change. Absent means

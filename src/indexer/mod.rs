@@ -33,12 +33,15 @@ use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
 use coverage::{CoverageCollector, CoverageReport};
 pub use incremental::{
-    fill_after_bootstrap, full_manifest, full_manifest_within, index_incremental,
-    tree_changed_since, FillMethod, FillResult,
+    fill_after_bootstrap, full_manifest, index_incremental, tree_changed_since, FillMethod,
+    FillResult,
 };
+// For the bin's `prepare_full_rebuild_within`, a test seam; the lib has no caller.
+#[allow(unused_imports)]
+pub(crate) use incremental::full_manifest_within;
 // Both full paths now take `full_manifest` before indexing and save it after
-// (#478), so the bin no longer calls this; the integration tests (`tests/*.rs`)
-// and the bin's unit tests still build fixtures with it through this path.
+// (#478), so the bin no longer calls this; the integration tests (`tests/*.rs`),
+// the bin's unit tests and the `incremental_speed` benchmark still use it.
 #[allow(unused_imports)]
 pub use incremental::write_full_manifest;
 use persist::{

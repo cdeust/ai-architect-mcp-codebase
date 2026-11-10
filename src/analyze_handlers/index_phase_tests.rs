@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// A three-file crate with calls across files, so resolve and cluster have
 /// real work, and an `extra/` directory an `exclude_dirs` change can drop
 /// (not `vendor/`, which the walk already prunes by default).
-fn fixture(prefix: &str) -> (PathBuf, TestTempDir) {
+pub(super) fn fixture(prefix: &str) -> (PathBuf, TestTempDir) {
     let base = tempfile::Builder::new()
         .prefix(prefix)
         .tempdir()
@@ -34,7 +34,7 @@ fn fixture(prefix: &str) -> (PathBuf, TestTempDir) {
     (base.join("repo"), base)
 }
 
-fn analyze(repo: &Path, out: &Path, extra: Value) -> Value {
+pub(super) fn analyze(repo: &Path, out: &Path, extra: Value) -> Value {
     let mut args = json!({
         "path": repo.to_string_lossy(),
         "output_dir": out.to_string_lossy(),
@@ -50,7 +50,7 @@ fn analyze(repo: &Path, out: &Path, extra: Value) -> Value {
 
 /// Everything a caller reads off a completed analysis that must not depend on
 /// which index path produced the graph.
-fn outcome(resp: &Value) -> Value {
+pub(super) fn outcome(resp: &Value) -> Value {
     json!({
         "edges": edge_rows(resp),
         "graph": resp["graph"],
@@ -63,7 +63,7 @@ fn outcome(resp: &Value) -> Value {
 
 /// Every relationship row of the graph, as sorted `table|from|to` strings, so
 /// two graphs with equal totals but a different call target still differ.
-fn edge_rows(resp: &Value) -> Vec<String> {
+pub(super) fn edge_rows(resp: &Value) -> Vec<String> {
     let path = PathBuf::from(resp["graph_path"].as_str().expect("graph_path"));
     let store = crate::graph_store::GraphStore::open_or_create(&path).expect("open graph");
     let mut rows = Vec::new();
@@ -105,39 +105,6 @@ fn a_second_call_on_an_unchanged_tree_reparses_nothing() {
     assert_eq!(coverage["index_mode"], "incremental");
     coverage["index_mode"] = first["coverage"]["index_mode"].clone();
     assert_eq!(coverage, first["coverage"]);
-}
-
-#[test]
-fn a_call_after_an_edit_rebuilds_and_matches_a_fresh_analysis() {
-    let (repo, base) = fixture("analyze443_edit_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-
-    // Change a call target, add a file, delete one.
-    fs::write(
-        repo.join("src/a.rs"),
-        "pub fn alpha() { crate::b::gamma(); }\n",
-    )
-    .expect("edit");
-    fs::write(
-        repo.join("src/c.rs"),
-        "pub fn delta() { crate::b::beta(); }\n",
-    )
-    .expect("add");
-    fs::write(
-        repo.join("src/lib.rs"),
-        "mod a;\nmod b;\nmod c;\npub fn root() { a::alpha(); }\n",
-    )
-    .expect("edit lib.rs");
-    fs::remove_file(repo.join("src/extra/v.rs")).expect("delete");
-
-    // An edited tree is rebuilt: the resolver cannot invalidate edges of the
-    // unchanged files yet (see the module doc of `index_phase`).
-    let second = analyze(&repo, &out, json!({}));
-    assert_eq!(second["index"]["mode"], "full", "{second}");
-
-    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
-    assert_eq!(outcome(&second), outcome(&fresh));
 }
 
 #[test]
@@ -228,30 +195,6 @@ fn exclusions_compare_by_content_not_by_spelling_or_order() {
 }
 
 #[test]
-fn a_call_made_ambiguous_by_an_added_file_is_rebuilt() {
-    // Codex review of #478, P1: `a.rs` (unchanged) calls `beta()`, unique in
-    // the first run. An added file declares a second `beta`, so a fresh
-    // analysis no longer resolves the call by unique match. Reusing the graph
-    // kept the earlier edge (3 call-site targets against 2), so a change of
-    // the tree must rebuild.
-    let (repo, base) = fixture("analyze443_ambiguous_");
-    let out = base.join("out");
-    fs::write(repo.join("src/a.rs"), "pub fn alpha() { beta(); }\n").expect("edit a.rs");
-    analyze(&repo, &out, json!({}));
-    fs::write(repo.join("src/c.rs"), "pub fn beta() {}\n").expect("add c.rs");
-    fs::write(
-        repo.join("src/lib.rs"),
-        "mod a;\nmod b;\nmod c;\npub fn root() { a::alpha(); }\n",
-    )
-    .expect("edit lib.rs");
-
-    let second = analyze(&repo, &out, json!({}));
-    assert_eq!(second["index"]["mode"], "full", "{second}");
-    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
-    assert_eq!(outcome(&second), outcome(&fresh));
-}
-
-#[test]
 fn a_coverage_write_that_fails_on_reuse_fails_the_analysis() {
     // Codex review of #478, P2: the reuse path read the sidecar back, so a
     // failed write left the previous report on disk and presented it as this
@@ -275,7 +218,7 @@ fn a_coverage_write_that_fails_on_reuse_fails_the_analysis() {
     }))
     .expect_err("a coverage receipt that did not reach the sidecar must not be returned");
     // The reuse path's own refusal, not a full rebuild's: the full path would
-    // have removed the manifest first (`forget_sidecars`).
+    // have removed the manifest first (`forget_graph_sidecars`).
     assert!(err.starts_with("coverage sidecar write failed"), "{err}");
     assert!(
         crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out)).is_some(),
@@ -425,80 +368,6 @@ fn a_symlinked_graph_is_not_reused_and_its_target_is_left_alone() {
 }
 
 #[test]
-fn an_index_codebase_pass_that_applied_changes_makes_the_next_analysis_rebuild() {
-    // Claude review of #478: a same-settings `index_codebase` pass between two
-    // analyses applied an add and kept the scope, so the next analysis saw no
-    // change and reused a graph whose resolver rows were stale.
-    let (repo, base) = fixture("analyze443_index_between_");
-    let out = base.join("out");
-    fs::write(repo.join("src/a.rs"), "pub fn alpha() { beta(); }\n").expect("edit a.rs");
-    analyze(&repo, &out, json!({}));
-    fs::write(repo.join("src/c.rs"), "pub fn beta() {}\n").expect("add c.rs");
-    crate::indexing_handlers::do_index_codebase(&json!({
-        "path": repo.to_string_lossy(),
-        "output_dir": out.to_string_lossy(),
-        "language": "rust",
-    }))
-    .expect("index");
-    let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
-    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
-    assert_eq!(outcome(&resp), outcome(&fresh));
-}
-
-#[test]
-fn a_pure_add_delete_or_rename_rebuilds() {
-    // Each case touches one file that no `mod` declares, so only the matching
-    // arm of `tree_changed_since` can see it (review of #478).
-    let (repo, base) = fixture("analyze443_pure_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    let extra = repo.join("src/extra");
-
-    fs::write(extra.join("added.rs"), "pub fn added() {}\n").expect("add");
-    assert_eq!(
-        analyze(&repo, &out, json!({}))["index"]["mode"],
-        "full",
-        "add"
-    );
-
-    fs::rename(extra.join("added.rs"), extra.join("renamed.rs")).expect("rename");
-    assert_eq!(
-        analyze(&repo, &out, json!({}))["index"]["mode"],
-        "full",
-        "rename"
-    );
-
-    fs::remove_file(extra.join("renamed.rs")).expect("delete");
-    assert_eq!(
-        analyze(&repo, &out, json!({}))["index"]["mode"],
-        "full",
-        "delete"
-    );
-}
-
-#[test]
-fn a_touched_file_with_identical_content_is_still_reused() {
-    // A moved mtime with the same bytes is not a change (the hash fallback);
-    // otherwise every `git checkout` would rebuild.
-    let (repo, base) = fixture("analyze443_touch_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    let b = repo.join("src/b.rs");
-    let bytes = fs::read(&b).expect("read b.rs");
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
-    fs::write(&b, &bytes).expect("rewrite b.rs");
-    fs::File::options()
-        .write(true)
-        .open(&b)
-        .and_then(|f| f.set_modified(later))
-        .expect("move mtime");
-    let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
-    assert_eq!(resp["index"]["files_reparsed"], 0, "{resp}");
-}
-
-#[test]
 fn reuse_with_an_excluded_directory_keeps_the_files_indexed_count() {
     // Codex review of #478: the reuse path subtracted the excluded directory's
     // `skipped` entry from `files_indexed`.
@@ -584,25 +453,28 @@ fn a_graph_with_language_server_rows_is_not_reused() {
     }
     let resp = analyze(&repo, &out, json!({}));
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
-    // And `lsp: true` itself never reuses.
-    let resp = analyze(&repo, &out, json!({ "lsp": true }));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
-}
-
-#[test]
-fn a_file_unreadable_at_build_time_is_retried() {
-    // Review of #478: an empty recorded hash means the full index could not
-    // read the file; `chmod +r` moves no mtime, so it must count as changed.
-    let (repo, base) = fixture("analyze443_unreadable_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    let path = crate::indexer::manifest::manifest_path(&out);
-    let mut m: Value =
-        serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("parse");
-    m["files"]["src/b.rs"]["content_hash"] = json!("");
-    fs::write(&path, m.to_string()).expect("write");
-    let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    // And `lsp: true` itself never reuses. Asked of the reuse check directly:
+    // a whole analysis would start the language server (Claude review of #478).
+    let args = json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "language": "rust",
+        "lsp": true,
+    });
+    let req = crate::analyze_handlers::AnalyzeRequest::prepare(args.as_object().expect("object"))
+        .expect("prepare");
+    assert!(super::reusable_manifest(&req).is_none());
+    let args = json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "language": "rust",
+    });
+    let req = crate::analyze_handlers::AnalyzeRequest::prepare(args.as_object().expect("object"))
+        .expect("prepare");
+    assert!(
+        super::reusable_manifest(&req).is_some(),
+        "the same graph is reusable without lsp: the refusal is lsp's"
+    );
 }
 
 #[test]
@@ -664,218 +536,4 @@ fn reuse_survives_its_own_refresh() {
         assert_eq!(resp["index"]["mode"], "incremental", "{call}: {resp}");
         assert_eq!(outcome(&resp), outcome(&first), "{call}");
     }
-}
-
-#[test]
-fn an_in_place_edit_of_the_same_size_rebuilds() {
-    // Review of #478: every other edit test also adds a file, so the hash arm
-    // of the change check was never reached with a real content change.
-    let (repo, base) = fixture("analyze443_same_size_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    let b = repo.join("src/b.rs");
-    let before = fs::read_to_string(&b).expect("read");
-    let after = before.replacen("beta", "bxta", 1);
-    assert_eq!(before.len(), after.len(), "precondition: same size");
-    fs::write(&b, after).expect("edit");
-    // Explicitly later: on a coarse-mtime filesystem the write could land in
-    // the same tick, and the test would never reach the hash arm.
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
-    fs::File::options()
-        .write(true)
-        .open(&b)
-        .and_then(|f| f.set_modified(later))
-        .expect("bump mtime");
-    let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
-    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
-    assert_eq!(outcome(&resp), outcome(&fresh));
-}
-
-#[test]
-fn full_manifest_and_the_change_check_see_an_edit_made_after_the_snapshot() {
-    // Review of #478: the property the full paths' ordering relies on (a
-    // snapshot taken before an edit reports it; one taken after hides it).
-    // The production ordering itself is pinned by
-    // `prepare_full_rebuild_snapshots_before_the_index_runs` below.
-    let (repo, _base) = fixture("analyze443_snapshot_order_");
-    let opts = crate::indexer::IndexOptions::default();
-    let snapshot = crate::indexer::full_manifest(&repo, &opts).expect("snapshot");
-    let b = repo.join("src/b.rs");
-    fs::write(&b, "pub fn beta() { edited(); }\n").expect("edit during the index");
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
-    fs::File::options()
-        .write(true)
-        .open(&b)
-        .and_then(|f| f.set_modified(later))
-        .expect("bump mtime");
-    assert!(
-        crate::indexer::tree_changed_since(&repo, &opts, &snapshot).expect("check"),
-        "the pre-index snapshot must not vouch for the edited file"
-    );
-    let after = crate::indexer::full_manifest(&repo, &opts).expect("post-index manifest");
-    assert!(
-        !crate::indexer::tree_changed_since(&repo, &opts, &after).expect("check"),
-        "a manifest taken after the edit would hide it: the ordering is what matters"
-    );
-}
-
-fn graph_sidecars_intact(out: &Path) {
-    assert!(
-        crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(out)).is_some(),
-        "manifest kept"
-    );
-    assert!(out.join("meta.json").exists(), "meta.json kept");
-    assert!(
-        fs::symlink_metadata(out.join("graph")).is_ok(),
-        "graph kept"
-    );
-}
-
-#[test]
-fn an_over_cap_tree_is_refused_before_the_old_graph_is_touched() {
-    // Review of #478: `prepare_full_rebuild` refuses a tree over the byte cap
-    // as its first step, so the previous graph and its sidecars survive.
-    let (repo, base) = fixture("analyze443_cap_keeps_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    let opts = crate::indexer::IndexOptions {
-        language_filter: Some(crate::parser::Language::Rust),
-        ..Default::default()
-    };
-    let err = crate::query_handlers::prepare_full_rebuild_within(
-        &repo,
-        &out,
-        &out.join("graph"),
-        &opts,
-        Some(1),
-    )
-    .expect_err("1-byte cap");
-    assert!(
-        err.starts_with(crate::indexer::TOTAL_BYTES_EXCEEDED),
-        "{err}"
-    );
-    graph_sidecars_intact(&out);
-}
-
-fn refuse_release(_path: &Path) -> Result<(), String> {
-    Err("graph_handle_in_use: held by a running request (test)".into())
-}
-
-#[test]
-fn a_busy_graph_keeps_its_sidecars_when_the_rebuild_is_refused() {
-    // Review of #478: handles are released before the sidecars are forgotten,
-    // so a busy graph fails while its manifest and meta.json still describe
-    // it. The hook is per thread; each test runs on its own.
-    let (repo, base) = fixture("analyze443_busy_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    crate::graph_store::register_release_hook(refuse_release);
-    let err = do_analyze_codebase(&json!({
-        "path": repo.to_string_lossy(),
-        "output_dir": out.to_string_lossy(),
-        "language": "rust",
-        "full": true,
-    }))
-    .expect_err("the graph is busy");
-    assert!(err.contains("graph_handle_in_use"), "{err}");
-    graph_sidecars_intact(&out);
-}
-
-#[test]
-fn prepare_full_rebuild_snapshots_before_the_index_runs() {
-    // Review of #478: drive the production pieces in the order both full
-    // paths use them. A file edited after `prepare_full_rebuild` (that is,
-    // during the index) must make the next analysis rebuild.
-    let (repo, base) = fixture("analyze443_prod_order_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    let opts = crate::indexer::IndexOptions {
-        language_filter: Some(crate::parser::Language::Rust),
-        ..Default::default()
-    };
-    let graph = out.join("graph");
-    let snapshot = crate::query_handlers::prepare_full_rebuild(&repo, &out, &graph, &opts)
-        .expect("prepare")
-        .expect("snapshot");
-    let b = repo.join("src/b.rs");
-    fs::write(&b, "pub fn beta() { edited(); }\n").expect("edit during the index");
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
-    fs::File::options()
-        .write(true)
-        .open(&b)
-        .and_then(|f| f.set_modified(later))
-        .expect("bump mtime");
-    let result = crate::indexer::index_codebase_with_language(&repo, &graph, &opts).expect("index");
-    crate::indexer::coverage::save(
-        &crate::indexer::coverage::coverage_path(&out),
-        &result.coverage,
-    )
-    .expect("coverage");
-    crate::indexer::manifest::save(&crate::indexer::manifest::manifest_path(&out), &snapshot)
-        .expect("save the pre-index snapshot");
-    crate::query_handlers::write_graph_meta(&out, &repo).expect("meta");
-    let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
-}
-
-/// A crate whose test calls a method through `use <crate name>::Set`: which
-/// receiver the call resolves to depends on the crate name in `Cargo.toml`,
-/// a file the `language: "rust"` walk does not list (Codex review of #478).
-fn cargo_fixture(prefix: &str, crate_name: &str) -> (PathBuf, TestTempDir) {
-    let base = tempfile::Builder::new()
-        .prefix(prefix)
-        .tempdir()
-        .expect("create temp dir")
-        .keep_managed();
-    let repo = base.join("repo");
-    fs::create_dir_all(repo.join("src")).expect("mk src");
-    fs::create_dir_all(repo.join("tests")).expect("mk tests");
-    write_cargo_toml(&repo, crate_name);
-    fs::write(
-        repo.join("src/lib.rs"),
-        "pub struct Set;\nimpl Set {\n    pub fn m(&self) {}\n}\n",
-    )
-    .expect("write lib.rs");
-    fs::write(
-        repo.join("tests/t.rs"),
-        "use old_name::Set;\n\n#[test]\nfn f() {\n    let s: Set = Set;\n    s.m();\n}\n",
-    )
-    .expect("write t.rs");
-    (repo, base)
-}
-
-fn write_cargo_toml(repo: &Path, crate_name: &str) {
-    fs::write(
-        repo.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n"
-        ),
-    )
-    .expect("write Cargo.toml");
-}
-
-#[test]
-fn an_unchanged_cargo_crate_is_reused() {
-    let (repo, base) = cargo_fixture("analyze443_cargo_same_", "old_name");
-    let out = base.join("out");
-    let first = analyze(&repo, &out, json!({}));
-    let second = analyze(&repo, &out, json!({}));
-    // The full and the incremental pass fingerprint the same Cargo map alike.
-    assert_eq!(second["index"]["mode"], "incremental", "{second}");
-    assert_eq!(outcome(&second), outcome(&first));
-}
-
-#[test]
-fn an_edit_to_cargo_toml_alone_rebuilds() {
-    let (repo, base) = cargo_fixture("analyze443_cargo_edit_", "old_name");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-
-    write_cargo_toml(&repo, "new_name");
-    let second = analyze(&repo, &out, json!({}));
-    assert_eq!(second["index"]["mode"], "full", "{second}");
-
-    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
-    assert_eq!(outcome(&second), outcome(&fresh));
 }

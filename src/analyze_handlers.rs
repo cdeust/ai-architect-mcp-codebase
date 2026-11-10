@@ -261,26 +261,26 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
 fn persist_analyze_sidecars(
     req: &AnalyzeRequest,
     coverage: &indexer::coverage::CoverageReport,
-    snapshot: Result<indexer::manifest::FileManifest, String>,
+    snapshot: indexer::manifest::FileManifest,
 ) -> Result<Option<String>, String> {
     // Source: dy-wcet stdio reproduction (2026-09-06): analyze discarded
     // IndexResult.coverage, leaving query_graph(graph="missed") unavailable
     // or stale. A failed write must not return a successful coverage receipt.
     indexer::coverage::save(&indexer::coverage::coverage_path(&req.output_dir), coverage)?;
     let manifest_path = indexer::manifest::manifest_path(&req.output_dir);
-    // A manifest that cannot be written (or a snapshot that could not be
-    // taken) still leaves `meta.json` behind, with null manifest fields as
-    // `index_codebase` writes it, and both errors are reported (review of #478).
-    let manifest_err = snapshot
-        .and_then(|m| indexer::manifest::save(&manifest_path, &m))
+    // A manifest that cannot be written still leaves `meta.json` behind, with
+    // null manifest fields as `index_codebase` writes it, and both errors are
+    // reported (review of #478).
+    let manifest_err = indexer::manifest::save(&manifest_path, &snapshot)
         .err()
         .inspect(|e| eprintln!("[ap] file manifest write failed (analyze succeeded): {e}"));
     let meta_err = write_graph_meta(&req.output_dir, &req.codebase)
         .err()
         .inspect(|e| eprintln!("[ap] graph meta sidecar write failed (analyze succeeded): {e}"));
     Ok(match (manifest_err, meta_err) {
-        (Some(m), Some(e)) => Some(format!("manifest: {m}; meta: {e}")),
-        (Some(m), None) => Some(format!("manifest: {m}")),
+        // `manifest::save` already prefixes its error with `manifest: `.
+        (Some(m), Some(e)) => Some(format!("{m}; meta: {e}")),
+        (Some(m), None) => Some(m),
         (None, e) => e,
     })
 }
@@ -305,6 +305,10 @@ fn fold_lsp_coverage(
 /// Surfaces a failed sidecar write on the response rather than leaving the
 /// caller believing a complete, queryable graph landed (review round 6 finding
 /// 4: three of five `write_graph_meta` call sites swallowed this).
+///
+/// The key keeps its fleet-watch#112 name, but on `analyze_codebase` it also
+/// carries a failed manifest write, prefixed `manifest: ` (and `meta: ` when
+/// both failed); a bare message is a `meta.json` failure.
 fn report_sidecar_error(response: &mut Value, err: Option<String>) {
     if let Some(err) = err {
         response["meta_write_error"] = json!(err);

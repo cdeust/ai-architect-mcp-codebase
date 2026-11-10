@@ -1,0 +1,310 @@
+//! Issue #443, reviews of #478: what a full rebuild does before and after the
+//! index, driven through the production entry points (`do_analyze_codebase`,
+//! `do_index_codebase`), and the Cargo map a reuse compares.
+
+use super::tests::{analyze, fixture, outcome};
+use crate::analyze_handlers::do_analyze_codebase;
+use crate::indexing_handlers::do_index_codebase;
+use crate::test_support::{TempDirExt, TestTempDir};
+use serde_json::{json, Value};
+use std::cell::RefCell;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+type Entry = fn(&Value) -> Result<Value, String>;
+
+fn full_args(repo: &Path, out: &Path) -> Value {
+    json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "language": "rust",
+        "full": true,
+    })
+}
+
+fn graph_sidecars_intact(out: &Path) {
+    assert!(
+        crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(out)).is_some(),
+        "manifest kept"
+    );
+    assert!(out.join("meta.json").exists(), "meta.json kept");
+    assert!(
+        fs::symlink_metadata(out.join("graph")).is_ok(),
+        "graph kept"
+    );
+}
+
+#[test]
+fn an_over_cap_tree_is_refused_before_the_old_graph_is_touched() {
+    // Review of #478: `prepare_full_rebuild` refuses a tree over the byte cap
+    // as its first step, so the previous graph and its sidecars survive.
+    let (repo, base) = fixture("analyze443_cap_keeps_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let opts = crate::indexer::IndexOptions {
+        language_filter: Some(crate::parser::Language::Rust),
+        ..Default::default()
+    };
+    let err = crate::query_handlers::prepare_full_rebuild_within(
+        &repo,
+        &out,
+        &out.join("graph"),
+        &opts,
+        Some(1),
+    )
+    .expect_err("1-byte cap");
+    assert!(
+        err.starts_with(crate::indexer::TOTAL_BYTES_EXCEEDED),
+        "{err}"
+    );
+    graph_sidecars_intact(&out);
+}
+
+#[test]
+fn any_snapshot_error_is_refused_before_the_old_graph_is_touched() {
+    // Claude review of #478: not only the byte cap. A root the walk cannot
+    // read fails the index too, so it must fail before the old graph goes.
+    let (repo, base) = fixture("analyze443_snap_err_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let gone = base.join("not-there");
+    let err = crate::query_handlers::prepare_full_rebuild(
+        &gone,
+        &out,
+        &out.join("graph"),
+        &crate::indexer::IndexOptions::default(),
+    )
+    .expect_err("an unreadable root");
+    assert!(!err.is_empty());
+    graph_sidecars_intact(&out);
+}
+
+fn refuse_release(_path: &Path) -> Result<(), String> {
+    Err("graph_handle_in_use: held by a running request (test)".into())
+}
+
+/// Review of #478: handles are released before the sidecars are forgotten,
+/// so a busy graph fails while its manifest and meta.json still describe it.
+/// The hook is per thread; each test runs on its own.
+fn busy_graph_keeps_its_sidecars(entry: Entry, prefix: &str) {
+    let (repo, base) = fixture(prefix);
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    crate::graph_store::register_release_hook(refuse_release);
+    let err = entry(&full_args(&repo, &out)).expect_err("the graph is busy");
+    assert!(err.contains("graph_handle_in_use"), "{err}");
+    graph_sidecars_intact(&out);
+}
+
+#[test]
+fn a_busy_graph_keeps_its_sidecars_when_analyze_is_refused() {
+    busy_graph_keeps_its_sidecars(do_analyze_codebase, "analyze443_busy_");
+}
+
+#[test]
+fn a_busy_graph_keeps_its_sidecars_when_index_codebase_is_refused() {
+    busy_graph_keeps_its_sidecars(do_index_codebase, "analyze443_busy_index_");
+}
+
+thread_local! {
+    /// The file `edit_on_first_release` edits, armed by the test.
+    static EDIT_ON_RELEASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// A release hook that edits the armed file once, with a later mtime, then
+/// lets every release through. `prepare_full_rebuild` releases after its
+/// snapshot and before the index, so the edit lands during the rebuild.
+fn edit_on_first_release(_path: &Path) -> Result<(), String> {
+    if let Some(file) = EDIT_ON_RELEASE.with(|c| c.borrow_mut().take()) {
+        fs::write(&file, "pub fn beta() { edited(); }\n").map_err(|e| e.to_string())?;
+        let later = SystemTime::now() + Duration::from_secs(120);
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .and_then(|f| f.set_modified(later))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Claude review of #478: the production full path, not a hand-built copy of
+/// its steps. A file edited during the rebuild must make the next analysis
+/// rebuild: the manifest that path saves is the snapshot taken before the
+/// index, not one taken after it.
+fn an_edit_during_a_full_rebuild_is_seen_next_time(entry: Entry, prefix: &str) {
+    let (repo, base) = fixture(prefix);
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    EDIT_ON_RELEASE.with(|c| *c.borrow_mut() = Some(repo.join("src/b.rs")));
+    crate::graph_store::register_release_hook(edit_on_first_release);
+    entry(&full_args(&repo, &out)).expect("full rebuild");
+    assert!(
+        EDIT_ON_RELEASE.with(|c| c.borrow().is_none()),
+        "the edit ran during the rebuild"
+    );
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+#[test]
+fn an_edit_during_a_full_analysis_is_seen_by_the_next_one() {
+    an_edit_during_a_full_rebuild_is_seen_next_time(do_analyze_codebase, "analyze443_during_");
+}
+
+#[test]
+fn an_edit_during_a_full_index_codebase_is_seen_by_the_next_analysis() {
+    an_edit_during_a_full_rebuild_is_seen_next_time(do_index_codebase, "analyze443_during_ix_");
+}
+
+#[test]
+fn a_full_index_codebase_whose_coverage_write_fails_is_not_reused() {
+    // Claude review of #478: that path only logs a failed coverage write. The
+    // previous graph's report must not survive beside the new graph, or the
+    // next analysis reuses it and carries its gaps forward.
+    let (repo, base) = fixture("analyze443_ix_covfail_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let cov = crate::indexer::coverage::coverage_path(&out);
+    let blocker = cov.with_extension("json.tmp");
+    fs::create_dir_all(&blocker).expect("block the temp file");
+    do_index_codebase(&full_args(&repo, &out)).expect("the index itself succeeds");
+    assert!(
+        crate::indexer::coverage::load(&cov).is_none(),
+        "the previous graph's coverage report is gone"
+    );
+    fs::remove_dir(&blocker).expect("unblock");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+#[test]
+fn an_incremental_pass_whose_coverage_write_fails_records_no_scope() {
+    // The same rule on `index_codebase`'s incremental path: a manifest that
+    // vouches for the graph must not sit beside another pass's report.
+    let (repo, base) = fixture("analyze443_inc_covfail_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let blocker = crate::indexer::coverage::coverage_path(&out).with_extension("json.tmp");
+    fs::create_dir_all(&blocker).expect("block the temp file");
+    let mut args = full_args(&repo, &out);
+    args["full"] = json!(false);
+    do_index_codebase(&args).expect("index");
+    let m = crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out))
+        .expect("manifest");
+    assert!(m.scope.is_none(), "{:?}", m.scope);
+}
+
+/// A crate whose test calls a method through `use <crate name>::Set`: which
+/// receiver the call resolves to depends on the crate name in `Cargo.toml`,
+/// a file the `language: "rust"` walk does not list (Codex review of #478).
+fn cargo_fixture(prefix: &str, crate_name: &str) -> (PathBuf, TestTempDir) {
+    let base = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let repo = base.join("repo");
+    fs::create_dir_all(repo.join("src")).expect("mk src");
+    fs::create_dir_all(repo.join("tests")).expect("mk tests");
+    write_cargo_toml(&repo, crate_name);
+    fs::write(
+        repo.join("src/lib.rs"),
+        "pub struct Set;\nimpl Set {\n    pub fn m(&self) {}\n}\n",
+    )
+    .expect("write lib.rs");
+    fs::write(
+        repo.join("tests/t.rs"),
+        "use old_name::Set;\n\n#[test]\nfn f() {\n    let s: Set = Set;\n    s.m();\n}\n",
+    )
+    .expect("write t.rs");
+    (repo, base)
+}
+
+/// Without `cargo` both passes record the same empty map, so the rebuild these
+/// tests expect would not happen (Claude review of #478).
+fn cargo_available() -> bool {
+    std::process::Command::new("cargo")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+fn write_cargo_toml(repo: &Path, crate_name: &str) {
+    fs::write(
+        repo.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n"
+        ),
+    )
+    .expect("write Cargo.toml");
+}
+
+#[test]
+fn an_unchanged_cargo_crate_is_reused() {
+    if !cargo_available() {
+        return;
+    }
+    let (repo, base) = cargo_fixture("analyze443_cargo_same_", "old_name");
+    let out = base.join("out");
+    let first = analyze(&repo, &out, json!({}));
+    let second = analyze(&repo, &out, json!({}));
+    // The full and the incremental pass fingerprint the same Cargo map alike.
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert_eq!(outcome(&second), outcome(&first));
+}
+
+#[test]
+fn an_edit_to_cargo_toml_alone_rebuilds() {
+    if !cargo_available() {
+        return;
+    }
+    let (repo, base) = cargo_fixture("analyze443_cargo_edit_", "old_name");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+
+    write_cargo_toml(&repo, "new_name");
+    let second = analyze(&repo, &out, json!({}));
+    assert_eq!(second["index"]["mode"], "full", "{second}");
+
+    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
+    assert_eq!(outcome(&second), outcome(&fresh));
+}
+
+#[test]
+fn an_index_codebase_pass_that_sees_the_cargo_map_move_records_no_scope() {
+    // Claude review of #478: the `index_codebase` route. Its pass refreshes the
+    // facts, so the next analysis compares equal digests: only a dropped scope
+    // makes it rebuild.
+    if !cargo_available() {
+        return;
+    }
+    let (repo, base) = cargo_fixture("analyze443_cargo_ix_", "old_name");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    write_cargo_toml(&repo, "new_name");
+    let mut args = full_args(&repo, &out);
+    args["full"] = json!(false);
+    do_index_codebase(&args).expect("index");
+    let m = crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out))
+        .expect("manifest");
+    assert!(m.scope.is_none(), "{:?}", m.scope);
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}
+
+#[test]
+fn a_manifest_without_a_cargo_digest_is_not_reused() {
+    // A manifest written before the digest existed: unknown, never a match.
+    let (repo, base) = fixture("analyze443_no_digest_");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+    let path = crate::indexer::manifest::manifest_path(&out);
+    let mut m: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("parse");
+    assert!(m["cargo_facts"].is_string(), "precondition: {m}");
+    m.as_object_mut().expect("object").remove("cargo_facts");
+    fs::write(&path, m.to_string()).expect("write");
+    let resp = analyze(&repo, &out, json!({}));
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+}

@@ -23,8 +23,9 @@
 //! 4. no file changed, was added, deleted or renamed since that manifest, and
 //!    none was unreadable when it was written (`indexer::tree_changed_since`);
 //! 5. the incremental pass that refreshes the sidecars succeeds and itself
-//!    finds no change (a save in between rebuilds). A failure is
-//!    logged and falls back to the full rebuild (§13 — no silent path);
+//!    finds no change (a save in between rebuilds). A failed refresh, or one
+//!    that finds a change, is logged and falls back to the full rebuild (§13 —
+//!    no silent path); a failed coverage-sidecar write fails the call;
 //! 6. that pass computes the same Cargo map (`FileManifest::cargo_facts`) as
 //!    the pass that built the graph. The map is read from manifests the walk
 //!    may not list — `Cargo.toml` under `language: "rust"`, a path dependency
@@ -74,19 +75,21 @@ pub(super) fn run(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
 }
 
 /// Conditions 1 to 4 of the module doc: the manifest to reuse, or `None`.
+/// The checks that need no I/O or read a small sidecar come first, then the
+/// walk, and only then the one that opens the graph, so an edited, re-scoped
+/// or `lsp: true` call never opens it (Claude review of #478).
 fn reusable_manifest(req: &AnalyzeRequest) -> Option<indexer::manifest::FileManifest> {
     if req.want_full || !is_own_graph(&req.graph_dir) {
         return None;
     }
-    // The refresh carries the unchanged files' gaps forward from this report;
-    // without it the reused graph would read as clean (Codex review of #478).
-    if indexer::coverage::load(&indexer::coverage::coverage_path(&req.output_dir)).is_none() {
-        eprintln!("[ap] analyze_codebase: no readable coverage sidecar; rebuilding in full");
+    if req.enable_lsp {
+        // The pass writes against the statically resolved graph.
+        eprintln!("[ap] analyze_codebase: lsp=true; rebuilding in full");
         return None;
     }
-    if !same_root(req) || req.enable_lsp || graph_has_lsp_rows(&req.graph_dir) {
+    if !same_root(req) {
         eprintln!(
-            "[ap] analyze_codebase: another root, or language-server rows in play; rebuilding in full"
+            "[ap] analyze_codebase: the graph was built for another root; rebuilding in full"
         );
         return None;
     }
@@ -98,14 +101,27 @@ fn reusable_manifest(req: &AnalyzeRequest) -> Option<indexer::manifest::FileMani
         );
         return None;
     }
+    // The refresh carries the unchanged files' gaps forward from this report;
+    // without it the reused graph would read as clean (Codex review of #478).
+    if indexer::coverage::load(&indexer::coverage::coverage_path(&req.output_dir)).is_none() {
+        eprintln!("[ap] analyze_codebase: no readable coverage sidecar; rebuilding in full");
+        return None;
+    }
     match indexer::tree_changed_since(&req.codebase, &req.options, &prior) {
-        Ok(false) => Some(prior),
-        Ok(true) => None,
+        Ok(false) => {}
+        Ok(true) => return None,
         Err(e) => {
             eprintln!("[ap] analyze_codebase: change check failed ({e}); rebuilding in full");
-            None
+            return None;
         }
     }
+    if graph_has_lsp_rows(&req.graph_dir) {
+        eprintln!(
+            "[ap] analyze_codebase: the graph holds language-server rows; rebuilding in full"
+        );
+        return None;
+    }
+    Some(prior)
 }
 
 /// True when `graph_dir` is a real directory or file, not a symlink. A
@@ -137,7 +153,8 @@ fn graph_has_lsp_rows(graph_dir: &std::path::Path) -> bool {
         .map_or(true, |n| n > 0)
 }
 
-/// `Ok(None)`: not applicable, or the refresh pass failed (logged).
+/// `Ok(None)`: not applicable, the refresh pass failed, the tree changed
+/// during it, or its Cargo map differs (each logged).
 /// `Err`: the pass ran but its coverage report did not reach the sidecar, so
 /// the response could not stand behind any coverage receipt (same rule as the
 /// full path, `persist_analyze_sidecars`).
@@ -212,7 +229,7 @@ fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
         prepare_full_rebuild(&req.codebase, &req.output_dir, &req.graph_dir, &req.options)?;
     let result =
         indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
-    let snapshot = snapshot.map(|m| m.with_cargo_facts(&result.cargo_facts_digest));
+    let snapshot = snapshot.with_cargo_facts(&result.cargo_facts_digest);
     let sidecar_err = super::persist_analyze_sidecars(req, &result.coverage, snapshot)?;
     Ok(IndexPhase {
         summary: json!({
@@ -230,3 +247,11 @@ fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
 #[cfg(test)]
 #[path = "index_phase_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "index_phase_rebuild_tests.rs"]
+mod rebuild_tests;
+
+#[cfg(test)]
+#[path = "index_phase_change_tests.rs"]
+mod change_tests;

@@ -106,7 +106,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   language-server rows (`lsp: true` now or before), any changed file or one
   unreadable at build time, a different Cargo map (a `Cargo.toml` edit that
   changes crate names, targets or features, even one the `language: "rust"`
-  walk does not list), a symlinked `graph`, a graph imported from an
+  walk does not list; the manifest records a digest of that map as
+  `cargo_facts`, and a manifest without one is not trusted), a symlinked `graph`, a graph imported from an
   artifact, a missing or unreadable coverage sidecar, `full: true`, or a failed
   refresh rebuilds from scratch. An edited tree is
   not reused yet: the resolver keeps edges of unchanged files whose candidate
@@ -119,7 +120,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   as changed by the next call.
   **Changed:** the response's `index` block carries `mode`; `node_count`,
   `edge_count` and `files_indexed` appear only when `mode` is `full` (whole-graph
-  totals stay in `graph`). **Added:** the `full` parameter. A full rebuild
+  totals stay in `graph`); on analyze, `meta_write_error` also reports a failed
+  manifest write, prefixed `manifest: ` (`meta: ` precedes a `meta.json` error
+  when both failed). **Added:** the `full` parameter. A full rebuild
   removes the previous manifest and `meta.json` first, so a rebuild that fails
   or is killed leaves nothing for the next call to reuse.
 

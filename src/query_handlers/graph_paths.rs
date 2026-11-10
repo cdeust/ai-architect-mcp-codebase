@@ -74,16 +74,20 @@ pub(crate) fn remove_stale_graph_artifact(path: &Path) -> Result<(), String> {
     outcome.map_err(|e| format!("remove stale graph artifact: {e}"))
 }
 
-/// Removes the manifest and `meta.json` that describe the graph in
-/// `output_dir`, before a full rebuild replaces it (review of #478). A rebuild
-/// that fails or is killed then leaves nothing that vouches for a new or
-/// partial graph: the next call starts from scratch instead of trusting the
-/// previous run's manifest. Absent is fine; a file that cannot be removed fails
-/// the call, since it would still be read.
+/// Removes the manifest, `meta.json` and the coverage sidecar that describe the
+/// graph in `output_dir`, before a full rebuild replaces it (reviews of #478).
+/// A rebuild that fails or is killed then leaves nothing that vouches for a new
+/// or partial graph: the next call starts from scratch instead of trusting the
+/// previous run's manifest. The coverage sidecar goes too: `index_codebase`
+/// only logs a failed coverage write, and the previous graph's report would
+/// otherwise still load beside the new graph and be carried forward by the
+/// next analysis. Absent is fine; a file that cannot be removed fails the
+/// call, since it would still be read.
 pub(crate) fn forget_graph_sidecars(output_dir: &Path) -> Result<(), String> {
     for path in [
         crate::indexer::manifest::manifest_path(output_dir),
         output_dir.join("meta.json"),
+        crate::indexer::coverage::coverage_path(output_dir),
     ] {
         match fs::remove_file(&path) {
             Ok(()) => {}
@@ -97,20 +101,22 @@ pub(crate) fn forget_graph_sidecars(output_dir: &Path) -> Result<(), String> {
 /// Everything a full rebuild does before indexing, in the order that keeps a
 /// failure harmless (reviews of #478), shared by `analyze_codebase` and
 /// `index_codebase`:
-/// 1. snapshot the manifest (`indexer::full_manifest`) — a tree over the byte
-///    cap is refused here, before anything is hashed or removed;
+/// 1. snapshot the manifest (`indexer::full_manifest`) — any failure is
+///    refused here, before anything is removed: a tree over the byte cap
+///    (refused before anything is hashed), too many files, too deep, or an
+///    unreadable root. The index walks the tree the same way and would fail on
+///    each of them, after the old graph was gone (Claude review of #478);
 /// 2. release cached handles on the graph — a busy graph fails here, while its
 ///    manifest and `meta.json` still describe it;
 /// 3. forget the old sidecars, then remove the old graph.
 ///
-/// The inner `Result` is the snapshot to save after the index; another
-/// snapshot error only means no manifest is written, so the next call rebuilds.
+/// Returns the snapshot, to save after the index.
 pub(crate) fn prepare_full_rebuild(
     codebase: &Path,
     output_dir: &Path,
     graph_dir: &Path,
     options: &crate::indexer::IndexOptions,
-) -> Result<Result<crate::indexer::manifest::FileManifest, String>, String> {
+) -> Result<crate::indexer::manifest::FileManifest, String> {
     prepare_full_rebuild_within(codebase, output_dir, graph_dir, options, None)
 }
 
@@ -122,16 +128,11 @@ pub(crate) fn prepare_full_rebuild_within(
     graph_dir: &Path,
     options: &crate::indexer::IndexOptions,
     cap: Option<u64>,
-) -> Result<Result<crate::indexer::manifest::FileManifest, String>, String> {
+) -> Result<crate::indexer::manifest::FileManifest, String> {
     let snapshot = match cap {
         Some(cap) => crate::indexer::full_manifest_within(codebase, options, cap),
         None => crate::indexer::full_manifest(codebase, options),
-    };
-    if let Err(e) = &snapshot {
-        if e.starts_with(crate::indexer::TOTAL_BYTES_EXCEEDED) {
-            return Err(e.clone());
-        }
-    }
+    }?;
     if graph_dir.exists() {
         crate::graph_store::release_open_handles(graph_dir)?;
     }
