@@ -360,6 +360,7 @@ fn index_and_hello(target: &Path) -> HelloRun {
             language_filter: Some(Language::Python),
             dependency_scope: indexer::DependencyScope::None,
             exclude_dirs: indexer::ExcludeSet::default(),
+            full_ast: false,
         },
     )
     .expect("index");

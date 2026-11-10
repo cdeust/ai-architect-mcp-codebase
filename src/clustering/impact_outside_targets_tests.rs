@@ -187,4 +187,12 @@ fn get_impact_falls_back_to_a_plain_count_on_a_graph_without_unresolved_reason()
         result.unresolved_callsites_outside_targets, 0,
         "no attribution is possible without the unresolved_reason column"
     );
+    // Issue #445: the legacy table still has id and line, so the site is
+    // listed (reason `not_recorded`), not dropped behind a count.
+    let listed: Vec<(&str, i64, &str)> = result
+        .unresolved_callsites
+        .iter()
+        .map(|s| (s.id.as_str(), s.line, s.reason.as_str()))
+        .collect();
+    assert_eq!(listed, vec![("cs::1", 1, "not_recorded")]);
 }
