@@ -244,23 +244,54 @@ fn distinct(lines: &[u64]) -> Vec<u64> {
 /// candidate holding it: a method wins over its class, also on one line
 /// (`class A { m() {} }`), but siblings that neither range nor id can tell
 /// apart (`fn a() {} fn b() {}` on one line) are all kept.
+///
+/// O(n log n) in the holding candidates (Codex security review of PR #482:
+/// thousands of constants on one line made a pairwise check quadratic). All
+/// of them hold `from..=to`, and `encloses` is strict containment or, on an
+/// equal range, a deeper id. Strict containment is a sweep by start
+/// (descending) and end (ascending); the deeper id on an equal range is a
+/// prefix lookup among that range's sorted ids.
 fn innermost(candidates: &[Candidate], from: u64, to: u64) -> Vec<usize> {
-    let holding: Vec<usize> = (0..candidates.len())
+    let mut holding: Vec<usize> = (0..candidates.len())
         .filter(|&i| candidates[i].start <= from && to <= candidates[i].end)
         .collect();
-    holding
-        .iter()
-        .copied()
-        .filter(|&i| {
-            !holding
-                .iter()
-                .any(|&j| encloses(&candidates[i], &candidates[j]))
-        })
-        .collect()
+    holding.sort_unstable_by(|&a, &b| {
+        let (a, b) = (&candidates[a], &candidates[b]);
+        b.start.cmp(&a.start).then(a.end.cmp(&b.end))
+    });
+    let mut kept = Vec::new();
+    // Smallest end among the ranges already swept: each starts at or after
+    // the current one, so an end at or before the current end means a
+    // strictly smaller range inside it.
+    let mut min_end = u64::MAX;
+    for group in holding.chunk_by(|&a, &b| {
+        (candidates[a].start, candidates[a].end) == (candidates[b].start, candidates[b].end)
+    }) {
+        let end = candidates[group[0]].end;
+        if min_end > end {
+            let mut ids: Vec<&str> = group.iter().map(|&i| candidates[i].id.as_str()).collect();
+            ids.sort_unstable();
+            kept.extend(
+                group
+                    .iter()
+                    .copied()
+                    .filter(|&i| !has_deeper(&ids, &candidates[i].id)),
+            );
+        }
+        min_end = min_end.min(end);
+    }
+    kept.sort_unstable();
+    kept
 }
 
-/// True when `outer`'s range holds `inner`'s and is wider, or the ranges are
-/// equal and `inner`'s id extends `outer`'s (`A::m` inside `A`).
+/// Whether a sorted `ids` holds an id nested under `id` (`id::…`).
+fn has_deeper(ids: &[&str], id: &str) -> bool {
+    let child = format!("{id}::");
+    let at = ids.partition_point(|x| *x < child.as_str());
+    ids.get(at).is_some_and(|x| x.starts_with(&child))
+}
+
+#[cfg(test)]
 fn encloses(outer: &Candidate, inner: &Candidate) -> bool {
     let holds = outer.start <= inner.start && inner.end <= outer.end;
     let wider = (outer.end - outer.start) > (inner.end - inner.start);
@@ -311,6 +342,53 @@ mod tests {
     fn siblings_on_one_line_all_keep_it() {
         let c = [candidate("m.rs::a", 5, 5), candidate("m.rs::b", 5, 5)];
         assert_eq!(owners(&c, 5), vec!["a", "b"]);
+    }
+
+    /// Codex security review of PR #482: the sweep equals the pairwise
+    /// definition, and many siblings on one line stay fast.
+    #[test]
+    fn the_sweep_matches_the_pairwise_definition() {
+        let pairwise = |c: &[Candidate], from: u64, to: u64| -> Vec<usize> {
+            let holding: Vec<usize> = (0..c.len())
+                .filter(|&i| c[i].start <= from && to <= c[i].end)
+                .collect();
+            holding
+                .iter()
+                .copied()
+                .filter(|&i| !holding.iter().any(|&j| encloses(&c[i], &c[j])))
+                .collect()
+        };
+        // Overlapping, nested, equal and id-nested ranges around lines 1..12.
+        let mut c = Vec::new();
+        let mut seed: u64 = 7;
+        for n in 0..300 {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let start = 1 + (seed >> 33) % 10;
+            let end = start + (seed >> 45) % 4;
+            let parent = (seed >> 20) % 6;
+            let id = if n % 3 == 0 {
+                format!("f.rs::s{parent}")
+            } else {
+                format!("f.rs::s{parent}::m{n}")
+            };
+            c.push(candidate(&id, start, end));
+        }
+        for line in 0..15 {
+            assert_eq!(
+                innermost(&c, line, line),
+                pairwise(&c, line, line),
+                "line {line}"
+            );
+            assert_eq!(innermost(&c, line, line + 1), pairwise(&c, line, line + 1));
+        }
+        let many: Vec<Candidate> = (0..50_000)
+            .map(|n| candidate(&format!("f.rs::C{n}"), 1, 1))
+            .collect();
+        let started = std::time::Instant::now();
+        assert_eq!(innermost(&many, 1, 1).len(), 50_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
     }
 
     /// Claude review of PR #482: `class A { m() {} }` on one line.

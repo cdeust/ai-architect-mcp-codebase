@@ -272,8 +272,8 @@ pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis,
     let mut analysis = build_analysis(store, &hunks)?;
     let one_sided = one_sided_entries(diff_text);
     // A non-empty diff with no readable section at all (a colored paste, a
-    // reformatted diff) is not an empty change. `Only in` lines have their
-    // own reason below.
+    // reformatted diff) is not an empty change. `Only in` and `Files … differ`
+    // lines have their own reason below.
     if hunks.is_empty()
         && one_sided == 0
         && !diff_text.trim().is_empty()
@@ -287,8 +287,8 @@ pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis,
         );
         analysis.coverage_gap_count += 1;
     }
-    // `diff -r` without `-N` lists a file on one side only as an `Only in`
-    // line, with no hunk: its symbols are not in the diff.
+    // `diff -r` without `-N` (`Only in`) or with `-q` (`Files … differ`) names
+    // a file with no hunk: its symbols are not in the diff.
     if one_sided > 0 {
         analysis.epistemic = crate::epistemic::Boundary::LowerBound.as_str();
         analysis.epistemic_reasons.push(format!(
@@ -704,12 +704,22 @@ mod tests {
         assert!(merged.iter().any(|h| h.malformed));
         // The same with a quoted (non-ASCII) path in the hunk-less section.
         let quoted =
-            "a1 two\ndiff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+A\n\
+            "a1 one\ndiff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+A\n\
                       diff --git \"a/caf\\303\\251.sh\" \"b/caf\\303\\251.sh\"\nold mode 100644\n\
-                      new mode 100755\nb2 one\ndiff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n\
+                      new mode 100755\nb2 two\ndiff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n\
                       @@ -40 +40 @@\n-b\n+B\n";
         let merged = merge_by_path(parse_unified_diff(quoted).unwrap());
-        assert!(merged.iter().any(|h| h.malformed));
+        let flagged: Vec<_> = merged
+            .iter()
+            .filter(|h| h.malformed)
+            .map(|h| h.file_path.as_str())
+            .collect();
+        assert_eq!(flagged, ["(diff section with no file path)"]);
+        // Control: a quoted mode-only section after a hunk stays readable.
+        let clean = quoted.replace("b2 two\n", "");
+        assert!(merge_by_path(parse_unified_diff(&clean).unwrap())
+            .iter()
+            .all(|h| !h.malformed));
         // A git diff with several hunk-less sections after a hunk stays readable.
         let modes = "diff --git a/m.rs b/m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1 +1 @@\n-a\n+A\n\
                      diff --git a/a.sh b/a.sh\nold mode 100644\nnew mode 100755\n\
