@@ -68,6 +68,10 @@ pub(super) struct DiffSymbols {
     /// `File.id`s the graph holds among the diff's paths (`File.id` is the
     /// path: `indexer::persist::insert_file_node`).
     known_files: HashSet<String>,
+    /// Indexed Files whose path extends a diff path with `::` (`a.rs::b.rs`
+    /// next to `a.rs`): their symbols also match the `a.rs::` prefix and
+    /// must not be credited to `a.rs` (Codex security review of PR #482).
+    nested_files: Vec<String>,
     by_file: HashMap<String, Vec<Candidate>>,
     /// Whether a graph query failed, so the candidates may be incomplete.
     query_failed: bool,
@@ -102,6 +106,7 @@ impl DiffSymbols {
     pub(super) fn load(store: &GraphStore, paths: &[&str]) -> Self {
         let mut loaded = DiffSymbols {
             known_files: HashSet::new(),
+            nested_files: Vec::new(),
             by_file: HashMap::new(),
             query_failed: false,
         };
@@ -125,12 +130,24 @@ impl DiffSymbols {
     }
 
     fn load_files(&mut self, store: &GraphStore, chunk: &[&str]) {
-        let cond = or_of(chunk, |p| format!("f.id = {}", cypher_str(p)));
-        match store.execute_query(&format!("MATCH (f:File) WHERE {cond} RETURN f.id")) {
-            Ok(qr) => self
-                .known_files
-                .extend(qr.rows.into_iter().filter_map(|r| r.into_iter().next())),
-            Err(_) => self.query_failed = true,
+        let cond = or_of(chunk, |p| {
+            format!(
+                "f.id = {} OR starts_with(f.id, {})",
+                cypher_str(p),
+                cypher_str(&format!("{p}::"))
+            )
+        });
+        let Ok(qr) = store.execute_query(&format!("MATCH (f:File) WHERE {cond} RETURN f.id"))
+        else {
+            self.query_failed = true;
+            return;
+        };
+        for id in qr.rows.into_iter().filter_map(|r| r.into_iter().next()) {
+            if chunk.contains(&id.as_str()) {
+                self.known_files.insert(id);
+            } else {
+                self.nested_files.push(id);
+            }
         }
     }
 
@@ -153,6 +170,16 @@ impl DiffSymbols {
             let Some(file) = owning_file(files, &id) else {
                 continue;
             };
+            // A longer indexed File owns it (`a.rs::b.rs::f`, not `a.rs`).
+            let nested = self.nested_files.iter().any(|n| {
+                n.len() > file.len()
+                    && id
+                        .strip_prefix(n.as_str())
+                        .is_some_and(|rest| rest.starts_with("::"))
+            });
+            if nested {
+                continue;
+            }
             let start: u64 = start.parse().unwrap_or(0);
             let end: u64 = end.parse().unwrap_or(0);
             self.by_file
@@ -449,6 +476,7 @@ mod gap_tests {
     fn loaded(candidates: Vec<Candidate>) -> DiffSymbols {
         DiffSymbols {
             known_files: HashSet::from(["m.rs".to_string()]),
+            nested_files: Vec::new(),
             by_file: HashMap::from([("m.rs".to_string(), candidates)]),
             query_failed: false,
         }

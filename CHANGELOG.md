@@ -16,7 +16,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   Rust `impl` method (whose type is defined in another file) as nothing. Every
   symbol label is now read by the `<File.id>::` prefix every symbol id carries,
   which also reaches functions whose `Defines` edge is dropped (C++ namespace,
-  Rust inline `mod`), and Constant and TypeAlias are candidates too. Each
+  Rust inline `mod`; a symbol of an indexed `a.rs::b.rs` is not credited to
+  `a.rs`), and Constant and TypeAlias are candidates too. Each
   changed line goes to the innermost symbols whose range holds it (on one line,
   the deeper id wins; siblings it cannot tell apart all keep it; a sorted
   sweep, so many symbols on one line stay linear-logarithmic; one sweep over

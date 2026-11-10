@@ -376,3 +376,35 @@ fn git_diff_of_a_pure_rename_is_one_small_lower_bound_section() {
         analysis.epistemic_reasons
     );
 }
+
+/// Codex security review of PR #482: the `a.rs::` id prefix also matches the
+/// symbols of an indexed `a.rs::b.rs`. They are not credited to `a.rs`, so a
+/// one-line decoy there cannot hide the real, wider function.
+#[test]
+fn symbols_of_a_nested_path_file_are_not_credited_to_its_prefix() {
+    let root = tempfile::Builder::new()
+        .prefix("detect_changes_446_nested_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("create src");
+    fs::write(
+        src.join("a.rs"),
+        "pub fn wide() -> u32 {\n    let x = 1;\n    let y = 2;\n    x + y\n}\n",
+    )
+    .expect("write a.rs");
+    fs::write(src.join("a.rs::b.rs"), "\n\npub fn decoy() -> u32 { 0 }\n")
+        .expect("write a.rs::b.rs");
+    let graph_dir = root.join("graph");
+    indexer::index_codebase(&src, &graph_dir).expect("index_codebase");
+    let store = GraphStore::open_or_create(&graph_dir).expect("open graph");
+
+    let analysis = analyze_diff(&store, &diff_at("a.rs", 3)).expect("analyze_diff");
+    assert_eq!(
+        changed(&analysis),
+        vec![("Function".to_string(), "wide".to_string())],
+        "{:?}",
+        analysis.epistemic_reasons
+    );
+}
