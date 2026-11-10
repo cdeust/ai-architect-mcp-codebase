@@ -818,3 +818,64 @@ fn prepare_full_rebuild_snapshots_before_the_index_runs() {
     let resp = analyze(&repo, &out, json!({}));
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
 }
+
+/// A crate whose test calls a method through `use <crate name>::Set`: which
+/// receiver the call resolves to depends on the crate name in `Cargo.toml`,
+/// a file the `language: "rust"` walk does not list (Codex review of #478).
+fn cargo_fixture(prefix: &str, crate_name: &str) -> (PathBuf, TestTempDir) {
+    let base = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let repo = base.join("repo");
+    fs::create_dir_all(repo.join("src")).expect("mk src");
+    fs::create_dir_all(repo.join("tests")).expect("mk tests");
+    write_cargo_toml(&repo, crate_name);
+    fs::write(
+        repo.join("src/lib.rs"),
+        "pub struct Set;\nimpl Set {\n    pub fn m(&self) {}\n}\n",
+    )
+    .expect("write lib.rs");
+    fs::write(
+        repo.join("tests/t.rs"),
+        "use old_name::Set;\n\n#[test]\nfn f() {\n    let s: Set = Set;\n    s.m();\n}\n",
+    )
+    .expect("write t.rs");
+    (repo, base)
+}
+
+fn write_cargo_toml(repo: &Path, crate_name: &str) {
+    fs::write(
+        repo.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n"
+        ),
+    )
+    .expect("write Cargo.toml");
+}
+
+#[test]
+fn an_unchanged_cargo_crate_is_reused() {
+    let (repo, base) = cargo_fixture("analyze443_cargo_same_", "old_name");
+    let out = base.join("out");
+    let first = analyze(&repo, &out, json!({}));
+    let second = analyze(&repo, &out, json!({}));
+    // The full and the incremental pass fingerprint the same Cargo map alike.
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert_eq!(outcome(&second), outcome(&first));
+}
+
+#[test]
+fn an_edit_to_cargo_toml_alone_rebuilds() {
+    let (repo, base) = cargo_fixture("analyze443_cargo_edit_", "old_name");
+    let out = base.join("out");
+    analyze(&repo, &out, json!({}));
+
+    write_cargo_toml(&repo, "new_name");
+    let second = analyze(&repo, &out, json!({}));
+    assert_eq!(second["index"]["mode"], "full", "{second}");
+
+    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
+    assert_eq!(outcome(&second), outcome(&fresh));
+}

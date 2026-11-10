@@ -24,7 +24,11 @@
 //!    none was unreadable when it was written (`indexer::tree_changed_since`);
 //! 5. the incremental pass that refreshes the sidecars succeeds and itself
 //!    finds no change (a save in between rebuilds). A failure is
-//!    logged and falls back to the full rebuild (§13 — no silent path).
+//!    logged and falls back to the full rebuild (§13 — no silent path);
+//! 6. that pass computes the same Cargo map (`FileManifest::cargo_facts`) as
+//!    the pass that built the graph. The map is read from manifests the walk
+//!    may not list — `Cargo.toml` under `language: "rust"`, a path dependency
+//!    outside the tree — so condition 4 cannot see it move.
 //!
 //! # Why an edited tree is still rebuilt in full
 //!
@@ -165,6 +169,16 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
         eprintln!("[ap] analyze_codebase: the tree changed during the refresh; rebuilding in full");
         return Ok(None);
     }
+    // The Cargo map comes from manifests the walk may not list (`Cargo.toml`
+    // under `language: "rust"`), and `resolve_graph` keeps the
+    // `receiver-local-binding` rows an earlier map accepted (Codex review of
+    // #478): a different map is a rebuild, like a changed file.
+    if prior.cargo_facts.as_deref() != Some(inc.cargo_facts_digest.as_str()) {
+        eprintln!(
+            "[ap] analyze_codebase: the Cargo map changed or is unrecorded; rebuilding in full"
+        );
+        return Ok(None);
+    }
     if let Some(e) = inc.coverage_write_error {
         return Err(format!("coverage sidecar write failed: {e}"));
     }
@@ -198,6 +212,7 @@ fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
         prepare_full_rebuild(&req.codebase, &req.output_dir, &req.graph_dir, &req.options)?;
     let result =
         indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
+    let snapshot = snapshot.map(|m| m.with_cargo_facts(&result.cargo_facts_digest));
     let sidecar_err = super::persist_analyze_sidecars(req, &result.coverage, snapshot)?;
     Ok(IndexPhase {
         summary: json!({

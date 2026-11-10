@@ -135,6 +135,8 @@ pub struct IndexResult {
     /// Coverage-honesty report (issue #57): which files were parse-incomplete,
     /// skipped, or quarantined. The composition root persists it to the sidecar.
     pub coverage: CoverageReport,
+    /// `CargoFacts::digest` of this pass, for `FileManifest::cargo_facts`.
+    pub cargo_facts_digest: String,
 }
 
 /// Outcome of an incremental (changed-files-only) re-index (issue #62).
@@ -162,6 +164,9 @@ pub struct IncrementalResult {
     pub coverage: CoverageReport,
     /// Why the sidecar write failed, when it did.
     pub coverage_write_error: Option<String>,
+    /// `CargoFacts::digest` of this pass. `analyze_codebase` compares it with
+    /// the manifest's before reusing a graph (review of #478).
+    pub cargo_facts_digest: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +335,7 @@ pub fn index_codebase_with_language(
     // is `or_insert`, see `coverage.rs`. The same `cargo metadata` map also
     // drives the feature-gated attribution (issue #291).
     let facts = record_cargo_attributions(&mut collector, codebase_path, &source_files);
+    let cargo_facts_digest = facts.digest();
     // The workspace's crate names, read by the resolver to accept a receiver
     // type named through a `use` (issues #348, #349 and #358); every `#[cfg]`
     // twin learns whether the default build compiles it (issue #353).
@@ -356,6 +362,7 @@ pub fn index_codebase_with_language(
         files_indexed,
         elapsed_ms,
         coverage,
+        cargo_facts_digest,
     })
 }
 

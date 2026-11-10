@@ -196,18 +196,16 @@ pub fn index_incremental(
     // changed nothing. Different settings leave files the new ones would add
     // or drop; an applied change leaves resolver rows `resolve_graph` cannot
     // invalidate (#478 review). Either way the scope becomes unknown and the
-    // next scope-checking caller (`analyze_codebase`) rebuilds.
+    // next scope-checking caller (`analyze_codebase`) rebuilds. The same holds
+    // for a changed Cargo map, decided below once this pass has computed it.
     let scope = options.scope();
     let c = &plan.change_set;
     let unchanged =
         c.changed.is_empty() && c.added.is_empty() && c.deleted.is_empty() && c.renamed.is_empty();
-    plan.next_manifest.scope = (unchanged && prior.scope.as_ref() == Some(&scope)).then_some(scope);
+    let settings_match = unchanged && prior.scope.as_ref() == Some(&scope);
 
     let (reparsed, reparsed_gaps) =
         apply_changes(&store, codebase, &plan.change_set, &current, policy)?;
-
-    // Persist the refreshed manifest (built by classify, hashes reused).
-    manifest::save(manifest_path, &plan.next_manifest)?;
 
     // Coverage (issue #57/#249): carry forward unchanged files' gaps, overlay
     // the freshly-reparsed files' gaps (clearing any that are now clean), plus
@@ -224,6 +222,14 @@ pub fn index_incremental(
         walk_pruned,
         "incremental",
     );
+    // Persist the refreshed manifest (built by classify, hashes reused), now
+    // that this pass's Cargo map is known: an edit to a `Cargo.toml` the walk
+    // does not list changes no file state, only this digest (review of #478).
+    let cargo_facts_digest = cov.facts.digest();
+    let facts_match = prior.cargo_facts.as_deref() == Some(cargo_facts_digest.as_str());
+    plan.next_manifest.scope = (settings_match && facts_match).then_some(scope);
+    plan.next_manifest.cargo_facts = Some(cargo_facts_digest.clone());
+    manifest::save(manifest_path, &plan.next_manifest)?;
     apply_cargo_facts(&store, &cov.facts);
 
     // Intentionally NO node_count()/edge_count() here — see `IncrementalResult`.
@@ -238,6 +244,7 @@ pub fn index_incremental(
         elapsed_ms: start.elapsed().as_millis() as u64,
         coverage: cov.report,
         coverage_write_error: cov.write_error,
+        cargo_facts_digest,
     })
 }
 

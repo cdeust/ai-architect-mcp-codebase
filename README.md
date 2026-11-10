@@ -167,7 +167,9 @@ changed file reuses the graph without re-parsing anything. Any edit, a change of
 `language`, `dependency_scope` or `exclude_dirs`, another codebase root, a new
 server version, `lsp: true` (now or on the run that built the graph), a
 symlinked or artifact-imported graph, a missing or unreadable coverage sidecar,
-a file that was unreadable when the graph was built, or `full: true` rebuilds
+a file that was unreadable when the graph was built, a `Cargo.toml`
+edit that changes the crate names, targets or features (even under
+`language: "rust"`, whose walk skips that file), or `full: true` rebuilds
 from scratch. Reusing an edited graph waits on resolver
 invalidation (#443). The three-stage `index_codebase` → `resolve_graph` path
 re-parses only the changed files, but it can keep a call edge a fresh analysis

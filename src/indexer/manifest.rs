@@ -79,6 +79,13 @@ pub struct FileManifest {
     pub files: BTreeMap<String, FileState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<IndexScope>,
+    /// `CargoFacts::digest` of the pass that built the graph (review of #478):
+    /// the Cargo map the resolver reads comes from manifests the walk may not
+    /// list (`Cargo.toml` under `language: "rust"`, a path dependency outside
+    /// the tree), so the per-file states cannot see it change. Absent means
+    /// "unknown", never "unchanged".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo_facts: Option<String>,
 }
 
 impl FileManifest {
@@ -88,7 +95,16 @@ impl FileManifest {
             schema_version: MANIFEST_SCHEMA_VERSION,
             files: BTreeMap::new(),
             scope: None,
+            cargo_facts: None,
         }
+    }
+
+    /// This manifest, recording `digest` as the Cargo map of the pass that
+    /// built the graph. A full index takes its snapshot before it runs (so a
+    /// file saved during it reads as changed) and only knows the map after.
+    pub fn with_cargo_facts(mut self, digest: &str) -> Self {
+        self.cargo_facts = Some(digest.to_string());
+        self
     }
 }
 
@@ -175,10 +191,14 @@ pub fn mtime_ns(meta: &fs::Metadata) -> i64 {
 /// source: the RustCrypto `sha2` crate already vendored for stage-2
 /// transcript digests (Cargo.toml) — same primitive, reused; no new dependency.
 pub fn hash_file(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
+    fs::read(path).ok().map(|bytes| hash_bytes(&bytes))
+}
+
+/// Lowercase hex SHA-256 of `bytes`.
+pub fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Some(hex_lower(&hasher.finalize()))
+    hasher.update(bytes);
+    hex_lower(&hasher.finalize())
 }
 
 /// Encodes bytes as a lowercase hex string.

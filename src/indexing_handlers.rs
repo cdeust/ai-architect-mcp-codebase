@@ -171,6 +171,7 @@ fn persist_full_index_sidecars(
     result: &indexer::IndexResult,
     snapshot: Result<indexer::manifest::FileManifest, String>,
 ) -> (std::path::PathBuf, Value, Option<String>) {
+    let snapshot = snapshot.map(|m| m.with_cargo_facts(&result.cargo_facts_digest));
     if let Err(e) = snapshot.and_then(|m| indexer::manifest::save(&req.manifest_path, &m)) {
         eprintln!("[ap] file manifest write failed (index succeeded): {e}");
     }
