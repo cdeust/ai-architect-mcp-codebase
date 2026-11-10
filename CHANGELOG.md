@@ -48,7 +48,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   disagree on the change type); when a file is renamed or copied with no
   content hunk; when a non-empty diff holds no readable section at all (a diff
   whose sections change no line, such as a chmod, stays `exact`); when `diff -r`
-  without `-N` lists a one-sided file as an `Only in` line; when a
+  without `-N` lists a one-sided file as an `Only in` line (or `-q` a changed
+  one as `Files … differ`); when a
   section is binary (also `hg diff` and `svn diff` binary notices); or when
   the symbol load fails (one reason for the whole
   diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after

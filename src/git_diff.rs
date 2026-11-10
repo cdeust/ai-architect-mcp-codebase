@@ -292,8 +292,9 @@ pub fn analyze_diff(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis,
     if one_sided > 0 {
         analysis.epistemic = crate::epistemic::Boundary::LowerBound.as_str();
         analysis.epistemic_reasons.push(format!(
-            "{one_sided} `Only in` line(s): a file present on one side only is \
-             not in the diff (run `diff -N`, or `git diff`)"
+            "{one_sided} `Only in` or `Files … differ` line(s): a file present on \
+             one side only, or whose lines are not shown, is not in the diff \
+             (run `diff -N` without `-q`, or `git diff`)"
         ));
         analysis.coverage_gap_count += 1;
     }
@@ -715,6 +716,18 @@ mod tests {
                 .map(|h| (&h.file_path, h.malformed))
                 .collect::<Vec<_>>()
         );
+        // `diff -q` hides a changed file; `diff -rs` notices and
+        // `format-patch --base` lines change nothing.
+        let brief = "--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-a\n+b\nFiles a/y.rs and b/y.rs differ\n\
+                     Files a/z.rs and b/z.rs are identical\nCommon subdirectories: a/d and b/d\n\
+                     Only in b: w.rs\n\nbase-commit: 0123abcd\nprerequisite-patch-id: 4567ef\n-- \n2.43.0\n";
+        assert!(!parse_unified_diff(brief).unwrap()[0].malformed);
+        assert_eq!(one_sided_entries(brief), 2);
+        // A normal `git diff` deletion (mode line, index line, hunk) is readable.
+        let del = "diff --git a/d.rs b/d.rs\ndeleted file mode 100644\nindex 3b18e51..0000000\n\
+                   --- a/d.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n";
+        let h = &parse_unified_diff(del).unwrap()[0];
+        assert!(h.is_deleted && !h.malformed);
         // `hg diff` and `svn diff` binary notices are binary.
         let hg = "diff -r 0123abcd img.png\nBinary file img.png has changed\n";
         assert!(parse_unified_diff(hg).unwrap()[0].binary);

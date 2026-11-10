@@ -292,7 +292,12 @@ impl FileSection {
             }
             return;
         }
-        if !line.is_empty() && !BETWEEN_FILES.iter().any(|p| line.starts_with(p)) {
+        // `diff -rs` `Files X and Y are identical` changes nothing; `diff -q`
+        // `Files X and Y differ` is a diff-level gap (`one_sided_entries`),
+        // not this section's.
+        let files_notice = line.starts_with("Files ")
+            && (line.ends_with(" are identical") || line.ends_with(" differ"));
+        if !line.is_empty() && !files_notice && !BETWEEN_FILES.iter().any(|p| line.starts_with(p)) {
             self.malformed = true;
         }
     }
@@ -369,7 +374,9 @@ const BETWEEN_FILES: &[&str] = &[
     "diff ",
     "Only in ",
     "Common subdirectories: ",
-    "Files ",
+    // `git format-patch --base` / `format.useAutoBase`.
+    "base-commit: ",
+    "prerequisite-patch-id: ",
     "Index: ",
     "====",
 ];
@@ -460,14 +467,16 @@ pub(crate) fn has_diff_structure(diff_text: &str) -> bool {
     diff_text.lines().any(|l| l.starts_with("diff --git "))
 }
 
-/// The `Only in <dir>: <name>` lines of `diff -r` without `-N`: each is a
-/// file (or directory) present on one side only, printed with no hunk and no
-/// file header, whose changes the diff does not show. No hunk body line can
-/// start with `O`, so the count is exact.
+/// The `diff -r` lines that name a changed file without showing its lines:
+/// `Only in <dir>: <name>` (a file on one side only, without `-N`) and
+/// `Files X and Y differ` (`-q`/`--brief`). No hunk body line can start with
+/// `O` or `F`, so the count is exact.
 pub(crate) fn one_sided_entries(diff_text: &str) -> usize {
     diff_text
         .lines()
-        .filter(|l| l.starts_with("Only in "))
+        .filter(|l| {
+            l.starts_with("Only in ") || (l.starts_with("Files ") && l.ends_with(" differ"))
+        })
         .count()
 }
 
