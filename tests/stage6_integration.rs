@@ -122,6 +122,8 @@ fn test_hallucinated_symbol_produces_critical_finding() {
     );
     assert_eq!(report.validation_status, "fail");
     assert_eq!(report.summary.hallucinated_symbols, 1);
+    // `Absent` is a regex-fallback verdict only; the contract decides here.
+    assert_eq!(report.summary.absent_symbols, 0);
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -436,5 +438,216 @@ fn test_regex_fallback_when_structured_contract_missing() {
         critical, 0,
         "regex fallback unresolved tokens must not be critical"
     );
+    let _ = fs::remove_dir_all(&root);
+}
+
+// source: issue #450 — called the way the README flow suggests (PRD only, no
+// stage-5 sidecar), a PRD naming a fabricated class reported zero
+// hallucinated symbols and status `ok`: every regex-fallback token was
+// `info`. A backticked token that matches no symbol by qualified name or by
+// name must now be a warning, counted in `absent_symbols`, while a real
+// symbol named bare (`Tool`, `handle_tool_call`) must not be.
+#[test]
+fn test_regex_fallback_flags_fabricated_class_without_sidecar() {
+    let root = tmp("fabricated");
+    let _ = fs::remove_dir_all(&root);
+    let fixture_dir = root.join("fixture");
+    let graph_dir = root.join("graph");
+    let store = build_fixture_graph(&fixture_dir, &graph_dir);
+
+    let prd_dir = root.join("prd");
+    let prd_path = write_prd(
+        &prd_dir,
+        "Modify `QuantumToolRegistry` so that `handle_tool_call` registers each `Tool`.",
+    );
+
+    // No affected_symbols path: the sidecar is absent, as in the README flow.
+    let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
+    assert_eq!(report.extraction_mode, "regex_fallback");
+
+    let warnings: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.axis == "symbol_hallucination" && f.severity == "warning")
+        .collect();
+    assert_eq!(
+        warnings
+            .iter()
+            .map(|f| f.symbol.clone())
+            .collect::<Vec<_>>(),
+        vec![Some("QuantumToolRegistry".to_string())],
+        "only the fabricated class is a warning; findings: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.symbol.clone(), f.severity.clone()))
+            .collect::<Vec<_>>()
+    );
+    // The warning replaces the info finding for that token, never doubles it.
+    assert!(!report
+        .findings
+        .iter()
+        .any(|f| f.severity == "info" && f.symbol.as_deref() == Some("QuantumToolRegistry")));
+    assert_eq!(report.summary.absent_symbols, 1);
+    // Contract-backed count stays critical-only: change_kind is unknown here.
+    assert_eq!(report.summary.hallucinated_symbols, 0);
+    assert_eq!(report.validation_status, "warning");
+    let _ = fs::remove_dir_all(&root);
+}
+
+// source: PR #487 review — name_lookup's suggestion list covers only
+// SEARCHABLE_LABELS, which omit Variant and Field. A backticked real enum
+// variant or struct field must not be reported as matching nothing.
+#[test]
+fn test_regex_fallback_does_not_flag_real_variant_or_field() {
+    let root = tmp("variant_field");
+    let _ = fs::remove_dir_all(&root);
+    let fixture_dir = root.join("fixture");
+    let graph_dir = root.join("graph");
+    fs::create_dir_all(fixture_dir.join("src")).unwrap();
+    fs::write(
+        fixture_dir.join("src/main.rs"),
+        "pub enum Status { Pending, Done }\n\
+         pub struct Job { pub retry_count: u32 }\n\
+         fn main() { let _ = Status::Pending; }\n",
+    )
+    .unwrap();
+    let _ = indexer::index_codebase(&fixture_dir.join("src"), &graph_dir).expect("index");
+    let store = GraphStore::open_or_create(&graph_dir).unwrap();
+
+    let prd_dir = root.join("prd");
+    let prd_path = write_prd(
+        &prd_dir,
+        "Retry `Status::Pending` jobs until `retry_count` hits the cap.",
+    );
+    let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
+    assert_eq!(report.extraction_mode, "regex_fallback");
+    assert_eq!(
+        report.summary.absent_symbols,
+        0,
+        "a real variant and a real field are not absent; findings: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.symbol.clone(), f.severity.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert!(!report.findings.iter().any(|f| f.severity == "warning"));
+    // Both tokens must actually be extracted and judged, or this test proves
+    // nothing: each is an unresolved-but-real name, so exactly one `info`.
+    assert_eq!(report.summary.claimed_symbols, 2);
+    for tok in ["Status::Pending", "retry_count"] {
+        let sev: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.symbol.as_deref() == Some(tok))
+            .map(|f| f.severity.as_str())
+            .collect();
+        assert_eq!(sev, vec!["info"], "{tok}");
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+// source: PR #487 review — the boundaries of the `Absent` verdict.
+//   * A qualified token is judged by its leaf only, so a fabricated owner with
+//     a real leaf (`QuantumToolRegistry::handle_tool_call`) is NOT absent. This
+//     pins the known limitation: tightening it must be a deliberate test change.
+//   * An unresolved file-path token stays `info`: only backticked identifiers
+//     are names an author writes as code.
+#[test]
+fn test_regex_fallback_absent_boundaries() {
+    let root = tmp("absent_bounds");
+    let _ = fs::remove_dir_all(&root);
+    let store = build_fixture_graph(&root.join("fixture"), &root.join("graph"));
+    let prd_path = write_prd(
+        &root.join("prd"),
+        "Move `QuantumToolRegistry::handle_tool_call` into src/nonexistent.rs \
+         and `src/other_missing.rs` today",
+    );
+    let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
+    let severity_of = |tok: &str| {
+        report
+            .findings
+            .iter()
+            .filter(|f| f.symbol.as_deref() == Some(tok))
+            .map(|f| f.severity.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        severity_of("QuantumToolRegistry::handle_tool_call"),
+        vec!["info".to_string()],
+        "known limitation: a real leaf keeps a qualified token at info"
+    );
+    assert_eq!(severity_of("src/nonexistent.rs"), vec!["info".to_string()]);
+    assert_eq!(
+        severity_of("src/other_missing.rs"),
+        vec!["info".to_string()]
+    );
+    assert_eq!(report.summary.absent_symbols, 0);
+    assert_eq!(report.validation_status, "ok");
+    let _ = fs::remove_dir_all(&root);
+}
+
+// source: PR #487 review — in structured mode a claim that ADDS a new name is
+// legitimately absent from the graph and must not warn.
+#[test]
+fn test_structured_add_of_new_symbol_stays_ok() {
+    let root = tmp("structured_add");
+    let _ = fs::remove_dir_all(&root);
+    let store = build_fixture_graph(&root.join("fixture"), &root.join("graph"));
+    let prd_dir = root.join("prd");
+    let prd_path = write_prd(&prd_dir, "add `QuantumToolRegistry`");
+    let affected = write_affected(
+        &prd_dir,
+        json!({
+            "affected_symbols": [
+                { "qualified_name": "main.rs::QuantumToolRegistry", "change_kind": "add", "rationale": "new type" }
+            ],
+            "scope_claims": []
+        }),
+    );
+    let report = prd_validator::validate_prd(&store, &prd_path, Some(&affected)).expect("validate");
+    assert_eq!(report.extraction_mode, "structured");
+    assert_eq!(report.summary.absent_symbols, 0);
+    assert_eq!(report.summary.hallucinated_symbols, 0);
+    assert_eq!(report.validation_status, "ok");
+    let _ = fs::remove_dir_all(&root);
+}
+
+// source: PR #487 review — the extractor keeps any `[A-Za-z0-9_:]` run, so a
+// token with a trailing `::` or a single `:` must not be judged by a leaf
+// that is not an identifier (`Tool::` would probe the empty name).
+#[test]
+fn test_regex_fallback_non_identifier_leaf_is_not_absent() {
+    let root = tmp("non_ident_leaf");
+    let _ = fs::remove_dir_all(&root);
+    let store = build_fixture_graph(&root.join("fixture"), &root.join("graph"));
+    let prd_path = write_prd(
+        &root.join("prd"),
+        "Extend the `Tool::` methods; bind `localhost:8080` behind `feature:fast` for `9lives`.",
+    );
+    let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
+    assert_eq!(
+        report.summary.absent_symbols,
+        0,
+        "findings: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.symbol.clone(), f.severity.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(report.validation_status, "ok");
+    // Every token must be extracted and judged, or the guard goes unexercised.
+    assert_eq!(report.summary.claimed_symbols, 4);
+    for tok in ["Tool::", "localhost:8080", "feature:fast", "9lives"] {
+        let sev: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.symbol.as_deref() == Some(tok))
+            .map(|f| f.severity.as_str())
+            .collect();
+        assert_eq!(sev, vec!["info"], "{tok}");
+    }
     let _ = fs::remove_dir_all(&root);
 }

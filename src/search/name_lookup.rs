@@ -60,7 +60,7 @@ pub fn resolve_qualified_name(store: &GraphStore, input: &str) -> Result<String,
         }
     }
 
-    // Layer 3 — name-only fuzzy. Return top candidates as suggestions.
+    // Layer 3 — name-only, exact on the leaf. Return top candidates as suggestions.
     let leaf = input.rsplit("::").next().unwrap_or(input);
     let suggestions = find_name_candidates(store, leaf, 5);
     Err(SymbolNotFound {
