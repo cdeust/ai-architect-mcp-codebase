@@ -10,7 +10,7 @@
 // "hallucinated".
 
 use super::{ClaimOrigin, ResolvedClaim};
-use crate::graph_store::{cypher_str, GraphStore};
+use crate::graph_store::{cypher_str, GraphStore, CFG_GATE_LABELS};
 use crate::language_provider::ALL_EXTENSIONS;
 use crate::search::strip_leading_path_component;
 use std::path::Path;
@@ -34,7 +34,8 @@ pub(super) enum ClaimVerdict {
     /// confirm or refute the claim. Info finding, not counted as hallucinated.
     Unverifiable(String),
     /// Regex fallback only (issue #450): a backticked token that resolves to
-    /// nothing AND matches no symbol of that name anywhere in the graph — the
+    /// nothing AND whose leaf names no code symbol of any kind (function,
+    /// method, type, variant, field, trait, module, constant, alias) — the
     /// shape of a fabricated class. Without the stage-5 contract its
     /// change_kind is unknown (it may be a symbol the PRD adds, or an
     /// external name), so it is a warning, not a critical hallucination.
@@ -57,15 +58,14 @@ fn classify_one(store: &GraphStore, r: &ResolvedClaim) -> ClaimVerdict {
         return ClaimVerdict::Resolved;
     }
     if r.claim.origin == ClaimOrigin::Backticked {
-        // `did_you_mean` is search::name_lookup's layer-3 list: the stored
-        // symbols whose `name` equals the token's leaf. Empty means no symbol
-        // of that name exists at all, not merely that the qualification is
-        // off. A bare or `A::B` token carries no file path, so the file
-        // coverage check below cannot apply to it.
-        return if r.did_you_mean.is_empty() {
-            ClaimVerdict::Absent
-        } else {
-            ClaimVerdict::Unscored
+        // A bare or `A::B` token carries no file path, so the file coverage
+        // check below cannot apply to it: the only question is whether any
+        // code symbol bears its leaf name. Only a definite "no" is `Absent`;
+        // a failed probe (`None`) says nothing and stays `Unscored`.
+        let leaf = r.claim.token.rsplit("::").next().unwrap_or(&r.claim.token);
+        return match name_exists(store, leaf) {
+            Some(false) => ClaimVerdict::Absent,
+            Some(true) | None => ClaimVerdict::Unscored,
         };
     }
     let kind = r.claim.change_kind.as_str();
@@ -139,6 +139,24 @@ pub(crate) fn unverifiable_reason(store: &GraphStore, token: &str) -> Option<Str
         "file not present in the indexed graph: '{file_path}' \
          (outside indexed scope, or excluded by a language/dependency filter)"
     ))
+}
+
+// Whether any code symbol is named `leaf`: `Some(true)`/`Some(false)` when
+// every probe ran, `None` when one failed. Deliberately NOT
+// search::name_lookup's `did_you_mean` list: that one covers only
+// SEARCHABLE_LABELS and drops query errors, so a backticked enum variant or
+// struct field (Variant/Field nodes) would read as absent, and so would any
+// name whose lookup errored (PR #487 review). CFG_GATE_LABELS is the set of
+// labels that are named code symbols; every one has a `name` column.
+fn name_exists(store: &GraphStore, leaf: &str) -> Option<bool> {
+    let literal = cypher_str(leaf);
+    for label in CFG_GATE_LABELS {
+        let cypher = format!("MATCH (n:{label}) WHERE n.name = {literal} RETURN n.id LIMIT 1");
+        if !store.execute_query(&cypher).ok()?.rows.is_empty() {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 fn file_has_graph_node(store: &GraphStore, file_path: &str) -> bool {

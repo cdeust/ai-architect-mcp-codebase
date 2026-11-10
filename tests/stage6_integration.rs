@@ -492,3 +492,44 @@ fn test_regex_fallback_flags_fabricated_class_without_sidecar() {
     assert_eq!(report.validation_status, "warning");
     let _ = fs::remove_dir_all(&root);
 }
+
+// source: PR #487 review — name_lookup's suggestion list covers only
+// SEARCHABLE_LABELS, which omit Variant and Field. A backticked real enum
+// variant or struct field must not be reported as matching nothing.
+#[test]
+fn test_regex_fallback_does_not_flag_real_variant_or_field() {
+    let root = tmp("variant_field");
+    let _ = fs::remove_dir_all(&root);
+    let fixture_dir = root.join("fixture");
+    let graph_dir = root.join("graph");
+    fs::create_dir_all(fixture_dir.join("src")).unwrap();
+    fs::write(
+        fixture_dir.join("src/main.rs"),
+        "pub enum Status { Pending, Done }\n\
+         pub struct Job { pub retry_count: u32 }\n\
+         fn main() { let _ = Status::Pending; }\n",
+    )
+    .unwrap();
+    let _ = indexer::index_codebase(&fixture_dir.join("src"), &graph_dir).expect("index");
+    let store = GraphStore::open_or_create(&graph_dir).unwrap();
+
+    let prd_dir = root.join("prd");
+    let prd_path = write_prd(
+        &prd_dir,
+        "Retry `Status::Pending` jobs until `retry_count` hits the cap.",
+    );
+    let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
+    assert_eq!(report.extraction_mode, "regex_fallback");
+    assert_eq!(
+        report.summary.absent_symbols,
+        0,
+        "a real variant and a real field are not absent; findings: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.symbol.clone(), f.severity.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert!(!report.findings.iter().any(|f| f.severity == "warning"));
+    let _ = fs::remove_dir_all(&root);
+}

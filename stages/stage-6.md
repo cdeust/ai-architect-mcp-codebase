@@ -142,7 +142,7 @@ Only triggered when `stage-5.affected_symbols.json` is missing.
 
 For each extracted token, attempt graph lookup by qualified_name (exact) → by name (exact, case-sensitive). Severity by outcome (issue #450):
 
-- **Backticked token, zero matches by qualified name AND by name** → `warning`, counted in `summary.absent_symbols`. It is either (a) an external reference, (b) a symbol the PRD adds, or (c) a hallucination; without the contract the change_kind that would tell them apart is unknown, so it is a warning and not a §5 V1 `fail`. A PRD that names a fabricated class therefore never validates as `ok` with zero findings.
+- **Backticked token, zero matches by qualified name AND its leaf names no code symbol of any label** (function, method, struct, enum, variant, trait, field, constant, type alias, module) → `warning`, counted in `summary.absent_symbols`. It is either (a) an external reference, (b) a symbol the PRD adds, or (c) a hallucination; without the contract the change_kind that would tell them apart is unknown, so it is a warning and not a §5 V1 `fail`. A PRD that names a fabricated class therefore never validates as `ok` with zero findings.
 - **Backticked token whose name exists but whose qualification does not resolve** → `info` (the graph shows the PRD names something real; `did_you_mean` lists the candidates).
 - **File-path token that does not resolve** → `info`.
 
