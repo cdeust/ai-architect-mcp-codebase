@@ -41,23 +41,27 @@ fn drop_scope(graph_dir: &Path) -> Result<(), String> {
     let path = indexer::manifest::manifest_path(output_dir);
     // Only a regular file that loads is kept (Claude review of #478): a
     // symlink, even a dangling one, or a file that does not parse could later
-    // read as a manifest with a scope that was never dropped. `load` follows
-    // links and answers `None` for both, so ask `symlink_metadata` first.
+    // read as a manifest with a scope that was never dropped. A non-regular
+    // entry is unlinked before anything reads it: `load` follows links, and a
+    // link to `/dev/zero` would be read without end (Codex security review).
     let regular = match std::fs::symlink_metadata(&path) {
         Ok(meta) => meta.file_type().is_file(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(format!("stat {}: {e}", path.display())),
     };
+    let remove = || {
+        std::fs::remove_file(&path).map_err(|e| format!("remove unusable {}: {e}", path.display()))
+    };
+    if !regular {
+        return remove();
+    }
     match indexer::manifest::load(&path) {
-        Some(mut m) if regular => {
-            if m.scope.is_none() {
-                return Ok(());
-            }
+        Some(m) if m.scope.is_none() => Ok(()),
+        Some(mut m) => {
             m.scope = None;
             indexer::manifest::save(&path, &m)
         }
-        _ => std::fs::remove_file(&path)
-            .map_err(|e| format!("remove unusable {}: {e}", path.display())),
+        None => remove(),
     }
 }
 
@@ -80,6 +84,23 @@ mod tests {
         std::os::unix::fs::symlink(dir.path().join("later.json"), &manifest).expect("link");
         forget(&graph, Ok(())).expect("forget");
         assert!(fs::symlink_metadata(&manifest).is_err(), "the link is gone");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_non_regular_manifest_is_removed_without_being_read() {
+        // Codex security review of #478: a symlink to `/dev/zero` would be read
+        // without end. A FIFO with no writer stands in for it without risking
+        // the test's memory: opening it to read blocks forever, so reaching
+        // the assertion means nothing opened it.
+        let (_dir, graph, manifest) = layout();
+        let made = std::process::Command::new("mkfifo")
+            .arg(&manifest)
+            .status()
+            .expect("mkfifo");
+        assert!(made.success());
+        forget(&graph, Ok(())).expect("forget");
+        assert!(fs::symlink_metadata(&manifest).is_err(), "the FIFO is gone");
     }
 
     #[test]
