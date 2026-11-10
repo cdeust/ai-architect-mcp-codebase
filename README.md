@@ -345,13 +345,14 @@ compares file retrieval against a Grep/Glob/Read baseline (n=20), but its
 graph leg serializes a benchmark-only envelope of symbol identities, not the
 responses the server sends, so its payload ratio is not a session cost. An
 independent audit of v0.14.0 (issue #451) measured real `get_impact` answers
-at 400 to 1,070 tokens, found `git grep` output smaller than the graph
-answer on 4 of 5 questions, and measured the tool prompt at 7.6k tokens (`core` profile) to 16.7k (`full`).
-`benchmarks/token_surface` renders representative responses through the
-handlers' own `token_surface::render_list`, but neither real end-to-end
-handler responses nor the tool prompt are measured in this repository yet.
-No energy or CO2 figure is derived either, because this repository measures
-no joules and a token count does not convert to watt-hours.
+at 400 to 1,070 tokens, found `git grep` output smaller than the graph answer
+on 4 of 5 questions, and measured the tool prompt at 7.6k tokens (`core`
+profile) to 16.7k (`full`). `benchmarks/token_surface` renders representative
+responses through the handlers' own `token_surface::render_list`, but neither
+real end-to-end handler responses nor the tool prompt are measured in this
+repository yet. No energy or CO2 figure is derived either, because this
+repository measures no joules and a token count does not convert to
+watt-hours.
 
 On the server side, bulk graph writes through UNWIND with a typed struct cost
 0.127 ms per edge against 9.658 ms for the naive raw-string path, 76 times
