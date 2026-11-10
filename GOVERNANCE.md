@@ -54,6 +54,9 @@ are required before merge:
 
 - `cargo test (graph accuracy gate)` — the full suite plus the structural
   graph-accuracy floor in `tests/graph_accuracy.rs`
+- `cargo build --release (shipped command smoke)` — the release binary, the
+  portable-host, Claude-plugin and mcpb smoke scripts and the pinned Codex
+  validators
 - `cargo clippy (-D warnings, workspace-wide)` — plus `cargo fmt --all --check`
 - `analyze (rust)` and `analyze (actions)` — CodeQL
 
