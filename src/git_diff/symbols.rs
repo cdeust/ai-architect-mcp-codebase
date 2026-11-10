@@ -29,7 +29,7 @@
 // Lines that fall in no candidate, and queries that fail, are reported, so the
 // caller can refuse to call an incomplete answer `exact`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::FileHunk;
 use crate::graph_store::{cypher_str, GraphStore};
@@ -80,7 +80,15 @@ pub(super) struct FileAttribution {
     pub(super) candidates: Vec<Candidate>,
     /// Distinct changed lines (and pure removals) that lie in no candidate.
     pub(super) unattributed_lines: u64,
+    /// `ATTRIBUTION_BUDGET` ran out: the later lines were not attributed.
+    pub(super) budget_exceeded: bool,
 }
+
+/// Most (line, holding symbol) pairs one file's attribution visits. A sweep
+/// visits each pair once, so real files stay far below it; it bounds only
+/// pathological nesting (thousands of symbols each spanning thousands of
+/// changed lines; Codex security review of PR #482).
+const ATTRIBUTION_BUDGET: usize = 4_000_000;
 
 impl DiffSymbols {
     /// Whether a File or symbol query failed while loading, so some
@@ -178,26 +186,48 @@ impl DiffSymbols {
             .unwrap_or_default();
         let nonblank_lines: HashSet<u64> = hunk.nonblank_lines.iter().copied().collect();
         let nonblank_gaps: HashSet<u64> = hunk.nonblank_gaps.iter().copied().collect();
+        // Every query is `from..=to`: a line (`l..=l`) or a removal between
+        // lines p-1 and p (`p-1..=p`). A removal belongs to a symbol only when
+        // that symbol spans both: deleting `fn foo` just above `fn bar` is not
+        // a change of `bar`. Line 0 does not exist, so a gap at 1 is outside.
+        // Sorted by (from, to), both bounds never decrease, so one sweep over
+        // the candidates sorted by start keeps exactly the ones holding the
+        // query (Codex security review of PR #482: no full scan per line).
+        let mut queries: Vec<(u64, u64, bool)> = distinct(&hunk.added_lines)
+            .into_iter()
+            .map(|l| (l, l, nonblank_lines.contains(&l)))
+            .collect();
         let mut unattributed_lines = 0;
-        for line in distinct(&hunk.added_lines) {
-            let owners = innermost(&candidates, line, line);
-            if owners.is_empty() && nonblank_lines.contains(&line) {
+        for gap in distinct(&hunk.removal_gaps) {
+            if gap > 1 {
+                queries.push((gap - 1, gap, nonblank_gaps.contains(&gap)));
+            } else if nonblank_gaps.contains(&gap) {
                 unattributed_lines += 1;
             }
-            for i in owners {
-                candidates[i].overlap += 1;
-            }
         }
-        // A removal between lines p-1 and p belongs to a symbol only when that
-        // symbol spans both: deleting `fn foo` just above `fn bar` is not a
-        // change of `bar`. Line 0 does not exist, so a gap at 1 is outside.
-        for gap in distinct(&hunk.removal_gaps) {
-            let owners = if gap > 1 {
-                innermost(&candidates, gap - 1, gap)
-            } else {
-                Vec::new()
-            };
-            if owners.is_empty() && nonblank_gaps.contains(&gap) {
+        queries.sort_unstable();
+        let mut by_start: Vec<usize> = (0..candidates.len()).collect();
+        by_start.sort_unstable_by_key(|&i| candidates[i].start);
+        let mut next = 0;
+        let mut active: BTreeSet<(u64, usize)> = BTreeSet::new();
+        let mut work = 0usize;
+        let mut budget_exceeded = false;
+        for (from, to, nonblank) in queries {
+            while next < by_start.len() && candidates[by_start[next]].start <= from {
+                let i = by_start[next];
+                active.insert((candidates[i].end, i));
+                next += 1;
+            }
+            while active.first().is_some_and(|&(end, _)| end < to) {
+                active.pop_first();
+            }
+            work += active.len();
+            if work > ATTRIBUTION_BUDGET {
+                budget_exceeded = true;
+                break;
+            }
+            let owners = innermost_of(&candidates, active.iter().map(|&(_, i)| i).collect());
+            if owners.is_empty() && nonblank {
                 unattributed_lines += 1;
             }
             for i in owners {
@@ -208,6 +238,7 @@ impl DiffSymbols {
             file_known: self.known_files.contains(&hunk.file_path),
             candidates,
             unattributed_lines,
+            budget_exceeded,
         }
     }
 }
@@ -251,10 +282,16 @@ fn distinct(lines: &[u64]) -> Vec<u64> {
 /// equal range, a deeper id. Strict containment is a sweep by start
 /// (descending) and end (ascending); the deeper id on an equal range is a
 /// prefix lookup among that range's sorted ids.
+#[cfg(test)]
 fn innermost(candidates: &[Candidate], from: u64, to: u64) -> Vec<usize> {
-    let mut holding: Vec<usize> = (0..candidates.len())
+    let holding: Vec<usize> = (0..candidates.len())
         .filter(|&i| candidates[i].start <= from && to <= candidates[i].end)
         .collect();
+    innermost_of(candidates, holding)
+}
+
+/// `innermost` over `holding`, the candidates that all hold one query.
+fn innermost_of(candidates: &[Candidate], mut holding: Vec<usize>) -> Vec<usize> {
     holding.sort_unstable_by(|&a, &b| {
         let (a, b) = (&candidates[a], &candidates[b]);
         b.start.cmp(&a.start).then(a.end.cmp(&b.end))
@@ -508,5 +545,36 @@ mod gap_tests {
             owning_file(&["d::e.rs", "d"], "d::e.rs::f"),
             Some("d::e.rs")
         );
+    }
+
+    /// Codex security review of PR #482: a whole-file edit of 60,000
+    /// one-line symbols is one sweep, not a scan of every symbol per line.
+    #[test]
+    fn many_changed_lines_over_many_symbols_stay_fast() {
+        let n = 60_000u64;
+        let c: Vec<Candidate> = (1..=n)
+            .map(|l| function(&format!("m.rs::T{l}"), l, l))
+            .collect();
+        let lines: Vec<u64> = (1..=n).collect();
+        let started = std::time::Instant::now();
+        let a = loaded(c).attribute(&hunk(&lines, &[]));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert!(!a.budget_exceeded);
+        assert_eq!(a.unattributed_lines, 0);
+        assert!(a.candidates.iter().all(|c| c.overlap == 1));
+    }
+
+    /// Deep nesting over many changed lines runs out of the work budget and
+    /// says so, instead of running unbounded.
+    #[test]
+    fn deep_nesting_over_many_lines_hits_the_work_budget() {
+        let depth = 3_000u64;
+        let lines = 2_000u64;
+        let c: Vec<Candidate> = (0..depth)
+            .map(|d| function(&format!("m.rs::N{d}"), 1, lines + depth - d))
+            .collect();
+        let changed: Vec<u64> = (1..=lines).collect();
+        let a = loaded(c).attribute(&hunk(&changed, &[]));
+        assert!(a.budget_exceeded);
     }
 }

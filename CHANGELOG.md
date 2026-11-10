@@ -19,7 +19,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   Rust inline `mod`), and Constant and TypeAlias are candidates too. Each
   changed line goes to the innermost symbols whose range holds it (on one line,
   the deeper id wins; siblings it cannot tell apart all keep it; a sorted
-  sweep, so many symbols on one line stay linear-logarithmic), and a
+  sweep, so many symbols on one line stay linear-logarithmic; one sweep over
+  the changed lines, with a work budget past which the file is a
+  `lower-bound`), and a
   modified line counts once (`git_diff::symbols`). A pure removal counts for a
   symbol only when that symbol spans the lines on both sides of it (deleting
   `fn foo` just above `fn bar` no longer reports `bar`). Per diff, the symbols

@@ -218,6 +218,12 @@ fn coverage_gap(hunk: &FileHunk, attribution: &symbols::FileAttribution) -> Opti
     if (hunk.is_new || hunk.is_deleted) && attribution.candidates.is_empty() {
         return Some(format!("{path}: the file holds no indexed symbol"));
     }
+    if attribution.budget_exceeded {
+        return Some(format!(
+            "{path}: too many (changed line, symbol) pairs to attribute within the \
+             work budget; later lines are not attributed"
+        ));
+    }
     match attribution.unattributed_lines {
         0 => None,
         // A deleted file's hunk (`+0,0`) carries no line of the indexed file.
