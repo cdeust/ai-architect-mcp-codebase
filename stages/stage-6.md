@@ -140,9 +140,13 @@ Only triggered when `stage-5.affected_symbols.json` is missing.
 | Backticked identifier (snake_case or CamelCase) | `` `([A-Za-z_][A-Za-z0-9_]{2,})` `` | `` `handle_tool_call` ``, `` `GraphStore` `` |
 | File path with extension | `([A-Za-z0-9_/\-.]+\.(rs\|ts\|py\|go))` | `src/main.rs` |
 
-For each extracted token, attempt graph lookup by qualified_name (exact) → by name (fuzzy, case-sensitive). Tokens with zero matches are either (a) external references or (b) hallucinations; both are reported as `unresolved_claims` with severity `info`.
+For each extracted token, attempt graph lookup by qualified_name (exact) → by name (exact, case-sensitive). Severity by outcome (issue #450):
 
-**Precision-recall stance.** Regex fallback is deliberately **low-precision, high-recall**. False positives land as `info`-level findings the reviewer can dismiss; false negatives (missed hallucinations) are the catastrophic failure mode we must avoid.
+- **Backticked token, zero matches by qualified name AND by name** → `warning`, counted in `summary.absent_symbols`. It is either (a) an external reference, (b) a symbol the PRD adds, or (c) a hallucination; without the contract the change_kind that would tell them apart is unknown, so it is a warning and not a §5 V1 `fail`. A PRD that names a fabricated class therefore never validates as `ok` with zero findings.
+- **Backticked token whose name exists but whose qualification does not resolve** → `info` (the graph shows the PRD names something real; `did_you_mean` lists the candidates).
+- **File-path token that does not resolve** → `info`.
+
+**Precision-recall stance.** Regex fallback is deliberately **low-precision, high-recall**. False positives land as `warning`/`info`-level findings the reviewer can dismiss; false negatives (missed hallucinations) are the catastrophic failure mode we must avoid. `hallucinated_symbols` stays the contract-backed count of §5 V1 failures.
 
 ---
 

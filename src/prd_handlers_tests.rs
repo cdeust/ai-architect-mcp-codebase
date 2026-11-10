@@ -403,6 +403,7 @@ fn validate_prd_checks_a_prd_against_a_real_graph() {
         "resolved_symbols",
         "hallucinated_symbols",
         "unverifiable_symbols",
+        "absent_symbols",
         "communities_spanned",
         "processes_impacted",
     ] {

@@ -79,6 +79,13 @@ pub struct ValidationSummary {
     // a coverage gap alone. Mirrors epistemic.rs's exact/lower-bound
     // philosophy: say what the graph cannot verify, don't call it wrong.
     pub unverifiable_symbols: u64,
+    // source: issue #450 — regex-fallback backticked tokens that match NO
+    // symbol of that name anywhere in the graph. Without the stage-5 contract
+    // the validator cannot know a token's change_kind, so these are not
+    // counted as `hallucinated_symbols` (which stays the contract-backed,
+    // critical count); they are counted here and surface as warnings, so a
+    // fabricated class named in a PRD is never reported as zero findings.
+    pub absent_symbols: u64,
     pub communities_spanned: u64,
     pub processes_impacted: u64,
 }
@@ -103,16 +110,18 @@ pub fn validate_prd(
     emit_community_consistency(&scope_claims, &communities, &mut findings);
     let processes = processes_for_resolved(store, &resolved);
     emit_process_impact(&scope_claims, &processes, &mut findings);
-    emit_unresolved_info(&resolved, mode == "regex_fallback", &mut findings);
+    emit_unresolved_info(
+        &resolved,
+        &verdicts,
+        mode == "regex_fallback",
+        &mut findings,
+    );
     let status = compute_status(&findings);
-    let hallucinated_symbols = verdicts
-        .iter()
-        .filter(|v| matches!(v, ClaimVerdict::Hallucinated))
-        .count() as u64;
-    let unverifiable_symbols = verdicts
-        .iter()
-        .filter(|v| matches!(v, ClaimVerdict::Unverifiable(_)))
-        .count() as u64;
+    let count =
+        |pred: fn(&ClaimVerdict) -> bool| verdicts.iter().filter(|v| pred(v)).count() as u64;
+    let hallucinated_symbols = count(|v| matches!(v, ClaimVerdict::Hallucinated));
+    let unverifiable_symbols = count(|v| matches!(v, ClaimVerdict::Unverifiable(_)));
+    let absent_symbols = count(|v| matches!(v, ClaimVerdict::Absent));
     Ok(ValidationReport {
         validation_status: status,
         summary: ValidationSummary {
@@ -120,6 +129,7 @@ pub fn validate_prd(
             resolved_symbols: resolved.iter().filter(|r| r.resolved_qn.is_some()).count() as u64,
             hallucinated_symbols,
             unverifiable_symbols,
+            absent_symbols,
             communities_spanned: distinct_count(&communities) as u64,
             processes_impacted: processes.len() as u64,
         },
@@ -149,9 +159,24 @@ fn read_prd_text(prd_path: &Path) -> Result<String, String> {
 struct SymbolClaim {
     token: String,       // raw text as it appeared (qualified_name or identifier)
     change_kind: String, // add | modify | remove | rename | unknown
+    origin: ClaimOrigin,
     #[allow(dead_code)]
     // retained from structured contract; future axes will surface it in findings.
     rationale: String,
+}
+
+/// Where a claim came from. The verdict depends on it: a structured claim
+/// carries a change_kind the validator can trust, a regex-fallback token does
+/// not, and of the fallback tokens only a backticked identifier is written
+/// by the PRD author as a code name (a bare path is located, not named).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClaimOrigin {
+    /// `stage-5.affected_symbols.json` (stage-6 §4.2).
+    Structured,
+    /// A backticked identifier or qualified name in the PRD text (§4.3).
+    Backticked,
+    /// A file-path-looking token in the PRD text (§4.3).
+    FilePath,
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +220,7 @@ fn parse_structured_claims(v: &Value) -> (Vec<SymbolClaim>, Vec<ScopeClaim>) {
             claims.push(SymbolClaim {
                 token: qn,
                 change_kind: str_field_default(item, "change_kind", "unknown"),
+                origin: ClaimOrigin::Structured,
                 rationale: str_field(item, "rationale"),
             });
         }
@@ -251,13 +277,13 @@ fn regex_extract_symbols(text: &str) -> Vec<SymbolClaim> {
     let mut out: Vec<SymbolClaim> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for raw in extract_backticked(text) {
-        push_token(&mut out, &mut seen, raw);
+        push_token(&mut out, &mut seen, raw, ClaimOrigin::Backticked);
         if out.len() >= FALLBACK_MAX_TOKENS {
             return out;
         }
     }
     for raw in extract_file_paths(text) {
-        push_token(&mut out, &mut seen, raw);
+        push_token(&mut out, &mut seen, raw, ClaimOrigin::FilePath);
         if out.len() >= FALLBACK_MAX_TOKENS {
             return out;
         }
@@ -265,7 +291,12 @@ fn regex_extract_symbols(text: &str) -> Vec<SymbolClaim> {
     out
 }
 
-fn push_token(out: &mut Vec<SymbolClaim>, seen: &mut BTreeSet<String>, token: String) {
+fn push_token(
+    out: &mut Vec<SymbolClaim>,
+    seen: &mut BTreeSet<String>,
+    token: String,
+    origin: ClaimOrigin,
+) {
     if token.len() < FALLBACK_MIN_TOKEN_LEN {
         return;
     }
@@ -275,6 +306,7 @@ fn push_token(out: &mut Vec<SymbolClaim>, seen: &mut BTreeSet<String>, token: St
     out.push(SymbolClaim {
         token,
         change_kind: "unknown".into(),
+        origin,
         rationale: "regex_fallback".into(),
     });
 }
@@ -424,6 +456,7 @@ pub fn report_to_json(
             "resolved_symbols": report.summary.resolved_symbols,
             "hallucinated_symbols": report.summary.hallucinated_symbols,
             "unverifiable_symbols": report.summary.unverifiable_symbols,
+            "absent_symbols": report.summary.absent_symbols,
             "communities_spanned": report.summary.communities_spanned,
             "processes_impacted": report.summary.processes_impacted,
         },

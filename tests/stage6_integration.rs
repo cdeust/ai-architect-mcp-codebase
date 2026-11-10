@@ -438,3 +438,57 @@ fn test_regex_fallback_when_structured_contract_missing() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+// source: issue #450 — called the way the README flow suggests (PRD only, no
+// stage-5 sidecar), a PRD naming a fabricated class reported zero
+// hallucinated symbols and status `ok`: every regex-fallback token was
+// `info`. A backticked token that matches no symbol by qualified name or by
+// name must now be a warning, counted in `absent_symbols`, while a real
+// symbol named bare (`Tool`, `handle_tool_call`) must not be.
+#[test]
+fn test_regex_fallback_flags_fabricated_class_without_sidecar() {
+    let root = tmp("fabricated");
+    let _ = fs::remove_dir_all(&root);
+    let fixture_dir = root.join("fixture");
+    let graph_dir = root.join("graph");
+    let store = build_fixture_graph(&fixture_dir, &graph_dir);
+
+    let prd_dir = root.join("prd");
+    let prd_path = write_prd(
+        &prd_dir,
+        "Modify `QuantumToolRegistry` so that `handle_tool_call` registers each `Tool`.",
+    );
+
+    // No affected_symbols path: the sidecar is absent, as in the README flow.
+    let report = prd_validator::validate_prd(&store, &prd_path, None).expect("validate");
+    assert_eq!(report.extraction_mode, "regex_fallback");
+
+    let warnings: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.axis == "symbol_hallucination" && f.severity == "warning")
+        .collect();
+    assert_eq!(
+        warnings
+            .iter()
+            .map(|f| f.symbol.clone())
+            .collect::<Vec<_>>(),
+        vec![Some("QuantumToolRegistry".to_string())],
+        "only the fabricated class is a warning; findings: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.symbol.clone(), f.severity.clone()))
+            .collect::<Vec<_>>()
+    );
+    // The warning replaces the info finding for that token, never doubles it.
+    assert!(!report
+        .findings
+        .iter()
+        .any(|f| f.severity == "info" && f.symbol.as_deref() == Some("QuantumToolRegistry")));
+    assert_eq!(report.summary.absent_symbols, 1);
+    // Contract-backed count stays critical-only: change_kind is unknown here.
+    assert_eq!(report.summary.hallucinated_symbols, 0);
+    assert_eq!(report.validation_status, "warning");
+    let _ = fs::remove_dir_all(&root);
+}

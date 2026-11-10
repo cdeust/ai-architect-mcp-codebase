@@ -9,17 +9,18 @@
 // (summary counters) so the two never diverge on what counts as
 // "hallucinated".
 
-use super::ResolvedClaim;
+use super::{ClaimOrigin, ResolvedClaim};
 use crate::graph_store::{cypher_str, GraphStore};
 use crate::language_provider::ALL_EXTENSIONS;
 use crate::search::strip_leading_path_component;
 use std::path::Path;
 
 // `Unscored` covers claims outside the structured-modify gate (change_kind
-// `add`/`unknown`, or regex-fallback tokens) — unchanged pre-existing
-// behavior: they were never critical findings and are not counted as
-// hallucinated in the summary either (see issue #13 discussion; regex
-// fallback already gets its own "info" finding via `emit_unresolved_info`).
+// `add`/`unknown`, or regex-fallback tokens that are not `Absent`) —
+// unchanged pre-existing behavior: they were never critical findings and are
+// not counted as hallucinated in the summary either (see issue #13
+// discussion; regex fallback gets its own "info" finding via
+// `emit_unresolved_info`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ClaimVerdict {
     /// resolved_qn was Some — not a candidate for this axis at all.
@@ -32,6 +33,14 @@ pub(super) enum ClaimVerdict {
     /// extension — pruned, filtered, or never walked). The graph cannot
     /// confirm or refute the claim. Info finding, not counted as hallucinated.
     Unverifiable(String),
+    /// Regex fallback only (issue #450): a backticked token that resolves to
+    /// nothing AND matches no symbol of that name anywhere in the graph — the
+    /// shape of a fabricated class. Without the stage-5 contract its
+    /// change_kind is unknown (it may be a symbol the PRD adds, or an
+    /// external name), so it is a warning, not a critical hallucination.
+    /// A token whose name does exist (only its qualification failed) stays
+    /// `Unscored`: the graph shows the PRD is talking about something real.
+    Absent,
     /// Outside the structured-modify gate — not evaluated by this axis.
     Unscored,
 }
@@ -46,6 +55,18 @@ pub(super) fn classify_unresolved(
 fn classify_one(store: &GraphStore, r: &ResolvedClaim) -> ClaimVerdict {
     if r.resolved_qn.is_some() {
         return ClaimVerdict::Resolved;
+    }
+    if r.claim.origin == ClaimOrigin::Backticked {
+        // `did_you_mean` is search::name_lookup's layer-3 list: the stored
+        // symbols whose `name` equals the token's leaf. Empty means no symbol
+        // of that name exists at all, not merely that the qualification is
+        // off. A bare or `A::B` token carries no file path, so the file
+        // coverage check below cannot apply to it.
+        return if r.did_you_mean.is_empty() {
+            ClaimVerdict::Absent
+        } else {
+            ClaimVerdict::Unscored
+        };
     }
     let kind = r.claim.change_kind.as_str();
     if !matches!(kind, "modify" | "remove" | "rename") {
