@@ -394,7 +394,12 @@ binds `x.m()` when the enclosing function declares `x` exactly once, by
 `const`/`let`/`var x = new T(..)` before the call, nothing else in the function
 binds or writes `x`, and the caller's own file defines the class `T` with a
 method `m` (`"receiver-local-binding"`); otherwise the call keeps its by-name
-resolution. In Rust, a receiver it cannot type is left unresolved; it never
+resolution. In Python (issue #444) it binds `x.m()` the same way when the only
+binding of `x` in the enclosing function is one statement `x = T(..)`, and
+`T` is a class the file declares once, undecorated, without a metaclass,
+`__new__` or `__getattribute__`, whose bases are all classes of the same file
+and whose own body defines `m`; a class imported from another file, an
+inherited method and module-level code are not typed. In Rust, a receiver it cannot type is left unresolved; it never
 falls back to a lookup by bare name.
 
 ### Query truncation and paging

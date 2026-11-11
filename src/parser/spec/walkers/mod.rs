@@ -46,6 +46,7 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser, Tree};
 
 use super::lang_spec::LangSpec;
+use super::py_receiver::PyReceiverScopes;
 use super::ts_receiver::ReceiverScopes;
 use crate::parser::{
     collect_error_ranges, count_parse_errors, parse_tree_too_deep, parse_with_timeout,
@@ -84,6 +85,8 @@ pub(crate) struct WalkCtx<'a> {
     /// built once per scope of THIS tree (node ids are per tree, so an embedded
     /// region's walk starts its own).
     pub(super) ts_receivers: ReceiverScopes,
+    /// Issue #444. The same for the Python constructed-receiver hint.
+    pub(super) py_receivers: PyReceiverScopes,
 }
 
 impl<'a> WalkCtx<'a> {
@@ -105,6 +108,7 @@ impl<'a> WalkCtx<'a> {
             cfg_gates,
             twins,
             ts_receivers: ReceiverScopes::default(),
+            py_receivers: PyReceiverScopes::default(),
         }
     }
 }
