@@ -1256,7 +1256,13 @@ fn the_wiki_module_names_no_network_or_model_client_api() {
     );
     let wiki = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wiki");
     sources.retain(|p| *p != wiki.join("skeleton_tests.rs"));
-    for name in ["mod.rs", "error.rs", "checks.rs", "skeleton.rs"] {
+    for name in [
+        "mod.rs",
+        "error.rs",
+        "checks.rs",
+        "skeleton.rs",
+        "communities.rs",
+    ] {
         assert!(
             sources.contains(&wiki.join(name)),
             "the tripwire must scan {name}: {sources:?}"

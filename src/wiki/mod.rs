@@ -8,14 +8,17 @@
 // type-level provenance tag on every edge, the mandatory `file:line` on every
 // member, edge and missed-graph gap (a `parse_incomplete` gap is file-level
 // and a cross-community count has no line), the always-present coverage
-// block, and the canonical (byte-identical) serialisation. Building pages
-// from a `GraphStore` and the MCP tool that exports them are later slices of
-// #196.
+// block, and the canonical (byte-identical) serialisation. The second slice,
+// `communities`, builds the community pages from a resolved + clustered
+// `GraphStore`. Process and god-node pages, coverage attribution and the MCP
+// tool that exports the skeleton are later slices of #196.
 
 mod checks;
+pub mod communities;
 mod error;
 pub mod skeleton;
 
+pub use communities::{community_pages, CommunityPages};
 pub use error::SkeletonError;
 pub use skeleton::{
     CoverageGap, Edge, Location, Page, PageKind, Provenance, Symbol, WikiSkeleton, SCHEMA_VERSION,
