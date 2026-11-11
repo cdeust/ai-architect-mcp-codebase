@@ -1,0 +1,83 @@
+{
+  "schema_version": "ai-architect.wiki-skeleton/1",
+  "pages": [
+    {
+      "kind": "community",
+      "id": "c1",
+      "title": "parser",
+      "members": [
+        {
+          "id": "a",
+          "name": "a",
+          "kind": "Function",
+          "location": {
+            "file": "src/a.rs",
+            "line": 3
+          }
+        },
+        {
+          "id": "b",
+          "name": "b",
+          "kind": "Function",
+          "location": {
+            "file": "src/b.rs",
+            "line": 7
+          }
+        }
+      ],
+      "edges": [
+        {
+          "source": "a",
+          "target": "b",
+          "relation": "Calls",
+          "provenance": "inferred",
+          "location": {
+            "file": "src/a.rs",
+            "line": 4
+          }
+        },
+        {
+          "source": "a",
+          "target": "b",
+          "relation": "Defines",
+          "provenance": "extracted",
+          "location": {
+            "file": "src/a.rs",
+            "line": 3
+          }
+        }
+      ],
+      "cross_community_edges": {
+        "c2": 5
+      },
+      "source_files": [
+        "src/a.rs",
+        "src/b.rs"
+      ],
+      "coverage": [
+        {
+          "kind": "missed",
+          "name": "unknown_fn",
+          "location": {
+            "file": "src/a.rs",
+            "line": 9
+          }
+        },
+        {
+          "kind": "parse_incomplete",
+          "file": "src/broken.rs"
+        }
+      ]
+    },
+    {
+      "kind": "god_node",
+      "id": "g1",
+      "title": "GraphStore",
+      "members": [],
+      "edges": [],
+      "cross_community_edges": {},
+      "source_files": [],
+      "coverage": []
+    }
+  ]
+}
