@@ -208,9 +208,18 @@ def check_unreleased(root: Path, version: str, run) -> None:
         f"launcher did not refuse with the release-asset error: {run.stderr}",
     )
     # A refused connection or a timeout prints the same FATAL; only curl's own
-    # 404 line shows that the asset is absent, not unreachable.
+    # 404 line shows that the asset is absent, not unreachable. The number in
+    # parentheses is curl's exit code and is not the same everywhere: 22 on the
+    # ubuntu and windows runners, 56 on the macos runner (measured 2026-11-11,
+    # run 43092287724, job `install (macos-latest)`: `curl: (56) The requested
+    # URL returned error: 404`). The message is what names the HTTP status.
     require(
-        re.search(r"^curl: \(22\) .*\b404\b", run.stderr, re.MULTILINE) is not None,
+        re.search(
+            r"^curl: \(\d+\) The requested URL returned error: 404$",
+            run.stderr,
+            re.MULTILINE,
+        )
+        is not None,
         f"release asset download failed, but not with a 404: {run.stderr}",
     )
     require(run.stdout.strip() == "", "launcher answered with no release to run")

@@ -27,15 +27,15 @@ EXPECTED_REPOSITORY_URL="https://github.com/${EXPECTED_REPO}"
 EXPECTED_SIGNER_WORKFLOW="${EXPECTED_REPO}/.github/workflows/release.yml"
 # This is a release pin, not a floating minimum. The distribution identity gate
 # requires it to match Cargo.toml and every public manifest before merge.
-EXPECTED_VERSION="0.14.0"
-EXPECTED_PLUGIN_MANIFEST_SHA256="18d68d95124f378dfe55f22b755f5045c29bdd83bcfcec52e801da894b4d5c0b"
+EXPECTED_VERSION="0.15.0"
+EXPECTED_PLUGIN_MANIFEST_SHA256="d5bd822a5505429ea442b582590778c8dae4ce32e15c35427254b946bec47cb3"
 # The Cargo pin hashes the [package] table only (see cargo_package_table), never
 # the dependency tables: those are what Dependabot rewrites, and in marketplace
 # mode nothing builds from them - the binary is the attested release asset. The
 # table still binds the package name, version and metadata to the reviewed
 # release. scripts/bootstrap_pins.py defines the same bytes: both refuse a
 # manifest holding a NUL byte or no [package] table, and agree on every other.
-EXPECTED_CARGO_PACKAGE_SHA256="ae3f636e76eb32beac829a846cfbc625c7f7bc780e1051cce0db15328a100a43"
+EXPECTED_CARGO_PACKAGE_SHA256="7f6c80a0b3a337054d1034db5ef3b550927bf349b2e96a023ae288f1bf064b9f"
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BINARY_NAME="ai-architect-mcp-codebase"

@@ -6,9 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-11
+
+This is a minor release. One default changes: the full-AST layer (`AstNode`
+rows and `FileContent`) is no longer persisted unless `index_codebase` or
+`analyze_codebase` is called with `"full_ast": true`. The server gains a 27th
+tool, `check_doc_claims`, the plugin ships `SessionStart` and `SubagentStart`
+hooks that name the graph tools, and the library gains the versioned wiki
+skeleton artifact. Several answers now state what they could not see: the
+coverage report counts the files no parser handles (`no_extraction`), an empty
+`search_codebase` answer names them, `check_security_gates` reports an
+unresolved changed symbol as a `warning` instead of an `info` and says which
+languages its unsafe-symbol check did not cover, `validate_prd_against_graph`
+warns on a token that matches no symbol, `get_impact` lists the call sites it
+could not resolve, and every open call site records why. An incremental
+refresh retracts the call, import, use, implements and extends rows a pass no
+longer decides, and `analyze_codebase` reuses an unchanged graph. A graph
+written by an earlier version needs one full reindex before an incremental
+refresh, a bootstrap fill or an artifact import: the tools refuse otherwise
+with "full reindex required" (the #400 entry below). On Linux, the source
+build of the plugin launcher now needs `cmake`, `pkg-config` and `libzstd-dev`.
+
 ### Changed
 
 - **The `install` job states what it proves on a version with no release yet.** `scripts/smoke_claude_plugin.py --installed` fetched the tool catalog and the assets of `v<plugin.json version>`, so on a release pull request it failed with `release catalog unavailable for v<version>: HTTP Error 404`; `merge` and `tag` both require `install`, so a version bump could neither merge nor be tagged. The script now reads the repository's latest release first, from the redirect of the github.com page `releases/latest` (one request, redirect not followed; no REST call and no token, so the anonymous REST quota shared by hosted runners cannot fail the job). A version at or below the latest release: nothing changes, the launcher must install the attested asset and answer that tag's exact catalog and `health_check`, and a version that was skipped or lowered fails there. A version above it (a draft, a prerelease and a bare tag are never the latest release): the launcher, run as the plugin runs it, must exit 1 with the single line `FATAL: release asset unavailable: …/v<version>/…` after curl's 404, with nothing on stdout, no source build and no binary under `target/release`; the job prints `INSTALL: v<version> is not released yet; …`, which says that the catalog is the `e2e` job's on that commit and the download path `release.yml`'s `publish_verified_release`. Any answer other than a `302` to `…/releases/tag/v<X.Y.Z>` fails. Tests: `scripts/tests/test_install_release_state.py`, in the `regression` command of `ci.json`. `docs/agent-guidance.md`, CONTRIBUTING ("What `install` proves before and after a release") and the README's platform section state the contract.
+- **The `install` job reads the missing release asset from curl's message, not from its exit code.** On the macos runner curl reports the 404 as `curl: (56) The requested URL returned error: 404`, where the ubuntu and windows runners print `(22)`; the check accepted only `(22)`, so the first release pull request to take the unreleased path failed on macos alone (measured 2026-11-11, run 43092287724). The check now requires the whole message `The requested URL returned error: 404` under any exit code, and no longer accepts a `404` that merely appears elsewhere on a curl line.
 - The resolver reads the file names of the low-risk Dependabot tier from the new required `ci.json` key `low_risk_files` (`Cargo.lock`, `Cargo.toml`) on the default branch, and fails when the key is missing; the names are no longer written in `pipeline-post-merge.yml`. The `ci.json` validator of the `contract` job in `pipeline.yml` and `pipeline-post-merge.yml` accepts the key and reports its absence. A file is still matched by its name in any directory, and a path under `.github/` is never low risk (Cortex ADR-1131, amends Cortex ADR-1126).
 - The release tag goes on the tested commit, fetched by SHA into a bare repository, as in Cortex: the `tag` job of `pipeline.yml` and `pipeline-post-merge.yml` no longer checks out `main` with the deploy key and no longer compares the tested commit with main's tip. `scripts/tests/test_no_main_comparison.py` (Cortex's guard) runs in the `contract` job of both workflows and fails when a comparison with main returns to `scripts/` or `.github/workflows/`; `scripts/tests/test_no_main_comparison_guard.py` proves it detects each marker and runs in the `regression` command of `ci.json`. The header of `pipeline.yml` no longer carries a hash.
 - `claude-review.yml`, `scripts/ci_review_budget.py` and its test are byte for byte Cortex's (commit `637f6aa`). The workflow gains a step that authorizes the pinned action's fetch on a private repository only, the prompt asks for every review `/review-pr` lists, and the budget script refuses a `GITHUB_OUTPUT` outside `RUNNER_TEMP`. The pinned review action follows Cortex's pin, v1.0.263.
