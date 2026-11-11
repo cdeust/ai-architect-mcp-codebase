@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - The resolver reads the file names of the low-risk Dependabot tier from the new required `ci.json` key `low_risk_files` (`Cargo.lock`, `Cargo.toml`) on the default branch, and fails when the key is missing; the names are no longer written in `pipeline-post-merge.yml`. The `ci.json` validator of the `contract` job in `pipeline.yml` and `pipeline-post-merge.yml` accepts the key and reports its absence. A file is still matched by its name in any directory, and a path under `.github/` is never low risk (Cortex ADR-1131, amends Cortex ADR-1126).
+- The release tag goes on the tested commit, fetched by SHA into a bare repository, as in Cortex: the `tag` job of `pipeline.yml` and `pipeline-post-merge.yml` no longer checks out `main` with the deploy key and no longer compares the tested commit with main's tip. `scripts/tests/test_no_main_comparison.py` (Cortex's guard) runs in the `contract` job of both workflows and fails when a comparison with main returns to `scripts/` or `.github/workflows/`; `scripts/tests/test_no_main_comparison_guard.py` proves it detects each marker and runs in the `regression` command of `ci.json`. The header of `pipeline.yml` no longer carries a hash.
 - `claude-review.yml`, `scripts/ci_review_budget.py` and its test are byte for byte Cortex's (commit `637f6aa`). The workflow gains a step that authorizes the pinned action's fetch on a private repository only, the prompt asks for every review `/review-pr` lists, and the budget script refuses a `GITHUB_OUTPUT` outside `RUNNER_TEMP`. The pinned review action follows Cortex's pin, v1.0.263.
 - A merge that waits no longer fails `Pipeline after merge` (Cortex ADR-1128). Each head wakes the resolver twice, once at the end of the Pipeline and once at the end of the review, and the first wake-up is held; it exited 1, so the default branch showed a failed run for every normal merge. A held merge, or a head that advanced, now ends green with a notice and writes no output, and `close-issues` requires a pull request number. Every other refusal still fails.
 - The review prompt puts the run's link just before the verdict line in every comment that carries it (Cortex ADR-1130). The resolver reads a verdict only from a comment that links the review run of the head; a review posted with `gh pr comment` carried the verdict without the link, and an approved, green pull request stayed unmerged (#495).
@@ -88,7 +89,26 @@ adheres to [Semantic Versioning](https://semver.org/).
   its properties. A retracted caller-level row's runtime `observed_count` (from
   `ingest_traces`) moves to the `OBSERVED_CALLS_*` row ingest writes when no
   static row exists, so the runtime evidence survives. `Uses_*`, `Imports_*`,
-  `Implements_*` and `Extends_*` rows are still only added.
+  `Implements_*` and `Extends_*` rows were still only added; the next entry
+  covers them.
+- **`resolve_graph` retracts the import, use, implements and extends rows a
+  pass no longer decides (issue #443).** After an incremental
+  `index_codebase`, three things a fresh index of the same tree does not have
+  survived. An edited file keeps its File node, so the `Imports_File_*` row of
+  an import the edit removed stayed. An Import of an unchanged file kept
+  `is_resolved = true` after an edit or a deletion removed its target, and
+  kept its row too when an added file made it ambiguous (the flag is what
+  `check_security_gates` counts as an unresolved import). A reference the pass
+  decided again to another of two same-named definitions kept the earlier row
+  next to the new one (`Uses_*`, `Implements_*`, `Extends_*`). The rows of
+  those four families that carry a `resolution_method` the resolver's phases
+  write, that existed before a pass and that the pass did not meet again, are
+  now deleted after the flush, and every Import is set back to unresolved
+  before the pass, which marks again the ones it resolves. Rows of the light
+  links, the IaC pass, the language server and the macro layer are untouched.
+  Not covered: which of several same-named candidates the use, implements and
+  extends phases take still follows index order, so a refreshed graph and a
+  fresh one can point at different twins (one row each).
 
 - **`get_impact` names the call sites it could not resolve** (#445). An
   incomplete answer gave only `unresolved_callsites_naming_target`, a count, so

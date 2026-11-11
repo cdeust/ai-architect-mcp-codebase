@@ -34,8 +34,8 @@
 // whose `resolution_method` is a static tier label are owned here; a row the
 // pass meets again keeps its properties (trace ingest's `observed_count`), and
 // the count of a retracted caller-level row moves to `OBSERVED_CALLS_*`.
-// Known gap, accepted for this slice: `Uses_*`, `Imports_*`, `Implements_*` and
-// `Extends_*` rows are still only added.
+// `Uses_*`, `Imports_*`, `Implements_*` and `Extends_*` rows are retracted by
+// `retract_edges`; `Retraction` runs both around the pass.
 
 use crate::ambiguity_policy::{resolution_label, Evidence};
 use crate::graph_store::{cypher_str, GraphStore, NODE_CALL_SITE, REL_TABLES};
@@ -44,9 +44,36 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 /// A resolution row as the `EdgeBuffer` keys it: (rel table, from id, to id).
 pub(super) type RowKey = (String, String, String);
 
+/// What a pass may retract, read before it runs: the static call rows and the
+/// import, use, implements and extends rows of earlier passes.
+pub(super) struct Retraction {
+    calls: HashSet<RowKey>,
+    edges: HashSet<RowKey>,
+}
+
+impl Retraction {
+    /// Step 1 of both modules: reads the owned rows, reopens the call sites
+    /// only those rows resolve, and sets every Import back to unresolved.
+    pub(super) fn begin(store: &GraphStore) -> Result<Self, String> {
+        let calls = load_static_call_rows(store)?;
+        reopen_static_sites(store, &calls)?;
+        let edges = super::retract_edges::load_owned_rows(store);
+        super::retract_edges::reopen_imports(store)?;
+        Ok(Retraction { calls, edges })
+    }
+
+    /// The last step: deletes the owned rows absent from `met`, the persisted
+    /// rows the pass decided again. Precondition: the pass's buffer is flushed.
+    pub(super) fn finish(self, store: &GraphStore, met: &HashSet<RowKey>) -> Result<(), String> {
+        retract_unmet(store, &self.calls, met)?;
+        super::retract_edges::retract_unmet(store, &self.edges, met)?;
+        Ok(())
+    }
+}
+
 /// The `resolution_method` labels the static call tiers write. The macro
 /// tiers are not listed: their own reset deletes their rows before each pass.
-fn static_call_methods() -> Vec<&'static str> {
+pub(super) fn static_call_methods() -> Vec<&'static str> {
     [
         Evidence::UniqueGlobal,
         Evidence::ReceiverBound,
@@ -81,7 +108,7 @@ fn site_tables() -> impl Iterator<Item = &'static (&'static str, &'static str, &
 }
 
 /// The static-tier `Calls_*` rows in the graph before the pass runs.
-pub(super) fn load_static_call_rows(store: &GraphStore) -> Result<HashSet<RowKey>, String> {
+fn load_static_call_rows(store: &GraphStore) -> Result<HashSet<RowKey>, String> {
     let methods = method_list();
     let mut rows = HashSet::new();
     for &(rel, from, to) in call_tables() {
@@ -106,10 +133,7 @@ pub(super) fn load_static_call_rows(store: &GraphStore) -> Result<HashSet<RowKey
 /// that hold no per-site call row of another writer, so the pass that follows
 /// writes the reason of each one it leaves open. A site a language-server row
 /// also resolves keeps its flag.
-pub(super) fn reopen_static_sites(
-    store: &GraphStore,
-    owned: &HashSet<RowKey>,
-) -> Result<(), String> {
+fn reopen_static_sites(store: &GraphStore, owned: &HashSet<RowKey>) -> Result<(), String> {
     let sites: BTreeSet<&str> = owned
         .iter()
         .filter(|(rel, _, _)| site_tables().any(|(t, _, _)| t == rel))
@@ -126,7 +150,7 @@ pub(super) fn reopen_static_sites(
 /// Precondition: `owned` was read by `load_static_call_rows` before the pass,
 /// and the pass's buffer has been flushed. Idempotent: a second call with the
 /// same arguments finds nothing left to delete.
-pub(super) fn retract_unmet(
+fn retract_unmet(
     store: &GraphStore,
     owned: &HashSet<RowKey>,
     met: &HashSet<RowKey>,

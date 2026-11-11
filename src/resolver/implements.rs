@@ -4,6 +4,7 @@
 // under the §4.1 cap. Pure move; `use super::*` provides the shared
 // resolution types/helpers exactly as when this lived in one module.
 
+use super::retract_edges::{METHOD_DECLARED_IMPLEMENTS, METHOD_DERIVE_MACRO, METHOD_IMPL_BLOCK};
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -136,7 +137,7 @@ fn resolve_one_implements(
             return Ok(false);
         }
         let table = format!("Implements_{label}_Trait");
-        buf.add(&table, from_id, &t.id, 0.95, "declared-implements");
+        buf.add(&table, from_id, &t.id, 0.95, METHOD_DECLARED_IMPLEMENTS);
         return Ok(true);
     }
     // Derive/decorator → stdlib-trait expansion, only for languages that
@@ -155,7 +156,7 @@ fn resolve_one_implements(
                 canonical,
                 "rust",
             )?;
-            buf.add(&table, from_id, canonical, 0.9, "derive-macro");
+            buf.add(&table, from_id, canonical, 0.9, METHOD_DERIVE_MACRO);
             any = true;
         }
         return Ok(any);
@@ -203,7 +204,7 @@ fn resolve_impl_trait_blocks(
         match trait_target {
             Some(t) => {
                 let table = format!("Implements_{}_Trait", recv.label);
-                buf.add(&table, &recv.id, &t.id, 0.95, "impl-block");
+                buf.add(&table, &recv.id, &t.id, 0.95, METHOD_IMPL_BLOCK);
                 resolved += 1;
             }
             None => unresolved.push(UnresolvedRef {
