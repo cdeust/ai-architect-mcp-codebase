@@ -79,6 +79,8 @@ For non-Rust languages, extend to:
 
 **Data requirement.** The parser (stage 3a) must record an `is_unsafe` or `risky_api_refs` property. If not currently recorded, degrade gracefully: emit `info` "unsafe detection unavailable: parser does not expose is_unsafe" and skip.
 
+**Shipped state (issue #450).** No parser records `is_unsafe`, for Rust or any other language, so S2 skips every changed symbol. Each skip flag carries `details.language` and `details.checked_languages` (empty), and the report's `language_coverage.unsafe_symbol` lists `checked_languages`, `not_checked_languages` and `symbols_not_checked`. A changed symbol that does not resolve in the graph gets no check: it is an `input_unresolved` flag at `warning`, with `details.unverifiable_reason` when its file is outside the indexer's coverage.
+
 **Cypher sketch.**
 ```cypher
 MATCH (s) WHERE s.qualified_name IN $changed AND s.is_unsafe = true

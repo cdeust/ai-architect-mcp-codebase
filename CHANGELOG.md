@@ -112,6 +112,26 @@ adheres to [Semantic Versioning](https://semver.org/).
   a `warning` (status `warning`), counted in the new `summary.absent_symbols`;
   a token whose name exists stays `info`. `hallucinated_symbols` remains the
   contract-backed critical count. `stages/stage-6.md` §4.3 states the rule.
+- **`check_security_gates` states what it could not check, and the README
+  documents the stage-5 sidecar** (issue #450). The unsafe-symbol check is
+  skipped for every changed symbol, because no parser records `unsafe` for any
+  language, but its flag read "the Rust parser does not record is_unsafe" even
+  on a Python symbol. Each skip flag now carries `details.language` and
+  `details.checked_languages` (empty), and the report gains
+  `language_coverage.unsafe_symbol` `{checked_languages,
+  not_checked_languages, symbols_not_checked, note}`, derived from the skip
+  flags. A changed symbol that does not resolve in the graph, on which no
+  check runs, was an `info` flag; `input_unresolved` is now a `warning` with
+  `details.checks_run: 0` and `details.unverifiable_reason` when its file is
+  in a language no parser handles or has no File node. `gates_passed` is
+  unchanged (it counts critical flags only); `summary.warning_count` now
+  counts unresolved symbols and `summary.info_count` no longer does. The
+  README gains "The affected-symbols sidecar": the file's shape, how it is
+  passed (`affected_symbols_path`; no default location is searched), what each
+  `change_kind` and `scope_claims` kind decides, and what the regex fallback
+  cannot. Tests: `tests/prd_sidecar_contract_450.rs` feeds the README's
+  example to the validator as written and exercises each stated rule; two
+  tests in `tests/stage8_integration.rs`.
 - **`detect_changes` reports a modified method as the method, and never calls
   an incomplete answer `exact`** (issue #446). Methods were looked up through
   `Defines_File_Method`, a table that does not exist: the query failed, the
