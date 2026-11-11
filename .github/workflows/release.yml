@@ -340,13 +340,20 @@ jobs:
         run: cargo install cargo-cyclonedx --locked --version 0.5.9
 
       - name: Generate SBOM
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           cargo cyclonedx --format json --all --override-filename sbom
-          # cargo-cyclonedx writes per-manifest files; collect the workspace
-          # root one under a predictable release-asset name.
-          # -exec rather than `| xargs`: shellcheck SC2038, and a path with a
-          # space would silently produce the wrong file.
-          find . -maxdepth 3 -name 'sbom.json' -exec cp {} ai-architect-mcp-codebase.cdx.json \; -quit
+          # cargo-cyclonedx writes one sbom.json next to each workspace
+          # manifest; the released crate is the root manifest, so its SBOM is
+          # ./sbom.json. The step used to copy the first one `find` returned,
+          # which is directory order: v0.13.0 published the SBOM of
+          # `zera 0.0.1` under this name. The check fails the job, before the
+          # attestation, unless the root component is the released crate at
+          # the tag's version.
+          cp sbom.json ai-architect-mcp-codebase.cdx.json
+          python3 scripts/check_sbom_identity.py ai-architect-mcp-codebase.cdx.json --tag "$TAG"
           ls -la ai-architect-mcp-codebase.cdx.json
           sha256sum ai-architect-mcp-codebase.cdx.json | tee ai-architect-mcp-codebase.cdx.json.sha256
 

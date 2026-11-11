@@ -16,7 +16,7 @@ mod reason;
 mod settle;
 mod variant_guard;
 use candidate_scope::qualified_path_gate;
-use gates::{rust_local_receiver_gate, same_class_receiver_gate, ts_constructed_receiver_gate};
+use gates::{constructed_local_receiver_gate, rust_local_receiver_gate, same_class_receiver_gate};
 use includes::IncludeGraph;
 use reason::{Failure, Gated};
 use settle::{record_reason, settle, CallTally, Located};
@@ -336,7 +336,7 @@ struct RowInput<'a> {
 /// `site.caller_label` identify the calling symbol (used only by the
 /// same-class receiver gate below); `site.receiver_hint` is the
 /// parser-attached issue #283 palier 3 hint (used only by the Rust
-/// local-receiver gate and the TS/JS constructed-receiver gate below).
+/// local-receiver gate and the constructed-receiver gate below).
 /// postcondition: the returned `Resolution` depends only on the candidate
 /// set and the evidence context — never directly on whether the callee was
 /// spelled qualified or unqualified — EXCEPT for the three receiver gates,
@@ -351,7 +351,7 @@ fn resolve_single_call(ctx: &ResolveContext, site: &CallSite, file_id: &str) -> 
     if let Some(gated) = rust_local_receiver_gate(ctx, site, file_id) {
         return gated;
     }
-    if let Some(gated) = ts_constructed_receiver_gate(ctx, site, file_id) {
+    if let Some(gated) = constructed_local_receiver_gate(ctx, site, file_id) {
         return gated;
     }
     // A path into std or a foreign crate names no repository item (issue #393).

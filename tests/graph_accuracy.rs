@@ -3551,6 +3551,58 @@ fn fixture_intra_inheritance_py() -> Fixture {
     f
 }
 
+/// constructed_receiver.py validates issue #444 for Python: a method call on
+/// a local the function binds once to `T()`, with `T` a class of the file,
+/// resolves to `T`'s method. Two classes own `run`, so the three expected
+/// edges can only come from the receiver's type; `rebound` rebinds its local
+/// and must contribute none (an edge there scores as a false positive).
+fn fixture_constructed_receiver_py() -> Fixture {
+    let file_prefix = "synthetic/constructed_receiver.py";
+    let mut f = build_core_fixture(&CoreFixtureInputs {
+        name: "constructed_receiver.py",
+        category: "synthetic",
+        rel_path: file_prefix,
+        file_prefix,
+        imports: &[("__future__::annotations", 9)],
+        constants: &[],
+        // Each caller holds a constructor call and a method call; `rebound`
+        // holds two constructor calls.
+        functions: &[
+            ("use_worker", 28, 2),
+            ("use_other", 33, 2),
+            ("rebound", 38, 3),
+        ],
+        classes: &[
+            ExpectedClassInput {
+                name: "Worker",
+                line: 12,
+                bases: &[],
+                methods: &[("run", 13, 0)],
+            },
+            ExpectedClassInput {
+                name: "Other",
+                line: 17,
+                bases: &[],
+                methods: &[("run", 18, 0)],
+            },
+            ExpectedClassInput {
+                name: "Pool",
+                line: 22,
+                bases: &[],
+                methods: &[("drain", 23, 2)],
+            },
+        ],
+        resolved_calls: &[("use_worker", "Worker::run"), ("use_other", "Other::run")],
+    });
+    push_method_to_method_calls(&mut f.edges, file_prefix, &[("Pool", "drain", "run")]);
+    // `push_method_to_method_calls` targets the caller's own class; the call
+    // in `Pool.drain` reaches `Worker.run`.
+    if let Some(edge) = f.edges.last_mut() {
+        edge.to_qn = format!("{file_prefix}::Worker::run");
+    }
+    f
+}
+
 // ---------------------------------------------------------------------------
 // Per-fixture runner
 // ---------------------------------------------------------------------------
@@ -4250,6 +4302,19 @@ fn synthetic_intra_inheritance_py() {
     run_fixture(
         "intra_inheritance_py",
         fixture_intra_inheritance_py(),
+        Floors {
+            nodes: 1.0,
+            defines: 1.0,
+            calls: 1.0,
+        },
+    );
+}
+
+#[test]
+fn synthetic_constructed_receiver_py() {
+    run_fixture(
+        "constructed_receiver_py",
+        fixture_constructed_receiver_py(),
         Floors {
             nodes: 1.0,
             defines: 1.0,

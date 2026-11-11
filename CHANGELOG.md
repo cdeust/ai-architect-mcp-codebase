@@ -29,6 +29,7 @@ build of the plugin launcher now needs `cmake`, `pkg-config` and `libzstd-dev`.
 
 ### Changed
 
+- **The `install` job states what it proves on a version with no release yet.** `scripts/smoke_claude_plugin.py --installed` fetched the tool catalog and the assets of `v<plugin.json version>`, so on a release pull request it failed with `release catalog unavailable for v<version>: HTTP Error 404`; `merge` and `tag` both require `install`, so a version bump could neither merge nor be tagged. The script now reads the repository's latest release first, from the redirect of the github.com page `releases/latest` (one request, redirect not followed; no REST call and no token, so the anonymous REST quota shared by hosted runners cannot fail the job). A version at or below the latest release: nothing changes, the launcher must install the attested asset and answer that tag's exact catalog and `health_check`, and a version that was skipped or lowered fails there. A version above it (a draft, a prerelease and a bare tag are never the latest release): the launcher, run as the plugin runs it, must exit 1 with the single line `FATAL: release asset unavailable: …/v<version>/…` after curl's 404, with nothing on stdout, no source build and no binary under `target/release`; the job prints `INSTALL: v<version> is not released yet; …`, which says that the catalog is the `e2e` job's on that commit and the download path `release.yml`'s `publish_verified_release`. Any answer other than a `302` to `…/releases/tag/v<X.Y.Z>` fails. Tests: `scripts/tests/test_install_release_state.py`, in the `regression` command of `ci.json`. `docs/agent-guidance.md`, CONTRIBUTING ("What `install` proves before and after a release") and the README's platform section state the contract.
 - The resolver reads the file names of the low-risk Dependabot tier from the new required `ci.json` key `low_risk_files` (`Cargo.lock`, `Cargo.toml`) on the default branch, and fails when the key is missing; the names are no longer written in `pipeline-post-merge.yml`. The `ci.json` validator of the `contract` job in `pipeline.yml` and `pipeline-post-merge.yml` accepts the key and reports its absence. A file is still matched by its name in any directory, and a path under `.github/` is never low risk (Cortex ADR-1131, amends Cortex ADR-1126).
 - The release tag goes on the tested commit, fetched by SHA into a bare repository, as in Cortex: the `tag` job of `pipeline.yml` and `pipeline-post-merge.yml` no longer checks out `main` with the deploy key and no longer compares the tested commit with main's tip. `scripts/tests/test_no_main_comparison.py` (Cortex's guard) runs in the `contract` job of both workflows and fails when a comparison with main returns to `scripts/` or `.github/workflows/`; `scripts/tests/test_no_main_comparison_guard.py` proves it detects each marker and runs in the `regression` command of `ci.json`. The header of `pipeline.yml` no longer carries a hash.
 - `claude-review.yml`, `scripts/ci_review_budget.py` and its test are byte for byte Cortex's (commit `637f6aa`). The workflow gains a step that authorizes the pinned action's fetch on a private repository only, the prompt asks for every review `/review-pr` lists, and the budget script refuses a `GITHUB_OUTPUT` outside `RUNNER_TEMP`. The pinned review action follows Cortex's pin, v1.0.263.
@@ -62,6 +63,7 @@ build of the plugin launcher now needs `cmake`, `pkg-config` and `libzstd-dev`.
 
 ### Fixed
 
+- **The release SBOM is the released crate's.** `release.yml` copied the first `sbom.json` that `find` returned among the per-manifest files of `cargo cyclonedx --all`, in directory order: the attested `ai-architect-mcp-codebase.cdx.json` of v0.13.0 describes `zera 0.0.1` (28 components), while v0.12.0 and v0.14.0 got the root crate's by luck. The step now copies the root manifest's `sbom.json`, and `scripts/check_sbom_identity.py` fails the job before the attestation unless the root component is `ai-architect-mcp-codebase` at the tag's version (`v<X.Y.Z>` or `v<X.Y.Z>-rc<N>`). Tests: `scripts/tests/test_check_sbom_identity.py`, in the `regression` command of `ci.json`. The v0.13.0 asset is not replaced.
 - **README: a supported-platforms table** (issue #449, first slice). The
   README did not say which platforms the plugin installs on, nor that the Linux
   aarch64 asset is built but never started by CI. The table lists each release
@@ -255,6 +257,34 @@ build of the plugin launcher now needs `cmake`, `pkg-config` and `libzstd-dev`.
   with function nesting. Tests: `tests/ts_constructed_local_receiver_444.rs`
   (fails on `main` with no edge for `useConst`), ten unit tests in
   `ts_receiver`.
+- **Python: a call on a local built from a class of the file binds to that
+  class** (issue #444). `w = Worker()` then `w.run(3)` reached the resolver as
+  the bare name `w.run`, so with two classes owning `run` the call stayed
+  unresolved. The Python call walker now attaches `receiver_hint = Worker`
+  (`receiver_hint_via = constructed`) when the only occurrence of `w` in the
+  call's enclosing function that is not a plain read is one statement
+  `w = Worker(..)` (`parser::spec::py_receiver`), and the resolver's
+  constructed-receiver gate, now shared by TypeScript/JavaScript and Python,
+  binds it to `Worker::run` when the caller's file defines that method. A name
+  assigned in a Python function is local to the whole function, so the
+  statement need not precede the call. No hint, and so the answer the call had
+  before, when the local is bound in any other way (a second assignment, a
+  parameter, a `for`/`with`/`except`/`import` target, `:=`, `del`,
+  `global`/`nonlocal`, a comprehension variable, a nested function); when the
+  call is at module level or in a nested function; when the file does not
+  bind `Worker` exactly once by a `class` statement (an imported class, a
+  second definition, a `from m import *`); when the class or a class on its
+  base chain is decorated, takes a class keyword, binds `__new__` or
+  `__getattribute__`, or has a base the file does not declare; when the
+  class's own body does not bind the method exactly once (an inherited
+  method); and when the file writes an attribute of the method's name or
+  `__class__`. Read positions are an allowlist, so an occurrence in a position
+  the module does not know counts as a binding. The accuracy gate gains
+  `synthetic/constructed_receiver.py` (three expected edges, one rebound local
+  that must contribute none): `Calls` recall 0 of 3 before, 3 of 3 after.
+  Tests: `tests/py_constructed_local_receiver_444.rs`, nine unit tests in
+  `py_receiver`. Not covered: a class imported from another file, an
+  inherited method, a field chain (`w.base.greet()`).
 - **Files in unsupported languages are counted in the coverage report** (#447,
   first slice). A PHP, C# or Lua file became a File node with no symbols and
   left no trace in `coverage` or in `query_graph(graph="missed")`, so an empty
