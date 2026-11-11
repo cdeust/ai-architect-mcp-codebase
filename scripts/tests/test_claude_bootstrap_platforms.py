@@ -115,7 +115,7 @@ class BootstrapHarness(unittest.TestCase):
             if manifest_edit:
                 manifest = plugin / manifest_edit
                 manifest.write_bytes(
-                    manifest.read_bytes().replace(b"0.14.0", b"0.14.1")
+                    manifest.read_bytes().replace(b"0.15.0", b"0.15.1")
                 )
             windows = system.startswith(("MINGW", "MSYS", "CYGWIN"))
             name = "ai-architect-mcp-codebase" + (".exe" if windows else "")
@@ -156,9 +156,9 @@ class BootstrapHarness(unittest.TestCase):
 
     def check_verified_cache(self, base, asset, command, environment):
         log = (base / "downloads").read_text()
-        self.assertIn(f"v0.14.0/{asset.name}", log)
+        self.assertIn(f"v0.15.0/{asset.name}", log)
         proof = (base / "provenance").read_text()
-        self.assertIn("--source-ref refs/tags/v0.14.0", proof)
+        self.assertIn("--source-ref refs/tags/v0.15.0", proof)
         self.assertIn(
             "--signer-workflow cdeust/ai-architect-mcp-codebase/.github/workflows/release.yml",
             proof,

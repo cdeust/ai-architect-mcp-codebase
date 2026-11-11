@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-11
+
+This is a minor release. One default changes: the full-AST layer (`AstNode`
+rows and `FileContent`) is no longer persisted unless `index_codebase` or
+`analyze_codebase` is called with `"full_ast": true`. The server gains a 27th
+tool, `check_doc_claims`, the plugin ships `SessionStart` and `SubagentStart`
+hooks that name the graph tools, and the library gains the versioned wiki
+skeleton artifact. Several answers now state what they could not see: the
+coverage report counts the files no parser handles (`no_extraction`), an empty
+`search_codebase` answer names them, `check_security_gates` reports an
+unresolved changed symbol as a `warning` instead of an `info` and says which
+languages its unsafe-symbol check did not cover, `validate_prd_against_graph`
+warns on a token that matches no symbol, `get_impact` lists the call sites it
+could not resolve, and every open call site records why. An incremental
+refresh retracts the call, import, use, implements and extends rows a pass no
+longer decides, and `analyze_codebase` reuses an unchanged graph. A graph
+written by an earlier version needs one full reindex before an incremental
+refresh, a bootstrap fill or an artifact import: the tools refuse otherwise
+with "full reindex required" (the #400 entry below). On Linux, the source
+build of the plugin launcher now needs `cmake`, `pkg-config` and `libzstd-dev`.
+
 ### Changed
 
 - The resolver reads the file names of the low-risk Dependabot tier from the new required `ci.json` key `low_risk_files` (`Cargo.lock`, `Cargo.toml`) on the default branch, and fails when the key is missing; the names are no longer written in `pipeline-post-merge.yml`. The `ci.json` validator of the `contract` job in `pipeline.yml` and `pipeline-post-merge.yml` accepts the key and reports its absence. A file is still matched by its name in any directory, and a path under `.github/` is never low risk (Cortex ADR-1131, amends Cortex ADR-1126).
