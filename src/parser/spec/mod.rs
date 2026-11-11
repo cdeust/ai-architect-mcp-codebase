@@ -49,6 +49,7 @@ mod rust_scope;
 mod rust_type_scope;
 mod shallow;
 mod swift;
+mod ts_receiver;
 mod typescript;
 mod walkers;
 

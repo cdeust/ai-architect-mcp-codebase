@@ -176,6 +176,7 @@ class CliTests(unittest.TestCase):
                 "HEAD_REF": "feat",
                 "LABELS": labels,
                 "GITHUB_OUTPUT": str(out_file),
+                "RUNNER_TEMP": str(out_file.parent),
             }
             gh = fake_gh(runs, jobs)
             stdout = StringIO()
@@ -200,6 +201,16 @@ class CliTests(unittest.TestCase):
         self.assertIn("skip=true", lines)
         self.assertIn("refinement PR", text)
         self.assertIn(budget.BYPASS_LABEL, text)
+
+    def test_the_output_file_must_sit_inside_the_runner_temp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inside = {"RUNNER_TEMP": tmp, "GITHUB_OUTPUT": f"{tmp}/cmd/out"}
+            expected = os.path.realpath(inside["GITHUB_OUTPUT"])
+            self.assertEqual(budget.output_file(inside), expected)
+            for outside in (f"{tmp}-other/out", f"{tmp}/../out", tmp):
+                env = {"RUNNER_TEMP": tmp, "GITHUB_OUTPUT": outside}
+                with self.subTest(path=outside), self.assertRaises(SystemExit):
+                    budget.output_file(env)
 
 
 class WorkflowWiringTests(unittest.TestCase):
@@ -269,8 +280,8 @@ class WorkflowWiringTests(unittest.TestCase):
             self.assertIn(needle, prompt)
 
     def test_prompt_puts_the_run_link_in_every_comment_that_carries_the_verdict(self):
-        # Cortex ADR-1130: the resolver binds a verdict to a head through the run its
-        # comment links. A review posted with `gh pr comment` carried no link.
+        # ADR-1130: the resolver binds a verdict to a head through the run its comment
+        # links. A review posted with `gh pr comment` carried the verdict and no link.
         prompt = self.action()["with"]["prompt"]
         link = (
             '"[View job run](${{ github.server_url }}/${{ github.repository }}'

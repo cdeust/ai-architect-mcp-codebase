@@ -99,15 +99,29 @@ pub fn resolve_binary(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     const SERVER_PACKAGE_REL: &str = "target/release/ai-architect-mcp-codebase";
 
     /// A fake `cargo` (shell script) that runs `body` in the invocation's cwd.
+    ///
+    /// A child process writes the script, so this process never holds it open
+    /// for writing. Tests run on threads of one process: had this thread the
+    /// script open, a spawn on another thread would fork a child that keeps
+    /// that write descriptor until its own exec, and running the script in
+    /// that window fails with ETXTBSY ("Text file busy", CI job 130215858911).
     fn fake_cargo(dir: &Path, body: &str) -> PathBuf {
         let path = dir.join("fake-cargo");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let written = std::process::Command::new("sh")
+            .args([
+                "-c",
+                r#"printf '#!/bin/sh\n%s\n' "$1" > "$2" && chmod 755 "$2""#,
+                "sh",
+            ])
+            .arg(body)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(written.success(), "writing {} failed", path.display());
         path
     }
 

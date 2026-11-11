@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `claude-review.yml`, `scripts/ci_review_budget.py` and its test are byte for byte Cortex's (commit `637f6aa`). The workflow gains a step that authorizes the pinned action's fetch on a private repository only, the prompt asks for every review `/review-pr` lists, and the budget script refuses a `GITHUB_OUTPUT` outside `RUNNER_TEMP`. The pinned review action follows Cortex's pin, v1.0.263.
+- A merge that waits no longer fails `Pipeline after merge` (Cortex ADR-1128). Each head wakes the resolver twice, once at the end of the Pipeline and once at the end of the review, and the first wake-up is held; it exited 1, so the default branch showed a failed run for every normal merge. A held merge, or a head that advanced, now ends green with a notice and writes no output, and `close-issues` requires a pull request number. Every other refusal still fails.
 - The review prompt puts the run's link just before the verdict line in every comment that carries it (Cortex ADR-1130). The resolver reads a verdict only from a comment that links the review run of the head; a review posted with `gh pr comment` carried the verdict without the link, and an approved, green pull request stayed unmerged (#495).
 - `docs/agent-guidance.md` states the CI contract for every agent and routine, and `CLAUDE.md` points to it: one pull request in flight, no comparison with the main branch and no forced push, one push per verdict, a refinement pull request on a new branch once the three reviews are spent, no comment after an approve. It wins over a less restrictive routine prompt written before the contract.
 - The resolver is also woken by the end of the Claude review, not only by the end of the Pipeline, so an approved pull request merges whichever finishes last (Cortex ADR-1127).
@@ -36,6 +38,22 @@ adheres to [Semantic Versioning](https://semver.org/).
   `"full": true`.
 
 ### Fixed
+
+- **README: a supported-platforms table** (issue #449, first slice). The
+  README did not say which platforms the plugin installs on, nor that the Linux
+  aarch64 asset is built but never started by CI. The table lists each release
+  asset, whether the launcher installs or refuses the platform (macOS Intel,
+  and a Windows shell that reports arm64, are refused), and whether the
+  pipeline's `install` job starts the published asset there. `ReadmePlatformTable` in
+  `scripts/tests/test_claude_bootstrap_platforms.py` checks the table row by
+  row: the installed rows' assets are exactly those the launcher accepts and
+  `release.yml` builds; each installed platform's `uname` pair is run through
+  the launcher and must pick that row's asset; the row says "yes" exactly when
+  a runner of the pipeline's `install` job maps to that `uname` pair (a table
+  inferred from `install` passing on those images), and otherwise names the
+  asset's build runner; every `install` runner starts a listed row; each
+  refused platform is refused by the launcher; and `ci.json`'s `install`
+  command ends with the installed copy's smoke.
 
 - **The README no longer quotes the 14.26x token reduction (#451).** The
   figure is a mean of per-question ratios between the head-to-head graph leg,
@@ -86,6 +104,113 @@ adheres to [Semantic Versioning](https://semver.org/).
   rendering, in `get_impact`'s `unresolved_callsites_by_reason`, in
   `index_status`'s `unresolved_call_sites.by_reason`, and in the
   `open_by_reason` of `lsp_resolve` and `analyze_codebase`.
+- **`validate_prd_against_graph` no longer passes a fabricated class when the
+  stage-5 sidecar is absent** (issue #450, first slice). In regex-fallback
+  mode every unresolved token was an `info` finding, so a PRD naming a class
+  that does not exist validated as `ok` with zero hallucinated symbols. A
+  backticked token that matches no symbol by qualified name or by name is now
+  a `warning` (status `warning`), counted in the new `summary.absent_symbols`;
+  a token whose name exists stays `info`. `hallucinated_symbols` remains the
+  contract-backed critical count. `stages/stage-6.md` §4.3 states the rule.
+- **`detect_changes` reports a modified method as the method, and never calls
+  an incomplete answer `exact`** (issue #446). Methods were looked up through
+  `Defines_File_Method`, a table that does not exist: the query failed, the
+  error was skipped, and no Method was ever a candidate, so a change inside a
+  TypeScript or Python method was reported as its class and a change inside a
+  Rust `impl` method (whose type is defined in another file) as nothing. Every
+  symbol label is now read by the `<File.id>::` prefix every symbol id carries,
+  which also reaches functions whose `Defines` edge is dropped (C++ namespace,
+  Rust inline `mod`; a symbol of an indexed `a.rs::b.rs` is not credited to
+  `a.rs`), and Constant and TypeAlias are candidates too. Each
+  changed line goes to the innermost symbols whose range holds it (on one line,
+  the deeper id wins; siblings it cannot tell apart all keep it; a sorted
+  sweep, so many symbols on one line stay linear-logarithmic; one sweep over
+  the changed lines, with a work budget past which the file is a
+  `lower-bound`), and a
+  modified line counts once (`git_diff::symbols`). A pure removal counts for a
+  symbol only when that symbol spans the lines on both sides of it (deleting
+  `fn foo` just above `fn bar` no longer reports `bar`). Per diff, the symbols
+  are read with one File query and one query per label for each chunk of 64
+  paths, and `get_impact` runs once per changed symbol, for at most
+  256 per diff (past that, the answer is `lower-bound`). A blank line added or
+  removed on its own is no coverage gap outside every symbol, but inside one
+  it still counts (it can change a multiline string). Each hunk is read for
+  the line counts its header announces: a `+++i;` or `--- note` body line is a
+  change, not a file header, the `git format-patch` trailer is no removal, and
+  a plain `diff -u` with several files is split at each file header. The
+  `\ No newline at end of file` marker is no line of either file. Sections
+  that repeat a path are merged, and `git diff` runs with `--no-color
+  --no-ext-diff` and pinned `a/`/`b/` prefixes. The answer is `lower-bound`,
+  with a reason, when a changed line of a modified or added file, or a pure
+  removal, lies in no indexed symbol (a blank-only one excepted); when the diff
+  names a path with no indexed File (an unsupported language, a path outside
+  the indexed root, or a deleted file); when an added or deleted file holds no
+  indexed symbol; when part of a file's diff cannot be read (an unreadable or
+  combined-diff header, a hunk cut short or overrun, body lines before any
+  `@@`, file headers with no hunk, a deleted file with no hunk (`git diff
+  -D`), a missing, empty or out-of-place file header, several commits (also
+  `git log -p --oneline`: after a hunk, only what diff tools print between
+  files is expected), a hunk
+  with no `+`/`-` line (`--word-diff`), a
+  header that swallows the next file's headers, a `git format-patch` series
+  whose patches end with the `-- ` signature, or sections of one path that
+  disagree on the change type); when a file is renamed or copied with no
+  content hunk; when a non-empty diff holds no readable section at all (a diff
+  whose sections change no line, such as a chmod, stays `exact`); when `diff -r`
+  without `-N` lists a one-sided file as an `Only in` line (or `-q` a changed
+  one as `Files … differ`); when a
+  section is binary (also `hg diff` and `svn diff` binary notices); or when
+  the symbol load fails (one reason for the whole
+  diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after
+  a tab) name their file, and `git diff` also runs with `--find-renames
+  --no-textconv -c core.quotePath=false`. The response lists are bounded by the
+  response budget (`*_count` keeps the total, `*_truncated` marks a cut, and a
+  cut symbol list is `lower-bound`). `next_steps` suggests `lsp_resolve`
+  only for dependency reasons, not for these coverage gaps. Tests:
+  `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
+  a change in `Shape::area`, and `exact` for a diff of an
+  unsupported file), unit tests in `git_diff`, `git_diff::parse` behaviour and
+  `git_diff::symbols`, and `detect_changes_next_steps_tests`.
+- **TypeScript/JavaScript: a call on a local built by `new` binds to the
+  constructed class** (issue #444, first slice). `const w = new Worker();
+  w.run()` reached the resolver as the bare name `w.run`: the local-receiver
+  type (`CallSite.receiver_hint`) was produced for Rust and C++ only, so with
+  two classes owning `run` the call stayed unresolved. The TS call walker now
+  attaches `receiver_hint = Worker` (`receiver_hint_via = constructed`) when the
+  call's enclosing function declares the receiver exactly once, by
+  `const`/`let`/`var x = new T(..)` written before the call in a block that
+  contains it, and nothing else in the function binds or writes `x`
+  (`parser::spec::ts_receiver`). The resolver binds it to `T::<m>` when the
+  caller's file defines the class `T` with that method (several such methods
+  stay ambiguous), and otherwise keeps the by-name path it took before.
+  Reassigned (also through `(x)`, `x!`, `x as T`, `x satisfies T`, `<T>x`),
+  shadowed (also by a named class or function expression), destructured,
+  parameter and module-scope receivers carry no hint, nor does a `new T(..)`
+  whose `T` an enclosing function rebinds, whose `T` has a `static` member of
+  the called name, or whose `extends` chain has a constructor returning a value
+  or leaves the file. The facts are gathered in one pass over the file, each
+  node visited once, so the cost grows neither with the number of calls nor
+  with function nesting. Tests: `tests/ts_constructed_local_receiver_444.rs`
+  (fails on `main` with no edge for `useConst`), ten unit tests in
+  `ts_receiver`.
+- **Files in unsupported languages are counted in the coverage report** (#447,
+  first slice). A PHP, C# or Lua file became a File node with no symbols and
+  left no trace in `coverage` or in `query_graph(graph="missed")`, so an empty
+  search over it read as absence. The coverage sidecar now carries
+  `no_extraction`, extension → file count, over every file the walk yields
+  (the same `Language::from_extension` rule the indexer applies before it
+  parses), minus the files the IaC pass drew nodes from (read from the graph's
+  `Defines_File_IacResource`/`Defines_File_IacModule` edges, so a Dockerfile
+  or a Kubernetes manifest is not counted), recomputed on full and incremental
+  passes. `analyze_codebase`, `index_codebase`, `index_status` and `missed`
+  render it as `coverage.no_extraction` `{status, count, by_extension,
+  extensions_omitted, note}`; an older sidecar, or one written by a
+  `language`-filtered index (its walk yields only files that language parses),
+  renders `status: not_recorded`, never a count of zero. It is a declared
+  limit, not a gap bucket: `.md` and `.json` land there too, so it does not
+  turn `get_impact` into `lower-bound`. Not yet done: the zero-result note on
+  `search_codebase`.
+
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
   `ubuntu-latest` moved from 24.04 (last green run on f3b51d3, 2026-10-22) to
@@ -132,6 +257,25 @@ adheres to [Semantic Versioning](https://semver.org/).
   `ci.json` regression). The text is 711 bytes (712 with the trailing newline
   of the SessionStart output). There is no `PreToolUse` gate. See
   `docs/configuration.md`.
+- **Wiki skeleton artifact, first slice of #196.** `src/wiki/skeleton.rs`
+  defines the versioned (`ai-architect.wiki-skeleton/1`) skeleton: page stubs
+  for communities, processes and god nodes; every edge carries a
+  `provenance` of `extracted` or `inferred` (an untagged edge cannot be built
+  or deserialised); every member, edge and missed-graph gap carries
+  `file:line` (line 0 is refused, and paths must be repo-relative: no
+  absolute, drive or UNC prefix, empty, `.` or `..` component, backslash or
+  control character); one edge cannot carry two provenance tags, two members
+  sharing an id but differing elsewhere are refused (exact repeats merge),
+  two pages of the same kind and id are refused, a community page cannot
+  count edges to itself, a key repeated in `cross_community_edges` is
+  refused, a zero cross-community count is dropped, and a read
+  `source_files` must be the members' set of files (order and repeats
+  ignored); the per-page `coverage` block is always written, `[]` when
+  empty; the same pages in any order give byte-identical JSON, pinned by a
+  golden v1 fixture; reading a skeleton refuses another schema version, a
+  JSON array in place of any of its objects and an object in place of a
+  `provenance` or page `kind` string. Library only: no tool yet, and
+  nothing builds pages from a graph yet (later slices of #196).
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
   runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov
@@ -145,7 +289,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   released v0.14.0 binary lists 26 tools where HEAD's smoke expects 27, so
   `install` is red until the next release; Windows is refused by
   `bin/ensure-binary.sh`; line coverage is under 90 % (the previous CI floor
-  is 80 %, ci.yml).
+  is 80 %, ci.yml). Since then, `install` checks the release tag's catalog and
+  the launcher installs `windows-x86_64`: `install` passed on all three runners
+  in run 42697366993 (see "Supported platforms" in the README).
 
 - `check_doc_claims`, a read-only tool that checks what a document says about
   the code against the graph, one claim at a time (part 1 of 3 of the

@@ -1,5 +1,6 @@
-// resolver::calls::gates: the two receiver gates `resolve_single_call` consults
-// before the by-name ambiguity policy (same-class receiver, Rust local binding).
+// resolver::calls::gates: the three receiver gates `resolve_single_call` consults
+// before the by-name ambiguity policy (same-class receiver, Rust local binding,
+// TypeScript/JavaScript constructed local).
 // Moved out of `calls.rs` to keep it under the size cap; behavior unchanged.
 
 use super::reason::{self, Decline, Gated};
@@ -94,6 +95,42 @@ pub(super) fn rust_local_receiver_gate(
         return Some(declined);
     }
     resolve_by_hint(ctx, site, &m, file_id, imported_from, constructed)
+}
+
+/// TypeScript/JavaScript `<local>.<m>` whose receiver the parser typed by a
+/// `new T(..)` the enclosing function proves (`parser::spec::ts_receiver`,
+/// issue #444): bound to `T::<m>` when the caller's own file defines the class
+/// `T` with a method `m`. The class is read in the caller's file only: an
+/// imported `T` is not traced through the import here. A `static m` of `T`,
+/// which the method rows do not mark, never reaches this gate: the parser
+/// emits no hint for it (`ts_receiver::FileFacts::instance_method_of`).
+///
+/// postcondition: `None` when the gate does not apply (not TypeScript, no
+/// `constructed` hint, callee not `<ident>.<m>`-shaped) AND when the file holds no
+/// class `T` owning `m` — the call then falls through to the by-name path it
+/// took before this gate existed. Otherwise its answer, `Ambiguous` included,
+/// is final: one method of `T` binds; several (two classes named `T` in one
+/// file, e.g. in two namespaces) stay ambiguous without the by-name path.
+pub(super) fn ts_constructed_receiver_gate(
+    ctx: &ResolveContext,
+    site: &CallSite,
+    file_id: &str,
+) -> Option<Gated> {
+    if ctx.provider.language() != "typescript"
+        || site.receiver_hint.is_empty()
+        || site.receiver_hint_via != crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED
+    {
+        return None;
+    }
+    let receiver::ReceiverForm::Local { m, .. } =
+        receiver::classify(site.callee, &receiver::ReceiverSpelling::of(ctx.provider))
+    else {
+        return None;
+    };
+    match receiver::resolve_local_receiver_in_file(ctx.idx, site.receiver_hint, &m, file_id) {
+        PolicyResolution::NotFound => None,
+        resolution => Some((resolution, None)),
+    }
 }
 
 /// A return type named only by a `use` of a crate the latest index pass did not

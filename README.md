@@ -8,8 +8,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-27-orange" alt="27 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-3300+_passing-brightgreen" alt="3300+ tests">
-  <img src="https://img.shields.io/badge/Coverage-93%25-brightgreen" alt="93% line coverage">
+  <img src="https://img.shields.io/badge/Tests-3500+_passing-brightgreen" alt="3500+ tests">
+  <img src="https://img.shields.io/badge/Coverage-94%25-brightgreen" alt="94% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
 </p>
@@ -72,6 +72,35 @@ claude plugin install ai-architect-mcp-codebase@ai-architect-mcp-codebase-market
 The plugin downloads the release binary and verifies its Sigstore provenance
 before running it; this needs GitHub CLI 2.68 or newer. The plugin starts the
 `full` profile unless `AP_PROFILE=core` is set.
+
+### Supported platforms
+
+Installed from the marketplace, the plugin launcher (`bin/ensure-binary.sh`)
+installs one release asset per platform below and refuses every other one; in
+a source checkout it runs `cargo build` instead, on any platform, when the
+binary is missing or older than the sources. The platform is read from
+`uname -s` and `uname -m` of the shell, so an x64 Git Bash emulated on Windows
+arm64 reports `x86_64` and installs `windows-x86_64`. "Started by CI" means the
+pipeline's `install` job installs the published asset on that runner and runs
+`initialize`, `tools/list` (the exact tool catalog) and `health_check` against
+it (`scripts/smoke_claude_plugin.py
+--installed`).
+
+<!-- platforms:begin -->
+| Platform | Release asset | Plugin launcher | Started by CI |
+|---|---|---|---|
+| macOS arm64 | `macos-aarch64` | installs | yes, on `macos-latest` |
+| Linux x86_64 | `linux-x86_64` | installs | yes, on `ubuntu-latest` |
+| Linux aarch64 | `linux-aarch64` | installs | **no**: built on `ubuntu-24.04-arm`, never started |
+| Windows x86_64 (a shell whose `uname -s` starts with `MINGW`, `MSYS` or `CYGWIN`, as Git Bash does) | `windows-x86_64` | installs | yes, on `windows-latest` |
+| macOS x86_64 (Intel), Windows arm64, any other | none | refuses | no |
+<!-- platforms:end -->
+
+A `cargo install` or a source build does not go through the launcher. CI runs
+the test suite from source on Linux x86_64 only; the pipeline's `environment`
+job also builds from source and runs `install --dry-run` on `ubuntu-latest`,
+`macos-latest` and `windows-latest` (`scripts/ci_environment.sh`), and
+`windows-build.yml` builds Windows x86_64 on every pull request.
 
 ### Other MCP hosts
 
@@ -158,7 +187,8 @@ get_impact(graph_path, qualified_name: "src/main.rs::handle_tool_call")
     affected, and an epistemic label (exact or lower-bound) with its reasons
 
 detect_changes(graph_path, codebase_path: "/path/to/repo", base_ref: "main", head_ref: "HEAD")
-  → symbols the diff adds, modifies or deletes, with a heuristic risk score each
+  → symbols the diff adds, modifies or deletes, one heuristic risk score for the
+    diff, and an epistemic label (exact or lower-bound) with its reasons
 
 query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep
@@ -293,8 +323,13 @@ when `x` is bound once in the enclosing function by a typed parameter, a typed
 types `x` from the declared return type of a free function of the same file
 that initialised it (`let x = make();`, and an `Option` or `Result` unwrapped by
 `let Some(x) = .. else`, `.expect(..)`, `.unwrap()` or `?`), at a lower
-confidence (`"receiver-return-type"`, 0.85). A receiver it cannot type is left
-unresolved; it never falls back to a lookup by bare name.
+confidence (`"receiver-return-type"`, 0.85). In TypeScript and JavaScript (issue #444) it
+binds `x.m()` when the enclosing function declares `x` exactly once, by
+`const`/`let`/`var x = new T(..)` before the call, nothing else in the function
+binds or writes `x`, and the caller's own file defines the class `T` with a
+method `m` (`"receiver-local-binding"`); otherwise the call keeps its by-name
+resolution. In Rust, a receiver it cannot type is left unresolved; it never
+falls back to a lookup by bare name.
 
 ### Query truncation and paging
 
@@ -423,7 +458,7 @@ In this codebase:
 
 ```bash
 cargo build --release
-cargo test                                            # full suite (3300+ tests)
+cargo test                                            # full suite (3500+ tests)
 cargo test --test graph_accuracy                      # structural accuracy gate
 cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
 python3 scripts/check_doc_claims.py                   # README numbers against their sources
