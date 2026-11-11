@@ -8,8 +8,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-27-orange" alt="27 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-3400+_passing-brightgreen" alt="3400+ tests">
-  <img src="https://img.shields.io/badge/Coverage-93%25-brightgreen" alt="93% line coverage">
+  <img src="https://img.shields.io/badge/Tests-3500+_passing-brightgreen" alt="3500+ tests">
+  <img src="https://img.shields.io/badge/Coverage-94%25-brightgreen" alt="94% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
 </p>
@@ -323,8 +323,13 @@ when `x` is bound once in the enclosing function by a typed parameter, a typed
 types `x` from the declared return type of a free function of the same file
 that initialised it (`let x = make();`, and an `Option` or `Result` unwrapped by
 `let Some(x) = .. else`, `.expect(..)`, `.unwrap()` or `?`), at a lower
-confidence (`"receiver-return-type"`, 0.85). A receiver it cannot type is left
-unresolved; it never falls back to a lookup by bare name.
+confidence (`"receiver-return-type"`, 0.85). In TypeScript and JavaScript (issue #444) it
+binds `x.m()` when the enclosing function declares `x` exactly once, by
+`const`/`let`/`var x = new T(..)` before the call, nothing else in the function
+binds or writes `x`, and the caller's own file defines the class `T` with a
+method `m` (`"receiver-local-binding"`); otherwise the call keeps its by-name
+resolution. In Rust, a receiver it cannot type is left unresolved; it never
+falls back to a lookup by bare name.
 
 ### Query truncation and paging
 
@@ -453,7 +458,7 @@ In this codebase:
 
 ```bash
 cargo build --release
-cargo test                                            # full suite (3400+ tests)
+cargo test                                            # full suite (3500+ tests)
 cargo test --test graph_accuracy                      # structural accuracy gate
 cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
 python3 scripts/check_doc_claims.py                   # README numbers against their sources
