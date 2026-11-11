@@ -465,9 +465,15 @@ pub(super) fn ts_walk_calls(spec: &LangSpec, ctx: &mut WalkCtx, root: Node, call
     while let Some(n) = stack.pop() {
         if kind_in(spec.call_node_kinds, n.kind()) {
             if let Some(callee) = spec.conventions.call_callee(ctx.source, n) {
-                let entry = spec
+                let mut entry = spec
                     .conventions
                     .call_entry(ctx.source, n, caller_qn, &callee, 0);
+                // `const w = new Worker(); w.run()`: the receiver's type when
+                // the enclosing function proves it (issue #444).
+                entry.properties.extend(
+                    ctx.ts_receivers
+                        .constructed_receiver_properties(ctx.source, n),
+                );
                 ctx.nodes.push(ExtractedNode {
                     label: LABEL_CALL_SITE.to_string(),
                     name: entry.name,

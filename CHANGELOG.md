@@ -171,6 +171,28 @@ adheres to [Semantic Versioning](https://semver.org/).
   a change in `Shape::area`, and `exact` for a diff of an
   unsupported file), unit tests in `git_diff`, `git_diff::parse` behaviour and
   `git_diff::symbols`, and `detect_changes_next_steps_tests`.
+- **TypeScript/JavaScript: a call on a local built by `new` binds to the
+  constructed class** (issue #444, first slice). `const w = new Worker();
+  w.run()` reached the resolver as the bare name `w.run`: the local-receiver
+  type (`CallSite.receiver_hint`) was produced for Rust and C++ only, so with
+  two classes owning `run` the call stayed unresolved. The TS call walker now
+  attaches `receiver_hint = Worker` (`receiver_hint_via = constructed`) when the
+  call's enclosing function declares the receiver exactly once, by
+  `const`/`let`/`var x = new T(..)` written before the call in a block that
+  contains it, and nothing else in the function binds or writes `x`
+  (`parser::spec::ts_receiver`). The resolver binds it to `T::<m>` when the
+  caller's file defines the class `T` with that method (several such methods
+  stay ambiguous), and otherwise keeps the by-name path it took before.
+  Reassigned (also through `(x)`, `x!`, `x as T`, `x satisfies T`, `<T>x`),
+  shadowed (also by a named class or function expression), destructured,
+  parameter and module-scope receivers carry no hint, nor does a `new T(..)`
+  whose `T` an enclosing function rebinds, whose `T` has a `static` member of
+  the called name, or whose `extends` chain has a constructor returning a value
+  or leaves the file. The facts are gathered in one pass over the file, each
+  node visited once, so the cost grows neither with the number of calls nor
+  with function nesting. Tests: `tests/ts_constructed_local_receiver_444.rs`
+  (fails on `main` with no edge for `useConst`), ten unit tests in
+  `ts_receiver`.
 - **Files in unsupported languages are counted in the coverage report** (#447,
   first slice). A PHP, C# or Lua file became a File node with no symbols and
   left no trace in `coverage` or in `query_graph(graph="missed")`, so an empty
