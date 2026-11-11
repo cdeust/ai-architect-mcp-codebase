@@ -3,3 +3,5 @@
 /.claude-plugin/plugin.json text eol=lf
 # Bash scripts must retain LF endings after a Windows checkout.
 *.sh text eol=lf
+# Golden fixtures are compared byte for byte (src/wiki skeleton test).
+src/wiki/testdata/*.json text eol=lf
