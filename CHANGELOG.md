@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The resolver reads the file names of the low-risk Dependabot tier from the new required `ci.json` key `low_risk_files` (`Cargo.lock`, `Cargo.toml`) on the default branch, and fails when the key is missing; the names are no longer written in `pipeline-post-merge.yml`. The `ci.json` validator of the `contract` job in `pipeline.yml` and `pipeline-post-merge.yml` accepts the key and reports its absence. A file is still matched by its name in any directory, and a path under `.github/` is never low risk (Cortex ADR-1131, amends Cortex ADR-1126).
 - The release tag goes on the tested commit, fetched by SHA into a bare repository, as in Cortex: the `tag` job of `pipeline.yml` and `pipeline-post-merge.yml` no longer checks out `main` with the deploy key and no longer compares the tested commit with main's tip. `scripts/tests/test_no_main_comparison.py` (Cortex's guard) runs in the `contract` job of both workflows and fails when a comparison with main returns to `scripts/` or `.github/workflows/`; `scripts/tests/test_no_main_comparison_guard.py` proves it detects each marker and runs in the `regression` command of `ci.json`. The header of `pipeline.yml` no longer carries a hash.
 - `claude-review.yml`, `scripts/ci_review_budget.py` and its test are byte for byte Cortex's (commit `637f6aa`). The workflow gains a step that authorizes the pinned action's fetch on a private repository only, the prompt asks for every review `/review-pr` lists, and the budget script refuses a `GITHUB_OUTPUT` outside `RUNNER_TEMP`. The pinned review action follows Cortex's pin, v1.0.263.
 - A merge that waits no longer fails `Pipeline after merge` (Cortex ADR-1128). Each head wakes the resolver twice, once at the end of the Pipeline and once at the end of the review, and the first wake-up is held; it exited 1, so the default branch showed a failed run for every normal merge. A held merge, or a head that advanced, now ends green with a notice and writes no output, and `close-issues` requires a pull request number. Every other refusal still fails.
@@ -209,8 +210,21 @@ adheres to [Semantic Versioning](https://semver.org/).
   `language`-filtered index (its walk yields only files that language parses),
   renders `status: not_recorded`, never a count of zero. It is a declared
   limit, not a gap bucket: `.md` and `.json` land there too, so it does not
-  turn `get_impact` into `lower-bound`. Not yet done: the zero-result note on
-  `search_codebase`.
+  turn `get_impact` into `lower-bound`.
+- **An empty `search_codebase` answer says how many files had no extraction**
+  (#447). A search for a symbol that lives in a PHP, C# or Lua file answered
+  "ok, 0 results", which reads as absence. When `total_count` is 0 the
+  response now carries `no_extraction` `{status, count, by_extension,
+  extensions_omitted, note}`, read from the graph's coverage sidecar, and the
+  note reads "no extraction for N files in this repository" and says to grep
+  them. A recorded count of zero carries no note; a graph with no coverage
+  sidecar, an older one, or one written by a `language`-filtered index renders
+  `status: not_recorded` with the reason, never a count of zero. An answer
+  with at least one result is unchanged. Tests:
+  `tests/search_no_extraction_447.rs` (PHP, C# and Lua fixture over stdio;
+  fails on `main`, where the key is absent), two unit tests in
+  `indexing_handlers_coverage`. The README's coverage section now describes
+  `no_extraction`.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;

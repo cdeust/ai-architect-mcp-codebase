@@ -11,6 +11,7 @@ use std::path::Path;
 use crate::graph_cache;
 use crate::graph_store;
 use crate::history;
+use crate::indexing_handlers_coverage;
 use crate::response_budget;
 use crate::search;
 
@@ -342,6 +343,10 @@ pub(crate) fn do_search_codebase(arguments: &Value) -> Result<Value, String> {
     let mut out = search_envelope(&req, &page, &view, by_process, elapsed_ms);
     attach_foreign_results(&mut out, arguments, graph_path, &req);
     attach_search_next_steps(&mut out, &page.items);
+    if page.total_count == 0 {
+        // Issue #447: an empty answer says how many files had no extraction.
+        out["no_extraction"] = indexing_handlers_coverage::zero_result_no_extraction(graph_path);
+    }
     Ok(out)
 }
 
