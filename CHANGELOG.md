@@ -194,6 +194,23 @@ adheres to [Semantic Versioning](https://semver.org/).
   with function nesting. Tests: `tests/ts_constructed_local_receiver_444.rs`
   (fails on `main` with no edge for `useConst`), ten unit tests in
   `ts_receiver`.
+- **Files in unsupported languages are counted in the coverage report** (#447,
+  first slice). A PHP, C# or Lua file became a File node with no symbols and
+  left no trace in `coverage` or in `query_graph(graph="missed")`, so an empty
+  search over it read as absence. The coverage sidecar now carries
+  `no_extraction`, extension → file count, over every file the walk yields
+  (the same `Language::from_extension` rule the indexer applies before it
+  parses), minus the files the IaC pass drew nodes from (read from the graph's
+  `Defines_File_IacResource`/`Defines_File_IacModule` edges, so a Dockerfile
+  or a Kubernetes manifest is not counted), recomputed on full and incremental
+  passes. `analyze_codebase`, `index_codebase`, `index_status` and `missed`
+  render it as `coverage.no_extraction` `{status, count, by_extension,
+  extensions_omitted, note}`; an older sidecar, or one written by a
+  `language`-filtered index (its walk yields only files that language parses),
+  renders `status: not_recorded`, never a count of zero. It is a declared
+  limit, not a gap bucket: `.md` and `.json` land there too, so it does not
+  turn `get_impact` into `lower-bound`. Not yet done: the zero-result note on
+  `search_codebase`.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
