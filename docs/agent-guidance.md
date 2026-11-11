@@ -30,18 +30,24 @@ Exit 0 requires aggregate ≥0.85 and every language ≥0.75. The runner rebuild
 
 - **Doc-truth**: `scripts/check_doc_claims.py` fails the build when README's test count or coverage badge drifts from measured reality (100-test buckets). Crossing a bucket means updating README **and committing it**.
 - **clippy `--all-targets`** compiles `lib` separately from `unittests`: anything reachable only from `#[cfg(test)]` code, imports included, must itself be `#[cfg(test)]`-gated.
-- **`install` asks GitHub whether the plugin's version is released**
-  (`scripts/smoke_claude_plugin.py --installed`, the last command of `ci.json`
-  `install`). It reads `releases/tags/v<plugin.json version>` from the GitHub
-  API; a 404 or a draft is "not released", any other answer (rate limit, server
-  error, no network) fails the job, as an unknown state is never read as "not
-  released".
-  - *Released*: the launcher must download the attested asset, verify its
+- **`install` reads the repository's latest release before it decides what
+  to require** (`scripts/smoke_claude_plugin.py --installed`, the last command
+  of `ci.json` `install`). The source is one request to the github.com page
+  `https://github.com/cdeust/ai-architect-mcp-codebase/releases/latest`,
+  redirects not followed: a `302` whose `Location` ends in
+  `/releases/tag/v<X.Y.Z>`. No REST call and no token are used (the anonymous
+  REST quota is 60 requests per hour per address, and hosted runners share
+  addresses). The latest release is never a draft or a prerelease. Any other
+  answer (another status, another `Location`, no network) fails the job: an
+  unknown state is never read as "not released".
+  - *Plugin version at or below the latest release*: the published contract,
+    unchanged. The launcher must download the attested asset, verify its
     checksum and provenance, and answer the exact tool catalog of that tag and
-    `health_check`. A missing asset or catalog of a published release fails.
-  - *Not released* (a release pull request, and its merge until the release is
-    public): the version must be above the latest published release, and the
-    launcher must fail closed: exit 1, one `FATAL: release asset unavailable:
+    `health_check`. A missing asset or catalog fails, so a version that was
+    skipped or lowered fails here.
+  - *Plugin version above the latest release* (a release pull request, and its
+    merge until the release is public, draft included): the launcher must fail
+    closed: exit 1, one `FATAL: release asset unavailable:
     …/v<version>/…` line, curl's 404, nothing on stdout, no source build, no
     binary under `target/release`. The job then prints one line starting with
     `INSTALL: v<version> is not released yet;`. It proves that the plugin

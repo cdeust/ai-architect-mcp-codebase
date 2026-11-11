@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Exercise the shipped Claude launcher against its source or release catalog.
 
-With `--installed` the script first asks GitHub whether the release of the
-plugin's version is published (`release_published`). Published: the launcher
-must install the attested asset and answer the exact catalog of that tag.
-Not published (a release pull request, or its merge before the tag's assets
-exist): the launcher must refuse with its release-asset error and install
-nothing (`check_unreleased`); the catalog is the `e2e` job's on that commit.
+With `--installed` the script first reads the repository's latest release
+from github.com (`latest_release`: one request, no REST call, no token). A
+plugin version at or below it is held to the published contract: the launcher
+must install the attested asset and answer the exact catalog of that tag. A
+version above it has no published release (a release pull request, or its
+merge until the release is public): the launcher must refuse with its
+release-asset error and install nothing (`check_unreleased`); the catalog is
+the `e2e` job's on that commit.
 """
 
 from __future__ import annotations
@@ -19,15 +21,19 @@ import shutil
 import subprocess
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 REPOSITORY = "cdeust/ai-architect-mcp-codebase"
-# source: docs.github.com/en/rest/releases/releases ("Get a release by tag
-# name", "Get the latest release"): a tag with no published release is a 404,
-# and the latest release is never a draft or a prerelease.
-RELEASES_API = f"https://api.github.com/repos/{REPOSITORY}/releases"
-HTTP_NOT_FOUND = 404
+# source: observed 2026-11-11 without following redirects: `302 Found`,
+# `Location: https://github.com/<repository>/releases/tag/v0.14.0`. The latest
+# release is the most recent one that is neither a draft nor a prerelease
+# (docs.github.com, "Linking to releases" and "Get the latest release"). A
+# github.com page, not the REST API: no token, and not under the REST quota of
+# 60 anonymous requests per hour per address that hosted runners share.
+LATEST_RELEASE = f"https://github.com/{REPOSITORY}/releases/latest"
+HTTP_FOUND = 302
+HTTP_TIMEOUT_S = 30  # source: judgment; the launcher's own connect bound is 5 s
 # source: bin/ensure-binary.sh: `fatal` writes "<name>: FATAL: <text>" and
 # exits 1; the first download failing is "release asset unavailable: <url>".
 LAUNCHER_FATAL_EXIT = 1
@@ -72,60 +78,50 @@ def require_version(version: str) -> tuple[int, int, int]:
     return int(major), int(minor), int(patch)
 
 
-def release_api(path: str) -> dict | None:
-    """The JSON object GitHub answers for `releases/<path>`; None on a clean 404.
-    Any other answer (rate limit, server error, no network, not an object)
-    stops the run: an unknown release state is never read as "not released"."""
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "ai-architect-mcp-codebase-install-smoke",
-    }
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+class _NoRedirect(HTTPRedirectHandler):
+    """Report a redirect to the caller instead of following it."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+NO_REDIRECT = build_opener(_NoRedirect)
+
+
+def latest_release() -> tuple[int, int, int]:
+    """The version of the repository's latest release: the most recent one that
+    is neither a draft nor a prerelease. github.com answers LATEST_RELEASE with
+    a 302 to `.../releases/tag/<tag>`; any other answer (another status, another
+    Location, a tag that is not v<X.Y.Z>, no network) stops the run, because an
+    unknown release state is never read as "not released"."""
+    request = Request(LATEST_RELEASE, headers={"User-Agent": f"{BINARY}-install"})
     try:
-        with urlopen(Request(f"{RELEASES_API}/{path}", headers=headers)) as reply:
-            value = json.loads(reply.read().decode("utf-8"))
+        with NO_REDIRECT.open(request, timeout=HTTP_TIMEOUT_S) as reply:
+            status, location = reply.status, None
     except HTTPError as exc:
-        if exc.code == HTTP_NOT_FOUND:
-            return None
+        status, location = exc.code, exc.headers.get("Location")
+    except OSError as exc:
         raise SystemExit(
-            f"release state unavailable ({path}): HTTP {exc.code}"
+            f"release state unavailable ({LATEST_RELEASE}): {exc}"
         ) from exc
-    except (OSError, ValueError) as exc:
-        raise SystemExit(f"release state unavailable ({path}): {exc}") from exc
-    require(isinstance(value, dict), f"release state unreadable ({path})")
-    return value
+    prefix = f"https://github.com/{REPOSITORY}/releases/tag/"
+    tag = location[len(prefix) :] if (location or "").startswith(prefix) else ""
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+    require(
+        status == HTTP_FOUND and match is not None,
+        f"release state unreadable ({LATEST_RELEASE}): HTTP {status}, "
+        f"Location {location!r}",
+    )
+    return tuple(map(int, match.groups()))
 
 
 def release_published(version: str) -> bool:
-    """True when GitHub serves a published release for tag v<version>; False on
-    a 404 or a draft (a draft's assets are not public)."""
-    require_version(version)
-    release = release_api(f"tags/v{version}")
-    if release is None:
-        return False
-    require(
-        release.get("tag_name") == f"v{version}"
-        and isinstance(release.get("draft"), bool),
-        f"release state unreadable (tags/v{version})",
-    )
-    return not release["draft"]
-
-
-def require_ahead_of_latest_release(version: str) -> None:
-    """Post: the unreleased `version` is above the latest published release, so
-    a version that was skipped, or lowered, never takes the unreleased path."""
-    latest = release_api("latest")
-    if latest is None:
-        return
-    tag = latest.get("tag_name")
-    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag if isinstance(tag, str) else "")
-    require(match is not None, f"latest release tag unreadable: {tag!r}")
-    require(
-        require_version(version) > tuple(map(int, match.groups())),
-        f"v{version} is not released and is not above the latest release {tag}",
-    )
+    """False when `version` is above the latest release: it has no published
+    release (a draft and a prerelease are never the latest). True otherwise:
+    the version is the latest release or an older one, and the caller holds it
+    to the published contract, which fails on its own if that release or one
+    of its assets does not exist."""
+    return require_version(version) <= latest_release()
 
 
 def expected_tools(root: Path, version: str, *, installed: bool) -> set[str]:
@@ -194,8 +190,9 @@ def check_unreleased(root: Path, version: str, run) -> None:
     on stdout, no source build, no binary under target/release."""
     require(
         run.returncode == LAUNCHER_FATAL_EXIT,
-        f"launcher exit {run.returncode} for unreleased v{version}, expected "
-        f"{LAUNCHER_FATAL_EXIT}: {run.stderr}",
+        f"launcher exit {run.returncode} for v{version}, which is above the "
+        f"latest release and so has none; expected {LAUNCHER_FATAL_EXIT}: "
+        f"{run.stderr}",
     )
     fatal = [line for line in run.stderr.splitlines() if "FATAL:" in line]
     asset = (
@@ -270,8 +267,6 @@ def main() -> None:
     released = not args.installed or release_published(version)
     if released:
         expected = expected_tools(ROOT, version, installed=args.installed)
-    else:
-        require_ahead_of_latest_release(version)
     server = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"][
         "ai-architect"
     ]

@@ -205,15 +205,19 @@ that shipped v0.8.1 and v0.8.2 to zero installs (#67). The same class in
 ### What `install` proves before and after a release
 
 The pipeline's `install` job installs the plugin from the checkout and runs
-`scripts/smoke_claude_plugin.py --installed`, which first asks the GitHub API
-whether the release of the plugin's version is published (a 404 or a draft is
-not; any other answer fails the job).
+`scripts/smoke_claude_plugin.py --installed`, which first reads the
+repository's latest release: one request to the github.com page
+`https://github.com/cdeust/ai-architect-mcp-codebase/releases/latest`, without
+following the redirect, whose `Location` ends in `/releases/tag/v<X.Y.Z>`. No
+REST call and no token are used, so the check does not depend on the anonymous
+REST quota that hosted runners share. The latest release is the most recent
+one that is neither a draft nor a prerelease, so a draft, a release candidate
+and a bare tag never count. Any answer other than that redirect fails the job.
 
-| State of `v<plugin.json version>` | What `install` requires |
+| `plugin.json` version | What `install` requires |
 |---|---|
-| Published | The launcher downloads the asset, verifies its checksum and provenance, and answers the exact tool catalog of that tag and `health_check`. Unchanged, and mandatory: a missing asset or catalog fails. |
-| Not published, and above the latest release | The launcher fails closed: exit 1, `FATAL: release asset unavailable: …/v<version>/…`, curl's 404, no answer on stdout, no source build, no binary installed. The job prints `INSTALL: v<version> is not released yet; …`. |
-| Not published, and not above the latest release | Failure: a version that was skipped or lowered. |
+| The latest release, or below it | The published contract. The launcher downloads the asset, verifies its checksum and provenance, and answers the exact tool catalog of that tag and `health_check`. Unchanged, and mandatory: a missing asset or catalog fails, which is also what happens to a version that was skipped or lowered. |
+| Above the latest release | The launcher fails closed: exit 1, `FATAL: release asset unavailable: …/v<version>/…`, curl's 404, no answer on stdout, no source build, no binary installed. The job prints `INSTALL: v<version> is not released yet; …`. A launcher that starts a server here is a failure. |
 
 So a release pull request can merge and be tagged: before this, `install`
 needed assets that only exist after the tag, and both `merge` and `tag` need
@@ -224,7 +228,7 @@ job on that commit, from a binary built from source. The assets are proved by
 the draft, and `publish_verified_release` makes the release public, downloads
 each asset anonymously, verifies it again, and returns the release to draft if
 that fails. The next `install` run after the release takes the published
-branch.
+branch, because that release is then the latest.
 
 **The release window.** Between the merge of the version bump and
 `publish_verified_release`, a plugin updated from the marketplace has a
