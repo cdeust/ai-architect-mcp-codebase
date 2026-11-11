@@ -291,7 +291,13 @@ Cargo-derived buckets were determined: `known`, `unknown` (the `cargo
 metadata` call failed or `cargo` is missing, so an empty bucket means "not
 determined"), `not_applicable`, or `not_recorded` for an older record.
 `coverage.pruned_dirs` names every directory the walk skipped by policy, with
-its reason. An empty coverage report is still not proof of completeness.
+its reason. `coverage.no_extraction` counts, by extension, the files no symbol
+was extracted from because no language parser handles them (PHP, C#, Lua,
+Markdown); it reads `not_recorded`, never zero, on an older record or a
+`language`-filtered index. `search_codebase` attaches the same block to an
+answer with zero results, with the note "no extraction for N files in this
+repository", so an empty search over such a repository does not read as
+absence. An empty coverage report is still not proof of completeness.
 
 ### Epistemic boundary on impact
 
