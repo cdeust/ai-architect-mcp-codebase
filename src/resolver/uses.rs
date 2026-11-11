@@ -130,7 +130,13 @@ fn resolve_one_callable_type_use(
             }],
         );
     }
-    buf.add(&table, callable_id, &target.id, 0.9, "type-reference-parse");
+    buf.add(
+        &table,
+        callable_id,
+        &target.id,
+        0.9,
+        super::retract_edges::METHOD_TYPE_REFERENCE,
+    );
     (1, vec![])
 }
 
@@ -210,7 +216,13 @@ fn resolve_one_field_type_use(
             }],
         );
     }
-    buf.add(&table, field_id, &target.id, 0.9, "type-annotation-parse");
+    buf.add(
+        &table,
+        field_id,
+        &target.id,
+        0.9,
+        super::retract_edges::METHOD_TYPE_ANNOTATION,
+    );
     (1, vec![])
 }
 

@@ -87,7 +87,26 @@ adheres to [Semantic Versioning](https://semver.org/).
   its properties. A retracted caller-level row's runtime `observed_count` (from
   `ingest_traces`) moves to the `OBSERVED_CALLS_*` row ingest writes when no
   static row exists, so the runtime evidence survives. `Uses_*`, `Imports_*`,
-  `Implements_*` and `Extends_*` rows are still only added.
+  `Implements_*` and `Extends_*` rows were still only added; the next entry
+  covers them.
+- **`resolve_graph` retracts the import, use, implements and extends rows a
+  pass no longer decides (issue #443).** After an incremental
+  `index_codebase`, three things a fresh index of the same tree does not have
+  survived. An edited file keeps its File node, so the `Imports_File_*` row of
+  an import the edit removed stayed. An Import of an unchanged file kept
+  `is_resolved = true` after an edit or a deletion removed its target, and
+  kept its row too when an added file made it ambiguous (the flag is what
+  `check_security_gates` counts as an unresolved import). A reference the pass
+  decided again to another of two same-named definitions kept the earlier row
+  next to the new one (`Uses_*`, `Implements_*`, `Extends_*`). The rows of
+  those four families that carry a `resolution_method` the resolver's phases
+  write, that existed before a pass and that the pass did not meet again, are
+  now deleted after the flush, and every Import is set back to unresolved
+  before the pass, which marks again the ones it resolves. Rows of the light
+  links, the IaC pass, the language server and the macro layer are untouched.
+  Not covered: which of several same-named candidates the use, implements and
+  extends phases take still follows index order, so a refreshed graph and a
+  fresh one can point at different twins (one row each).
 
 - **`get_impact` names the call sites it could not resolve** (#445). An
   incomplete answer gave only `unresolved_callsites_naming_target`, a count, so
