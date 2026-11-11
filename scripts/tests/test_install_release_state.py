@@ -230,6 +230,13 @@ class InstalledRun(unittest.TestCase):
         self.assertEqual(environment["AI_ARCHITECT_SOURCE_CHECKOUT"], "0")
         self.assertEqual(environment["CLAUDE_PLUGIN_ROOT"], self.root.as_posix())
 
+    def test_the_404_is_read_from_curl_message_whatever_its_exit_code(self):
+        # The macos runner's curl reports the same 404 under exit code 56.
+        macos = REFUSAL.replace(CURL_404, CURL_404.replace("(22)", "(56)"))
+        network = Network(latest_is(BELOW), CATALOG)
+        out = self.run_main(network, launcher_result(1, "", macos))
+        self.assertIn(f"INSTALL: v{VERSION} is not released yet", out)
+
     def test_draft_release_is_not_published(self):
         """A draft (and a prerelease, and a bare tag) of this version is never
         the latest release: `releases/latest` still names the previous one,
@@ -288,6 +295,11 @@ class InstalledRun(unittest.TestCase):
             ),
             "server error, not a 404": launcher_result(
                 1, "", REFUSAL.replace("error: 404", "error: 503")
+            ),
+            "a 404 only inside another message": launcher_result(
+                1,
+                "",
+                REFUSAL.replace(CURL_404, "curl: (22) 404 seen in a redirect body"),
             ),
             "asset of another version": launcher_result(
                 1, "", REFUSAL.replace(ASSET, other)
