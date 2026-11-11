@@ -4,6 +4,7 @@
 // under the §4.1 cap. Pure move; `use super::*` provides the shared
 // resolution types/helpers exactly as when this lived in one module.
 
+use super::retract_edges::METHOD_DECLARED_EXTENDS;
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -188,6 +189,12 @@ pub(super) fn resolve_one_extends_base(
     // 0.95/"declared-extends" mirrors resolve_one_implements's 0.95/
     // "declared-implements" for the parallel `implements` CSV.
     // source: ADR-4253701 §Decision 2 (levier 2, resolver.rs resolve_extends).
-    buf.add(&rel_table, child_qn, &target.id, 0.95, "declared-extends");
+    buf.add(
+        &rel_table,
+        child_qn,
+        &target.id,
+        0.95,
+        METHOD_DECLARED_EXTENDS,
+    );
     (1, vec![])
 }
