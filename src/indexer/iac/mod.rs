@@ -119,6 +119,30 @@ pub(super) fn run_iac_pass_for(
     Ok(gaps)
 }
 
+/// The files the IaC pass extracted something from (issue #447): every File
+/// with an outgoing `Defines_File_IacResource` or `Defines_File_IacModule`
+/// edge, read from the graph rather than from one pass's sources, so an
+/// incremental refresh sees the untouched manifests too. A Dockerfile defines
+/// its `::dockerfile` resource and a Kustomization its module, so both are
+/// covered; a `.yaml` that is not a Kubernetes manifest defines nothing and is
+/// not in the set. All or nothing: a failed read of either edge table is an
+/// `Err`, never a partial set.
+pub(super) fn files_with_iac_nodes(store: &GraphStore) -> Result<HashSet<String>, String> {
+    let mut files = HashSet::new();
+    for edge in ["Defines_File_IacResource", "Defines_File_IacModule"] {
+        let found = store.execute_query(&format!(
+            "MATCH (f:File)-[:{edge}]->() RETURN DISTINCT f.id"
+        ))?;
+        files.extend(
+            found
+                .rows
+                .into_iter()
+                .filter_map(|row| row.into_iter().next()),
+        );
+    }
+    Ok(files)
+}
+
 // ---------------------------------------------------------------------------
 // File classification
 // ---------------------------------------------------------------------------

@@ -219,10 +219,14 @@ pub fn index_incremental(
     let cov = save_incremental_coverage(
         codebase,
         graph_dir,
+        &store,
         &current,
         &plan.change_set,
-        merged_gaps,
-        walk_pruned,
+        coverage::PassGaps {
+            files: merged_gaps,
+            pruned_dirs: walk_pruned,
+            language_filtered: options.language_filter.is_some(),
+        },
         "incremental",
     );
     // Persist the refreshed manifest (built by classify, hashes reused), now

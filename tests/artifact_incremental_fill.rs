@@ -363,3 +363,56 @@ fn fill_falls_back_to_content_hash_when_not_a_git_tree() {
         "content-hash fill must also reach full-index parity"
     );
 }
+
+/// Bootstrap-imports `repo` into `tmp/<out>` and fills it under `options`,
+/// then returns the coverage sidecar the fill wrote.
+fn fill_nogit_coverage(
+    tmp: &Path,
+    repo: &Path,
+    out: &str,
+    options: &IndexOptions,
+) -> indexer::coverage::CoverageReport {
+    let boot_out = tmp.join(out);
+    fs::create_dir_all(&boot_out).expect("mk boot_out");
+    let boot_graph = boot_out.join("graph");
+    let boot_manifest = manifest::manifest_path(&boot_out);
+    let meta = artifact::import_artifact(repo, &boot_graph).expect("import");
+    let imported = manifest::load(&boot_manifest);
+    indexer::fill_after_bootstrap(
+        repo,
+        &boot_graph,
+        &boot_manifest,
+        &meta.commit,
+        imported.as_ref(),
+        options,
+    )
+    .expect("fill");
+    indexer::coverage::load(&indexer::coverage::coverage_path(&boot_out)).expect("sidecar")
+}
+
+/// Issue #447: the bootstrap fill records the `no_extraction` tally like any
+/// other pass, and records none under a `language` filter, whose walk yields
+/// only the files that language parses.
+#[test]
+fn bootstrap_fill_records_no_extraction_unless_language_filtered() {
+    let tmp = tempfile::Builder::new()
+        .prefix("artifact_fill_no_extraction_")
+        .tempdir()
+        .expect("temp dir");
+    let repo = tmp.path().join("repo");
+    write_and_export_nogit_fixture(tmp.path(), &repo);
+    fs::write(repo.join("src/legacy.php"), "<?php\nfunction a() {}\n").expect("add php");
+
+    let unfiltered = fill_nogit_coverage(tmp.path(), &repo, "boot_all", &IndexOptions::default());
+    let tally = unfiltered
+        .no_extraction
+        .expect("an unfiltered fill records the tally");
+    assert_eq!(tally.get("php"), Some(&1), "{tally:?}");
+
+    let python_only = IndexOptions {
+        language_filter: Some(ai_architect_mcp::parser::Language::Python),
+        ..IndexOptions::default()
+    };
+    let filtered = fill_nogit_coverage(tmp.path(), &repo, "boot_python", &python_only);
+    assert_eq!(filtered.no_extraction, None);
+}

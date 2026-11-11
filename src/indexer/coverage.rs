@@ -57,7 +57,7 @@
 
 use super::cargo_attribution::CargoAttributionStatus;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -127,6 +127,24 @@ pub struct CoverageReport {
     /// binary sets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cargo_attribution: Option<CargoAttributionStatus>,
+    /// Files no symbol was extracted from (issue #447): no language parser
+    /// handles their extension and the IaC pass drew no node from them.
+    /// Extension → file count, over every file the walk yields. A PHP, C# or Lua
+    /// file is indexed this way, so a search that finds nothing in it is not
+    /// evidence of absence. Like `pruned_dirs`, this is a declared limit of
+    /// the indexer, not a per-file gap: it is outside `counts()`, and a
+    /// README.md lands here as well as a `.php`. Recomputed every pass (full
+    /// and incremental), never carried forward.
+    ///
+    /// `None` means not recorded: a sidecar written before this field
+    /// existed, or an index run with a `language` filter, whose walk yields
+    /// only files that filter parses, so its empty tally would claim
+    /// "nothing unextracted" about files it never looked at. Every other
+    /// write path sets `Some`, an empty map included, so "not recorded" never
+    /// reads as "nothing unextracted" (the `cargo_attribution` rule, issue
+    /// #316). Additive, see the schema note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_extraction: Option<BTreeMap<String, u64>>,
 }
 
 impl CoverageReport {
@@ -138,6 +156,7 @@ impl CoverageReport {
             files: BTreeMap::new(),
             pruned_dirs: BTreeMap::new(),
             cargo_attribution: None,
+            no_extraction: None,
         }
     }
 
@@ -169,6 +188,37 @@ impl CoverageReport {
             error_ranges: Vec::new(),
         });
     }
+}
+
+/// The key `no_extraction_by_extension` files an extensionless path under.
+pub const NO_EXTENSION_KEY: &str = "(none)";
+
+/// Tallies, per extension, the files of `rels` nothing extracted anything
+/// from (issue #447). A file is out of the tally when a language parser
+/// handles its extension (the rule `index_single_file` applies before it
+/// parses: `Language::from_extension` on the raw extension) or when it is in
+/// `iac_extracted`, the files the IaC pass drew nodes from (a Dockerfile, a
+/// Kubernetes manifest, a Kustomization).
+pub fn no_extraction_by_extension<'a>(
+    rels: impl IntoIterator<Item = &'a str>,
+    iac_extracted: &HashSet<String>,
+) -> BTreeMap<String, u64> {
+    let mut tally = BTreeMap::new();
+    for rel in rels {
+        if iac_extracted.contains(rel) {
+            continue;
+        }
+        let ext = Path::new(rel).extension().and_then(|e| e.to_str());
+        if ext
+            .and_then(crate::parser::Language::from_extension)
+            .is_some()
+        {
+            continue;
+        }
+        let key = ext.filter(|e| !e.is_empty()).unwrap_or(NO_EXTENSION_KEY);
+        *tally.entry(key.to_string()).or_insert(0) += 1;
+    }
+    tally
 }
 
 /// Per-kind file counts returned by `CoverageReport::counts`.
@@ -451,6 +501,79 @@ mod tests {
             "a pre-existing skipped/quarantined/partial gap must win over outside-targets"
         );
         assert_eq!(files["kani/h.rs"].kind, CoverageKind::OutsideBuildTargets);
+    }
+
+    /// Issue #447: an unsupported-language file is tallied by extension; a
+    /// supported one (`.h` included) is not, an extensionless file is named,
+    /// not dropped, and a file the IaC pass extracted from is not tallied.
+    #[test]
+    fn no_extraction_tallies_only_files_nothing_extracted_from() {
+        let iac: HashSet<String> = ["Dockerfile".to_string(), "k8s/deploy.yaml".to_string()]
+            .into_iter()
+            .collect();
+        let tally = no_extraction_by_extension(
+            [
+                "src/a.php",
+                "src/b.php",
+                "lib/c.cs",
+                "init.lua",
+                "src/main.rs",
+                "include/x.h",
+                "web/app.js",
+                "Makefile",
+                "trailing.",
+                "Dockerfile",
+                "k8s/deploy.yaml",
+            ],
+            &iac,
+        );
+        let expected: BTreeMap<String, u64> = [
+            ("php".to_string(), 2),
+            ("cs".to_string(), 1),
+            ("lua".to_string(), 1),
+            // `Makefile` and `trailing.` (an empty extension is not a key).
+            (NO_EXTENSION_KEY.to_string(), 2),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(tally, expected);
+    }
+
+    /// Issue #447: the tally survives the sidecar, stays out of the gap
+    /// counts, an old sidecar without it loads as `None` (not recorded), and
+    /// a recorded empty tally round-trips as `Some({})`.
+    #[test]
+    fn no_extraction_round_trips_and_an_old_sidecar_is_not_recorded() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = coverage_path(dir.path());
+        let mut report = CoverageReport::new("full", 2);
+        report.no_extraction = Some(no_extraction_by_extension(
+            ["a.php", "b.lua"],
+            &HashSet::new(),
+        ));
+        save(&path, &report).expect("save");
+        let loaded = load(&path).expect("load");
+        assert_eq!(loaded.no_extraction, report.no_extraction);
+        assert_eq!(loaded.counts(), CoverageCounts::default());
+
+        fs::write(
+            &path,
+            r#"{"schema_version":1,"index_mode":"full","files_indexed":2,"files":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load(&path).expect("old sidecar").no_extraction,
+            None,
+            "an old sidecar is not recorded, never an empty tally"
+        );
+
+        report.no_extraction = Some(BTreeMap::new());
+        save(&path, &report).expect("save an empty tally");
+        assert_eq!(
+            load(&path).expect("load").no_extraction,
+            Some(BTreeMap::new()),
+            "a recorded empty tally survives the round trip as recorded"
+        );
     }
 
     const OUTSIDE_TARGETS_DETAIL_FOR_TEST: &str = "not in any Cargo target (test fixture)";

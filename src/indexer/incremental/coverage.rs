@@ -1,10 +1,12 @@
 // coverage — the incremental coverage-sidecar merge path (issue #288 split).
 //
 // Carries forward unchanged files' coverage gaps, overlays the freshly
-// reparsed files' fresh gaps, and recomputes the outside-build-targets gap
-// class (issue #284) and the feature-gated one (issue #291) fresh every pass. Separable from the change-detection
-// path: this module only ever reads a `ChangeSet`/`Discovered` slice, never
-// mutates the graph.
+// reparsed files' fresh gaps, and recomputes fresh every pass the
+// outside-build-targets gap class (issue #284), the feature-gated one
+// (issue #291), the pruned directories and the `no_extraction` tally
+// (issue #447). Separable from the change-detection path: this module reads
+// a `ChangeSet`/`Discovered` slice and, for the tally, which files carry IaC
+// nodes; it never mutates the graph.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -183,6 +185,17 @@ pub(in crate::indexer) fn apply_cargo_facts(
     }
 }
 
+/// What one incremental pass or bootstrap fill observed for the sidecar: the
+/// fresh per-file gaps (reparsed files plus walk-level directories) and the
+/// directories the walk pruned by policy (§4.4 parameter object).
+pub(super) struct PassGaps {
+    pub(super) files: BTreeMap<String, FileCoverage>,
+    pub(super) pruned_dirs: BTreeMap<String, String>,
+    /// Whether the walk was narrowed by a `language` filter: the
+    /// `no_extraction` tally is then not recorded (issue #447).
+    pub(super) language_filtered: bool,
+}
+
 /// What `save_incremental_coverage` produced: the Cargo facts to apply to the
 /// store, the report this pass computed, and why it could not be persisted.
 pub(super) struct IncrementalCoverage {
@@ -201,18 +214,26 @@ pub(super) struct IncrementalCoverage {
 /// Builds and writes the coverage sidecar for an incremental pass or bootstrap
 /// fill: carry forward unchanged files' gaps, overlay the reparsed files'
 /// fresh gaps, drop gaps for vanished/now-clean files, then recompute
-/// outside-build-targets fresh over the whole current tree (issue #284).
+/// outside-build-targets fresh over the whole current tree (issue #284), and,
+/// unless the walk was `language`-filtered (then `None`), the `no_extraction`
+/// tally (issue #447), for which `store` says which files carry IaC nodes;
+/// `store` is read only after the IaC pass of `apply_changes`.
 /// Best-effort for the index — a failed write never fails the pass — but the
 /// failure is returned, so a caller that reports coverage can refuse to.
 pub(super) fn save_incremental_coverage(
     codebase: &Path,
     graph_dir: &Path,
+    store: &crate::graph_store::GraphStore,
     current: &[Discovered],
     changes: &ChangeSet,
-    reparsed_gaps: BTreeMap<String, FileCoverage>,
-    pruned_dirs: BTreeMap<String, String>,
+    pass: PassGaps,
     index_mode: &str,
 ) -> IncrementalCoverage {
+    let PassGaps {
+        files: reparsed_gaps,
+        pruned_dirs,
+        language_filtered,
+    } = pass;
     let output_dir = match graph_dir.parent() {
         Some(p) => p,
         None => {
@@ -251,6 +272,17 @@ pub(super) fn save_incremental_coverage(
     // than carried forward: the pruned set changes the moment a directory is
     // added or removed. source: ADR-9841.
     report.pruned_dirs = pruned_dirs;
+    // Issue #447: recomputed over the whole current tree, like `pruned_dirs`.
+    // Files the IaC pass drew nodes from are read from the graph, so the
+    // manifests this pass did not reparse are excluded too.
+    // Not recorded under a `language` filter: see `CoverageReport::no_extraction`.
+    if !language_filtered {
+        let iac_extracted = super::super::iac_extracted_files(store);
+        report.no_extraction = Some(coverage::no_extraction_by_extension(
+            current.iter().map(|d| d.rel.as_str()),
+            &iac_extracted,
+        ));
+    }
     let facts = overlay_cargo_attributions(&mut report, codebase, current);
     let write_error = coverage::save(&cov_path, &report).err();
     if let Some(e) = &write_error {

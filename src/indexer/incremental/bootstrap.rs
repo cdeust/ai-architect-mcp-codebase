@@ -14,8 +14,9 @@ use crate::graph_store::GraphStore;
 use super::super::manifest::{self, FileManifest, FileState};
 use super::super::walk::WalkOptions;
 use super::classify::{classify, discover};
+use super::coverage::{save_incremental_coverage, PassGaps};
 use super::{apply_changes, ChangeSet, Discovered, Rename};
-use super::{coverage::save_incremental_coverage, IncrementalResult, IndexOptions};
+use super::{IncrementalResult, IndexOptions};
 
 /// How the bootstrap fill classified the diff — surfaced in the tool response so
 /// the caller always knows which signal drove the fill.
@@ -127,10 +128,14 @@ pub fn fill_after_bootstrap(
     let cov = save_incremental_coverage(
         codebase,
         graph_dir,
+        &store,
         &current,
         &changes,
-        merged_gaps,
-        walk_pruned,
+        PassGaps {
+            files: merged_gaps,
+            pruned_dirs: walk_pruned,
+            language_filtered: options.language_filter.is_some(),
+        },
         "bootstrap_fill",
     );
     super::apply_cargo_facts(&store, &cov.facts);

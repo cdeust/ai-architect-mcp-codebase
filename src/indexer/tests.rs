@@ -479,6 +479,137 @@ fn callsite_column_is_persisted_not_zero() {
     );
 }
 
+/// Issue #447: PHP and Lua files are File nodes only. The full index tallies
+/// them by extension, outside the gap counts, with a plain `ci.yml` (no
+/// manifest, so nothing extracted), and leaves out the Dockerfile, the
+/// Kubernetes manifest and the Kustomization the IaC pass extracted. An
+/// incremental refresh
+/// that adds a C# file, deletes a PHP file and renames the Lua file to `.txt`
+/// recomputes the tally over the whole tree and writes it to the sidecar.
+#[test]
+fn unsupported_language_files_are_tallied_by_extension_full_and_incremental() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let source = tmp.path().join("source");
+    std::fs::create_dir_all(source.join("lib")).unwrap();
+    std::fs::write(source.join("mod.py"), "def f():\n    return 1\n").unwrap();
+    std::fs::write(
+        source.join("lib/a.php"),
+        "<?php\nfunction a() { return 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(source.join("lib/b.php"), "<?php\nclass B {}\n").unwrap();
+    std::fs::write(source.join("init.lua"), "local function f() end\n").unwrap();
+    // The IaC pass extracts these three (a Dockerfile resource, a manifest
+    // resource, a Kustomization module): none is tallied.
+    std::fs::create_dir_all(source.join("k8s")).unwrap();
+    std::fs::write(source.join("Dockerfile"), "FROM alpine:3.20\n").unwrap();
+    std::fs::write(
+        source.join("k8s/deploy.yaml"),
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("k8s/kustomization.yaml"),
+        "resources:\n  - deploy.yaml\n",
+    )
+    .unwrap();
+    // A YAML file that is not a manifest defines nothing: it is tallied.
+    std::fs::write(source.join("ci.yml"), "jobs:\n  build: {}\n").unwrap();
+    let graph = tmp.path().join("graph");
+    let manifest_path = tmp.path().join("manifest.json");
+    let tally = |pairs: &[(&str, u64)]| -> std::collections::BTreeMap<String, u64> {
+        pairs.iter().map(|(e, n)| (e.to_string(), *n)).collect()
+    };
+
+    let full = index_codebase(&source, &graph).expect("index");
+    assert_eq!(
+        full.coverage.no_extraction,
+        Some(tally(&[("lua", 1), ("php", 2), ("yml", 1)]))
+    );
+    assert_eq!(
+        full.coverage.counts(),
+        coverage::CoverageCounts::default(),
+        "a file no parser handles is a declared limit, not a gap"
+    );
+
+    write_full_manifest(&source, &manifest_path, &IndexOptions::default()).expect("manifest");
+    // The prior sidecar the incremental pass would carry forward from, as the
+    // indexing handler writes it after a full index.
+    coverage::save(&coverage::coverage_path(tmp.path()), &full.coverage).expect("prior sidecar");
+    // Growth, shrink and move in one refresh: a tally carried forward from
+    // the prior sidecar would keep `lua` and the second `php`.
+    std::fs::write(source.join("lib/C.cs"), "class C {}\n").unwrap();
+    std::fs::remove_file(source.join("lib/b.php")).unwrap();
+    std::fs::rename(source.join("init.lua"), source.join("init.txt")).unwrap();
+    let prior = manifest::load(&manifest_path).expect("load manifest");
+    index_incremental(
+        &source,
+        &graph,
+        &manifest_path,
+        &IndexOptions::default(),
+        &prior,
+    )
+    .expect("incremental refresh");
+    let sidecar = coverage::load(&coverage::coverage_path(tmp.path())).expect("sidecar");
+    assert_eq!(
+        sidecar.no_extraction,
+        Some(tally(&[("cs", 1), ("php", 1), ("txt", 1), ("yml", 1)])),
+        "recomputed over the current tree; the untouched Dockerfile and manifest stay excluded"
+    );
+}
+
+/// Issue #447: a `language`-filtered index walks only the files that language
+/// parses, so it records no tally rather than a false "nothing unextracted".
+#[test]
+fn a_language_filtered_index_leaves_no_extraction_unrecorded() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let source = tmp.path().join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("mod.py"), "def f():\n    return 1\n").unwrap();
+    std::fs::write(source.join("a.php"), "<?php\nfunction a() {}\n").unwrap();
+    let options = IndexOptions {
+        language_filter: Some(Language::Python),
+        ..IndexOptions::default()
+    };
+    let result =
+        index_codebase_with_language(&source, &tmp.path().join("graph"), &options).expect("index");
+    assert_eq!(result.coverage.no_extraction, None);
+}
+
+/// Issue #447: a `language`-filtered INCREMENTAL refresh records no tally
+/// either. The prior sidecar holds a real `{php: 1}` from an unfiltered full
+/// index; the filtered refresh must not overwrite it with a false
+/// "recorded, nothing unextracted", nor carry the old count forward.
+#[test]
+fn a_language_filtered_incremental_refresh_leaves_no_extraction_unrecorded() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let source = tmp.path().join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("mod.py"), "def f():\n    return 1\n").unwrap();
+    std::fs::write(source.join("a.php"), "<?php\nfunction a() {}\n").unwrap();
+    let graph = tmp.path().join("graph");
+    let manifest_path = tmp.path().join("manifest.json");
+    let full = index_codebase(&source, &graph).expect("index");
+    assert_eq!(
+        full.coverage.no_extraction,
+        Some([("php".to_string(), 1)].into_iter().collect())
+    );
+    coverage::save(&coverage::coverage_path(tmp.path()), &full.coverage).expect("prior sidecar");
+
+    let filtered = IndexOptions {
+        language_filter: Some(Language::Python),
+        ..IndexOptions::default()
+    };
+    write_full_manifest(&source, &manifest_path, &filtered).expect("manifest");
+    // A different length, so the change is seen even with coarse mtimes.
+    std::fs::write(source.join("mod.py"), "def g():\n    return 20\n").unwrap();
+    let prior = manifest::load(&manifest_path).expect("load manifest");
+    index_incremental(&source, &graph, &manifest_path, &filtered, &prior)
+        .expect("incremental refresh");
+    let sidecar = coverage::load(&coverage::coverage_path(tmp.path())).expect("sidecar");
+    assert_eq!(sidecar.no_extraction, None);
+}
+
 #[cfg(test)]
 fn dir_size(path: &std::path::Path) -> u64 {
     // lbug may materialize the database as a single file OR a directory
