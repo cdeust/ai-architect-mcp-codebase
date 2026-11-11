@@ -259,6 +259,49 @@ pub(crate) fn coverage_summary_for_graph(graph_dir: &Path) -> Value {
     }
 }
 
+/// The `no_extraction` block `search_codebase` attaches to an answer with
+/// zero results (issue #447): a symbol that lives in a PHP, C# or Lua file is
+/// not in the graph, so "ok, 0 results" alone reads as absence. The block is
+/// the coverage record's tally under the same keys, with a `note` worded for
+/// the empty search when at least one file had no extraction. Without a
+/// tally (no coverage sidecar, an older one, a `language`-filtered index) it
+/// renders `status: not_recorded`, never a count of zero.
+pub(crate) fn zero_result_no_extraction(graph_dir: &Path) -> Value {
+    let report = graph_dir
+        .parent()
+        .and_then(|out| indexer::coverage::load(&indexer::coverage::coverage_path(out)));
+    let Some(report) = report else {
+        return json!({
+            "status": "not_recorded",
+            "detail": "no coverage record next to this graph, so the number of \
+                       files no symbol was extracted from is unknown; zero \
+                       results is not evidence of absence. Re-index to record it",
+        });
+    };
+    let mut block = no_extraction_json(&report);
+    match block["count"].as_u64() {
+        // Nothing to grep: the coverage note would point at no file.
+        Some(0) => {
+            if let Some(fields) = block.as_object_mut() {
+                fields.remove("note");
+            }
+        }
+        Some(count) => {
+            let files = if count == 1 { "file" } else { "files" };
+            block["note"] = json!(format!(
+                "no extraction for {count} {files} in this repository: no \
+                 language parser handles their extension (`by_extension`) and \
+                 the IaC pass drew no node from them, so a symbol they declare \
+                 is not in the graph and this empty result is not evidence \
+                 that it is absent; grep those files."
+            ));
+        }
+        // `not_recorded`: the block already says why there is no count.
+        None => {}
+    }
+    block
+}
+
 /// The `query_graph(graph="missed")` response (issue #57): a structural
 /// enumeration of what the index does NOT fully cover, so an agent can pivot to
 /// grep. `null` coverage means no coverage sidecar exists for this graph — which
@@ -294,6 +337,7 @@ mod tests {
     use super::*;
     use crate::indexer::cargo_attribution::CargoAttributionStatus;
     use crate::indexer::coverage::CoverageReport;
+    use std::path::PathBuf;
 
     fn rendered(status: Option<CargoAttributionStatus>) -> Value {
         let mut report = CoverageReport::new("full", 1);
@@ -364,6 +408,78 @@ mod tests {
         let block = coverage_summary(&CoverageReport::new("full", 1))["no_extraction"].clone();
         assert_eq!(block["status"], json!("not_recorded"));
         assert!(block.get("count").is_none(), "{block}");
+    }
+
+    /// Writes `report` as the coverage sidecar of a graph directory and
+    /// returns the temp dir (kept alive by the caller) with the graph path.
+    fn graph_with_sidecar(report: Option<&CoverageReport>) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        if let Some(report) = report {
+            let path = indexer::coverage::coverage_path(dir.path());
+            indexer::coverage::save(&path, report).expect("save sidecar");
+        }
+        let graph = dir.path().join("graph");
+        (dir, graph)
+    }
+
+    /// Issue #447: an empty search names how many files had no extraction,
+    /// in the singular for one file, and keeps the per-extension counts.
+    #[test]
+    fn a_zero_result_block_names_the_files_without_extraction() {
+        let mut report = CoverageReport::new("full", 4);
+        report.no_extraction = Some(
+            [("lua".to_string(), 1), ("php".to_string(), 2)]
+                .into_iter()
+                .collect(),
+        );
+        let (_dir, graph) = graph_with_sidecar(Some(&report));
+        let block = zero_result_no_extraction(&graph);
+        assert_eq!(block["status"], json!("recorded"));
+        assert_eq!(block["count"], json!(3));
+        assert_eq!(block["by_extension"], json!({"lua": 1, "php": 2}));
+        let note = block["note"].as_str().expect("a note");
+        assert!(
+            note.starts_with("no extraction for 3 files in this repository"),
+            "{note}"
+        );
+
+        report.no_extraction = Some([("php".to_string(), 1)].into_iter().collect());
+        let (_dir, graph) = graph_with_sidecar(Some(&report));
+        let note = zero_result_no_extraction(&graph)["note"].clone();
+        assert!(
+            note.as_str()
+                .is_some_and(|n| n.starts_with("no extraction for 1 file in this repository")),
+            "{note}"
+        );
+    }
+
+    /// Issue #447: a recorded tally of zero says so and carries no note (no
+    /// file to grep); a sidecar without a tally and a graph without a sidecar
+    /// both render `not_recorded` with the reason, never a count.
+    #[test]
+    fn a_zero_result_block_never_turns_a_missing_tally_into_zero() {
+        let mut report = CoverageReport::new("full", 1);
+        report.no_extraction = Some(Default::default());
+        let (_dir, graph) = graph_with_sidecar(Some(&report));
+        let block = zero_result_no_extraction(&graph);
+        assert_eq!(block["count"], json!(0));
+        assert!(block.get("note").is_none(), "{block}");
+
+        let (_dir, graph) = graph_with_sidecar(Some(&CoverageReport::new("full", 1)));
+        let untallied = zero_result_no_extraction(&graph);
+        assert_eq!(untallied["status"], json!("not_recorded"));
+        assert!(untallied.get("count").is_none(), "{untallied}");
+        assert!(untallied["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("language")));
+
+        let (_dir, graph) = graph_with_sidecar(None);
+        let absent = zero_result_no_extraction(&graph);
+        assert_eq!(absent["status"], json!("not_recorded"));
+        assert!(absent.get("count").is_none(), "{absent}");
+        assert!(absent["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("no coverage record")));
     }
 
     /// An old sidecar never claims `unknown`: it was not analysed for this.

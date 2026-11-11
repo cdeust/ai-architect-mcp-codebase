@@ -208,8 +208,21 @@ adheres to [Semantic Versioning](https://semver.org/).
   `language`-filtered index (its walk yields only files that language parses),
   renders `status: not_recorded`, never a count of zero. It is a declared
   limit, not a gap bucket: `.md` and `.json` land there too, so it does not
-  turn `get_impact` into `lower-bound`. Not yet done: the zero-result note on
-  `search_codebase`.
+  turn `get_impact` into `lower-bound`.
+- **An empty `search_codebase` answer says how many files had no extraction**
+  (#447). A search for a symbol that lives in a PHP, C# or Lua file answered
+  "ok, 0 results", which reads as absence. When `total_count` is 0 the
+  response now carries `no_extraction` `{status, count, by_extension,
+  extensions_omitted, note}`, read from the graph's coverage sidecar, and the
+  note reads "no extraction for N files in this repository" and says to grep
+  them. A recorded count of zero carries no note; a graph with no coverage
+  sidecar, an older one, or one written by a `language`-filtered index renders
+  `status: not_recorded` with the reason, never a count of zero. An answer
+  with at least one result is unchanged. Tests:
+  `tests/search_no_extraction_447.rs` (PHP, C# and Lua fixture over stdio;
+  fails on `main`, where the key is absent), two unit tests in
+  `indexing_handlers_coverage`. The README's coverage section now describes
+  `no_extraction`.
 
 - **lbug is built from source on Linux CI and releases.** The crates.io
   prebuilt `liblbug.a` (lbug 0.21.2) was compiled against an older libstdc++;
