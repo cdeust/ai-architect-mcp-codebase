@@ -108,8 +108,43 @@ pub fn community_pages(store: &GraphStore) -> Result<CommunityPages, String> {
         .collect();
     unanchored_members.sort_unstable();
 
-    let mut unanchored = BTreeSet::new();
-    let mut crossing: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let tally = read_edges(store, &members, &mut pages)?;
+    for (source, target, _) in &tally.crossing {
+        let to = &members[target].community;
+        if let Some(page) = pages.get_mut(&members[source].community) {
+            *page.cross_community_edges.entry(to.clone()).or_insert(0) += 1;
+        }
+    }
+
+    Ok(CommunityPages {
+        pages: pages.into_values().collect(),
+        unanchored_members,
+        unanchored_edges: tally.unanchored.len() as u64,
+    })
+}
+
+/// `(source, target, relation)` of an edge.
+type EdgeKey = (String, String, String);
+
+/// What `read_edges` saw besides the edges it put on pages.
+struct EdgeTally {
+    /// Edges whose source has no `file:line`.
+    unanchored: BTreeSet<EdgeKey>,
+    /// Edges between members of two different communities.
+    crossing: BTreeSet<EdgeKey>,
+}
+
+/// Put every symbol-to-symbol edge with a provenance on the page of its
+/// source, and tally the edges it could not anchor and those that cross.
+fn read_edges(
+    store: &GraphStore,
+    members: &BTreeMap<String, Member>,
+    pages: &mut BTreeMap<String, Page>,
+) -> Result<EdgeTally, String> {
+    let mut tally = EdgeTally {
+        unanchored: BTreeSet::new(),
+        crossing: BTreeSet::new(),
+    };
     let member_labels: BTreeSet<&str> = membership_tables().iter().map(|t| t.1).collect();
     for &(rel, from, to) in REL_TABLES {
         if !member_labels.contains(from) || !member_labels.contains(to) {
@@ -130,35 +165,24 @@ pub fn community_pages(store: &GraphStore) -> Result<CommunityPages, String> {
             let Some(member) = members.get(&source) else {
                 continue;
             };
-            if let Some(other) = members.get(&target).map(|t| &t.community) {
-                if *other != member.community {
-                    crossing.insert((source.clone(), target.clone(), relation.to_owned()));
-                }
+            let key = (source, target, relation.to_owned());
+            if members
+                .get(&key.1)
+                .is_some_and(|t| t.community != member.community)
+            {
+                tally.crossing.insert(key.clone());
             }
             let Some(location) = member.location.clone() else {
-                unanchored.insert((source, target, relation));
+                tally.unanchored.insert(key);
                 continue;
             };
-            let edge = Edge::new((source, target), relation, provenance, location);
             if let Some(page) = pages.get_mut(&member.community) {
-                page.edges.push(edge);
+                page.edges
+                    .push(Edge::new((key.0, key.1), relation, provenance, location));
             }
         }
     }
-
-    for (source, target, _) in &crossing {
-        let from = &members[source].community;
-        let to = &members[target].community;
-        if let Some(page) = pages.get_mut(from) {
-            *page.cross_community_edges.entry(to.clone()).or_insert(0) += 1;
-        }
-    }
-
-    Ok(CommunityPages {
-        pages: pages.into_values().collect(),
-        unanchored_members,
-        unanchored_edges: unanchored.len() as u64,
-    })
+    Ok(tally)
 }
 
 /// Read every membership row, add the anchored members to their page and
