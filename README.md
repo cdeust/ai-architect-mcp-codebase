@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-27-orange" alt="27 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-3300+_passing-brightgreen" alt="3300+ tests">
+  <img src="https://img.shields.io/badge/Tests-3400+_passing-brightgreen" alt="3400+ tests">
   <img src="https://img.shields.io/badge/Coverage-93%25-brightgreen" alt="93% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
@@ -187,7 +187,8 @@ get_impact(graph_path, qualified_name: "src/main.rs::handle_tool_call")
     affected, and an epistemic label (exact or lower-bound) with its reasons
 
 detect_changes(graph_path, codebase_path: "/path/to/repo", base_ref: "main", head_ref: "HEAD")
-  → symbols the diff adds, modifies or deletes, with a heuristic risk score each
+  → symbols the diff adds, modifies or deletes, one heuristic risk score for the
+    diff, and an epistemic label (exact or lower-bound) with its reasons
 
 query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep
@@ -461,7 +462,7 @@ In this codebase:
 
 ```bash
 cargo build --release
-cargo test                                            # full suite (3300+ tests)
+cargo test                                            # full suite (3400+ tests)
 cargo test --test graph_accuracy                      # structural accuracy gate
 cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
 python3 scripts/check_doc_claims.py                   # README numbers against their sources

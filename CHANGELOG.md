@@ -111,6 +111,65 @@ adheres to [Semantic Versioning](https://semver.org/).
   a `warning` (status `warning`), counted in the new `summary.absent_symbols`;
   a token whose name exists stays `info`. `hallucinated_symbols` remains the
   contract-backed critical count. `stages/stage-6.md` §4.3 states the rule.
+- **`detect_changes` reports a modified method as the method, and never calls
+  an incomplete answer `exact`** (issue #446). Methods were looked up through
+  `Defines_File_Method`, a table that does not exist: the query failed, the
+  error was skipped, and no Method was ever a candidate, so a change inside a
+  TypeScript or Python method was reported as its class and a change inside a
+  Rust `impl` method (whose type is defined in another file) as nothing. Every
+  symbol label is now read by the `<File.id>::` prefix every symbol id carries,
+  which also reaches functions whose `Defines` edge is dropped (C++ namespace,
+  Rust inline `mod`; a symbol of an indexed `a.rs::b.rs` is not credited to
+  `a.rs`), and Constant and TypeAlias are candidates too. Each
+  changed line goes to the innermost symbols whose range holds it (on one line,
+  the deeper id wins; siblings it cannot tell apart all keep it; a sorted
+  sweep, so many symbols on one line stay linear-logarithmic; one sweep over
+  the changed lines, with a work budget past which the file is a
+  `lower-bound`), and a
+  modified line counts once (`git_diff::symbols`). A pure removal counts for a
+  symbol only when that symbol spans the lines on both sides of it (deleting
+  `fn foo` just above `fn bar` no longer reports `bar`). Per diff, the symbols
+  are read with one File query and one query per label for each chunk of 64
+  paths, and `get_impact` runs once per changed symbol, for at most
+  256 per diff (past that, the answer is `lower-bound`). A blank line added or
+  removed on its own is no coverage gap outside every symbol, but inside one
+  it still counts (it can change a multiline string). Each hunk is read for
+  the line counts its header announces: a `+++i;` or `--- note` body line is a
+  change, not a file header, the `git format-patch` trailer is no removal, and
+  a plain `diff -u` with several files is split at each file header. The
+  `\ No newline at end of file` marker is no line of either file. Sections
+  that repeat a path are merged, and `git diff` runs with `--no-color
+  --no-ext-diff` and pinned `a/`/`b/` prefixes. The answer is `lower-bound`,
+  with a reason, when a changed line of a modified or added file, or a pure
+  removal, lies in no indexed symbol (a blank-only one excepted); when the diff
+  names a path with no indexed File (an unsupported language, a path outside
+  the indexed root, or a deleted file); when an added or deleted file holds no
+  indexed symbol; when part of a file's diff cannot be read (an unreadable or
+  combined-diff header, a hunk cut short or overrun, body lines before any
+  `@@`, file headers with no hunk, a deleted file with no hunk (`git diff
+  -D`), a missing, empty or out-of-place file header, several commits (also
+  `git log -p --oneline`: after a hunk, only what diff tools print between
+  files is expected), a hunk
+  with no `+`/`-` line (`--word-diff`), a
+  header that swallows the next file's headers, a `git format-patch` series
+  whose patches end with the `-- ` signature, or sections of one path that
+  disagree on the change type); when a file is renamed or copied with no
+  content hunk; when a non-empty diff holds no readable section at all (a diff
+  whose sections change no line, such as a chmod, stays `exact`); when `diff -r`
+  without `-N` lists a one-sided file as an `Only in` line (or `-q` a changed
+  one as `Files … differ`); when a
+  section is binary (also `hg diff` and `svn diff` binary notices); or when
+  the symbol load fails (one reason for the whole
+  diff). Headers without `a/`/`b/` prefixes (plain `diff -u`, timestamps after
+  a tab) name their file, and `git diff` also runs with `--find-renames
+  --no-textconv -c core.quotePath=false`. The response lists are bounded by the
+  response budget (`*_count` keeps the total, `*_truncated` marks a cut, and a
+  cut symbol list is `lower-bound`). `next_steps` suggests `lsp_resolve`
+  only for dependency reasons, not for these coverage gaps. Tests:
+  `tests/detect_changes_methods_446.rs` (fails on `main`: `[Struct Shape]` for
+  a change in `Shape::area`, and `exact` for a diff of an
+  unsupported file), unit tests in `git_diff`, `git_diff::parse` behaviour and
+  `git_diff::symbols`, and `detect_changes_next_steps_tests`.
 - **Files in unsupported languages are counted in the coverage report** (#447,
   first slice). A PHP, C# or Lua file became a File node with no symbols and
   left no trace in `coverage` or in `query_graph(graph="missed")`, so an empty
@@ -175,6 +234,25 @@ adheres to [Semantic Versioning](https://semver.org/).
   `ci.json` regression). The text is 711 bytes (712 with the trailing newline
   of the SessionStart output). There is no `PreToolUse` gate. See
   `docs/configuration.md`.
+- **Wiki skeleton artifact, first slice of #196.** `src/wiki/skeleton.rs`
+  defines the versioned (`ai-architect.wiki-skeleton/1`) skeleton: page stubs
+  for communities, processes and god nodes; every edge carries a
+  `provenance` of `extracted` or `inferred` (an untagged edge cannot be built
+  or deserialised); every member, edge and missed-graph gap carries
+  `file:line` (line 0 is refused, and paths must be repo-relative: no
+  absolute, drive or UNC prefix, empty, `.` or `..` component, backslash or
+  control character); one edge cannot carry two provenance tags, two members
+  sharing an id but differing elsewhere are refused (exact repeats merge),
+  two pages of the same kind and id are refused, a community page cannot
+  count edges to itself, a key repeated in `cross_community_edges` is
+  refused, a zero cross-community count is dropped, and a read
+  `source_files` must be the members' set of files (order and repeats
+  ignored); the per-page `coverage` block is always written, `[]` when
+  empty; the same pages in any order give byte-identical JSON, pinned by a
+  golden v1 fixture; reading a skeleton refuses another schema version, a
+  JSON array in place of any of its objects and an object in place of a
+  `provenance` or page `kind` string. Library only: no tool yet, and
+  nothing builds pages from a graph yet (later slices of #196).
 - `.github/workflows/claude.yml`: the @claude mention workflow can run ruff, uv, pipx, coverage, tsc, shellcheck and the Claude CLI.
 - **The single CI pipeline, run by the Claude bot.** `.github/workflows/pipeline.yml`
   runs contract, unit (90 % of lines from `coverage.xml`, `cargo llvm-cov

@@ -37,4 +37,5 @@ pub mod stdlib_index;
 mod test_support;
 pub mod token_surface;
 pub mod tool_schemas;
+pub mod wiki;
 pub mod write_diagnostics;
