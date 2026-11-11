@@ -193,3 +193,110 @@ fn test_gates_passed_reflects_severity() {
     assert!(!report.gates_passed);
     let _ = fs::remove_dir_all(&root);
 }
+
+/// The S2 skip flag for `symbol`.
+fn unsafe_flag<'a>(
+    report: &'a security_gates::SecurityReport,
+    symbol: &str,
+) -> &'a security_gates::SecurityFlag {
+    report
+        .flags
+        .iter()
+        .find(|f| f.gate == "unsafe_symbol" && f.symbol == symbol)
+        .unwrap_or_else(|| panic!("no unsafe_symbol flag for {symbol}"))
+}
+
+/// Issue #450: the unsafe-code check decides no language, and says so with
+/// the language of each symbol it skipped, in the flag and in the report's
+/// `language_coverage`. A skip on a Python symbol used to read "the Rust
+/// parser does not record is_unsafe".
+#[test]
+fn the_unsafe_check_states_the_languages_it_did_not_check() {
+    let root = tmp("s2_languages");
+    let fixture_dir = root.join("fixture");
+    let graph_dir = root.join("graph");
+    fs::create_dir_all(fixture_dir.join("src")).unwrap();
+    fs::write(
+        fixture_dir.join("src/tool.py"),
+        "def py_helper():\n    return 1\n",
+    )
+    .unwrap();
+    let store = build_fixture_graph(&fixture_dir, &graph_dir);
+
+    let changed = vec![
+        "helper.rs::untested_helper".to_string(),
+        "tool.py::py_helper".to_string(),
+    ];
+    let report = security_gates::check_gates(&store, &changed).expect("check");
+    for (symbol, language) in [
+        ("helper.rs::untested_helper", "rust"),
+        ("tool.py::py_helper", "python"),
+    ] {
+        let flag = unsafe_flag(&report, symbol);
+        assert_eq!(flag.details["language"], language, "{}", flag.message);
+        assert_eq!(flag.details["checked_languages"], serde_json::json!([]));
+        assert_eq!(flag.details["skipped"], true);
+        assert!(
+            flag.message.contains(&format!("language: {language}")),
+            "{}",
+            flag.message
+        );
+    }
+
+    let json = security_gates::report_to_json(&report, "", "", &graph_dir, &changed, "fixed");
+    let coverage = &json["language_coverage"]["unsafe_symbol"];
+    assert_eq!(coverage["checked_languages"], serde_json::json!([]));
+    assert_eq!(
+        coverage["not_checked_languages"],
+        serde_json::json!(["python", "rust"])
+    );
+    assert_eq!(coverage["symbols_not_checked"], 2);
+    assert_eq!(json["assessment_complete"], false);
+}
+
+/// Issue #450: a changed symbol outside the graph gets none of the checks.
+/// It was reported as `info`; it is a `warning`, and when its file is in a
+/// language no parser handles the flag says which.
+#[test]
+fn a_changed_symbol_outside_the_graph_is_a_warning_that_says_why() {
+    let root = tmp("unresolved");
+    let fixture_dir = root.join("fixture");
+    let graph_dir = root.join("graph");
+    let store = build_fixture_graph(&fixture_dir, &graph_dir);
+
+    let changed = vec![
+        "legacy/billing.php::charge".to_string(),
+        "no_such_symbol_anywhere".to_string(),
+    ];
+    let report = security_gates::check_gates(&store, &changed).expect("check");
+    assert_eq!(report.flags.len(), 2, "only the two unresolved flags");
+    assert_eq!(report.summary.warning_count, 2);
+    assert_eq!(report.summary.info_count, 0);
+    assert!(report.gates_passed, "a warning does not fail the gate");
+    assert!(!report.assessment_complete());
+
+    let php = &report.flags[0];
+    assert_eq!(php.gate, "input_unresolved");
+    assert_eq!(php.severity, "warning");
+    assert_eq!(php.details["checks_run"], 0);
+    let reason = php.details["unverifiable_reason"]
+        .as_str()
+        .expect("a file in an unparsed language has a reason");
+    assert!(reason.contains(".php"), "{reason}");
+    assert!(php.message.contains("outside the graph"), "{}", php.message);
+
+    let bare = &report.flags[1];
+    assert_eq!(bare.severity, "warning");
+    assert!(bare.details["unverifiable_reason"].is_null());
+    assert!(
+        bare.message.contains("none of the checks ran on it"),
+        "{}",
+        bare.message
+    );
+
+    // No changed symbol reached the unsafe check: the block says none did.
+    let json = security_gates::report_to_json(&report, "", "", &graph_dir, &changed, "fixed");
+    let coverage = &json["language_coverage"]["unsafe_symbol"];
+    assert_eq!(coverage["symbols_not_checked"], 0);
+    assert_eq!(coverage["not_checked_languages"], serde_json::json!([]));
+}

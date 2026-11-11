@@ -7,6 +7,7 @@
 // here. A new gate is a new function beside these plus one call in the
 // orchestration, and touches neither the report shape nor the writer.
 
+use super::coverage::{symbol_language, LANGUAGE_NOT_RECORDED, UNSAFE_CHECKED_LANGUAGES};
 use super::{SecurityFlag, AUTH_CRITICAL_PATTERNS};
 use crate::graph_store::{
     community_of as membership_community_of, cypher_str, GraphStore, SymbolMatch,
@@ -104,22 +105,32 @@ pub(super) fn community_of(store: &GraphStore, qualified_name: &str) -> Option<S
 // S2 — unsafe symbol (info-skip when parser lacks is_unsafe)
 // ---------------------------------------------------------------------------
 //
-// source: stages/stage-8.md §4.2 + §7 Open Q1. The current Rust parser
-// (src/parser/rust.rs) does NOT record an is_unsafe property on Function or
-// Method nodes. Per the spec's graceful-degradation rule (Invariant I6), S2
+// source: stages/stage-8.md §4.2 + §7 Open Q1. No parser records an
+// is_unsafe property on Function or Method nodes, for Rust or any other
+// language. Per the spec's graceful-degradation rule (Invariant I6), S2
 // ships in INFO-SKIP mode: emit one info flag per changed symbol stating the
-// detection is unavailable and skip the critical check. This preserves
-// determinism and leaves a breadcrumb for the 3b-v2 parser roadmap.
+// detection is unavailable and skip the critical check. The flag names the
+// symbol's language and the languages the check decides (none), so a skip on
+// a Python symbol does not read as a Rust-only limitation (issue #450).
 
-pub(super) fn run_s2(_store: &GraphStore, qualified_name: &str, flags: &mut Vec<SecurityFlag>) {
+pub(super) fn run_s2(store: &GraphStore, qualified_name: &str, flags: &mut Vec<SecurityFlag>) {
+    let language = symbol_language(store, qualified_name);
+    let shown = language.as_deref().unwrap_or(LANGUAGE_NOT_RECORDED);
     flags.push(SecurityFlag {
         gate: "unsafe_symbol".into(),
         severity: "info".into(),
         symbol: qualified_name.into(),
-        message: "unsafe detection unavailable: the Rust parser does not record is_unsafe \
-                  (see stages/stage-8.md §7 Q1; unblocks when stage 3a-v2 ships)"
-            .into(),
-        details: json!({ "skipped": true, "reason": "parser_missing_is_unsafe" }),
+        message: format!(
+            "unsafe-code check not run on this symbol (language: {shown}): it decides \
+             no language yet, no parser records is_unsafe, Rust included \
+             (see stages/stage-8.md §7 Q1)"
+        ),
+        details: json!({
+            "skipped": true,
+            "reason": "parser_missing_is_unsafe",
+            "language": language,
+            "checked_languages": UNSAFE_CHECKED_LANGUAGES,
+        }),
     });
 }
 

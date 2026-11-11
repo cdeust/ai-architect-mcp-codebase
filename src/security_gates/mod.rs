@@ -5,12 +5,16 @@
 //                              auth-pattern symbol.                  critical
 //   S2 unsafe_symbol          — changed symbol itself is `unsafe` (Rust) or
 //                              uses a risky JS/Python API.            critical|warning
-//                              INFO-SKIP mode when parser does not record it.
+//                              INFO-SKIP for every language: no parser
+//                              records it (see `coverage`, issue #450).
 //   S3 public_api_change      — crate-root `pub` symbol touched.      warning|critical
 //   S4 unresolved_imports     — unresolved Import status in the changed
 //                              symbol's source file.                   warning|critical
 //   S5 test_coverage_gap      — changed symbol has no ParticipatesIn
 //                              path from any test-entry process.      warning
+//
+// A changed symbol that does not resolve gets no check: `input_unresolved`,
+// a warning. `language_coverage` in the report says what S2 did not decide.
 //
 // Read-only w.r.t. the graph. LLM-free. Deterministic on (graph, Δ).
 //
@@ -18,6 +22,7 @@
 //         §7 (tool schema).
 
 use crate::graph_store::GraphStore;
+mod coverage;
 mod gates;
 use crate::search;
 use gates::{find_auth_communities, run_s1, run_s2, run_s3, run_s4, run_s5};
@@ -106,13 +111,7 @@ pub fn check_gates(
     }
     for r in &resolved {
         if r.resolved_qn.is_none() {
-            flags.push(SecurityFlag {
-                gate: "input_unresolved".into(),
-                severity: "info".into(),
-                symbol: r.input.clone(),
-                message: format!("changed symbol '{}' did not resolve in graph", r.input),
-                details: json!({ "did_you_mean": r.did_you_mean }),
-            });
+            flags.push(coverage::unresolved_flag(store, &r.input, &r.did_you_mean));
         }
     }
     let summary = tally(&flags, changed_symbols.len() as u64);
@@ -200,6 +199,7 @@ pub fn report_to_json(
         "checked_at": checked_at,
         "gates_passed": report.gates_passed,
         "assessment_complete": report.assessment_complete(),
+        "language_coverage": coverage::language_coverage(&report.flags),
         "summary": {
             "changed_symbols": report.summary.changed_symbols,
             "critical_count": report.summary.critical_count,

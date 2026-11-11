@@ -258,12 +258,69 @@ produce or check JSON artifacts on disk under the `output_dir` a call names. A s
 [ai-architect-mcp-spec](#related-projects), or any other consumer, can read
 them; the server itself has no dependency on the consumer.
 
+### The affected-symbols sidecar
+
+`validate_prd_against_graph` judges a PRD by what it is told the PRD changes.
+That list is a JSON file, by convention `stage-5.affected_symbols.json`,
+written next to the PRD by the tool that generated it (ai-architect-mcp-spec
+does) and passed as `affected_symbols_path`, an absolute path. The server
+looks nowhere else for it.
+
+<!-- sidecar-example: read by tests/prd_sidecar_contract_450.rs -->
+```json
+{
+  "affected_symbols": [
+    { "qualified_name": "src/server.rs::handle_request", "change_kind": "modify", "rationale": "adds a timeout" },
+    { "qualified_name": "src/server.rs::RequestBudget", "change_kind": "add", "rationale": "new type" }
+  ],
+  "scope_claims": [
+    { "kind": "community_scope", "assertion": "confined to the request layer" },
+    { "kind": "process_exclusion", "processes": ["nightly_export"] }
+  ]
+}
+```
+
+- `affected_symbols[].qualified_name` is required (`<file path>::<name>`, as
+  `search_codebase` returns it); an entry without it is ignored.
+  `change_kind` is `add`, `modify`, `remove` or `rename`, and reads as
+  `unknown` when missing. `rationale` is free text.
+- With the file, the response says `extraction_mode: "structured"` and
+  `contract_missing: false`. A symbol with `change_kind` `modify`, `remove` or
+  `rename` that is not in the graph is a `critical` finding, counted in
+  `summary.hallucinated_symbols`, and `validation_status` is `fail`. The
+  exception is a symbol whose file the index does not cover (an extension no
+  parser handles, or no File node for that path): it is an `info` finding
+  counted in `summary.unverifiable_symbols`. A missing symbol with `add` or
+  `unknown` is not scored.
+- `scope_claims` of kind `process_exclusion` name processes the PRD says it
+  does not affect; a resolved symbol that participates in one is `critical`.
+  A `community_scope` claim is recorded on the community finding
+  (`has_scope_assertion`) and does not change its severity: resolved symbols
+  spanning two communities are a `warning`, three or more `critical`, with or
+  without it.
+- A file with two empty arrays means "the PRD claims no code change" and is
+  still the structured mode. It is not the same as no file.
+- Without the file (no `affected_symbols_path`, a path that does not exist, or
+  content that is not JSON) the response says `extraction_mode:
+  "regex_fallback"` and `contract_missing: true`: claims are the backticked
+  identifiers and file paths found in the PRD text, their `change_kind` is
+  unknown, and nothing can be `critical` on the symbol axis. A backticked
+  identifier that matches no symbol by qualified name or by name is a
+  `warning` counted in `summary.absent_symbols`; any other unresolved token is
+  `info`. `scope_claims` exist only in the file, so the process and scope
+  checks need it.
+
 The verification verdicts have narrow meanings. `check_security_gates` returns
 `gates_passed: true` when no check raised a critical flag, and
 `report.assessment_complete` separately; the latter is false for an empty
 symbol list, a skipped check, or changed symbols that could not be resolved.
-The unsafe-symbol check is skipped until the Rust parser records `unsafe`.
-Neither field certifies security. A `clean` verdict from
+The unsafe-symbol check is skipped for every language, Rust included, because
+no parser records `unsafe` yet: each skip flag names the symbol's language,
+and `report.language_coverage.unsafe_symbol` lists the languages the check
+decides (`checked_languages`, empty today) and those of the changed symbols it
+did not. A changed symbol that does not resolve in the graph gets none of the
+checks and is a `warning` (`input_unresolved`), with the reason when its file
+is in a language no parser handles. Neither field certifies security. A `clean` verdict from
 `verify_semantic_diff` needs a regression score below the threshold and no new
 unresolved import, and says nothing about behavioural equivalence or
 compilation; tests, the compiler or proofs establish those. A finalized
@@ -514,7 +571,8 @@ ai-architect-mcp-codebase/
 Version 0.14.0. The capabilities above are covered by the test suite and the
 accuracy gate in CI and have been run end to end on the maintainer's machine;
 they have not yet been validated in a production deployment. The unsafe-symbol
-security check waits on `unsafe` extraction in the Rust parser. Rename and
+security check waits on `unsafe` extraction in the parsers and decides no
+language until then. Rename and
 refactor tools are out of scope because the server does not edit code. Direction is in
 [docs/ROADMAP.md](docs/ROADMAP.md); what shipped is in
 [CHANGELOG.md](CHANGELOG.md).
