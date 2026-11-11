@@ -84,7 +84,10 @@ arm64 reports `x86_64` and installs `windows-x86_64`. "Started by CI" means the
 pipeline's `install` job installs the published asset on that runner and runs
 `initialize`, `tools/list` (the exact tool catalog) and `health_check` against
 it (`scripts/smoke_claude_plugin.py
---installed`).
+--installed`). On a commit whose version has no published release yet (a
+release pull request), there is no asset to start: the job checks instead that
+the launcher refuses with its release-asset error and installs nothing, and
+says so in its output.
 
 <!-- platforms:begin -->
 | Platform | Release asset | Plugin launcher | Started by CI |

@@ -202,6 +202,45 @@ that shipped v0.8.1 and v0.8.2 to zero installs (#67). The same class in
 `cdeust/Cortex` withheld six `zetetic-team-subagents` releases and two
 `cortex-viz` releases (cdeust/Cortex#179).
 
+### What `install` proves before and after a release
+
+The pipeline's `install` job installs the plugin from the checkout and runs
+`scripts/smoke_claude_plugin.py --installed`, which first reads the
+repository's latest release: one request to the github.com page
+`https://github.com/cdeust/ai-architect-mcp-codebase/releases/latest`, without
+following the redirect, whose `Location` ends in `/releases/tag/v<X.Y.Z>`. No
+REST call and no token are used, so the check does not depend on the anonymous
+REST quota that hosted runners share. The latest release is the most recent
+one that is neither a draft nor a prerelease, so a draft, a release candidate
+and a bare tag never count. Any answer other than that redirect fails the job.
+
+| `plugin.json` version | What `install` requires |
+|---|---|
+| The latest release, or below it | The published contract. The launcher downloads the asset, verifies its checksum and provenance, and answers the exact tool catalog of that tag and `health_check`. Unchanged, and mandatory: a missing asset or catalog fails, which is also what happens to a version that was skipped or lowered. |
+| Above the latest release | The launcher fails closed: exit 1, `FATAL: release asset unavailable: …/v<version>/…`, curl's 404, no answer on stdout, no source build, no binary installed. The job prints `INSTALL: v<version> is not released yet; …`. A launcher that starts a server here is a failure. |
+
+So a release pull request can merge and be tagged: before this, `install`
+needed assets that only exist after the tag, and both `merge` and `tag` need
+`install`. What the unreleased branch does not prove is the download path. The
+tool catalog and `health_check` of the release commit are proved by the `e2e`
+job on that commit, from a binary built from source. The assets are proved by
+`release.yml`: `verify_staged_assets` checks every checksum and attestation on
+the draft, and `publish_verified_release` makes the release public, downloads
+each asset anonymously, verifies it again, and returns the release to draft if
+that fails. The next `install` run after the release takes the published
+branch, because that release is then the latest.
+
+**The release window.** Between the merge of the version bump and
+`publish_verified_release`, a plugin updated from the marketplace has a
+launcher that names assets that are not public yet. It stops with
+`FATAL: release asset unavailable: <url>` (no fallback to a source build in a
+marketplace install) and starts normally on the next launch after the release
+is public.
+
+The SBOM asset is checked the same way before it is attested:
+`scripts/check_sbom_identity.py` fails the `sbom` job unless the file's root
+component is `ai-architect-mcp-codebase` at the tag's version.
+
 ### Publishing `server.json` to the MCP Registry
 
 **Automatic.** The `publish_registry` job in `.github/workflows/release.yml`
