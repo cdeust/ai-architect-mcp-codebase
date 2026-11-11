@@ -79,6 +79,7 @@ fn reparse_embedded(inner_spec: &LangSpec, ctx: &mut WalkCtx, content: Node, sco
         twins: HashMap::new(),
         // A fresh tree: its node ids are not the host's.
         ts_receivers: Default::default(),
+        py_receivers: Default::default(),
     };
     walk_defs(inner_spec, &mut inner, tree.root_node(), scope, None);
     ctx.next_seq = inner.next_seq;

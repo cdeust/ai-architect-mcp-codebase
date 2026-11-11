@@ -1,6 +1,6 @@
 // resolver::calls::gates: the three receiver gates `resolve_single_call` consults
 // before the by-name ambiguity policy (same-class receiver, Rust local binding,
-// TypeScript/JavaScript constructed local).
+// TypeScript/JavaScript and Python constructed local).
 // Moved out of `calls.rs` to keep it under the size cap; behavior unchanged.
 
 use super::reason::{self, Decline, Gated};
@@ -97,26 +97,29 @@ pub(super) fn rust_local_receiver_gate(
     resolve_by_hint(ctx, site, &m, file_id, imported_from, constructed)
 }
 
-/// TypeScript/JavaScript `<local>.<m>` whose receiver the parser typed by a
-/// `new T(..)` the enclosing function proves (`parser::spec::ts_receiver`,
-/// issue #444): bound to `T::<m>` when the caller's own file defines the class
-/// `T` with a method `m`. The class is read in the caller's file only: an
-/// imported `T` is not traced through the import here. A `static m` of `T`,
-/// which the method rows do not mark, never reaches this gate: the parser
-/// emits no hint for it (`ts_receiver::FileFacts::instance_method_of`).
+/// `<local>.<m>` whose receiver the parser typed by a construction the
+/// enclosing function proves (issue #444): TypeScript/JavaScript `new T(..)`
+/// (`parser::spec::ts_receiver`) and Python `T(..)` (`parser::spec::py_receiver`).
+/// Bound to `T::<m>` when the caller's own file defines the class `T` with a
+/// method `m`. The class is read in the caller's file only: an imported `T`
+/// is not traced through the import here. The cases where `T(..).m` is not
+/// `T`'s own `m` never reach this gate, because the parser emits no hint for
+/// them: a TypeScript `static m` (`ts_receiver::FileFacts::instance_method_of`),
+/// a Python class that is decorated, has a base outside the file or binds
+/// `__new__` (`py_receiver::FileFacts::builds_instance_with_own`).
 ///
-/// postcondition: `None` when the gate does not apply (not TypeScript, no
+/// postcondition: `None` when the gate does not apply (another language, no
 /// `constructed` hint, callee not `<ident>.<m>`-shaped) AND when the file holds no
 /// class `T` owning `m` — the call then falls through to the by-name path it
 /// took before this gate existed. Otherwise its answer, `Ambiguous` included,
 /// is final: one method of `T` binds; several (two classes named `T` in one
 /// file, e.g. in two namespaces) stay ambiguous without the by-name path.
-pub(super) fn ts_constructed_receiver_gate(
+pub(super) fn constructed_local_receiver_gate(
     ctx: &ResolveContext,
     site: &CallSite,
     file_id: &str,
 ) -> Option<Gated> {
-    if ctx.provider.language() != "typescript"
+    if !matches!(ctx.provider.language(), "typescript" | "python")
         || site.receiver_hint.is_empty()
         || site.receiver_hint_via != crate::graph_store::RECEIVER_HINT_VIA_CONSTRUCTED
     {

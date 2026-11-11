@@ -8,7 +8,7 @@ use tree_sitter::Node;
 use super::super::conventions::CallEntry;
 use super::super::lang_spec::LangSpec;
 use super::{kind_in, WalkCtx};
-use crate::parser::{ExtractedNode, ExtractedRef, LABEL_CALL_SITE};
+use crate::parser::{ExtractedNode, ExtractedRef, Language, LABEL_CALL_SITE};
 
 /// Call walker: emits the `CallSite` node(s) + edge(s) per call expression the
 /// conventions accept. Stack DFS matches the hand-written walker so the `seq`
@@ -47,9 +47,17 @@ pub(super) fn emit_call_sites(spec: &LangSpec, ctx: &mut WalkCtx, n: Node, calle
         return;
     };
     let seq = ctx.next_seq();
-    let entry = spec
+    let mut entry = spec
         .conventions
         .call_entry(ctx.source, n, caller_qn, &callee, seq);
+    if spec.language == Language::Python {
+        // `w = Worker()` then `w.run()`: the receiver's type when the
+        // enclosing function proves it (issue #444).
+        entry.properties.extend(
+            ctx.py_receivers
+                .constructed_receiver_properties(ctx.source, n),
+        );
+    }
     push_call(ctx, entry, caller_qn);
     for extra in spec
         .conventions
