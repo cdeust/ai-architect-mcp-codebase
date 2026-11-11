@@ -234,6 +234,34 @@ adheres to [Semantic Versioning](https://semver.org/).
   with function nesting. Tests: `tests/ts_constructed_local_receiver_444.rs`
   (fails on `main` with no edge for `useConst`), ten unit tests in
   `ts_receiver`.
+- **Python: a call on a local built from a class of the file binds to that
+  class** (issue #444). `w = Worker()` then `w.run(3)` reached the resolver as
+  the bare name `w.run`, so with two classes owning `run` the call stayed
+  unresolved. The Python call walker now attaches `receiver_hint = Worker`
+  (`receiver_hint_via = constructed`) when the only occurrence of `w` in the
+  call's enclosing function that is not a plain read is one statement
+  `w = Worker(..)` (`parser::spec::py_receiver`), and the resolver's
+  constructed-receiver gate, now shared by TypeScript/JavaScript and Python,
+  binds it to `Worker::run` when the caller's file defines that method. A name
+  assigned in a Python function is local to the whole function, so the
+  statement need not precede the call. No hint, and so the answer the call had
+  before, when the local is bound in any other way (a second assignment, a
+  parameter, a `for`/`with`/`except`/`import` target, `:=`, `del`,
+  `global`/`nonlocal`, a comprehension variable, a nested function); when the
+  call is at module level or in a nested function; when the file does not
+  bind `Worker` exactly once by a `class` statement (an imported class, a
+  second definition, a `from m import *`); when the class or a class on its
+  base chain is decorated, takes a class keyword, binds `__new__` or
+  `__getattribute__`, or has a base the file does not declare; when the
+  class's own body does not bind the method exactly once (an inherited
+  method); and when the file writes an attribute of the method's name or
+  `__class__`. Read positions are an allowlist, so an occurrence in a position
+  the module does not know counts as a binding. The accuracy gate gains
+  `synthetic/constructed_receiver.py` (three expected edges, one rebound local
+  that must contribute none): `Calls` recall 0 of 3 before, 3 of 3 after.
+  Tests: `tests/py_constructed_local_receiver_444.rs`, nine unit tests in
+  `py_receiver`. Not covered: a class imported from another file, an
+  inherited method, a field chain (`w.base.greet()`).
 - **Files in unsupported languages are counted in the coverage report** (#447,
   first slice). A PHP, C# or Lua file became a File node with no symbols and
   left no trace in `coverage` or in `query_graph(graph="missed")`, so an empty

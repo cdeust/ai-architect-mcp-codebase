@@ -3,12 +3,13 @@
 
 /// The value of a hint read off a receiver that is a tuple-struct constructor
 /// or a struct literal, written in place or bound by a single `let` (Rust), or
-/// a TypeScript/JavaScript local bound once to `new T(..)` (issue #444). The
+/// a TypeScript/JavaScript local bound once to `new T(..)` or a Python local
+/// bound once to `T(..)` (issue #444). The
 /// resolver keeps only candidates defined in the caller's own file for such a
 /// hint: the hint is the last path segment, and a namesake type elsewhere would
 /// otherwise be a candidate.
-/// source: parser::spec::rust_constructed_receiver and
-/// parser::spec::ts_receiver write it, resolver::calls::gates reads it.
+/// source: parser::spec::rust_constructed_receiver, parser::spec::ts_receiver
+/// and parser::spec::py_receiver write it, resolver::calls::gates reads it.
 pub(crate) const RECEIVER_HINT_VIA_CONSTRUCTED: &str = "constructed";
 
 /// The value of a hint read off `Type::assoc(..)` written in place, whose
