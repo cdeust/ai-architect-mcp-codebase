@@ -37,7 +37,7 @@
 // reverse order (purge first, collect after) would lose the information for good,
 // because the edges are gone once the nodes are.
 
-use crate::graph_store::{cypher_str, GraphStore, REL_TABLES};
+use crate::graph_store::{cypher_str, symbol_name, GraphStore, REL_TABLES};
 use std::collections::HashSet;
 
 /// Sites flagged open before a purge of `purged_rels`: those OUTSIDE `skip` (the
@@ -68,6 +68,7 @@ pub(super) fn reopen_sites_resolved_into(
             }
         }
     }
+    ids.extend(sites_typed_into(store, &target, skip)?);
     let mut ids: Vec<String> = ids.into_iter().collect();
     ids.sort();
     let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
@@ -98,6 +99,50 @@ pub(super) fn restore_sites_with_edge(store: &GraphStore, ids: &[String]) -> Res
     let mut back: Vec<&str> = with_edge.iter().map(String::as_str).collect();
     back.sort_unstable();
     store.mark_nodes_resolved("CallSite", &back)
+}
+
+/// The resolved sites outside `skip` that the static pass resolved through a
+/// type the purge takes away: no per-site row, but their caller holds a
+/// `Uses_*` row into a purged symbol named like the callee (a Go conversion
+/// `Count(1)`, a call that names an Enum or a Trait; Codex review of #523).
+/// The row dies with the symbol, so the resolver's own check
+/// (`resolver::retract`) can no longer see it; this one runs before the purge.
+/// `restore_sites_with_edge` leaves them open, and the next resolve decides
+/// them again.
+fn sites_typed_into(
+    store: &GraphStore,
+    target: &str,
+    skip: &HashSet<String>,
+) -> Result<HashSet<String>, String> {
+    let mut uses: HashSet<(String, String)> = HashSet::new();
+    for &(rel, _, _) in REL_TABLES.iter().filter(|(n, _, _)| n.starts_with("Uses_")) {
+        // A table an older graph lacks holds no row.
+        let Ok(qr) = store.execute_query(&format!(
+            "MATCH (a)-[r:{rel}]->(t) WHERE {target} RETURN a.id, t.id"
+        )) else {
+            continue;
+        };
+        for row in qr.rows.into_iter().filter(|r| r.len() >= 2) {
+            uses.insert((row[0].clone(), symbol_name(&row[1]).to_string()));
+        }
+    }
+    let mut ids = HashSet::new();
+    let callers: HashSet<&str> = uses.iter().map(|(c, _)| c.as_str()).collect();
+    for caller in callers {
+        let qr = store.execute_query(&format!(
+            "MATCH (c:CallSite) WHERE c.is_resolved = true AND starts_with(c.id, {}) \
+             RETURN c.id, c.callee_name",
+            cypher_str(&format!("{caller}::call@"))
+        ))?;
+        for row in qr.rows.into_iter().filter(|r| r.len() >= 2) {
+            let owner = row[0].split("::").next().unwrap_or("");
+            let named = uses.contains(&(caller.to_string(), symbol_name(&row[1]).to_string()));
+            if named && !skip.contains(owner) {
+                ids.insert(row[0].clone());
+            }
+        }
+    }
+    Ok(ids)
 }
 
 fn call_site_tables() -> impl Iterator<Item = &'static str> {
