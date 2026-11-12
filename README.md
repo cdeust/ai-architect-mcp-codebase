@@ -103,7 +103,10 @@ A `cargo install` or a source build does not go through the launcher. CI runs
 the test suite from source on Linux x86_64 only; the pipeline's `environment`
 job also builds from source and runs `install --dry-run` on `ubuntu-latest`,
 `macos-latest` and `windows-latest` (`scripts/ci_environment.sh`), and
-`windows-build.yml` builds Windows x86_64 on every pull request.
+`windows-build.yml` builds Windows x86_64 on every pull request. A pull request
+whose every changed path is under `docs/` or is `CHANGELOG.md`, with names every
+system can hold, runs the `environment` and `install` jobs on `ubuntu-latest`
+alone before its merge; the three systems run after it.
 
 ### Other MCP hosts
 
