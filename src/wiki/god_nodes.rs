@@ -37,7 +37,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph_store::{GraphStore, REL_TABLES};
 
-use super::communities::{cell, membership_tables, provenance_of, read_members, relation_of};
+use super::communities::{
+    cell, membership_tables, provenance_of, read_members, relation_of, Member,
+};
 use super::skeleton::{Edge, Page, PageKind, Provenance, Symbol};
 
 /// The god-node pages of a graph, the fence that selected them, and what
@@ -113,21 +115,17 @@ fn quartile_quarters(sorted: &[u64], k: u64) -> Option<u64> {
 /// `(source, target, relation)` of an edge, with its provenance.
 type Incident = BTreeMap<(String, String, String), Provenance>;
 
+/// Clustered symbols by id, as `read_members` returns them.
+type Members = BTreeMap<String, Member>;
+
 /// Build one page per god node of `store`, which must already be resolved
 /// and clustered (`cluster_graph`). A store error is returned, never skipped.
 pub fn god_node_pages(store: &GraphStore) -> Result<GodNodePages, String> {
     let members = read_members(store)?;
     let edges = read_edges(store, &members)?;
-
-    let mut degree: BTreeMap<&str, u64> = members.keys().map(|id| (id.as_str(), 0)).collect();
-    for (source, target, _) in edges.keys() {
-        *degree.entry(source.as_str()).or_default() += 1;
-        if target != source {
-            *degree.entry(target.as_str()).or_default() += 1;
-        }
-    }
-    let degrees: Vec<u64> = degree.values().copied().collect();
-    let Some(fence) = Fence::of(&degrees) else {
+    let degree = degrees(&members, &edges);
+    let all: Vec<u64> = degree.values().copied().collect();
+    let Some(fence) = Fence::of(&all) else {
         return Ok(GodNodePages {
             pages: Vec::new(),
             fence: None,
@@ -135,16 +133,44 @@ pub fn god_node_pages(store: &GraphStore) -> Result<GodNodePages, String> {
             unanchored_edges: 0,
         });
     };
+    let (mut pages, unanchored_members) = pages_beyond(&fence, &degree, &members);
+    let unanchored_edges = attach_edges(&edges, &members, &mut pages);
+    Ok(GodNodePages {
+        pages: pages.into_values().collect(),
+        fence: Some(fence),
+        unanchored_members,
+        unanchored_edges,
+    })
+}
 
-    let mut pages: BTreeMap<&str, Page> = BTreeMap::new();
-    let mut unanchored_members = Vec::new();
-    for (&id, &d) in &degree {
+/// The degree of every clustered symbol, 0 included; a self-edge once.
+fn degrees<'a>(members: &'a Members, edges: &'a Incident) -> BTreeMap<&'a str, u64> {
+    let mut degree: BTreeMap<&str, u64> = members.keys().map(|id| (id.as_str(), 0)).collect();
+    for (source, target, _) in edges.keys() {
+        *degree.entry(source.as_str()).or_default() += 1;
+        if target != source {
+            *degree.entry(target.as_str()).or_default() += 1;
+        }
+    }
+    degree
+}
+
+/// One page per symbol beyond `fence`, holding the symbol, keyed by its id;
+/// and the ids of those the store gives no `file:line`, sorted.
+fn pages_beyond<'a>(
+    fence: &Fence,
+    degree: &BTreeMap<&'a str, u64>,
+    members: &Members,
+) -> (BTreeMap<&'a str, Page>, Vec<String>) {
+    let mut pages = BTreeMap::new();
+    let mut unanchored = Vec::new();
+    for (&id, &d) in degree {
         if !fence.exceeds(d) {
             continue;
         }
         let member = &members[id];
         let Some(location) = member.location.clone() else {
-            unanchored_members.push(id.to_owned());
+            unanchored.push(id.to_owned());
             continue;
         };
         let mut page = Page::new(PageKind::GodNode, id, member.name.clone());
@@ -156,17 +182,23 @@ pub fn god_node_pages(store: &GraphStore) -> Result<GodNodePages, String> {
         });
         pages.insert(id, page);
     }
+    (pages, unanchored)
+}
 
-    let mut unanchored_edges: BTreeSet<&(String, String, String)> = BTreeSet::new();
-    for (key, &provenance) in &edges {
+/// Put every edge incident to a god node on its page, anchored at the
+/// source, count its crossings by the community of the other end, and
+/// return how many distinct edges could not be anchored.
+fn attach_edges(edges: &Incident, members: &Members, pages: &mut BTreeMap<&str, Page>) -> u64 {
+    let mut unanchored: BTreeSet<&(String, String, String)> = BTreeSet::new();
+    for (key, &provenance) in edges {
         let (source, target, relation) = key;
         let ends = if source == target {
-            vec![source.as_str()]
+            vec![source]
         } else {
-            vec![source.as_str(), target.as_str()]
+            vec![source, target]
         };
         for end in ends {
-            let Some(page) = pages.get_mut(end) else {
+            let Some(page) = pages.get_mut(end.as_str()) else {
                 continue;
             };
             let other = if end == source { target } else { source };
@@ -185,25 +217,16 @@ pub fn god_node_pages(store: &GraphStore) -> Result<GodNodePages, String> {
                     location,
                 )),
                 None => {
-                    unanchored_edges.insert(key);
+                    unanchored.insert(key);
                 }
             }
         }
     }
-
-    Ok(GodNodePages {
-        pages: pages.into_values().collect(),
-        fence: Some(fence),
-        unanchored_members,
-        unanchored_edges: unanchored_edges.len() as u64,
-    })
+    unanchored.len() as u64
 }
 
 /// Every distinct edge with a provenance whose two ends are clustered.
-fn read_edges(
-    store: &GraphStore,
-    members: &BTreeMap<String, super::communities::Member>,
-) -> Result<Incident, String> {
+fn read_edges(store: &GraphStore, members: &Members) -> Result<Incident, String> {
     let labels: BTreeSet<&str> = membership_tables().iter().map(|t| t.1).collect();
     let mut edges = Incident::new();
     for &(rel, from, to) in REL_TABLES {
