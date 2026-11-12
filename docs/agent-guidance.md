@@ -112,9 +112,10 @@ apply. It never widens what a prompt allows.
    `ci/budget-counts-contract-reviews`, anything labelled `hold` or `do-not-merge`, a draft.
 8. **The work is verified before the pull request exists** (Cortex ADR-1132). Before
    opening a pull request, and before each push to one, run the `unit` and `regression`
-   commands of `ci.json` on a clean copy of the commit (a worktree under
-   `.claude/worktrees/` or a `git archive`), plus what the change needs beyond them, and
-   put each command with its passed, failed and skipped counts in the pull request body.
+   commands of `ci.json` on a clean copy of the commit, a worktree under
+   `.claude/worktrees/` (a `git archive` is not one here: tests of the `regression`
+   command call git), plus what the change needs beyond them, and put each command with
+   its passed, failed and skipped counts in the pull request body.
    A command the session cannot run is named there with the reason. The hosted Pipeline
    stays the gate; it is not the place to find out whether a change works. After a
    conflict merge under rule 4, the touched tests are enough. A changelog or
