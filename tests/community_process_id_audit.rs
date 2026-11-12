@@ -75,6 +75,11 @@ const CLASSIFIED: &[(&str, &str)] = &[
         "load_community_sizes skips an empty c.id key; load_process_counts reads \
          count(p) keyed by qualified_name",
     ),
+    (
+        "wiki/communities.rs",
+        "community_pages makes no page for an empty c.id; read_members skips a \
+         membership row whose n.id or c.id is empty (#196)",
+    ),
 ];
 
 fn src_root() -> PathBuf {
