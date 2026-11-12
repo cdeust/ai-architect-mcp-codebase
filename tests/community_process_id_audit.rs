@@ -80,6 +80,12 @@ const CLASSIFIED: &[(&str, &str)] = &[
         "community_pages makes no page for an empty c.id; read_members skips a \
          membership row whose n.id or c.id is empty (#196)",
     ),
+    (
+        "wiki/processes.rs",
+        "process_pages makes no page for an empty p.id; read_participants \
+         skips a participation row whose n.id is empty or whose p.id has no \
+         page (#196)",
+    ),
 ];
 
 fn src_root() -> PathBuf {
