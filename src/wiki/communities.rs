@@ -49,10 +49,12 @@ pub struct CommunityPages {
     pub unanchored_edges: u64,
 }
 
-/// A clustered symbol: its page, and its anchor when it has one.
-struct Member {
-    community: String,
-    location: Option<Location>,
+/// A clustered symbol: its community, and its anchor when it has one.
+pub(super) struct Member {
+    pub(super) community: String,
+    pub(super) name: String,
+    pub(super) kind: &'static str,
+    pub(super) location: Option<Location>,
 }
 
 /// The provenance of an edge table, or `None` when it is in neither class.
@@ -67,7 +69,7 @@ pub(super) fn provenance_of(rel: &str) -> Option<Provenance> {
 }
 
 /// The relation name an edge table carries: `Calls_Function_Method` -> `Calls`.
-fn relation_of(rel: &str) -> &str {
+pub(super) fn relation_of(rel: &str) -> &str {
     rel.split('_').next().unwrap_or(rel)
 }
 
@@ -81,7 +83,7 @@ fn membership_tables() -> Vec<(&'static str, &'static str)> {
 }
 
 /// The `file:line` of a node, when the store has both halves.
-fn anchor(id: &str, start_line: &str) -> Option<Location> {
+pub(super) fn anchor(id: &str, start_line: &str) -> Option<Location> {
     let file = extract_file_prefix(id)?;
     let line = start_line.trim().parse::<u32>().ok()?;
     Location::new(file, line).ok()
@@ -104,7 +106,17 @@ pub fn community_pages(store: &GraphStore) -> Result<CommunityPages, String> {
         pages.insert(id.clone(), Page::new(PageKind::Community, id, name));
     }
 
-    let members = read_members(store, &mut pages)?;
+    let members = read_members(store)?;
+    for (id, member) in &members {
+        if let (Some(location), Some(page)) = (&member.location, pages.get_mut(&member.community)) {
+            page.members.push(Symbol {
+                id: id.clone(),
+                name: member.name.clone(),
+                kind: member.kind.to_owned(),
+                location: location.clone(),
+            });
+        }
+    }
     let mut unanchored_members: Vec<String> = members
         .iter()
         .filter(|(_, m)| m.location.is_none())
@@ -189,12 +201,9 @@ fn read_edges(
     Ok(tally)
 }
 
-/// Read every membership row, add the anchored members to their page and
-/// return the community and anchor of every member, keyed by node id.
-fn read_members(
-    store: &GraphStore,
-    pages: &mut BTreeMap<String, Page>,
-) -> Result<BTreeMap<String, Member>, String> {
+/// Read every membership row and return the community, name, label and
+/// anchor of every clustered symbol, keyed by node id.
+pub(super) fn read_members(store: &GraphStore) -> Result<BTreeMap<String, Member>, String> {
     let mut members = BTreeMap::new();
     for (rel, label) in membership_tables() {
         // lbug refuses a property the label's table does not declare, so a
@@ -218,18 +227,12 @@ fn read_members(
                 continue;
             }
             let location = anchor(&id, &cell(row, 2));
-            if let (Some(location), Some(page)) = (&location, pages.get_mut(&community)) {
-                page.members.push(Symbol {
-                    id: id.clone(),
-                    name,
-                    kind: label.to_owned(),
-                    location: location.clone(),
-                });
-            }
             members.insert(
                 id,
                 Member {
                     community,
+                    name,
+                    kind: label,
                     location,
                 },
             );
@@ -238,7 +241,7 @@ fn read_members(
     Ok(members)
 }
 
-fn cell(row: &[String], i: usize) -> String {
+pub(super) fn cell(row: &[String], i: usize) -> String {
     row.get(i).cloned().unwrap_or_default()
 }
 
