@@ -102,8 +102,9 @@ release v0.14.0 on django (7,008 files) found `AstNode` rows were 94.7 % of
 the graph's nodes. Symbols, calls, imports, communities and processes are
 indexed the same way with or without it.
 
-The flag applies to the files a call parses. `analyze_codebase` rebuilds the
-graph from scratch on every call, so its flag applies to every file.
+The flag applies to the files a call parses. `analyze_codebase` records it in
+the manifest and rebuilds the graph from scratch when it differs from the one
+the previous graph was built with, so its flag applies to every file.
 `index_codebase` is incremental by default and its manifest does not record
 the flag, so switching it on or off for an existing graph there takes
 `"full": true` (the same contract `full` already has for `language`,

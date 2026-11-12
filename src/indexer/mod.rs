@@ -33,8 +33,7 @@ use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
 use coverage::{no_extraction_by_extension, CoverageCollector, CoverageReport};
 pub use incremental::{
-    fill_after_bootstrap, full_manifest, index_incremental, tree_changed_since, FillMethod,
-    FillResult,
+    fill_after_bootstrap, full_manifest, index_incremental, FillMethod, FillResult,
 };
 // For the bin's `prepare_full_rebuild_within`, a test seam; the lib has no caller.
 #[allow(unused_imports)]
@@ -71,8 +70,8 @@ const MAX_FILE_BYTES: u64 = 10_485_760;
 const MAX_TOTAL_BYTES: u64 = 2_147_483_648;
 
 /// The prefix of every refusal of a tree over `MAX_TOTAL_BYTES` (the walk's,
-/// the change check's and the manifest snapshot's), so a caller can tell it
-/// from other errors without matching a free-form message (review of #478).
+/// the incremental pass's and the manifest snapshot's), so a caller can tell
+/// it from other errors without matching a free-form message (review of #478).
 pub const TOTAL_BYTES_EXCEEDED: &str = "total_bytes_exceeded";
 
 // source: heuristic — 64 is deeper than any realistic project tree

@@ -20,29 +20,32 @@
 //!    graph was built with, and they equal this call's (`IndexOptions::scope`).
 //!    The per-file states cannot see a changed `language`, `dependency_scope`
 //!    or `exclude_dirs`, which change which files belong in the graph at all;
-//! 4. no file changed, was added, deleted or renamed since that manifest, and
-//!    none was unreadable when it was written (`indexer::tree_changed_since`);
-//! 5. the incremental pass that refreshes the sidecars succeeds and itself
-//!    finds no change (a save in between rebuilds). A failed refresh, or one
-//!    that finds a change, is logged and falls back to the full rebuild (§13 —
-//!    no silent path); a failed coverage-sidecar write fails the call;
+//! 4. the manifest records no file it could not read (an empty hash):
+//!    `chmod +r` moves no mtime, so the refresh would carry such a file
+//!    forward unparsed, and the full rebuild retries it;
+//! 5. the incremental pass, which re-parses the files changed, added, deleted
+//!    or renamed since that manifest, succeeds. A failed pass is logged and
+//!    falls back to the full rebuild (§13 — no silent path); a failed
+//!    coverage-sidecar write fails the call;
 //! 6. that pass keeps the manifest's scope (`IncrementalResult::scope_kept`):
 //!    it computed the same Cargo map (`FileManifest::cargo_facts`) as the pass
 //!    that wrote the manifest, and built its coverage report on the previous
 //!    one. The map is read from manifests the walk may not list — `Cargo.toml`
-//!    under `language: "rust"`, a path dependency outside the tree — so
-//!    condition 4 cannot see it move.
+//!    under `language: "rust"`, a path dependency outside the tree — so the
+//!    per-file states cannot see it move.
 //!
-//! # Why an edited tree is still rebuilt in full
+//! # Why an edited tree is reused
 //!
-//! Condition 4 is the resolver's limit, not the indexer's: `index_incremental`
-//! re-parses only the changed files correctly, but `resolver::resolve_graph`
-//! keeps the call edges an earlier run wrote and has no invalidation for an
-//! UNCHANGED file whose candidate set another file's edit changed. Adding a
-//! second `beta()` makes a call that resolved by unique match ambiguous; a
-//! fresh analysis drops that edge, a reused graph kept it (Codex review of
-//! #478, reproduced by `a_call_made_ambiguous_by_an_added_file_is_rebuilt`).
-//! Reusing an edited graph waits for that invalidation (a follow-up of #443).
+//! Until the resolver could invalidate its own rows, an edited tree was
+//! rebuilt in full: `resolver::resolve_graph` kept the rows an earlier run
+//! wrote, so a call an added second `beta()` made ambiguous kept its
+//! unique-match edge (Codex review of #478). Every pass now retracts the
+//! static call rows (`resolver::retract`, #496) and the import, use,
+//! implements and extends rows (`resolver::retract_edges`, #513) it does not
+//! decide again, and reopens the sites and imports they alone resolved, so
+//! resolving the refreshed graph gives the rows a fresh analysis gives.
+//! `index_phase_change_tests.rs` checks every edit kind against a fresh
+//! analysis of the same tree.
 //!
 //! The later phases (resolve, LSP, cluster, search index) run over the whole
 //! graph either way.
@@ -89,9 +92,9 @@ pub(super) fn run(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
 }
 
 /// Conditions 1 to 4 of the module doc: the manifest to reuse, or `None`.
-/// The checks that need no I/O or read a small sidecar come first, then the
-/// walk, and only then the one that opens the graph, so an edited, re-scoped
-/// or `lsp: true` call never opens it (Claude review of #478).
+/// The checks that need no I/O or read a small sidecar come first, and only
+/// then the one that opens the graph, so a re-scoped or `lsp: true` call
+/// never opens it (Claude review of #478).
 fn reusable_manifest(req: &AnalyzeRequest) -> Option<indexer::manifest::FileManifest> {
     if req.want_full || !is_own_graph(&req.graph_dir) {
         return None;
@@ -121,13 +124,11 @@ fn reusable_manifest(req: &AnalyzeRequest) -> Option<indexer::manifest::FileMani
         eprintln!("[ap] analyze_codebase: no readable coverage sidecar; rebuilding in full");
         return None;
     }
-    match indexer::tree_changed_since(&req.codebase, &req.options, &prior) {
-        Ok(false) => {}
-        Ok(true) => return None,
-        Err(e) => {
-            eprintln!("[ap] analyze_codebase: change check failed ({e}); rebuilding in full");
-            return None;
-        }
+    if prior.files.values().any(|f| f.content_hash.is_empty()) {
+        eprintln!(
+            "[ap] analyze_codebase: the manifest records an unreadable file; rebuilding in full"
+        );
+        return None;
     }
     if graph_has_lsp_rows(&req.graph_dir) {
         eprintln!(
@@ -148,8 +149,8 @@ fn is_own_graph(graph_dir: &std::path::Path) -> bool {
 
 /// True when `meta.json` names this call's root. Another checkout whose files
 /// all match by (mtime, size) — normalized mtimes, `cp -p` — would otherwise
-/// pass the change check (review of #478). `write_graph_meta` records the root
-/// exactly as this compares it.
+/// read as unchanged to the refresh (review of #478). `write_graph_meta`
+/// records the root exactly as this compares it.
 fn same_root(req: &AnalyzeRequest) -> bool {
     // A regular file of a sane size only (Codex security review of #478): a
     // FIFO here would block, and a link to `/dev/zero` would never end.
@@ -172,8 +173,8 @@ fn graph_has_lsp_rows(graph_dir: &std::path::Path) -> bool {
         .map_or(true, |n| n > 0)
 }
 
-/// `Ok(None)`: not applicable, the refresh pass failed, the tree changed
-/// during it, or it dropped the scope (each logged).
+/// `Ok(None)`: not applicable, the refresh pass failed, or it dropped the
+/// scope (each logged).
 /// `Err`: the pass ran but its coverage report did not reach the sidecar, so
 /// the response could not stand behind any coverage receipt (same rule as the
 /// full path, `persist_analyze_sidecars`).
@@ -182,8 +183,9 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
         return Ok(None);
     };
     let manifest_path = indexer::manifest::manifest_path(&req.output_dir);
-    // With nothing changed this re-parses nothing; it refreshes the manifest
-    // (moved mtimes), the coverage sidecar and the Cargo facts.
+    // Re-parses the changed, added and renamed files, purges the deleted
+    // ones, and refreshes the manifest, the coverage sidecar and the Cargo
+    // facts; with nothing changed it re-parses nothing.
     let inc = match indexer::index_incremental(
         &req.codebase,
         &req.graph_dir,
@@ -199,12 +201,6 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
             return Ok(None);
         }
     };
-    // A file saved between the change check and this pass was re-parsed
-    // (TOCTOU, review of #478): that graph is no longer one a reuse may keep.
-    if inc.changed + inc.added + inc.deleted + inc.renamed > 0 {
-        eprintln!("[ap] analyze_codebase: the tree changed during the refresh; rebuilding in full");
-        return Ok(None);
-    }
     if let Some(e) = inc.coverage_write_error {
         return Err(format!("coverage sidecar write failed: {e}"));
     }
