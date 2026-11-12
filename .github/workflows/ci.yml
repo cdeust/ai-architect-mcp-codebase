@@ -110,7 +110,7 @@ jobs:
       # forward as fixes land — current floor is nodes/Defines ≥ 0.96 on
       # tests/fixtures/graph_accuracy/pure-shared/text.py.
       - name: Run graph accuracy gate
-        run: cargo test --test graph_accuracy -- --nocapture
+        run: cargo test --locked --test graph_accuracy -- --nocapture
 
       # Full suite (stage3a-d integrations, etc.). Kept separate so a
       # graph-accuracy regression fails the build with a clear signal even
@@ -119,7 +119,7 @@ jobs:
       # source for the advertised test count — counting `#[test]` attributes
       # undercounts by every test our macros generate (AP #161).
       - name: Run full test suite
-        run: set -o pipefail && cargo test 2>&1 | tee test-output.log
+        run: set -o pipefail && cargo test --locked 2>&1 | tee test-output.log
 
       - name: Check generated Codex skills are current
         run: python3 scripts/sync_portable_skills.py --check
@@ -185,7 +185,8 @@ jobs:
         # script reads command + args from both manifests, performs the MCP
         # handshake and calls health_check through the core profile.
         run: |
-          cargo build --release --bin ai-architect-mcp-codebase
+          cargo build --locked --release --bin ai-architect-mcp-codebase
+          python3 scripts/smoke_binary.py target/release/ai-architect-mcp-codebase
           PATH="$PWD/target/release:$PATH" python3 scripts/smoke_portable_hosts.py
           CLAUDE_PLUGIN_ROOT="$PWD" python3 scripts/smoke_claude_plugin.py
           python3 scripts/smoke_mcpb.py
@@ -293,7 +294,8 @@ jobs:
             scripts/tests/test_check_doc_claims.py \
             scripts/tests/test_doc_claim_sources.py \
             scripts/tests/test_check_moved_fn_bodies.py \
-            scripts/tests/test_bootstrap_pins.py -v 2>&1 | tail -5
+            scripts/tests/test_bootstrap_pins.py \
+            scripts/tests/test_smoke_binary.py -v 2>&1 | tail -5
 
       # The move proof of #352 run on a real before/after pair kept in the
       # repository, both ways (issue #362): a pure move must pass, and a copy

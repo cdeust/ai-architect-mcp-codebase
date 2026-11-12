@@ -408,10 +408,41 @@ class ReadmePlatformTable(BootstrapHarness):
                     self.assertEqual(ci, expected)
                 else:
                     self.assertEqual(
-                        ci, f"**no**: built on `{built_on[asset]}`, never started"
+                        ci,
+                        f"**no**: built on `{built_on[asset]}` and started there "
+                        "by `release.yml` before it is packaged",
                     )
         self.assertFalse(
             started_by, f"install runners that start no listed platform: {started_by}"
+        )
+
+    def test_release_and_windows_build_start_what_they_build(self):
+        """Issue #449: the row above says `release.yml` starts the binary it
+        builds. Every leg of its matrix runs `scripts/smoke_binary.py` on its
+        own artifact, after the build and before the packaging, with no
+        condition; `windows-build.yml` starts the executable it builds."""
+        name = "      - name: Start the built binary (initialize, tools/list, health_check)\n"
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertEqual(release.count(name), 1)
+        step = release.split(name, 1)[1].split("      - name:", 1)[0]
+        self.assertNotIn("if:", step, "a leg of the matrix would skip the smoke")
+        self.assertIn("python3 scripts/smoke_binary.py", step)
+        self.assertIn(
+            "target/${{ matrix.rust_target }}/release/"
+            "ai-architect-mcp-codebase${{ matrix.bin_suffix }}",
+            step,
+        )
+        last_build = release.rindex("run: cargo build --locked --release")
+        self.assertLess(last_build, release.index(name))
+        self.assertLess(
+            release.index(name), release.index("      - name: Package tarball + sha256")
+        )
+        windows = (ROOT / ".github/workflows/windows-build.yml").read_text()
+        self.assertEqual(windows.count(name), 1)
+        self.assertIn(
+            "python3 scripts/smoke_binary.py "
+            "target/x86_64-pc-windows-msvc/release/ai-architect-mcp-codebase.exe",
+            windows.split(name, 1)[1],
         )
 
     def test_started_by_ci_means_the_installed_smoke(self):
