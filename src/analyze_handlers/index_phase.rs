@@ -32,7 +32,9 @@
 //!    that wrote the manifest, and built its coverage report on the previous
 //!    one. The map is read from manifests the walk may not list — `Cargo.toml`
 //!    under `language: "rust"`, a path dependency outside the tree — so the
-//!    per-file states cannot see it move.
+//!    per-file states cannot see it move. Nor does it keep the scope when
+//!    the IaC references of a file it did not re-parse may have moved
+//!    (`indexer::incremental::cross_links`, Codex review of #523).
 //!
 //! # Why an edited tree is reused
 //!
@@ -44,8 +46,10 @@
 //! implements and extends rows (`resolver::retract_edges`, #513) it does not
 //! decide again, and reopens the sites and imports they alone resolved, so
 //! resolving the refreshed graph gives the rows a fresh analysis gives.
-//! `index_phase_change_tests.rs` checks every edit kind against a fresh
-//! analysis of the same tree.
+//! The refresh also draws again the light links of unchanged files when the
+//! file set moves, which resolve against it (`cross_links`).
+//! `index_phase_change_tests.rs` and `index_phase_cross_link_tests.rs` check
+//! every edit kind against a fresh analysis of the same tree.
 //!
 //! The later phases (resolve, LSP, cluster, search index) run over the whole
 //! graph either way.
@@ -272,3 +276,7 @@ mod rebuild_tests;
 #[cfg(test)]
 #[path = "index_phase_change_tests.rs"]
 mod change_tests;
+
+#[cfg(test)]
+#[path = "index_phase_cross_link_tests.rs"]
+mod cross_link_tests;

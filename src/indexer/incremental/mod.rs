@@ -58,7 +58,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::coverage::FileCoverage;
-use super::manifest::{self, FileManifest, FileState};
+use super::manifest::{self, FileManifest};
 use super::persist::ParseOutcome;
 use super::walk::{ParsePolicy, WalkOptions};
 use super::{light_link, IncrementalResult, IndexOptions};
@@ -68,7 +68,9 @@ mod bootstrap;
 mod change_check;
 mod classify;
 mod coverage;
+mod cross_links;
 mod edges;
+mod full_manifest;
 mod mutate;
 mod stale_sites;
 
@@ -78,6 +80,8 @@ use classify::{classify, discover};
 pub(super) use coverage::apply_cargo_facts;
 use coverage::save_incremental_coverage;
 use edges::{relink_inbound_edges, snapshot_inbound_edges};
+#[allow(unused_imports)] // `write_full_manifest`: see the re-export in `indexer/mod.rs`
+pub use full_manifest::{full_manifest, full_manifest_within, write_full_manifest};
 use mutate::{
     existing_directory_ids, prune_orphan_directories, purge_file_content, purge_file_node,
     purge_file_symbols, purge_outbound_light_links, reparse_modified_file, reparse_new_file,
@@ -153,9 +157,10 @@ pub(super) struct Plan {
 /// file, none of its nodes or edges are touched (asserted by the integration
 /// test's per-file count check).
 ///
-/// The refreshed manifest keeps `prior`'s scope only when this pass changed no
-/// file, ran with the same settings, computed the same Cargo map, and saved a
-/// coverage report built on the previous one (issue #443, reviews of #478).
+/// The refreshed manifest keeps `prior`'s scope only when this pass ran with
+/// the same settings, computed the same Cargo map, saved a coverage report
+/// built on the previous one (issue #443, reviews of #478), and moved no IaC
+/// reference of a file it did not re-parse (`cross_links`, review of #523).
 pub fn index_incremental(
     codebase: &Path,
     graph_dir: &Path,
@@ -203,6 +208,9 @@ pub fn index_incremental(
     let scope = options.scope();
     let settings_match = prior.scope.as_ref() == Some(&scope);
 
+    // Read before the pass: an IaC reference of an unchanged file may move
+    // with this change set, and nothing draws it again (`cross_links`).
+    let iac_stale = cross_links::iac_references_stale(&store, &plan.change_set);
     let (reparsed, reparsed_gaps) =
         apply_changes(&store, codebase, &plan.change_set, &current, policy)?;
 
@@ -234,7 +242,7 @@ pub fn index_incremental(
     // forward by the next reuse as if it were; a report built without the
     // previous one lost the unchanged files' gaps (Claude reviews of #478).
     let coverage_saved = cov.write_error.is_none() && cov.prior_loaded;
-    let scope_kept = settings_match && facts_match && coverage_saved;
+    let scope_kept = settings_match && facts_match && coverage_saved && !iac_stale;
     plan.next_manifest.scope = scope_kept.then_some(scope);
     plan.next_manifest.cargo_facts = Some(cargo_facts_digest);
     manifest::save(manifest_path, &plan.next_manifest)?;
@@ -384,6 +392,10 @@ pub(super) fn apply_changes(
         }
     }
 
+    // An added, deleted or renamed file also moves the links of unchanged
+    // sources, which resolve against the file set (Codex review of #523).
+    cross_links::relink_unchanged_sources(store, codebase, changes, all_current)?;
+
     // ---- 4b. Re-derive IaC nodes/edges OUT of the re-parsed files -----------
     // (issue #63 incremental integration). The changed files' stale `<rel>::`
     // IaC nodes were already reclaimed by `purge_file_symbols` above (they share
@@ -427,77 +439,3 @@ fn record_reparse_outcome(
         }
     }
 }
-
-/// Builds the manifest for `codebase` and writes it to `manifest_path`. Since
-/// #478 the full paths call `full_manifest` before indexing and save it after;
-/// this one-step form builds fixtures for the tests and the baseline of the
-/// `incremental_speed` benchmark (`benchmarks/incremental_speed`). Like any
-/// manifest written outside a full index, it records no Cargo map, so an
-/// `analyze_codebase` over it rebuilds.
-///
-/// Preconditions: `codebase` is the tree a full index under the same
-/// `options` (`language_filter`/`dependency_scope`/`exclude_dirs`) built the
-/// graph from, unchanged since; `manifest_path`'s parent exists. Postcondition on `Ok`: the manifest
-/// records (mtime, size, content_hash) for every file the full index visited,
-/// keyed by the File node id. Best-effort per file: a stat/read failure
-/// records a zeroed/empty state rather than aborting the whole index (the
-/// file simply re-classifies as changed next time).
-///
-/// Walk-level gaps (excluded/unreadable directories, issue #249) are
-/// discarded here — the caller (a just-completed full index) already wrote
-/// the coverage sidecar from its own walk; this re-walk exists only to build
-/// the manifest baseline for the NEXT incremental call.
-#[allow(dead_code)] // see the re-export in `indexer/mod.rs`
-pub fn write_full_manifest(
-    codebase: &Path,
-    manifest_path: &Path,
-    options: &IndexOptions,
-) -> Result<(), String> {
-    manifest::save(manifest_path, &full_manifest(codebase, options)?)
-}
-
-/// The manifest a full index of `codebase` under `options` leaves, built from
-/// the tree as it is now. A full rebuild takes it BEFORE indexing and saves it
-/// after (review of #478): a file added, edited or deleted while the index
-/// runs then differs from this snapshot, so the next reuse check sees it,
-/// instead of a manifest written after the index vouching for a file the
-/// graph never parsed.
-pub fn full_manifest(codebase: &Path, options: &IndexOptions) -> Result<FileManifest, String> {
-    full_manifest_within(codebase, options, super::MAX_TOTAL_BYTES)
-}
-
-/// `full_manifest` under an explicit byte cap, so a caller's test can reach
-/// the refusal without a 2 GiB tree.
-pub fn full_manifest_within(
-    codebase: &Path,
-    options: &IndexOptions,
-    cap: u64,
-) -> Result<FileManifest, String> {
-    let walk_opts = WalkOptions {
-        language_filter: options.language_filter,
-        dependency_scope: options.dependency_scope,
-        exclude_dirs: options.exclude_dirs.clone(),
-    };
-    let (current, _walk_gaps, _walk_pruned) = discover(codebase, walk_opts)?;
-    // Taken before indexing, so the indexer's own cap has not run yet: refuse
-    // a tree over it before hashing anything (Codex review of #478).
-    check_total_bytes(&current, cap)?;
-    let mut m = FileManifest::new();
-    // A full index's manifest describes a graph built with exactly `options`.
-    m.scope = Some(options.scope());
-    for d in &current {
-        m.files.insert(
-            d.rel.clone(),
-            FileState {
-                mtime_ns: d.mtime_ns,
-                size: d.size,
-                content_hash: manifest::hash_file(&d.abs).unwrap_or_default(),
-            },
-        );
-    }
-    Ok(m)
-}
-
-#[cfg(test)]
-#[path = "full_manifest_tests.rs"]
-mod full_manifest_tests;

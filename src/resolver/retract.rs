@@ -12,7 +12,8 @@
 //
 // Sequence, around the pass:
 //   1. before it, read the static tiers' `Calls_*` rows (`load_static_call_rows`)
-//      and reopen the sites only those rows resolve (`reopen_static_sites`), so
+//      and reopen the sites only those rows resolve, and the sites resolved
+//      through a type (`reopen_static_sites`), so
 //      the pass writes the open reason of every site it leaves open (the reason
 //      writer skips a resolved site; Codex review of #496);
 //   2. the pass runs and flushes; it sets back to resolved every site it decides;
@@ -38,7 +39,7 @@
 // `retract_edges`; `Retraction` runs both around the pass.
 
 use crate::ambiguity_policy::{resolution_label, Evidence};
-use crate::graph_store::{cypher_str, GraphStore, NODE_CALL_SITE, REL_TABLES};
+use crate::graph_store::{cypher_str, symbol_name, GraphStore, NODE_CALL_SITE, REL_TABLES};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// A resolution row as the `EdgeBuffer` keys it: (rel table, from id, to id).
@@ -56,8 +57,8 @@ impl Retraction {
     /// only those rows resolve, and sets every Import back to unresolved.
     pub(super) fn begin(store: &GraphStore) -> Result<Self, String> {
         let calls = load_static_call_rows(store)?;
-        reopen_static_sites(store, &calls)?;
         let edges = super::retract_edges::load_owned_rows(store);
+        reopen_static_sites(store, &calls, &edges)?;
         super::retract_edges::reopen_imports(store)?;
         Ok(Retraction { calls, edges })
     }
@@ -133,13 +134,79 @@ fn load_static_call_rows(store: &GraphStore) -> Result<HashSet<RowKey>, String> 
 /// that hold no per-site call row of another writer, so the pass that follows
 /// writes the reason of each one it leaves open. A site a language-server row
 /// also resolves keeps its flag.
-fn reopen_static_sites(store: &GraphStore, owned: &HashSet<RowKey>) -> Result<(), String> {
+///
+/// Also reopens the sites the static pass resolved through a type
+/// (`type_resolved_sites`): a call that names an Enum, a Trait or a type alias
+/// (a Go conversion `Count(1)`) writes a `Uses_*` row from the caller to the
+/// type and no per-site `Calls_*` row. Its flag would otherwise outlive the
+/// type: renamed, the type no longer resolves the call, a fresh analysis
+/// leaves the site open, the refreshed graph kept `is_resolved = true` (Codex
+/// review of #523).
+fn reopen_static_sites(
+    store: &GraphStore,
+    owned: &HashSet<RowKey>,
+    owned_edges: &HashSet<RowKey>,
+) -> Result<(), String> {
     let sites: BTreeSet<&str> = owned
         .iter()
         .filter(|(rel, _, _)| site_tables().any(|(t, _, _)| t == rel))
         .map(|(_, from, _)| from.as_str())
         .collect();
-    reopen_sites_without_row(store, &sites, &method_list())
+    reopen_sites_without_row(store, &sites, &method_list())?;
+    let typed = type_resolved_sites(store, owned_edges)?;
+    let refs: Vec<&str> = typed.iter().map(String::as_str).collect();
+    store.mark_callsites_unresolved(&refs)
+}
+
+/// The resolved call sites that hold no per-site call row of any writer and
+/// whose caller holds a static `Uses_*` row (`owned_edges`, read by
+/// `retract_edges::load_owned_rows`) to a symbol named like the callee: the
+/// trace the static pass leaves when it resolves a call to a type. A site
+/// another tier flagged without such a row keeps its flag
+/// (`tests/stale_resolved_flag_353.rs`). Empty when the graph holds
+/// language-server rows, or cannot say: that pass may resolve the same site to
+/// a Trait without a per-site row, and only it can decide it again.
+fn type_resolved_sites(
+    store: &GraphStore,
+    owned_edges: &HashSet<RowKey>,
+) -> Result<Vec<String>, String> {
+    let uses: HashSet<(&str, &str)> = owned_edges
+        .iter()
+        .filter(|(rel, _, _)| rel.starts_with("Uses_"))
+        .map(|(_, from, to)| (from.as_str(), symbol_name(to)))
+        .collect();
+    if uses.is_empty()
+        || store
+            .count_edges_by_method("lsp-definition")
+            .map_or(true, |n| n > 0)
+    {
+        return Ok(Vec::new());
+    }
+    store.ensure_node_column("CallSite", "is_resolved", "BOOLEAN DEFAULT false")?;
+    let macro_site = crate::graph_store::rust_macro_site_predicate();
+    let resolved = store.execute_query(&format!(
+        "MATCH (cs:CallSite) WHERE cs.is_resolved = true AND NOT ({macro_site}) \
+         RETURN cs.id, cs.callee_name"
+    ))?;
+    let mut with_row: HashSet<String> = HashSet::new();
+    for &(rel, _, _) in site_tables() {
+        let qr = store.execute_query(&format!(
+            "MATCH (c:CallSite)-[r:{rel}]->() RETURN DISTINCT c.id"
+        ))?;
+        with_row.extend(qr.rows.into_iter().filter_map(|r| r.into_iter().next()));
+    }
+    let mut open: Vec<String> = resolved
+        .rows
+        .into_iter()
+        .filter(|r| r.len() >= 2 && !with_row.contains(&r[0]))
+        .filter(|r| {
+            let caller = super::extract_caller_from_callsite_id(&r[0]);
+            uses.contains(&(caller.as_str(), symbol_name(&r[1])))
+        })
+        .map(|mut r| r.swap_remove(0))
+        .collect();
+    open.sort_unstable();
+    Ok(open)
 }
 
 /// Step 3: deletes the rows of `owned` absent from `met` (the persisted rows
