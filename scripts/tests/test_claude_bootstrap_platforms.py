@@ -310,13 +310,20 @@ def release_runners():
 
 
 def install_job_runners():
-    """The `os` matrix of the pipeline's `install` job, in matrix order."""
+    """The systems the pipeline's `install` job runs on, in matrix order, for a
+    change that is not documentation only. The job takes its `os` matrix from the
+    `contract` job, which selects it from `RUNNERS` (Cortex ADR-1133)."""
     pipeline = (ROOT / ".github/workflows/pipeline.yml").read_text()
     job = re.search(r"^  install:\n(.*?)(?=^  [^\s#]|\Z)", pipeline, re.M | re.S)
     require(job, "pipeline.yml has no top-level `install:` job")
     body = job.group(1)
-    matrix = re.search(r"^\s+os: \[([^\]]*)\]", body, re.M)
-    require(matrix, "the `install` job has no inline `os: [...]` matrix")
+    selected = r"^\s+os: \$\{\{ fromJSON\(needs\.contract\.outputs\.platforms\) \}\}$"
+    require(
+        re.search(selected, body, re.M),
+        "the `install` job does not take its `os` matrix from the `contract` job",
+    )
+    runners = re.findall(r"^\s+RUNNERS = \[([^\]]*)\]$", pipeline, re.M)
+    require(len(runners) == 1, "pipeline.yml does not define `RUNNERS` exactly once")
     require(
         not re.search(r"^\s+(include|exclude):", body, re.M),
         "`include:`/`exclude:` matrix entries are not read",
@@ -325,7 +332,7 @@ def install_job_runners():
         re.search(r"^    runs-on: \$\{\{ matrix\.os \}\}$", body, re.M),
         "the `install` job does not run on `matrix.os`",
     )
-    labels = [runner.strip() for runner in matrix.group(1).split(",")]
+    labels = [runner.strip().strip('"') for runner in runners[0].split(",")]
     require(len(set(labels)) == len(labels), "an `install` runner is listed twice")
     return labels
 

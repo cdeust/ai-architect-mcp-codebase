@@ -35,6 +35,16 @@ Closes #
 - [ ] Manual verification of any UI / CLI / MCP-tool behavior changes.
 - [ ] Every commit is signed off (`git commit -s`), per GOVERNANCE.md.
 
+## Risk and rollback
+
+<!--
+  What can this change break, and how is it undone? (Cortex ADR-1132)
+  - Risk: what fails, and for whom, if this change is wrong.
+  - How to revert: the command or step that restores the previous behaviour.
+    `git revert <sha>` when nothing else is needed; name any released artifact
+    that a revert does not undo.
+-->
+
 ## Audit notes
 
 <!--

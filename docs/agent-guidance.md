@@ -110,3 +110,25 @@ apply. It never widens what a prompt allows.
    of rule 3. Never write a line that begins with `Verdict:`: that line is the review's.
 7. **Owner decisions are left alone:** a pull request on the branch
    `ci/budget-counts-contract-reviews`, anything labelled `hold` or `do-not-merge`, a draft.
+8. **The work is verified before the pull request exists** (Cortex ADR-1132). Before
+   opening a pull request, and before each push to one, run the `unit` and `regression`
+   commands of `ci.json` on a clean copy of the commit (a worktree under
+   `.claude/worktrees/` or a `git archive`), plus what the change needs beyond them, and
+   put each command with its passed, failed and skipped counts in the pull request body.
+   A command the session cannot run is named there with the reason. The hosted Pipeline
+   stays the gate; it is not the place to find out whether a change works. After a
+   conflict merge under rule 4, the touched tests are enough. A changelog or
+   documentation entry is pushed with the change it records; documentation is pushed
+   alone only to fix a blocker.
+9. **A pull request that changes the `ci.json` validator leaves a tree the earlier
+   validator still passes** (Cortex ADR-1134). The Pipeline after merge runs the workflow
+   of the commit before the merge: its `contract` job validates the merged tree, `ci.json`
+   and the version file it names, with the validator of that earlier commit. In Cortex,
+   the two pull requests that added a key to `ci.json` together with the validator that
+   accepts it each merged, then failed that job, and the test jobs of that run were
+   skipped. Such a pull request replays the step before it is opened and before each push
+   to it: the validator as it was before its commits, on the tree after them. So a key
+   enters `ci.json` in a pull request after the one that taught the validator to accept
+   it; what fails without the key, a validator that requires it or a reader that refuses
+   its absence, comes with the key or after it; a key the validator requires leaves
+   `ci.json` after the validator stopped requiring it.
