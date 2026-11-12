@@ -117,6 +117,21 @@ pub(super) fn link_file_imports_for(
     Ok(edge_count)
 }
 
+/// True for a file this pass scans for specifiers (JS family, Markdown,
+/// shell). Its links resolve against the set of File ids, not against the
+/// targets' content, so an added, deleted or renamed file can change the links
+/// of an unchanged source (`incremental::cross_links`).
+pub(super) fn is_link_source(file_path: &Path) -> bool {
+    let ext = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    [JS_EXTS, MD_EXTS, SH_EXTS]
+        .iter()
+        .any(|exts| exts.contains(&ext.as_str()))
+}
+
 /// Reads `file_path` and extracts its reference/import specifiers, tagged with
 /// the target relation table for its language:
 ///   JS family   → import/require              → Imports_File_File   (code dep)

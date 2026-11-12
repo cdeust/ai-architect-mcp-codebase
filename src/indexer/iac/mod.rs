@@ -155,6 +155,12 @@ enum IacKind {
     Other,
 }
 
+/// True for a file this pass may parse (a Dockerfile, a Kustomization, a
+/// YAML manifest candidate), whatever its content turns out to be.
+pub(super) fn is_iac_candidate(path: &Path) -> bool {
+    classify(path) != IacKind::Other
+}
+
 /// Classifies a file by name (and, for `.yaml`/`.yml`, by a cheap content
 /// sniff deferred to the parse step). source: pass_infrascan.c cbm_is_dockerfile
 /// + pass_k8s.c file dispatch.

@@ -25,6 +25,8 @@ mod macro_reset;
 pub(crate) use columns::{callee_shape::*, hint_via::*};
 pub(crate) use columns::{RECEIVER_HINT_VIA_IMPORT_PREFIX, RECEIVER_HINT_VIA_RETURN_TYPE};
 pub(crate) use macro_reset::{is_rust_macro_site, rust_macro_site_predicate};
+mod symbol_name;
+pub(crate) use symbol_name::symbol_name;
 mod membership;
 mod recovery;
 mod schema;

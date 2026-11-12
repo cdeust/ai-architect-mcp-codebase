@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-27-orange" alt="27 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-3500+_passing-brightgreen" alt="3500+ tests">
+  <img src="https://img.shields.io/badge/Tests-3600+_passing-brightgreen" alt="3600+ tests">
   <img src="https://img.shields.io/badge/Coverage-94%25-brightgreen" alt="94% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
@@ -210,8 +210,11 @@ root, a new server version, `lsp: true` (now or on the run that built the
 graph), a symlinked or artifact-imported graph, a missing or unreadable
 coverage sidecar, a file that was unreadable when the graph was built, a
 `Cargo.toml` edit that changes the crate names, targets or features (even under
-`language: "rust"`, whose walk skips that file), or `full: true` rebuilds from
-scratch. The response's `index.mode` says which path ran.
+`language: "rust"`, whose walk skips that file), an add, delete or rename, or
+an edit of a Dockerfile, Kustomization or YAML file, in a graph that holds
+infrastructure-as-code nodes (their references between files are not drawn
+again yet), or `full: true` rebuilds from scratch. The response's `index.mode`
+says which path ran.
 
 ## 27 MCP Tools
 
@@ -531,7 +534,7 @@ In this codebase:
 
 ```bash
 cargo build --release
-cargo test                                            # full suite (3500+ tests)
+cargo test                                            # full suite (3600+ tests)
 cargo test --test graph_accuracy                      # structural accuracy gate
 cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
 python3 scripts/check_doc_claims.py                   # README numbers against their sources
