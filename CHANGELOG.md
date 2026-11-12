@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `pipeline.yml` and `pipeline-post-merge.yml` are byte for byte Cortex's (commit `5ea8b83`). They bring the selection of Cortex ADR-1133: a pull request whose every changed path lies under an optional `docs_paths` of `ci.json` runs `environment` and `install` on Linux alone, the resolver accepts that matrix only when it finds the pull request documentation-only itself, and the Pipeline after merge still runs the three systems. This repository's `ci.json` has no `docs_paths` yet, so every pull request still runs the three systems. The test of the README platform table reads the `install` runners from the selection instead of an inline matrix.
+- CI contract, rules 8 and 9 (Cortex ADR-1132, ADR-1134): the `unit` and `regression` commands of `ci.json` are run before a pull request is opened or pushed to, and their counts go in its body; a pull request that changes the `ci.json` validator leaves a tree the earlier validator still passes. The pull request template asks for the risk of the change and the way to undo it.
+
 ## [0.15.0] - 2026-11-11
 
 This is a minor release. One default changes: the full-AST layer (`AstNode`
