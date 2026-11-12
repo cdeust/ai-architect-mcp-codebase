@@ -124,7 +124,8 @@ apply. It never widens what a prompt allows.
 9. **A pull request that changes the `ci.json` validator leaves a tree the earlier
    validator still passes** (Cortex ADR-1134). The Pipeline after merge runs the workflow
    of the commit before the merge: its `contract` job validates the merged tree, `ci.json`
-   and the version file it names, with the validator of that earlier commit. In Cortex,
+   and the version file (here the default, `.claude-plugin/plugin.json`), with the
+   validator of that earlier commit. In Cortex,
    the two pull requests that added a key to `ci.json` together with the validator that
    accepts it each merged, then failed that job, and the test jobs of that run were
    skipped. Such a pull request replays the step before it is opened and before each push
