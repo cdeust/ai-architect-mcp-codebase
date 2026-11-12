@@ -11,9 +11,10 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
 # source: the heredoc opener of the ci.json validator in pipeline.yml.
 VALIDATOR = "          python3 - \"$GITHUB_WORKSPACE\" --github-output <<'PY'\n"
-# source: ci.json of this repository. Neither scripts/ci_environment.sh, the
-# install command of ci.json nor scripts/smoke_claude_plugin.py reads these paths,
-# and no build script or include_str! of the binary embeds them.
+# source: ci.json of this repository. The install command copies the whole
+# checkout, these paths included, and nothing opens them afterwards: neither
+# scripts/ci_environment.sh nor scripts/smoke_claude_plugin.py reads them, and no
+# build script or include_str! of the binary embeds them.
 DOCS = ["docs/", "CHANGELOG.md"]
 
 
