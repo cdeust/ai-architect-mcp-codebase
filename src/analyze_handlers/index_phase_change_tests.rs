@@ -1,5 +1,6 @@
-//! Issue #443, reviews of #478: which changes to the tree make the next
-//! `analyze_codebase` rebuild, and which do not.
+//! Issue #443, reviews of #478: which changes to the tree the next
+//! `analyze_codebase` applies to the previous graph, which make it rebuild,
+//! and that the refreshed graph is the one a fresh analysis builds.
 
 use super::tests::{analyze, fixture, outcome};
 use crate::test_support::TempDirExt;
@@ -7,7 +8,7 @@ use serde_json::{json, Value};
 use std::fs;
 
 #[test]
-fn a_call_after_an_edit_rebuilds_and_matches_a_fresh_analysis() {
+fn a_call_after_an_edit_is_refreshed_and_matches_a_fresh_analysis() {
     let (repo, base) = fixture("analyze443_edit_");
     let out = base.join("out");
     analyze(&repo, &out, json!({}));
@@ -30,22 +31,25 @@ fn a_call_after_an_edit_rebuilds_and_matches_a_fresh_analysis() {
     .expect("edit lib.rs");
     fs::remove_file(repo.join("src/extra/v.rs")).expect("delete");
 
-    // An edited tree is rebuilt: the resolver cannot invalidate edges of the
-    // unchanged files yet (see the module doc of `index_phase`).
+    // An edited tree is refreshed: the resolver retracts the rows it no
+    // longer decides (see the module doc of `index_phase`).
     let second = analyze(&repo, &out, json!({}));
-    assert_eq!(second["index"]["mode"], "full", "{second}");
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert_eq!(second["index"]["changed"], 2, "{second}");
+    assert_eq!(second["index"]["added"], 1, "{second}");
+    assert_eq!(second["index"]["deleted"], 1, "{second}");
 
     let fresh = analyze(&repo, &base.join("fresh"), json!({}));
     assert_eq!(outcome(&second), outcome(&fresh));
 }
 
 #[test]
-fn a_call_made_ambiguous_by_an_added_file_is_rebuilt() {
+fn a_call_made_ambiguous_by_an_added_file_is_retracted_on_refresh() {
     // Codex review of #478, P1: `a.rs` (unchanged) calls `beta()`, unique in
     // the first run. An added file declares a second `beta`, so a fresh
     // analysis no longer resolves the call by unique match. Reusing the graph
-    // kept the earlier edge (3 call-site targets against 2), so a change of
-    // the tree must rebuild.
+    // before the resolver retracted its rows kept the earlier edge (3
+    // call-site targets against 2).
     let (repo, base) = fixture("analyze443_ambiguous_");
     let out = base.join("out");
     fs::write(repo.join("src/a.rs"), "pub fn alpha() { beta(); }\n").expect("edit a.rs");
@@ -58,16 +62,17 @@ fn a_call_made_ambiguous_by_an_added_file_is_rebuilt() {
     .expect("edit lib.rs");
 
     let second = analyze(&repo, &out, json!({}));
-    assert_eq!(second["index"]["mode"], "full", "{second}");
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
     let fresh = analyze(&repo, &base.join("fresh"), json!({}));
     assert_eq!(outcome(&second), outcome(&fresh));
 }
 
 #[test]
-fn an_index_codebase_pass_that_applied_changes_makes_the_next_analysis_rebuild() {
+fn an_index_codebase_pass_between_two_analyses_leaves_no_stale_row() {
     // Claude review of #478: a same-settings `index_codebase` pass between two
     // analyses applied an add and kept the scope, so the next analysis saw no
-    // change and reused a graph whose resolver rows were stale.
+    // change and reused a graph whose resolver rows were stale. The resolve
+    // phase of that analysis now retracts them.
     let (repo, base) = fixture("analyze443_index_between_");
     let out = base.join("out");
     fs::write(repo.join("src/a.rs"), "pub fn alpha() { beta(); }\n").expect("edit a.rs");
@@ -80,40 +85,33 @@ fn an_index_codebase_pass_that_applied_changes_makes_the_next_analysis_rebuild()
     }))
     .expect("index");
     let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
     let fresh = analyze(&repo, &base.join("fresh"), json!({}));
     assert_eq!(outcome(&resp), outcome(&fresh));
 }
 
 #[test]
-fn a_pure_add_delete_or_rename_rebuilds() {
+fn a_pure_add_delete_or_rename_is_refreshed_and_matches_a_fresh_analysis() {
     // Each case touches one file that no `mod` declares, so only the matching
-    // arm of `tree_changed_since` can see it (review of #478).
+    // arm of the incremental classification can see it (review of #478).
     let (repo, base) = fixture("analyze443_pure_");
     let out = base.join("out");
     analyze(&repo, &out, json!({}));
     let extra = repo.join("src/extra");
+    let check = |case: &str, field: &str| {
+        let resp = analyze(&repo, &out, json!({}));
+        assert_eq!(resp["index"]["mode"], "incremental", "{case}: {resp}");
+        assert_eq!(resp["index"][field], 1, "{case}: {resp}");
+        let fresh = analyze(&repo, &base.join(format!("fresh_{case}")), json!({}));
+        assert_eq!(outcome(&resp), outcome(&fresh), "{case}");
+    };
 
     fs::write(extra.join("added.rs"), "pub fn added() {}\n").expect("add");
-    assert_eq!(
-        analyze(&repo, &out, json!({}))["index"]["mode"],
-        "full",
-        "add"
-    );
-
+    check("add", "added");
     fs::rename(extra.join("added.rs"), extra.join("renamed.rs")).expect("rename");
-    assert_eq!(
-        analyze(&repo, &out, json!({}))["index"]["mode"],
-        "full",
-        "rename"
-    );
-
+    check("rename", "renamed");
     fs::remove_file(extra.join("renamed.rs")).expect("delete");
-    assert_eq!(
-        analyze(&repo, &out, json!({}))["index"]["mode"],
-        "full",
-        "delete"
-    );
+    check("delete", "deleted");
 }
 
 #[test]
@@ -154,9 +152,9 @@ fn a_file_unreadable_at_build_time_is_retried() {
 }
 
 #[test]
-fn an_in_place_edit_of_the_same_size_rebuilds() {
+fn an_in_place_edit_of_the_same_size_is_refreshed() {
     // Review of #478: every other edit test also adds a file, so the hash arm
-    // of the change check was never reached with a real content change.
+    // of the classification was never reached with a real content change.
     let (repo, base) = fixture("analyze443_same_size_");
     let out = base.join("out");
     analyze(&repo, &out, json!({}));
@@ -174,19 +172,23 @@ fn an_in_place_edit_of_the_same_size_rebuilds() {
         .and_then(|f| f.set_modified(later))
         .expect("bump mtime");
     let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
+    assert_eq!(resp["index"]["changed"], 1, "{resp}");
     let fresh = analyze(&repo, &base.join("fresh"), json!({}));
     assert_eq!(outcome(&resp), outcome(&fresh));
 }
 
 #[test]
-fn full_manifest_and_the_change_check_see_an_edit_made_after_the_snapshot() {
+fn full_manifest_and_the_refresh_see_an_edit_made_after_the_snapshot() {
     // Review of #478: the property the full paths' ordering relies on (a
     // snapshot taken before an edit reports it; one taken after hides it).
     // The production ordering itself is pinned end to end in
     // `index_phase_rebuild_tests.rs`.
-    let (repo, _base) = fixture("analyze443_snapshot_order_");
+    let (repo, base) = fixture("analyze443_snapshot_order_");
     let opts = crate::indexer::IndexOptions::default();
+    let graph = base.join("graph");
+    let manifest = base.join("file_manifest.json");
+    crate::indexer::index_codebase(&repo, &graph).expect("index");
     let snapshot = crate::indexer::full_manifest(&repo, &opts).expect("snapshot");
     let b = repo.join("src/b.rs");
     fs::write(&b, "pub fn beta() { edited(); }\n").expect("edit during the index");
@@ -196,13 +198,17 @@ fn full_manifest_and_the_change_check_see_an_edit_made_after_the_snapshot() {
         .open(&b)
         .and_then(|f| f.set_modified(later))
         .expect("bump mtime");
-    assert!(
-        crate::indexer::tree_changed_since(&repo, &opts, &snapshot).expect("check"),
+    let seen = crate::indexer::index_incremental(&repo, &graph, &manifest, &opts, &snapshot)
+        .expect("refresh");
+    assert_eq!(
+        seen.changed, 1,
         "the pre-index snapshot must not vouch for the edited file"
     );
     let after = crate::indexer::full_manifest(&repo, &opts).expect("post-index manifest");
-    assert!(
-        !crate::indexer::tree_changed_since(&repo, &opts, &after).expect("check"),
+    let hidden = crate::indexer::index_incremental(&repo, &graph, &manifest, &opts, &after)
+        .expect("refresh");
+    assert_eq!(
+        hidden.changed, 0,
         "a manifest taken after the edit would hide it: the ordering is what matters"
     );
 }
@@ -249,4 +255,47 @@ fn a_changed_full_ast_rebuilds() {
     assert_eq!(same["index"]["mode"], "incremental", "{same}");
     let without = analyze(&repo, &out, json!({}));
     assert_eq!(without["index"]["mode"], "full", "{without}");
+}
+
+#[test]
+fn a_python_import_whose_target_an_edit_removed_matches_a_fresh_analysis() {
+    // An UNCHANGED file whose import and call targets another file's edit
+    // removed: the refreshed graph must hold the rows and resolution flags a
+    // fresh analysis holds, outside Rust too. The purge of the edited file's
+    // symbols takes the rows with it; the Import's flag is reopened before
+    // the resolve (`resolver::retract_edges::reopen_imports`, #513).
+    let base = tempfile::Builder::new()
+        .prefix("analyze443_py_")
+        .tempdir()
+        .expect("create temp dir")
+        .keep_managed();
+    let repo = base.join("repo");
+    fs::create_dir_all(repo.join("pkg")).expect("mk repo");
+    fs::write(repo.join("pkg/__init__.py"), "").expect("write __init__");
+    fs::write(
+        repo.join("pkg/model.py"),
+        "class Widget:\n    pass\n\ndef make():\n    return Widget()\n",
+    )
+    .expect("write model.py");
+    fs::write(
+        repo.join("pkg/user.py"),
+        "from pkg.model import Widget, make\n\ndef use():\n    return make()\n",
+    )
+    .expect("write user.py");
+    let out = base.join("out");
+    let py = json!({ "language": "python" });
+    let first = analyze(&repo, &out, py.clone());
+    assert!(
+        super::tests::edge_rows(&first)
+            .iter()
+            .any(|r| r.starts_with("Imports_")),
+        "the comparison must see the import rows"
+    );
+
+    fs::write(repo.join("pkg/model.py"), "class Gadget:\n    pass\n").expect("edit model.py");
+    let second = analyze(&repo, &out, py.clone());
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert_eq!(second["index"]["changed"], 1, "{second}");
+    let fresh = analyze(&repo, &base.join("fresh"), py);
+    assert_eq!(outcome(&second), outcome(&fresh));
 }

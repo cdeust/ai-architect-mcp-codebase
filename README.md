@@ -197,19 +197,18 @@ query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep
 ```
 
-Re-run `analyze_codebase` after edits. On the same `output_dir`, a tree with no
-changed file reuses the graph without re-parsing anything. Any edit, a change of
-`language`, `dependency_scope` or `exclude_dirs`, another codebase root, a new
-server version, `lsp: true` (now or on the run that built the graph), a
-symlinked or artifact-imported graph, a missing or unreadable coverage sidecar,
-a file that was unreadable when the graph was built, a `Cargo.toml`
-edit that changes the crate names, targets or features (even under
-`language: "rust"`, whose walk skips that file), or `full: true` rebuilds
-from scratch. Reusing an edited graph waits on resolver
-invalidation (#443). The three-stage `index_codebase` → `resolve_graph` path
-re-parses only the changed files, but it can keep a call edge a fresh analysis
-would drop (a call made ambiguous by an added function), so prefer
-`analyze_codebase` when the edges matter.
+Re-run `analyze_codebase` after edits. On the same `output_dir` it refreshes
+the previous graph: only the changed, added and renamed files are re-parsed and
+the deleted ones purged, then resolve, cluster and the search index run over
+the whole graph, and the resolver retracts the rows it no longer decides, so
+the result matches a fresh analysis of the same tree (#443). A change of
+`language`, `dependency_scope`, `exclude_dirs` or `full_ast`, another codebase
+root, a new server version, `lsp: true` (now or on the run that built the
+graph), a symlinked or artifact-imported graph, a missing or unreadable
+coverage sidecar, a file that was unreadable when the graph was built, a
+`Cargo.toml` edit that changes the crate names, targets or features (even under
+`language: "rust"`, whose walk skips that file), or `full: true` rebuilds from
+scratch. The response's `index.mode` says which path ran.
 
 ## 27 MCP Tools
 

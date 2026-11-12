@@ -53,6 +53,7 @@ pub(super) fn analyze(repo: &Path, out: &Path, extra: Value) -> Value {
 pub(super) fn outcome(resp: &Value) -> Value {
     json!({
         "edges": edge_rows(resp),
+        "nodes": node_rows(resp),
         "graph": resp["graph"],
         "resolve_edges": resp["resolve"]["total_edges"],
         "communities": resp["cluster"]["community_count"],
@@ -75,6 +76,40 @@ pub(super) fn edge_rows(resp: &Value) -> Vec<String> {
             .execute_query(&q)
             .unwrap_or_else(|e| panic!("{q}: {e}"));
         rows.extend(qr.rows.iter().map(|r| format!("{rel}|{}|{}", r[0], r[1])));
+    }
+    rows.sort();
+    rows
+}
+
+/// Every node of the graph as sorted `label|id` strings, and the resolution
+/// flag of every call site and import as `label|id|is_resolved`: an edited
+/// graph that left a stale node behind, or a site resolved by a row a fresh
+/// analysis does not write, must not compare equal (issue #443).
+pub(super) fn node_rows(resp: &Value) -> Vec<String> {
+    let path = PathBuf::from(resp["graph_path"].as_str().expect("graph_path"));
+    let store = crate::graph_store::GraphStore::open_or_create(&path).expect("open graph");
+    let labels: std::collections::BTreeSet<&str> = crate::graph_store::REL_TABLES
+        .iter()
+        .flat_map(|&(_, from, to)| [from, to])
+        .collect();
+    let mut rows = Vec::new();
+    for label in labels {
+        let q = format!("MATCH (n:{label}) RETURN n.id");
+        let qr = store
+            .execute_query(&q)
+            .unwrap_or_else(|e| panic!("{q}: {e}"));
+        rows.extend(qr.rows.iter().map(|r| format!("{label}|{}", r[0])));
+    }
+    for label in ["CallSite", "Import"] {
+        let q = format!("MATCH (n:{label}) RETURN n.id, n.is_resolved");
+        let qr = store
+            .execute_query(&q)
+            .unwrap_or_else(|e| panic!("{q}: {e}"));
+        rows.extend(
+            qr.rows
+                .iter()
+                .map(|r| format!("{label}|{}|{}", r[0], r[1].to_lowercase())),
+        );
     }
     rows.sort();
     rows

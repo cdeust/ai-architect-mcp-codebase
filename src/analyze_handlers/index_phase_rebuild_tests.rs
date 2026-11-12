@@ -134,9 +134,9 @@ fn edit_on_first_release(_path: &Path) -> Result<(), String> {
 }
 
 /// Claude review of #478: the production full path, not a hand-built copy of
-/// its steps. A file edited during the rebuild must make the next analysis
-/// rebuild: the manifest that path saves is the snapshot taken before the
-/// index, not one taken after it.
+/// its steps. A file edited during the rebuild must be re-parsed by the next
+/// analysis: the manifest that path saves is the snapshot taken before the
+/// index, not one taken after it, so the edit reads as a change.
 fn an_edit_during_a_full_rebuild_is_seen_next_time(entry: Entry, prefix: &str) {
     let (repo, base) = fixture(prefix);
     let out = base.join("out");
@@ -149,7 +149,10 @@ fn an_edit_during_a_full_rebuild_is_seen_next_time(entry: Entry, prefix: &str) {
         "the edit ran during the rebuild"
     );
     let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
+    assert_eq!(resp["index"]["changed"], 1, "{resp}");
+    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
+    assert_eq!(outcome(&resp), outcome(&fresh));
 }
 
 #[test]
@@ -238,10 +241,11 @@ fn an_incremental_pass_without_a_prior_report_records_no_scope() {
 }
 
 #[test]
-fn an_edit_between_the_change_check_and_the_refresh_rebuilds() {
-    // Claude review of #478: the TOCTOU fallback in `try_reuse`. The reuse
-    // check opens the graph (`graph_has_lsp_rows`) after the change check and
-    // before the refresh; the release hook edits a file there.
+fn an_edit_between_the_reuse_checks_and_the_refresh_is_applied() {
+    // Claude review of #478: the reuse check opens the graph
+    // (`graph_has_lsp_rows`) before the refresh; the release hook edits a file
+    // there. The refresh classifies the tree itself, so it applies the edit,
+    // and the graph matches a fresh analysis (issue #443).
     let (repo, base) = fixture("analyze443_toctou_");
     let out = base.join("out");
     analyze(&repo, &out, json!({}));
@@ -252,7 +256,8 @@ fn an_edit_between_the_change_check_and_the_refresh_rebuilds() {
         EDIT_ON_RELEASE.with(|c| c.borrow().is_none()),
         "the edit ran during the call"
     );
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
+    assert_eq!(resp["index"]["changed"], 1, "{resp}");
     let fresh = analyze(&repo, &base.join("fresh"), json!({}));
     assert_eq!(outcome(&resp), outcome(&fresh));
 }

@@ -1,65 +1,8 @@
-//! The check `analyze_codebase` makes before reusing a graph (issue #443):
-//! did anything the graph was built from change? Split out of `mod.rs` for
-//! the §4.1 file cap (review of #478).
+//! The total-size refusal the incremental pass and the full manifest share
+//! (issue #443). Split out of `mod.rs` for the §4.1 file cap (review of
+//! #478).
 
-use std::path::Path;
-
-use super::super::manifest::{self, FileManifest};
-use super::super::walk::WalkOptions;
-use super::super::{IndexOptions, MAX_TOTAL_BYTES};
-use super::classify::discover;
 use super::Discovered;
-
-/// True when the tree under `codebase`, walked with `options`, differs from
-/// `prior`: a file changed, added, deleted or renamed, or `prior` records a
-/// file it could not read (empty hash). Reads the tree and writes nothing — no
-/// graph, no sidecar. `Err` when the walk fails (too many files, too deep, an
-/// unreadable root) or the tree is over `MAX_TOTAL_BYTES`.
-///
-/// Exists for `analyze_codebase` (#478 review): the resolver keeps the edges
-/// an earlier run wrote and has no invalidation for an unchanged file whose
-/// candidate set another file's edit changed, so analyze reuses a graph only
-/// when this returns `false`.
-pub fn tree_changed_since(
-    codebase: &Path,
-    options: &IndexOptions,
-    prior: &FileManifest,
-) -> Result<bool, String> {
-    let walk_opts = WalkOptions {
-        language_filter: options.language_filter,
-        dependency_scope: options.dependency_scope,
-        exclude_dirs: options.exclude_dirs.clone(),
-    };
-    let (current, _walk_gaps, _walk_pruned) = discover(codebase, walk_opts)?;
-    // Before `classify` hashes anything (Codex security review of #478): the
-    // full index refuses a tree over MAX_TOTAL_BYTES, and the change check must
-    // not read more than the rebuild it stands in for would.
-    check_total_bytes(&current, MAX_TOTAL_BYTES)?;
-    // A file the full index could not read is recorded with an empty hash, and
-    // making it readable (`chmod +r`) moves no mtime: count it as a change, or
-    // it would never be retried (review of #478).
-    if prior.files.values().any(|f| f.content_hash.is_empty()) {
-        return Ok(true);
-    }
-    Ok(differs(prior, &current))
-}
-
-/// The early-exit form of `classify` (review of #478): only a yes or no is
-/// needed, and on a changed tree the full rebuild re-reads every file anyway,
-/// so this stops at the first difference. A different file set (an add, a
-/// delete, either half of a rename) answers without reading any file; a file
-/// whose (mtime, size) moved is hashed, and identical bytes are no change
-/// (a `touch` or a `git checkout` of the same content).
-fn differs(prior: &FileManifest, current: &[Discovered]) -> bool {
-    if current.len() != prior.files.len() {
-        return true;
-    }
-    current.iter().any(|d| match prior.files.get(&d.rel) {
-        None => true,
-        Some(p) if p.mtime_ns == d.mtime_ns && p.size == d.size => false,
-        Some(p) => manifest::hash_file(&d.abs).as_deref() != Some(p.content_hash.as_str()),
-    })
-}
 
 /// `Err(total_bytes_exceeded…)` when the discovered files sum past `cap` —
 /// the same refusal, and wording, as the full index's walk.
