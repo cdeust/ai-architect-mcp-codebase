@@ -442,3 +442,58 @@ fn pages_of_an_indexed_and_clustered_repo_form_a_deterministic_skeleton() {
     let second = WikiSkeleton::new(again.pages).unwrap().to_json().unwrap();
     assert_eq!(first, second);
 }
+
+/// An empty id identifies nothing (tests/community_process_id_audit.rs): a
+/// `Community` with id `''` gets no page, and a symbol whose only membership
+/// points at it is in no community, so it is neither listed nor counted as
+/// crossing, and its edges are on no page.
+#[test]
+fn an_empty_community_id_makes_no_page_and_no_membership() {
+    let (_dir, store) = fixture();
+    insert(
+        &store,
+        "Community",
+        vec![vec![
+            ("id".into(), cypher_str("")),
+            ("name".into(), cypher_str("ghost")),
+        ]],
+    );
+    insert(
+        &store,
+        "Function",
+        vec![node("src/d.rs::lost", "lost", Some(9))],
+    );
+    link(
+        &store,
+        "MemberOf_Function_Community",
+        &[("src/d.rs::lost", "")],
+    );
+    link(
+        &store,
+        "Calls_Function_Function",
+        &[
+            ("src/d.rs::lost", "src/a.rs::f"),
+            ("src/a.rs::g", "src/d.rs::lost"),
+        ],
+    );
+    let built = community_pages(&store).expect("pages");
+    let ids: Vec<&str> = built.pages.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, [C1, C2]);
+    assert!(built
+        .pages
+        .iter()
+        .all(|p| p.members.iter().all(|s| s.id != "src/d.rs::lost")));
+    assert!(built
+        .pages
+        .iter()
+        .all(|p| p.edges.iter().all(|e| e.source() != "src/d.rs::lost")));
+    assert_eq!(
+        page(&built, C1).cross_community_edges,
+        BTreeMap::from([(C2.to_owned(), 2)]),
+        "g -> lost does not cross: lost is in no community"
+    );
+    assert!(!built
+        .unanchored_members
+        .contains(&"src/d.rs::lost".to_owned()));
+    WikiSkeleton::new(built.pages).expect("a valid skeleton");
+}

@@ -97,6 +97,10 @@ pub fn community_pages(store: &GraphStore) -> Result<CommunityPages, String> {
         .map_err(|e| format!("wiki: read communities: {e}"))?;
     for row in &communities.rows {
         let (id, name) = (cell(row, 0), cell(row, 1));
+        // An empty id identifies no community (tests/community_process_id_audit.rs).
+        if id.is_empty() {
+            continue;
+        }
         pages.insert(id.clone(), Page::new(PageKind::Community, id, name));
     }
 
@@ -208,6 +212,11 @@ fn read_members(
             .map_err(|e| format!("wiki: read {rel}: {e}"))?;
         for row in &rows.rows {
             let (id, name, community) = (cell(row, 0), cell(row, 1), cell(row, 3));
+            // An empty node or community id identifies nothing: such a row is
+            // no membership, so its symbol is in no community.
+            if id.is_empty() || community.is_empty() {
+                continue;
+            }
             let location = anchor(&id, &cell(row, 2));
             if let (Some(location), Some(page)) = (&location, pages.get_mut(&community)) {
                 page.members.push(Symbol {
