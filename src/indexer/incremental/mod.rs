@@ -74,7 +74,6 @@ mod stale_sites;
 
 pub use bootstrap::{fill_after_bootstrap, FillMethod, FillResult};
 use change_check::check_total_bytes;
-pub use change_check::tree_changed_since;
 use classify::{classify, discover};
 pub(super) use coverage::apply_cargo_facts;
 use coverage::save_incremental_coverage;
@@ -193,19 +192,16 @@ pub fn index_incremental(
     check_total_bytes(&current, super::MAX_TOTAL_BYTES)?;
     let mut plan = classify(prior, &current);
     // Issue #443: the refreshed manifest vouches for the graph only when the
-    // graph it extends was built with these same settings AND this pass
-    // changed nothing. Different settings leave files the new ones would add
-    // or drop; an applied change leaves resolver rows `resolve_graph` cannot
-    // invalidate (#478 review). Either way the scope becomes unknown and the
-    // next scope-checking caller (`analyze_codebase`) rebuilds. The same holds
-    // for a changed Cargo map, and for a coverage report that was not saved or
-    // was built without the previous one, decided below once this pass has
-    // computed them.
+    // graph it extends was built with these same settings. Different settings
+    // leave files the new ones would add or drop, so the scope becomes unknown
+    // and the next scope-checking caller (`analyze_codebase`) rebuilds. The
+    // same holds for a changed Cargo map, and for a coverage report that was
+    // not saved or was built without the previous one, decided below once
+    // this pass has computed them. An applied change no longer drops the
+    // scope: the next `resolve_graph` retracts the rows it does not decide
+    // again (`resolver::retract`, `resolver::retract_edges`).
     let scope = options.scope();
-    let c = &plan.change_set;
-    let unchanged =
-        c.changed.is_empty() && c.added.is_empty() && c.deleted.is_empty() && c.renamed.is_empty();
-    let settings_match = unchanged && prior.scope.as_ref() == Some(&scope);
+    let settings_match = prior.scope.as_ref() == Some(&scope);
 
     let (reparsed, reparsed_gaps) =
         apply_changes(&store, codebase, &plan.change_set, &current, policy)?;
