@@ -11,16 +11,20 @@
 // block, and the canonical (byte-identical) serialisation. The second slice,
 // `communities`, builds the community pages from a resolved + clustered
 // `GraphStore`; the third, `processes`, builds one page per detected process
-// from the same store. God-node pages, coverage attribution and the MCP tool
-// that exports the skeleton are later slices of #196.
+// from the same store; `coverage` attributes the `parse_incomplete` files of
+// the index's coverage record to the pages whose members they hold.
+// God-node pages, missed-graph attribution and the MCP tool that exports the
+// skeleton are later slices of #196.
 
 mod checks;
 pub mod communities;
+pub mod coverage;
 mod error;
 pub mod processes;
 pub mod skeleton;
 
 pub use communities::{community_pages, CommunityPages};
+pub use coverage::{attribute_parse_incomplete, CoverageAttribution};
 pub use error::SkeletonError;
 pub use processes::{process_pages, ProcessPages};
 pub use skeleton::{
