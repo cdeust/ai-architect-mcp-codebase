@@ -14,13 +14,15 @@
 // from the same store; `coverage` attributes the `parse_incomplete` files of
 // the index's coverage record to the pages whose members they hold; `missed`
 // attributes the call sites the resolver left open to the pages that list
-// the symbol whose body holds them. God-node pages and the MCP tool that
-// exports the skeleton are later slices of #196.
+// the symbol whose body holds them; `god_nodes` builds one page per symbol
+// whose degree is beyond Tukey's far-out fence of the degree distribution.
+// The MCP tool that exports the skeleton is a later slice of #196.
 
 mod checks;
 pub mod communities;
 pub mod coverage;
 mod error;
+pub mod god_nodes;
 pub mod missed;
 pub mod processes;
 pub mod skeleton;
@@ -28,6 +30,7 @@ pub mod skeleton;
 pub use communities::{community_pages, CommunityPages};
 pub use coverage::{attribute_parse_incomplete, CoverageAttribution};
 pub use error::SkeletonError;
+pub use god_nodes::{god_node_pages, Fence, GodNodePages};
 pub use missed::{attribute_missed, MissedAttribution};
 pub use processes::{process_pages, ProcessPages};
 pub use skeleton::{

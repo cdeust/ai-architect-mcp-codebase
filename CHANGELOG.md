@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Wiki skeleton: god-node pages (#196, slice 6).** `wiki::god_node_pages(&GraphStore)` builds one `god_node` page per clustered symbol whose degree lies strictly beyond Tukey's far-out fence, Q3 + 3·IQR, of the degrees of all clustered symbols (J. W. Tukey, *Exploratory Data Analysis*, 1977). The degree counts the distinct edges with a provenance between two clustered symbols, in or out, a self-edge once; quartiles are Hyndman and Fan's type 7 (R's and NumPy's default), computed exactly in quarter units. A page holds the symbol, every incident edge anchored at its source, and the cross-community counts of those edges; a god node with no `file:line` is returned in `unanchored_members`, an incident edge whose source has none is counted in `unanchored_edges`. The fence is returned with the pages. No constant is chosen: the fence moves with the graph, and the factor 3 is Tukey's.
+
 ### Changed
 
 - `/review-pr` (`.claude/commands/review-pr.md`) is Cortex's current file, byte for byte (Cortex ADR-1135, Cortex pull request 1000). Two of its five reviewers, `code-quality-reviewer` and `documentation-accuracy-reviewer`, are also told to try to refute the pull request: every statement it adds against its primary source; for every rule it adds, a case that follows the rule and still fails, or a harmless case the rule forbids; for every change to a workflow, a CI script or a file CI reads, which commit's workflow runs each job before and after the merge, and whether the tree the pull request leaves passes every step that will run on it. Cortex measured the brief on its evaluation set (`docs/review-eval/` there), three draws per case: on the case with one known defect it was named in 2 draws against 0; on the case with seven known defects, 2, 2 and 3 were named against 0, 0 and 0, and the criterion, three more on the medians, is not met; no Blocker on the control. The review of a pull request runs the `/review-pr` of the main branch, so the pull request that brings this file is reviewed with the one it replaces.

@@ -74,7 +74,7 @@ pub(super) fn relation_of(rel: &str) -> &str {
 }
 
 /// `(rel table, label)` for every membership table of the schema.
-fn membership_tables() -> Vec<(&'static str, &'static str)> {
+pub(super) fn membership_tables() -> Vec<(&'static str, &'static str)> {
     REL_TABLES
         .iter()
         .filter(|(rel, _, to)| rel.starts_with("MemberOf_") && *to == NODE_COMMUNITY)
