@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
@@ -29,13 +30,23 @@ STAND_IN = textwrap.dedent(
     b = json.loads((Path(__file__).resolve().parent / "behaviour.json").read_text())
     if b.get("exit"):
         sys.exit(b["exit"])
+    if b.get("sleep"):
+        import time
+        time.sleep(b["sleep"])
+    omit = b.get("omit", "")
     for line in sys.stdin:
         request = json.loads(line)
         ident = request.get("id")
         if request["method"] == "initialize":
+            if omit == "initialize":
+                continue
             result = {"serverInfo": {"name": b["name"], "version": b["version"]}}
+            if omit == "serverInfo":
+                result = {}
         elif request["method"] == "tools/list":
             result = {"tools": [{"name": name} for name in b["tools"]]}
+            if omit == "tools":
+                result = {}
         elif request["method"] == "tools/call":
             health = {"status": b["status"], "tools_count": len(b["tools"])}
             result = {"content": [{"type": "text", "text": json.dumps(health)}]}
@@ -103,6 +114,49 @@ class SmokeBinaryTests(unittest.TestCase):
         run = self.smoke(str(self.binary), exit=3)
         self.assertNotEqual(run.returncode, 0)
         self.assertIn("exited 3", run.stderr)
+
+    def test_an_answer_without_server_info_is_refused_with_what_was_printed(self):
+        """A malformed answer ends with the binary's output, not a traceback."""
+        run = self.smoke(str(self.binary), omit="serverInfo")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("answer 1 has no result.serverInfo", run.stderr)
+        self.assertIn('"id": 2', run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+
+    def test_a_tool_list_without_tools_is_refused_with_what_was_printed(self):
+        run = self.smoke(str(self.binary), omit="tools")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("answer 2 has no result.tools", run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+
+    def test_a_missing_answer_is_refused_without_a_traceback(self):
+        run = self.smoke(str(self.binary), omit="initialize")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("missing response 1", run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+
+    def test_a_binary_that_does_not_answer_in_time_is_refused(self):
+        """The limit is read from the module, set here to 1 s: the stand-in
+        sleeps 30 s, so the run ends on the limit and not on an answer."""
+        import smoke_binary
+
+        (Path(self.tmp.name) / "behaviour.json").write_text(
+            json.dumps({**self.behaviour, "sleep": 30}), encoding="utf-8"
+        )
+        with mock.patch.object(smoke_binary, "START_TIMEOUT_S", 1):
+            with self.assertRaises(SystemExit) as raised:
+                smoke_binary.answers(self.binary)
+        self.assertIn("did not answer within 1 s", str(raised.exception))
+
+    def test_a_file_the_system_cannot_start_is_refused(self):
+        """An executable file that is no program: the system refuses to start it."""
+        broken = Path(self.tmp.name) / "not-a-program"
+        broken.write_bytes(b"\x00\x01 not a program")
+        broken.chmod(0o755)
+        run = self.smoke(str(broken))
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("could not be started", run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
 
     def test_a_path_with_no_binary_is_refused(self):
         run = self.smoke(str(Path(self.tmp.name) / "absent"))

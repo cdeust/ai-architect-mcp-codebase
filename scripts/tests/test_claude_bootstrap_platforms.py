@@ -416,6 +416,41 @@ class ReadmePlatformTable(BootstrapHarness):
             started_by, f"install runners that start no listed platform: {started_by}"
         )
 
+    def test_ci_starts_the_release_binary_it_builds(self):
+        """Issue #449: the `cargo build --release` job of `ci.yml` starts the
+        binary it has just built, in the same step."""
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        build = "cargo build --locked --release --bin ai-architect-mcp-codebase\n"
+        self.assertEqual(ci.count(build), 1)
+        after = ci.split(build, 1)[1].split("      - name:", 1)[0]
+        self.assertIn(
+            "python3 scripts/smoke_binary.py target/release/ai-architect-mcp-codebase",
+            after,
+        )
+
+    def test_every_cargo_command_that_resolves_dependencies_is_locked(self):
+        """`cargo build`, `cargo test`, `cargo clippy` and the `cargo llvm-cov`
+        run that compiles take `--locked` wherever a workflow runs them: a
+        `Cargo.lock` that no longer matches `Cargo.toml` fails the job instead
+        of being rewritten on the runner."""
+        resolving = re.compile(
+            r"\bcargo (build|test|clippy|llvm-cov --workspace)\b|\bcargo llvm-cov --locked"
+        )
+        found = []
+        for name in ("ci.yml", "release.yml", "windows-build.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text()
+            for number, line in enumerate(text.splitlines(), 1):
+                stripped = line.strip()
+                if stripped.startswith(("#", "name:", "- name:")):
+                    continue
+                if resolving.search(stripped):
+                    found.append(name)
+                    self.assertIn("--locked", stripped, f"{name}:{number}")
+        self.assertEqual(
+            sorted(set(found)), ["ci.yml", "release.yml", "windows-build.yml"]
+        )
+        self.assertGreaterEqual(found.count("ci.yml"), 5)
+
     def test_release_and_windows_build_start_what_they_build(self):
         """Issue #449: the row above says `release.yml` starts the binary it
         builds. Every leg of its matrix runs `scripts/smoke_binary.py` on its
