@@ -274,8 +274,17 @@ if [ "$marketplace_install" = "yes" ]; then
     command -v curl >/dev/null 2>&1 || fatal "curl is required for marketplace installation"
     command -v gh >/dev/null 2>&1 \
         || fatal "GitHub CLI 2.68+ is required to verify release provenance: https://cli.github.com/"
-    gh attestation verify --help 2>&1 | grep -q -- '--source-ref' \
-        || fatal "GitHub CLI lacks 'gh attestation verify --source-ref'; upgrade to version 2.68 or newer"
+    # Read the whole help text, then look for the flag. `gh ... --help | grep -q`
+    # fails under pipefail whenever grep leaves at its first match while gh is
+    # still writing: gh dies of SIGPIPE and the pipeline is non-zero although
+    # the flag is there.
+    # source: run 43277987083, install (macos-latest), 2026-11-12; measured the
+    # same day with gh 2.89.0 on Linux: 22 of 1900 runs fail (gh 141, grep 0).
+    gh_help=$(gh attestation verify --help 2>&1) || true
+    case "$gh_help" in
+        *--source-ref*) ;;
+        *) fatal "GitHub CLI lacks 'gh attestation verify --source-ref'; upgrade to version 2.68 or newer" ;;
+    esac
 
     case "$(uname -s)-$(uname -m)" in
         Darwin-arm64) release_target="macos-aarch64" ;;

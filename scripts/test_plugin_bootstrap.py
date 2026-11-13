@@ -278,6 +278,37 @@ def case_old_gh(tmp: Path) -> None:
     require(not curl_calls.exists(), "old gh reached download path")
 
 
+def case_long_gh_help(tmp: Path) -> None:
+    # A gh that names the flag and keeps writing help text must be accepted.
+    # The gate used to read `gh ... --help | grep -q`: under pipefail, grep left
+    # at its first match and a gh still writing died of SIGPIPE, so the launcher
+    # reported a gh that "lacks --source-ref".
+    # source: run 43277987083, install (macos-latest), 2026-11-12; measured the
+    # same day with gh 2.89.0 on Linux: 22 of 1900 runs fail (gh 141, grep 0).
+    plugin, fake_bin, curl_calls, gh_calls = fixture(tmp / "longhelp")
+    # source: 20000 lines of 14 bytes are 280 kB, more than four times the
+    # 64 kB a Linux pipe holds (pipe(7)): the writer is still writing when
+    # grep -q leaves.
+    (fake_bin / "gh").write_text(
+        f"""#!/bin/sh
+if [ "$*" = "attestation verify --help" ]; then
+  echo "  --source-ref string"
+  i=0
+  while [ "$i" -lt 20000 ]; do echo "    help text"; i=$((i + 1)); done
+  exit 0
+fi
+printf '%s\\n' "$*" >> {str(gh_calls)!r}
+exit 0
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "gh").chmod(0o755)
+    install_curl(fake_bin, curl_calls, make_release(tmp / "longhelp"))
+    result = run(plugin, fake_bin)
+    require(result.returncode == 0, f"a gh whose help outlasts the match was refused: {result.stderr}")
+    require("--source-ref" in gh_calls.read_text(encoding="utf-8"), "provenance was not verified")
+
+
 def case_missing_gh(tmp: Path) -> None:
     plugin, fake_bin, curl_calls, _ = fixture(tmp / "nogh")
     (fake_bin / "gh").unlink()
@@ -418,6 +449,7 @@ def main() -> None:
         case_cargo_pin_hostile_bytes(tmp)
         case_invalid_versions(tmp)
         case_old_gh(tmp)
+        case_long_gh_help(tmp)
         case_missing_gh(tmp)
         case_hanging_gh(tmp)
         case_source_optout_without_git(tmp)
