@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -65,6 +66,25 @@ def answers(binary: Path) -> str:
     return run.stdout
 
 
+def answer(output: str, request_id: int, *keys: str) -> Any:
+    """Post: the value under `keys` in the answer to request `request_id`.
+
+    An answer that is missing, or that lacks one of the keys, ends the run with
+    what the binary printed, not with a traceback.
+    """
+    try:
+        value: Any = response(output, request_id)
+    except AssertionError as exc:
+        raise SystemExit(str(exc)) from exc
+    for key in keys:
+        require(
+            isinstance(value, dict) and key in value,
+            f"answer {request_id} has no {'.'.join(keys)}: {output}",
+        )
+        value = value[key]
+    return value
+
+
 def main() -> None:
     require(len(sys.argv) == 2, "usage: smoke_binary.py <path to the built binary>")
     binary = Path(sys.argv[1])
@@ -74,16 +94,17 @@ def main() -> None:
     )["version"]
     expected = expected_tools(ROOT, version, installed=False)
     output = answers(binary)
-    initialize = response(output, 1)
-    require(initialize.get("error") is None, "initialize failed")
-    served = initialize["result"]["serverInfo"]
+    require(answer(output, 1).get("error") is None, "initialize failed")
+    served = answer(output, 1, "result", "serverInfo")
+    for field in ("name", "version"):
+        require(field in served, f"serverInfo has no {field}: {output}")
     require(served["name"] == "ai-architect", f"server name is {served['name']}")
     require(
         served["version"] == version,
         f"server version is {served['version']}, the tree says {version}",
     )
-    check_tools(response(output, 2)["result"]["tools"], expected)
-    check_health(response(output, 3), len(expected))
+    check_tools(answer(output, 2, "result", "tools"), expected)
+    check_health(answer(output, 3), len(expected))
     print(
         f"BINARY SMOKE OK: {binary.name}, v{version}, exact {len(expected)}-tool "
         "catalog, health_check ok"

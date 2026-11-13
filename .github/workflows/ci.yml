@@ -250,7 +250,7 @@ jobs:
             ${{ runner.os }}-cargo-clippy-lbug-source-v2-
 
       - name: Run clippy (workspace, all targets, deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -385,7 +385,7 @@ jobs:
       # it. Collapsing these would either run the suite twice or leave the
       # doc-claims check with no number to compare against.
       - name: Run instrumented test suite
-        run: cargo llvm-cov --workspace --no-report
+        run: cargo llvm-cov --locked --workspace --no-report
 
       - name: Export coverage (machine-readable)
         run: cargo llvm-cov report --json --output-path coverage.json
