@@ -234,11 +234,11 @@ jobs:
         env:
           LBUG_BUILD_FROM_SOURCE: "1"
           ZSTD_SYS_USE_PKG_CONFIG: "1"
-        run: cargo build --release --bin ai-architect-mcp-codebase --target ${{ matrix.rust_target }}
+        run: cargo build --locked --release --bin ai-architect-mcp-codebase --target ${{ matrix.rust_target }}
 
       - name: Build (macos/windows — vendored static zstd)
         if: ${{ !startsWith(matrix.runner, 'ubuntu') }}
-        run: cargo build --release --bin ai-architect-mcp-codebase --target ${{ matrix.rust_target }}
+        run: cargo build --locked --release --bin ai-architect-mcp-codebase --target ${{ matrix.rust_target }}
 
       - name: Strip binary (best-effort)
         run: |
@@ -249,6 +249,16 @@ jobs:
           # No strip for MSVC binaries; the `|| true` covers windows too.
           strip "$BIN" 2>/dev/null || true
           ls -la "$BIN"
+
+      # Issue #449: every leg builds on a runner of its own platform, so the
+      # artifact is started here before it is packaged: `initialize`,
+      # `tools/list` (the exact catalog of this tree) and `health_check`. A
+      # binary that does not start is not published.
+      - name: Start the built binary (initialize, tools/list, health_check)
+        shell: bash
+        run: |
+          python3 scripts/smoke_binary.py \
+            "target/${{ matrix.rust_target }}/release/ai-architect-mcp-codebase${{ matrix.bin_suffix }}"
 
       - name: Package tarball + sha256
         run: |

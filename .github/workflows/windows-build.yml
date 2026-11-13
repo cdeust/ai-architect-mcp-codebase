@@ -89,7 +89,13 @@ jobs:
           exit 1
 
       - name: Build
-        run: cargo build --release --bin ai-architect-mcp-codebase --target x86_64-pc-windows-msvc
+        run: cargo build --locked --release --bin ai-architect-mcp-codebase --target x86_64-pc-windows-msvc
 
-      - name: Confirm the binary exists
-        run: ls -la target/x86_64-pc-windows-msvc/release/ai-architect-mcp-codebase.exe
+      # Issue #449: the build used to stop at a directory listing. The
+      # executable is started on this Windows runner: `initialize`,
+      # `tools/list` (the exact catalog of this tree) and `health_check`.
+      - name: Start the built binary (initialize, tools/list, health_check)
+        shell: bash
+        run: |
+          ls -la target/x86_64-pc-windows-msvc/release/ai-architect-mcp-codebase.exe
+          python3 scripts/smoke_binary.py target/x86_64-pc-windows-msvc/release/ai-architect-mcp-codebase.exe

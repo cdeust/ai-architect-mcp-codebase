@@ -94,7 +94,7 @@ says so in its output.
 |---|---|---|---|
 | macOS arm64 | `macos-aarch64` | installs | yes, on `macos-latest` |
 | Linux x86_64 | `linux-x86_64` | installs | yes, on `ubuntu-latest` |
-| Linux aarch64 | `linux-aarch64` | installs | **no**: built on `ubuntu-24.04-arm`, never started |
+| Linux aarch64 | `linux-aarch64` | installs | **no**: built on `ubuntu-24.04-arm` and started there by `release.yml` before it is packaged |
 | Windows x86_64 (a shell whose `uname -s` starts with `MINGW`, `MSYS` or `CYGWIN`, as Git Bash does) | `windows-x86_64` | installs | yes, on `windows-latest` |
 | macOS x86_64 (Intel), Windows arm64, any other | none | refuses | no |
 <!-- platforms:end -->
@@ -103,7 +103,10 @@ A `cargo install` or a source build does not go through the launcher. CI runs
 the test suite from source on Linux x86_64 only; the pipeline's `environment`
 job also builds from source and runs `install --dry-run` on `ubuntu-latest`,
 `macos-latest` and `windows-latest` (`scripts/ci_environment.sh`), and
-`windows-build.yml` builds Windows x86_64 on every pull request. A pull request
+`windows-build.yml` builds Windows x86_64 on every pull request and starts the
+executable. `release.yml` starts every binary it builds, on the runner that built
+it, before it is packaged (`scripts/smoke_binary.py`: `initialize`, `tools/list`,
+`health_check`). A pull request
 whose every changed path is under `docs/` or is `CHANGELOG.md`, with names every
 system can hold, runs the `environment` and `install` jobs on `ubuntu-latest`
 alone before its merge; the three systems run after it.
