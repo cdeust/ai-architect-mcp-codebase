@@ -132,4 +132,4 @@ fn site_definers(
 
 #[cfg(test)]
 #[path = "missed_tests.rs"]
-mod tests;
+pub(super) mod tests;

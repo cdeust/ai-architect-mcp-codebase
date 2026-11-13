@@ -15,13 +15,16 @@
 // the index's coverage record to the pages whose members they hold; `missed`
 // attributes the call sites the resolver left open to the pages that list
 // the symbol whose body holds them; `god_nodes` builds one page per symbol
-// whose degree is beyond Tukey's far-out fence of the degree distribution.
-// The MCP tool that exports the skeleton is a later slice of #196.
+// whose degree is beyond Tukey's far-out fence of the degree distribution;
+// `export` runs them all on one store and builds the whole skeleton, with
+// what it could not hold reported beside it. The MCP tool that exposes the
+// export is a later slice of #196.
 
 mod checks;
 pub mod communities;
 pub mod coverage;
 mod error;
+pub mod export;
 pub mod god_nodes;
 pub mod missed;
 pub mod processes;
@@ -30,6 +33,7 @@ pub mod skeleton;
 pub use communities::{community_pages, CommunityPages};
 pub use coverage::{attribute_parse_incomplete, CoverageAttribution};
 pub use error::SkeletonError;
+pub use export::{export, Export, ExportReport};
 pub use god_nodes::{god_node_pages, Fence, GodNodePages};
 pub use missed::{attribute_missed, MissedAttribution};
 pub use processes::{process_pages, ProcessPages};

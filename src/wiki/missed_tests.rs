@@ -44,7 +44,7 @@ fn link(store: &GraphStore, rel: &str, pairs: &[(&str, &str)]) {
 /// one to `g`; method `S::m` (src/b.rs) holds an open site to `phantom` at
 /// line 9; `orphan` (src/c.rs) holds an open site on no page; a module-level
 /// open site has no definer; one open site has no line, one no callee name.
-fn fixture() -> (tempfile::TempDir, GraphStore) {
+pub(in crate::wiki) fn fixture() -> (tempfile::TempDir, GraphStore) {
     let (dir, store) = open_store();
     store
         .bulk_insert_nodes(

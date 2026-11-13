@@ -247,4 +247,4 @@ pub(super) fn cell(row: &[String], i: usize) -> String {
 
 #[cfg(test)]
 #[path = "communities_tests.rs"]
-mod tests;
+pub(super) mod tests;

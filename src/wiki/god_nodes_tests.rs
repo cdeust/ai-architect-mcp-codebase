@@ -56,7 +56,7 @@ fn communities(store: &GraphStore) {
 /// it is no clustered symbol, so neither its degree nor its edges count,
 /// in either direction.
 /// An `OBSERVED_CALLS_*` edge has no provenance and does not count either.
-fn star() -> (tempfile::TempDir, GraphStore) {
+pub(in crate::wiki) fn star() -> (tempfile::TempDir, GraphStore) {
     let (dir, store) = open_store();
     communities(&store);
     let mut rows = vec![function("src/a.rs::hub", 10)];
@@ -267,9 +267,9 @@ fn a_self_edge_counts_once_toward_the_degree() {
     assert_eq!(ids, ["src/a.rs::a"]);
 }
 
-#[test]
-fn an_unanchored_god_node_is_returned_not_dropped() {
-    let (_dir, store) = open_store();
+/// A hub calling four anchored leaves, itself with no file (`weird::big`).
+pub(in crate::wiki) fn unanchored_hub() -> (tempfile::TempDir, GraphStore) {
+    let (dir, store) = open_store();
     communities(&store);
     let mut rows = vec![function("weird::big", 1)];
     for i in 1..=4 {
@@ -286,6 +286,12 @@ fn an_unanchored_god_node_is_returned_not_dropped() {
         .map(|l| ("weird::big", l.as_str()))
         .collect();
     link(&store, "Calls_Function_Function", &calls);
+    (dir, store)
+}
+
+#[test]
+fn an_unanchored_god_node_is_returned_not_dropped() {
+    let (_dir, store) = unanchored_hub();
     let built = god_node_pages(&store).expect("pages");
     assert!(built.pages.is_empty());
     assert_eq!(built.unanchored_members, ["weird::big"]);
