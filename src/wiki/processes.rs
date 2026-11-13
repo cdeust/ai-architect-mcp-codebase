@@ -232,4 +232,4 @@ fn read_edges(
 
 #[cfg(test)]
 #[path = "processes_tests.rs"]
-mod tests;
+pub(super) mod tests;

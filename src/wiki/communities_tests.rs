@@ -45,7 +45,7 @@ const C2: &str = "community::louvain::1::1";
 /// Two communities. c1: `f`, `g` and `weird::h` (no file extension, so no
 /// file). c2: `S`, `S::m` and module `modb` (no line). `orphan` is in no
 /// community. `S::x` is a field, a label with no community.
-fn fixture() -> (tempfile::TempDir, GraphStore) {
+pub(in crate::wiki) fn fixture() -> (tempfile::TempDir, GraphStore) {
     let (dir, store) = open_store();
     insert(
         &store,

@@ -51,7 +51,7 @@ const PM: &str = "proc_m";
 /// Communities: c1 = {f, g}, c2 = {S::m}; `h` is in none. `out` is in no
 /// process: its only participation, like that of `weird::lost` (no file),
 /// points at a process with an empty id, so neither is listed or counted.
-fn fixture() -> (tempfile::TempDir, GraphStore) {
+pub(in crate::wiki) fn fixture() -> (tempfile::TempDir, GraphStore) {
     let (dir, store) = open_store();
     insert(&store, "Community", vec![named(C1), named(C2)]);
     insert(&store, "Process", vec![named(PF), named(PM), named("")]);

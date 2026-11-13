@@ -257,4 +257,4 @@ fn read_edges(store: &GraphStore, members: &Members) -> Result<Incident, String>
 
 #[cfg(test)]
 #[path = "god_nodes_tests.rs"]
-mod tests;
+pub(super) mod tests;
