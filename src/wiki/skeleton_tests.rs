@@ -363,6 +363,27 @@ fn a_repeated_cross_community_key_is_refused() {
     );
 }
 
+/// `cross_community_edges` in another shape than an object is refused with
+/// an error that names the shape expected, so the reader of the error knows
+/// what to write (issue #196, criterion 8: the `expecting` text is behaviour).
+#[test]
+fn a_cross_community_value_that_is_no_object_names_the_shape_expected() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let listed = golden.replacen(
+        r#"{
+        "c2": 5
+      }"#,
+        r#"[["c2", 5]]"#,
+        1,
+    );
+    assert_ne!(listed, golden, "the fixture must contain the replaced text");
+    let err = WikiSkeleton::from_json(&listed).unwrap_err();
+    assert!(
+        matches!(&err, SkeletonError::Json(m) if m.contains("a map of community ids to edge counts")),
+        "{err:?}"
+    );
+}
+
 /// claude[bot] review on #475: serde's derived `Deserialize` also accepts a
 /// JSON array for a struct. Every level of the skeleton refuses one, so the
 /// v1 shape has one spelling.

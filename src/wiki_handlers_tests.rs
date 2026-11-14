@@ -187,6 +187,13 @@ fn a_long_report_list_is_bounded_with_its_count() {
     let shown = list["items"].as_array().unwrap().len();
     assert!(shown > 0 && shown < 20_000, "{shown}");
     assert_eq!(list["items"][0], "site_00000");
+    // Each of the REPORT_LISTS lists gets an equal share of one section: the
+    // six at their bound fit in it, and one more item would not fit the share.
+    // Every item serializes to 12 bytes (`"site_00000"`).
+    let item = 12;
+    let section = response_budget::per_section_chars();
+    assert!(shown * item * REPORT_LISTS <= section, "{shown}");
+    assert!((shown + 1) * item * REPORT_LISTS > section, "{shown}");
     assert_eq!(view["community_unanchored_members"]["truncated"], false);
     assert_eq!(view["god_node_fence"], Value::Null);
 }

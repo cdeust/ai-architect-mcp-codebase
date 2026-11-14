@@ -213,6 +213,27 @@ fn one_page_per_process_with_its_anchored_participants() {
         .all(|p| p.members.iter().all(|s| s.id != "src/c.rs::out")));
 }
 
+/// Membership is read from the `ParticipatesIn_*` tables only. Every entry
+/// point is also a participant at step 0 (`bfs_from_entry` in
+/// `src/clustering/process.rs`), so an `EntryPointOf` row alone adds nobody:
+/// a symbol that only an `EntryPointOf` row ties to a process is no member.
+#[test]
+fn an_entry_point_row_alone_makes_no_member() {
+    let (_dir, store) = fixture();
+    link(
+        &store,
+        "EntryPointOf_Function_Process",
+        &[("src/c.rs::out", PM)],
+    );
+    let built = process_pages(&store).expect("pages");
+    let pm: BTreeSet<&str> = page(&built, PM)
+        .members
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect();
+    assert_eq!(pm, BTreeSet::from(["src/a.rs::g", "src/b.rs::S::m"]));
+}
+
 #[test]
 fn a_participant_with_no_file_is_reported_not_dropped() {
     let (_dir, store) = fixture();
