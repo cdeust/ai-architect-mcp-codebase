@@ -86,6 +86,12 @@ const CLASSIFIED: &[(&str, &str)] = &[
          skips a participation row whose n.id is empty or whose p.id has no \
          page (#196)",
     ),
+    (
+        "wiki_handlers.rs",
+        "reads no node: the match is `PageKind::Community)` and \
+         `PageKind::Process)`, counting the pages wiki::export built (which \
+         drops empty ids, see wiki/communities.rs and wiki/processes.rs) (#196)",
+    ),
 ];
 
 fn src_root() -> PathBuf {

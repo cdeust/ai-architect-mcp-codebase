@@ -129,7 +129,7 @@ mod tests {
 
     /// Every tool the server ships, in `tool_schemas::tools_list()` order.
     /// Kept literal so adding a tool forces a conscious profile decision.
-    const FULL_TOOL_NAMES: [&str; 27] = [
+    const FULL_TOOL_NAMES: [&str; 28] = [
         "health_check",
         "extract_finding",
         "refine_finding",
@@ -157,6 +157,7 @@ mod tests {
         "check_security_gates",
         "verify_semantic_diff",
         "check_doc_claims",
+        "export_wiki_skeleton",
     ];
 
     fn registered_names(profile: ToolProfile) -> Vec<String> {

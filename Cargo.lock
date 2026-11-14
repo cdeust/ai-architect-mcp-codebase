@@ -16,6 +16,7 @@ name = "ai-architect-mcp-codebase"
 version = "0.15.0"
 dependencies = [
  "lbug",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

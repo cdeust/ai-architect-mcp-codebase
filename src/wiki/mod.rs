@@ -18,7 +18,7 @@
 // whose degree is beyond Tukey's far-out fence of the degree distribution;
 // `export` runs them all on one store and builds the whole skeleton, with
 // what it could not hold reported beside it. The MCP tool that exposes the
-// export is a later slice of #196.
+// export is `export_wiki_skeleton` (`wiki_handlers`, in the binary).
 
 mod checks;
 pub mod communities;

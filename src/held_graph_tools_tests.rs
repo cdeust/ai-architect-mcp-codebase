@@ -80,7 +80,11 @@ fn probe_args(name: &str, p: &Paths) -> Option<Value> {
         "index_codebase" => json!({ "path": code, "output_dir": out, "language": "rust" }),
         "analyze_codebase" => json!({ "path": code, "output_dir": out, "language": "rust",
             "lsp": false, "dependency_scope": "none" }),
-        "index_status" | "resolve_graph" | "cluster_graph" | "get_processes" => {
+        "index_status"
+        | "resolve_graph"
+        | "cluster_graph"
+        | "get_processes"
+        | "export_wiki_skeleton" => {
             json!({ "graph_path": graph })
         }
         "detect_changes" => json!({ "graph_path": graph, "codebase_path": code }),
