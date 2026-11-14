@@ -74,6 +74,12 @@ pub(super) fn relation_of(rel: &str) -> &str {
 }
 
 /// `(rel table, label)` for every membership table of the schema.
+///
+/// Both conditions select the same eight tables of `REL_TABLES` today (every
+/// `MemberOf_*` table points at `Community`, and no other table does), so a
+/// mutation of `&&` into `||` survives as an equivalent mutant
+/// (`docs/verification/wiki-skeleton-mutants-20261114.md`). Both are kept: a
+/// future table to `Community` that is not a membership must not become one.
 pub(super) fn membership_tables() -> Vec<(&'static str, &'static str)> {
     REL_TABLES
         .iter()

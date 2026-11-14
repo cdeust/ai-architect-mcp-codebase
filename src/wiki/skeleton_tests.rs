@@ -363,6 +363,24 @@ fn a_repeated_cross_community_key_is_refused() {
     );
 }
 
+/// `cross_community_edges` in another shape than an object is refused with
+/// the shape it must have, so the error tells a reader what to write.
+#[test]
+fn a_cross_community_count_list_in_another_shape_names_the_map_it_must_be() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let from = r#""cross_community_edges": {}"#;
+    let tampered = golden.replacen(from, r#""cross_community_edges": []"#, 1);
+    assert_ne!(tampered, golden, "the fixture must contain {from}");
+    let expected = "expected a map of community ids to edge counts";
+    let err = WikiSkeleton::from_json(&tampered).unwrap_err();
+    assert!(
+        matches!(&err, SkeletonError::Json(m) if m.contains(expected)),
+        "{err:?}"
+    );
+    let serde_err = serde_json::from_str::<WikiSkeleton>(&tampered).unwrap_err();
+    assert!(serde_err.to_string().contains(expected), "{serde_err}");
+}
+
 /// claude[bot] review on #475: serde's derived `Deserialize` also accepts a
 /// JSON array for a struct. Every level of the skeleton refuses one, so the
 /// v1 shape has one spelling.
