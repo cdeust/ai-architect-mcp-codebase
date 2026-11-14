@@ -381,3 +381,33 @@ fn pages_of_an_indexed_and_clustered_repo_form_a_deterministic_skeleton() {
     let second = WikiSkeleton::new(again.pages).unwrap().to_json().unwrap();
     assert_eq!(first, second);
 }
+
+/// A page lists the `ParticipatesIn` rows: an `EntryPointOf` row alone makes
+/// no participant (scoped `cargo mutants` on #196: `participation_tables`
+/// with `||` read the entry-point tables as participation).
+#[test]
+fn an_entry_point_row_without_participation_makes_no_member() {
+    let (_dir, store) = fixture();
+    insert(
+        &store,
+        "Function",
+        vec![node("src/d.rs::alone", "alone", 9)],
+    );
+    link(
+        &store,
+        "EntryPointOf_Function_Process",
+        &[("src/d.rs::alone", PM)],
+    );
+    let built = process_pages(&store).expect("pages");
+    for page in &built.pages {
+        assert!(
+            page.members.iter().all(|s| s.id != "src/d.rs::alone"),
+            "{}",
+            page.id
+        );
+    }
+    assert!(built
+        .unanchored_members
+        .iter()
+        .all(|id| id != "src/d.rs::alone"));
+}
