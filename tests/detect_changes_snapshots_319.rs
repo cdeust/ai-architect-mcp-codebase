@@ -5,7 +5,7 @@
 // Between `v1` and `v2`: `keep.py` keeps `stays` (body changed), loses `goes`
 // and gains `arrives`; `old.py` is deleted; `new.py` is added.
 
-use ai_architect_mcp::git_diff::{compare_snapshots, ChangedSymbol};
+use ai_architect_mcp::git_diff::{compare_snapshots, ChangedSymbol, RefRange};
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::indexer;
 use serde_json::{json, Value};
@@ -109,7 +109,16 @@ fn each_side_of_two_tags_is_read_against_its_own_graph() {
     let f = fixture();
     let head = GraphStore::open_or_create(&f.head_graph).unwrap();
     let base = GraphStore::open_or_create(&f.base_graph).unwrap();
-    let cmp = compare_snapshots(&head, &base, &f.repo, "v1", "v2").expect("compare");
+    let cmp = compare_snapshots(
+        &head,
+        &base,
+        &RefRange {
+            codebase_path: &f.repo,
+            base_ref: "v1",
+            head_ref: "v2",
+        },
+    )
+    .expect("compare");
 
     assert_eq!(
         by_name(&cmp.head.symbols_affected),

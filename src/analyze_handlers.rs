@@ -356,14 +356,7 @@ pub(crate) fn do_detect_changes(arguments: &Value) -> Result<Value, String> {
 
     let base_graph = args.get("base_graph_path").and_then(|v| v.as_str());
     let (analysis, base_side) = if let Some(base) = base_graph {
-        let cmp = detect_changes_base::compare_with_base(
-            &store,
-            base,
-            diff_text,
-            codebase_path,
-            base_ref,
-            head_ref,
-        )?;
+        let cmp = detect_changes_base::compare_with_base(&store, base, args, (base_ref, head_ref))?;
         (cmp.head, Some(cmp.base))
     } else if let Some(text) = diff_text {
         (git_diff::analyze_diff(&store, text)?, None)

@@ -5,7 +5,7 @@
 use crate::git_diff::{self, DiffAnalysis};
 use crate::graph_cache;
 use crate::graph_store::GraphStore;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::path::Path;
 
 /// Prefix of every base-side reason in the merged `epistemic_reasons`: the
@@ -61,19 +61,20 @@ pub(super) fn section(
 pub(super) fn compare_with_base(
     store: &GraphStore,
     base_graph: &str,
-    diff_text: Option<&str>,
-    codebase_path: Option<&str>,
-    base_ref: &str,
-    head_ref: &str,
+    args: &Map<String, Value>,
+    (base_ref, head_ref): (&str, &str),
 ) -> Result<git_diff::SnapshotComparison, String> {
-    if diff_text.is_some() {
+    if args.get("diff_text").is_some() {
         return Err(
             "base_graph_path compares two refs: give codebase_path with base_ref/head_ref, \
              not diff_text"
                 .to_string(),
         );
     }
-    let repo = codebase_path.ok_or("base_graph_path requires codebase_path")?;
+    let repo = args
+        .get("codebase_path")
+        .and_then(|v| v.as_str())
+        .ok_or("base_graph_path requires codebase_path")?;
     let repo_path = Path::new(repo);
     if !repo_path.exists() {
         return Err(format!("codebase_path does not exist: {repo}"));
@@ -83,5 +84,10 @@ pub(super) fn compare_with_base(
         return Err(format!("base_graph_path does not exist: {base_graph}"));
     }
     let base_store = graph_cache::open_cached(base_path)?;
-    git_diff::compare_snapshots(store, &base_store, repo_path, base_ref, head_ref)
+    let refs = git_diff::RefRange {
+        codebase_path: repo_path,
+        base_ref,
+        head_ref,
+    };
+    git_diff::compare_snapshots(store, &base_store, &refs)
 }

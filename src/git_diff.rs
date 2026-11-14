@@ -3,8 +3,7 @@
 // Three entry points:
 //   1. analyze_diff(store, diff_text) — parse raw unified diff text
 //   2. analyze_git_diff(store, codebase_path, base_ref, head_ref) — run git diff
-//   3. compare_snapshots(head_store, base_store, codebase_path, base_ref,
-//      head_ref) — the same git diff read against one graph per ref: lines
+//   3. compare_snapshots(head_store, base_store, refs) — the same git diff read against one graph per ref: lines
 //      of the head snapshot go to its symbols, lines the change removes from
 //      the base snapshot go to the base graph's symbols (issue #319)
 //
@@ -31,7 +30,7 @@ mod symbols;
 #[cfg(test)]
 use parse::parse_hunk_header;
 pub(crate) use parse::{has_diff_structure, one_sided_entries, parse_unified_diff, FileHunk};
-pub use snapshots::{compare_snapshots, SnapshotComparison};
+pub use snapshots::{compare_snapshots, RefRange, SnapshotComparison};
 
 /// Validates a git ref for safe use as a positional argument.
 /// Rejects refs starting with `-` (which git would treat as an option flag)

@@ -30,6 +30,13 @@ pub struct SnapshotComparison {
     pub base: DiffAnalysis,
 }
 
+/// Two refs of the repository at `codebase_path`.
+pub struct RefRange<'a> {
+    pub codebase_path: &'a Path,
+    pub base_ref: &'a str,
+    pub head_ref: &'a str,
+}
+
 /// Compares two snapshots of the repository at `codebase_path`, line by line:
 /// `git diff base_ref..head_ref` read against `head_store` (indexed at
 /// `head_ref`) and, reversed (`head_ref..base_ref`), against `base_store`
@@ -40,12 +47,10 @@ pub struct SnapshotComparison {
 pub fn compare_snapshots(
     head_store: &GraphStore,
     base_store: &GraphStore,
-    codebase_path: &Path,
-    base_ref: &str,
-    head_ref: &str,
+    refs: &RefRange<'_>,
 ) -> Result<SnapshotComparison, String> {
-    let forward = git_diff_text(codebase_path, base_ref, head_ref)?;
-    let reverse = git_diff_text(codebase_path, head_ref, base_ref)?;
+    let forward = git_diff_text(refs.codebase_path, refs.base_ref, refs.head_ref)?;
+    let reverse = git_diff_text(refs.codebase_path, refs.head_ref, refs.base_ref)?;
     let mut head = analyze_present_side(head_store, &forward)?;
     let mut base = analyze_present_side(base_store, &reverse)?;
     base.files_changed = head.files_changed;
