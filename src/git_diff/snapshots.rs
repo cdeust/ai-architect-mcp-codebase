@@ -151,7 +151,15 @@ fn analyze_present_side(store: &GraphStore, diff_text: &str) -> Result<DiffAnaly
         .map(|h| h.file_path.as_str())
         .collect::<HashSet<_>>()
         .len() as u64;
-    let present: Vec<FileHunk> = sections.into_iter().filter(|h| !h.is_deleted).collect();
+    let mut present: Vec<FileHunk> = sections.into_iter().filter(|h| !h.is_deleted).collect();
+    // A pure removal on this side is a run of added lines on the other side,
+    // which attributes it to its own symbols or reports it as its own gap. It
+    // still marks the symbol of this side that holds it, but is no gap here:
+    // a function added between two others would otherwise make the base side
+    // a lower bound (PR #540 review, note 1).
+    for hunk in &mut present {
+        hunk.nonblank_gaps.clear();
+    }
     let mut analysis = build_analysis(store, &merge_by_path(present))?;
     analysis.files_changed = files_changed;
     Ok(analysis)

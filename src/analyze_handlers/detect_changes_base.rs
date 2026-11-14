@@ -64,7 +64,7 @@ pub(super) fn section(
         "symbols_affected": symbols.items,
         "symbols_affected_count": symbols.total_count,
         "symbols_affected_truncated": symbols.truncated,
-        "epistemic": base.epistemic,
+        "epistemic": if symbols.truncated { lower } else { base.epistemic },
     })
 }
 

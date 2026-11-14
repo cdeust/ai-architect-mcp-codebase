@@ -17,6 +17,7 @@ use common::TempDirExt;
 
 const KEEP_V1: &str = "def stays():\n    return 1\n\n\ndef goes():\n    return 2\n";
 const KEEP_V2: &str = "def stays():\n    return 10\n\n\ndef arrives():\n    return 4\n";
+const KEEP_V4: &str = "def stays():\n    return 10\n\n\ndef middle():\n    return 6\n\n\ndef arrives():\n    return 4\n";
 const OLD_PY: &str = "def legacy():\n    return 3\n";
 const NEW_PY: &str = "def fresh():\n    return 5\n";
 
@@ -36,10 +37,12 @@ struct Fixture {
     head_graph: PathBuf,
     /// Tag `v3`: `new.py` replaced by a symlink to `keep.py`.
     link_graph: PathBuf,
+    /// Tag `v4`: `middle` added between `stays` and `arrives`.
+    middle_graph: PathBuf,
     _root: common::TestTempDir,
 }
 
-/// The repository with tags `v1`, `v2` and `v3`, and one graph per tag, each
+/// The repository with tags `v1` to `v4`, and one graph per tag, each
 /// indexed from a worktree checked out at that tag (repository-relative
 /// paths, as `git diff` prints them).
 fn fixture() -> Fixture {
@@ -69,8 +72,12 @@ fn fixture() -> Fixture {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "v3"]);
     git(&repo, &["tag", "v3"]);
+    std::fs::write(repo.join("keep.py"), KEEP_V4).unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "v4"]);
+    git(&repo, &["tag", "v4"]);
     let mut graphs = Vec::new();
-    for tag in ["v1", "v2", "v3"] {
+    for tag in ["v1", "v2", "v3", "v4"] {
         let tree = root.join(format!("tree-{tag}"));
         git(
             &repo,
@@ -89,6 +96,7 @@ fn fixture() -> Fixture {
     }
     Fixture {
         repo,
+        middle_graph: graphs.pop().unwrap(),
         link_graph: graphs.pop().unwrap(),
         head_graph: graphs.pop().unwrap(),
         base_graph: graphs.pop().unwrap(),
@@ -332,5 +340,43 @@ fn a_file_replaced_by_a_symlink_keeps_its_removed_symbols() {
         pairs(&[("fresh", "deleted")]),
         "{:?}",
         cmp.base.epistemic_reasons
+    );
+}
+
+#[test]
+fn a_function_added_between_two_others_is_no_base_side_gap() {
+    // PR #540 review, note 1: in the reversed diff the addition is a pure
+    // removal between two base symbols, which no base symbol holds.
+    let f = fixture();
+    let head = GraphStore::open_or_create(&f.middle_graph).unwrap();
+    let base = GraphStore::open_or_create(&f.link_graph).unwrap();
+    let cmp = compare_snapshots(
+        &head,
+        &base,
+        &RefRange {
+            codebase_path: &f.repo,
+            base_ref: "v3",
+            head_ref: "v4",
+        },
+    )
+    .expect("compare");
+    assert_eq!(
+        by_name(&cmp.head.symbols_affected),
+        pairs(&[("middle", "added")])
+    );
+    assert!(
+        cmp.base.symbols_affected.is_empty(),
+        "{:?}",
+        cmp.base.symbols_affected
+    );
+    assert_eq!(
+        cmp.base.epistemic, "exact",
+        "{:?}",
+        cmp.base.epistemic_reasons
+    );
+    assert_eq!(
+        cmp.head.epistemic, "exact",
+        "{:?}",
+        cmp.head.epistemic_reasons
     );
 }
