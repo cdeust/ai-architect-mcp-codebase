@@ -21,7 +21,7 @@
 // is deterministic: the same store and record give a byte-identical
 // `to_json` (criterion 6), since every builder reads in store order and the
 // skeleton canonicalises every list. The MCP tool that exposes the export is
-// the next slice of #196.
+// `export_wiki_skeleton` (`wiki_handlers`), slice 8 of #196.
 
 use crate::graph_store::GraphStore;
 use crate::indexer::coverage::CoverageReport;

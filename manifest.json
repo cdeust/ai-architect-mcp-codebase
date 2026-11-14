@@ -9,8 +9,8 @@
     "email": "admin@ai-architect.tools",
     "url": "https://ai-architect.tools"
   },
-  "description": "Cross-platform codebase intelligence MCP for Codex, Gemini, Claude, and other hosts — index any repo into a property graph; 27 tools for agents.",
-  "long_description": "AI Architect Codebase is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust / Python / TypeScript / Java / Kotlin / Swift / Objective-C / C / C++ / Go codebase into a LadybugDB property graph, resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 27 MCP tools. It is the codebase intelligence layer that sits between a finding and a PRD — read-only intelligence that tells the system what is true about the code so the next stage can reason without guessing.",
+  "description": "Cross-platform codebase intelligence MCP for Codex, Gemini, Claude, and other hosts — index any repo into a property graph; 28 tools for agents.",
+  "long_description": "AI Architect Codebase is a cross-platform Rust MCP server for Codex, Gemini CLI, Claude Code, Cursor, VS Code, Zed, and other stdio MCP hosts. It indexes any Rust / Python / TypeScript / Java / Kotlin / Swift / Objective-C / C / C++ / Go codebase into a LadybugDB property graph, resolves imports and call chains across files, detects functional communities via Leiden-class community detection, traces execution flows from entry points, builds a hybrid BM25 + sparse TF-IDF + RRF search index, and exposes all of it through 28 MCP tools. It is the codebase intelligence layer that sits between a finding and a PRD — read-only intelligence that tells the system what is true about the code so the next stage can reason without guessing.",
   "homepage": "https://github.com/cdeust/ai-architect-mcp-codebase",
   "documentation": "https://github.com/cdeust/ai-architect-mcp-codebase#readme",
   "support": "https://github.com/cdeust/ai-architect-mcp-codebase/issues",
@@ -129,6 +129,10 @@
     {
       "name": "check_doc_claims",
       "description": "Check what a document claims about the codebase against the graph, one claim anchored to its exact text at a file:line at a time. Verdicts: supported, contradicted, not_found, not_verifiable (with the reason), rejected_anchor; an absence or a lower-bound count never yields contradicted. Read-only."
+    },
+    {
+      "name": "export_wiki_skeleton",
+      "description": "Write the deterministic wiki skeleton of a resolved and clustered graph (one page per community, process and god node; every member and edge at file:line, every edge tagged extracted or inferred, a coverage block on every page) to wiki_skeleton.json beside the graph. Byte-identical for the same graph; no network, no model client."
     }
   ],
   "tools_generated": true

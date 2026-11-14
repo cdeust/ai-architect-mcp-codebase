@@ -116,6 +116,12 @@ tempfile = "3"
 # call hello() against a real indexed graph from this workspace.
 zera = { path = "crates/zera" }
 
+# The seccomp filter of `wiki_handlers_egress_tests` (issue #196, criteria 1
+# and 2): the export tool's path is run under a filter that kills on a socket
+# or a new process. Already in the lock as a transitive dependency.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

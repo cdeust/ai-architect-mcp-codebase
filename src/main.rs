@@ -56,6 +56,11 @@ mod test_support;
 mod token_surface;
 mod tool_profile;
 mod tool_schemas;
+// `wiki` is the library's API (re-exports, accessors, `from_json`); the binary
+// calls `wiki::export` alone (`export_wiki_skeleton`), so the rest is unused
+// here and used by the library's callers and tests.
+#[allow(unused_imports, dead_code)]
+mod wiki;
 mod write_diagnostics;
 
 use serde::Deserialize;
@@ -172,6 +177,7 @@ mod symbol_handlers;
 mod trace_ingest;
 mod verification_core;
 mod verification_ops;
+mod wiki_handlers;
 
 pub(crate) use analyze_handlers::*;
 pub(crate) use doc_claims_handlers::*;
@@ -187,6 +193,7 @@ pub(crate) use search_context_handlers::*;
 pub(crate) use symbol_handlers::*;
 use trace_ingest::*;
 pub(crate) use verification_ops::*;
+pub(crate) use wiki_handlers::run_export_wiki_skeleton;
 
 // ---------------------------------------------------------------------------
 // Tool dispatch
@@ -286,6 +293,7 @@ fn dispatch_tool(name: &str, arguments: &Value, profile: ToolProfile) -> Option<
         "check_security_gates" => run_check_security_gates(arguments),
         "verify_semantic_diff" => run_verify_semantic_diff(arguments),
         "check_doc_claims" => run_check_doc_claims(arguments),
+        "export_wiki_skeleton" => run_export_wiki_skeleton(arguments),
         _ => return None,
     };
     Some(payload)

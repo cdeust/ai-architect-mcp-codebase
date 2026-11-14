@@ -28,7 +28,7 @@ EXPECTED_SIGNER_WORKFLOW="${EXPECTED_REPO}/.github/workflows/release.yml"
 # This is a release pin, not a floating minimum. The distribution identity gate
 # requires it to match Cargo.toml and every public manifest before merge.
 EXPECTED_VERSION="0.15.0"
-EXPECTED_PLUGIN_MANIFEST_SHA256="d5bd822a5505429ea442b582590778c8dae4ce32e15c35427254b946bec47cb3"
+EXPECTED_PLUGIN_MANIFEST_SHA256="42d91010725514efd78db6eebfbec9b4d72b76d757edf29de8f8e06a545756ba"
 # The Cargo pin hashes the [package] table only (see cargo_package_table), never
 # the dependency tables: those are what Dependabot rewrites, and in marketplace
 # mode nothing builds from them - the binary is the attested release asset. The

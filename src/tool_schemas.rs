@@ -42,6 +42,10 @@ use graph_analysis::{
 mod doc_claims;
 use doc_claims::check_doc_claims_schema;
 
+#[path = "tool_schemas_wiki.rs"]
+mod wiki;
+use wiki::export_wiki_skeleton_schema;
+
 #[path = "tool_schemas_prd_security.rs"]
 mod prd_security;
 use prd_security::{
@@ -135,6 +139,7 @@ pub fn tools_list() -> Value {
         check_security_gates_schema(),
         verify_semantic_diff_schema(),
         check_doc_claims_schema(),
+        export_wiki_skeleton_schema(),
     ];
     for tool in &mut tools {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
