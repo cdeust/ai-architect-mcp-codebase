@@ -381,3 +381,69 @@ fn pages_of_an_indexed_and_clustered_repo_form_a_deterministic_skeleton() {
     let second = WikiSkeleton::new(again.pages).unwrap().to_json().unwrap();
     assert_eq!(first, second);
 }
+
+/// A page lists the `ParticipatesIn` rows: an `EntryPointOf` row alone makes
+/// no participant (scoped `cargo mutants` on #196: `participation_tables`
+/// with `||` read the entry-point tables as participation).
+#[test]
+fn an_entry_point_row_without_participation_makes_no_member() {
+    let (_dir, store) = fixture();
+    insert(
+        &store,
+        "Function",
+        vec![node("src/d.rs::alone", "alone", 9)],
+    );
+    link(
+        &store,
+        "EntryPointOf_Function_Process",
+        &[("src/d.rs::alone", PM)],
+    );
+    let built = process_pages(&store).expect("pages");
+    for page in &built.pages {
+        assert!(
+            page.members.iter().all(|s| s.id != "src/d.rs::alone"),
+            "{}",
+            page.id
+        );
+    }
+    assert!(built
+        .unanchored_members
+        .iter()
+        .all(|id| id != "src/d.rs::alone"));
+}
+
+/// A module and a function share one id (`mod foo {}` and `fn foo() {}`,
+/// kept as two nodes by `indexer::persist::nodes`). The module's `Defines`
+/// edge to `foo::inner` is no edge of the function `foo`, so the process
+/// page lists only the call (review 1 of #539: `read_edges` with `&&` read
+/// `Defines_Module_Function`).
+#[test]
+fn a_module_sharing_a_function_id_adds_no_edge_to_the_process() {
+    let (_dir, store) = open_store();
+    let (foo, inner) = ("src/lib.rs::foo", "src/lib.rs::foo::inner");
+    insert(&store, "Process", vec![named(PF)]);
+    insert(
+        &store,
+        "Function",
+        vec![node(foo, "foo", 2), node(inner, "inner", 1)],
+    );
+    insert(&store, "Module", vec![node(foo, "foo", 1)]);
+    link(
+        &store,
+        "ParticipatesIn_Function_Process",
+        &[(foo, PF), (inner, PF)],
+    );
+    link(&store, "Defines_Module_Function", &[(foo, inner)]);
+    link(&store, "Calls_Function_Function", &[(foo, inner)]);
+    let rows = store
+        .execute_query("MATCH (:Module)-[r:Defines_Module_Function]->(:Function) RETURN count(r)")
+        .expect("count");
+    assert_eq!(rows.rows[0][0], "1", "the Defines edge must exist");
+    let built = process_pages(&store).expect("pages");
+    let relations: Vec<&str> = page(&built, PF)
+        .edges
+        .iter()
+        .map(|e| e.relation())
+        .collect();
+    assert_eq!(relations, ["Calls"]);
+}

@@ -186,6 +186,15 @@ fn a_long_report_list_is_bounded_with_its_count() {
     assert_eq!(list["truncated"], true);
     let shown = list["items"].as_array().unwrap().len();
     assert!(shown > 0 && shown < 20_000, "{shown}");
+    // Each list gets an equal share of the section budget, and fills it: every
+    // item serialises to 12 characters ("site_00000" with its quotes), so the
+    // shown items fit the share and one more would not (scoped `cargo mutants`
+    // on #196: `per_section_chars() % REPORT_LISTS` showed one item).
+    let share = response_budget::per_section_chars() / REPORT_LISTS;
+    assert!(
+        shown * 12 <= share && (shown + 1) * 12 > share,
+        "{shown} of {share}"
+    );
     assert_eq!(list["items"][0], "site_00000");
     assert_eq!(view["community_unanchored_members"]["truncated"], false);
     assert_eq!(view["god_node_fence"], Value::Null);

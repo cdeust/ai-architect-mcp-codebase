@@ -322,3 +322,32 @@ fn god_node_pages_form_a_deterministic_skeleton_with_coverage() {
     assert!(first.contains(r#""kind": "god_node""#), "{first}");
     assert!(first.contains(r#""coverage": []"#), "{first}");
 }
+
+/// A field and a method share one id (`TaskSet::len`: a `len` field and a
+/// `len()` method, kept as two nodes by `indexer::persist::nodes`). The
+/// struct's `HasField` edge ends at the field, which is no clustered symbol,
+/// so it is no edge of the method and counts toward no degree (review 1 of
+/// #539: `read_edges` with `&&` read `HasField_Struct_Field`).
+#[test]
+fn a_field_sharing_a_method_id_adds_no_edge() {
+    let (_dir, store) = open_store();
+    communities(&store);
+    let (strukt, len) = ("src/a.rs::TaskSet", "src/a.rs::TaskSet::len");
+    for label in ["Struct", "Method", "Field"] {
+        let id = if label == "Struct" { strukt } else { len };
+        store
+            .bulk_insert_nodes(label, &[function(id, 1)])
+            .expect(label);
+    }
+    link(&store, "MemberOf_Struct_Community", &[(strukt, C1)]);
+    link(&store, "MemberOf_Method_Community", &[(len, C1)]);
+    link(&store, "HasField_Struct_Field", &[(strukt, len)]);
+    let rows = store
+        .execute_query("MATCH (:Struct)-[r:HasField_Struct_Field]->(:Field) RETURN count(r)")
+        .expect("count");
+    assert_eq!(rows.rows[0][0], "1", "the HasField edge must exist");
+    let members = read_members(&store).expect("members");
+    assert_eq!(members.len(), 2);
+    let edges = read_edges(&store, &members).expect("edges");
+    assert!(edges.is_empty(), "{edges:?}");
+}

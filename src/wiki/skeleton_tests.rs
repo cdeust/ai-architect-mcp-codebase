@@ -363,6 +363,25 @@ fn a_repeated_cross_community_key_is_refused() {
     );
 }
 
+/// A `cross_community_edges` that is not an object is refused with what was
+/// expected (scoped `cargo mutants` on #196: the visitor's `expecting` wrote
+/// nothing and no test read it).
+#[test]
+fn a_cross_community_value_that_is_not_an_object_names_what_was_expected() {
+    let golden = include_str!("testdata/skeleton_v1.json");
+    let scalar = golden.replacen(
+        r#""cross_community_edges": {},"#,
+        r#""cross_community_edges": 3,"#,
+        1,
+    );
+    assert_ne!(scalar, golden, "the fixture must contain the replaced text");
+    let err = WikiSkeleton::from_json(&scalar).unwrap_err();
+    assert!(
+        matches!(&err, SkeletonError::Json(m) if m.contains("a map of community ids to edge counts")),
+        "{err:?}"
+    );
+}
+
 /// claude[bot] review on #475: serde's derived `Deserialize` also accepts a
 /// JSON array for a struct. Every level of the skeleton refuses one, so the
 /// v1 shape has one spelling.
