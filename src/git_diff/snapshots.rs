@@ -12,7 +12,7 @@ use super::{
     build_analysis, git_diff_text, merge_by_path, parse_unified_diff, DiffAnalysis, FileHunk,
 };
 use crate::graph_store::{cypher_str, GraphStore};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 /// Both sides of one change between two snapshots of a repository, each
@@ -137,14 +137,22 @@ fn names_held(
         .collect())
 }
 
-/// `diff_text` against the graph of its new side, without the files the diff
-/// deletes: those exist only on the other side, whose graph attributes them.
-/// `files_changed` still counts every file of the diff.
+/// `diff_text` against the graph of its new side, without the sections that
+/// delete a file: those exist only on the other side, whose graph attributes
+/// them. Sections are dropped before they are merged by path, so a type
+/// change (a file replaced by a symlink, or the reverse: one deleting and one
+/// adding section for the same path) keeps its adding section here and its
+/// deleting one on the other side (Codex review of PR #540). `files_changed`
+/// still counts every path of the diff.
 fn analyze_present_side(store: &GraphStore, diff_text: &str) -> Result<DiffAnalysis, String> {
-    let hunks = merge_by_path(parse_unified_diff(diff_text)?);
-    let files_changed = hunks.len() as u64;
-    let present: Vec<FileHunk> = hunks.into_iter().filter(|h| !h.is_deleted).collect();
-    let mut analysis = build_analysis(store, &present)?;
+    let sections = parse_unified_diff(diff_text)?;
+    let files_changed = sections
+        .iter()
+        .map(|h| h.file_path.as_str())
+        .collect::<HashSet<_>>()
+        .len() as u64;
+    let present: Vec<FileHunk> = sections.into_iter().filter(|h| !h.is_deleted).collect();
+    let mut analysis = build_analysis(store, &merge_by_path(present))?;
     analysis.files_changed = files_changed;
     Ok(analysis)
 }

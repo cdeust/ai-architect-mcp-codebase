@@ -380,7 +380,10 @@ pub(crate) fn do_detect_changes(arguments: &Value) -> Result<Value, String> {
     let bound = |values: Vec<Value>| {
         crate::response_budget::bound_values(values, crate::response_budget::per_section_chars())
     };
-    let symbols = bound(to_values(&analysis.symbols_affected));
+    let symbols = crate::response_budget::bound_values(
+        to_values(&analysis.symbols_affected),
+        detect_changes_base::symbol_list_budget(base_side.is_some()),
+    );
     let communities = bound(to_values(&analysis.communities_affected));
     let processes = bound(to_values(&analysis.processes_affected));
     let mut epistemic = analysis.epistemic;

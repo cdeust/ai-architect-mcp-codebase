@@ -12,6 +12,19 @@ use std::path::Path;
 /// base side's reasons speak of the base graph, not of `graph_path`.
 pub(super) const BASE_REASON_PREFIX: &str = "base snapshot: ";
 
+/// The serialized-char budget of one symbol list. With a base snapshot the
+/// head and base lists share one section's budget, half each, so the two
+/// lists together take no more of the response than the head list alone did
+/// (Codex review of PR #540: three full sections could pass the host cap).
+pub(super) fn symbol_list_budget(with_base: bool) -> usize {
+    let section = crate::response_budget::per_section_chars();
+    if with_base {
+        section / 2
+    } else {
+        section
+    }
+}
+
 /// The `base_snapshot` section of the response. Its symbol list is bounded
 /// like the head's; its reasons join the response's `epistemic_reasons`, and
 /// a lower-bound base side (or a cut list) makes the whole answer one.
@@ -26,7 +39,7 @@ pub(super) fn section(
             .iter()
             .filter_map(|s| serde_json::to_value(s).ok())
             .collect(),
-        crate::response_budget::per_section_chars(),
+        symbol_list_budget(true),
     );
     let lower = crate::epistemic::Boundary::LowerBound.as_str();
     if base.epistemic == lower {
@@ -90,4 +103,16 @@ pub(super) fn compare_with_base(
         head_ref,
     };
     git_diff::compare_snapshots(store, &base_store, &refs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::symbol_list_budget;
+
+    #[test]
+    fn the_two_symbol_lists_share_one_section() {
+        let section = crate::response_budget::per_section_chars();
+        assert_eq!(symbol_list_budget(false), section);
+        assert!(2 * symbol_list_budget(true) <= section);
+    }
 }
