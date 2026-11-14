@@ -1,8 +1,11 @@
 // git_diff — maps git diff changed lines to affected symbols in the code graph.
 //
-// Two entry points:
+// Three entry points:
 //   1. analyze_diff(store, diff_text) — parse raw unified diff text
 //   2. analyze_git_diff(store, codebase_path, base_ref, head_ref) — run git diff
+//   3. compare_snapshots(head_store, base_store, refs) — the same git diff read against one graph per ref: lines
+//      of the head snapshot go to its symbols, lines the change removes from
+//      the base snapshot go to the base graph's symbols (issue #319)
 //
 // Each changed line is attributed to the innermost graph symbols whose
 // [start_line, end_line] range holds it (`symbols`). Each affected symbol is
@@ -21,11 +24,13 @@ use std::path::Path;
 use std::process::Command;
 
 mod parse;
+mod snapshots;
 mod symbols;
 
 #[cfg(test)]
 use parse::parse_hunk_header;
 pub(crate) use parse::{has_diff_structure, one_sided_entries, parse_unified_diff, FileHunk};
+pub use snapshots::{compare_snapshots, RefRange, SnapshotComparison};
 
 /// Validates a git ref for safe use as a positional argument.
 /// Rejects refs starting with `-` (which git would treat as an option flag)
@@ -330,6 +335,17 @@ pub fn analyze_git_diff(
     base_ref: &str,
     head_ref: &str,
 ) -> Result<DiffAnalysis, String> {
+    let diff_text = git_diff_text(codebase_path, base_ref, head_ref)?;
+    analyze_diff(store, &diff_text)
+}
+
+/// `git diff base_ref..head_ref` in `codebase_path`, in the one textual form
+/// the parser reads.
+pub(super) fn git_diff_text(
+    codebase_path: &Path,
+    base_ref: &str,
+    head_ref: &str,
+) -> Result<String, String> {
     validate_git_ref(base_ref, "base_ref")?;
     validate_git_ref(head_ref, "head_ref")?;
     // The combined `base..head` string now starts with whatever base_ref
@@ -369,15 +385,14 @@ pub fn analyze_git_diff(
         return Err(format!("git diff failed: {stderr}"));
     }
 
-    let diff_text = String::from_utf8_lossy(&output.stdout);
-    analyze_diff(store, &diff_text)
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// One `FileHunk` per path: a diff that names a path several times (a crafted
 /// `diff_text`, or `git diff` for a file<->symlink type change) is attributed
 /// once, so it cannot
 /// duplicate symbols, skew the risk averages or multiply the output.
-fn merge_by_path(hunks: Vec<FileHunk>) -> Vec<FileHunk> {
+pub(super) fn merge_by_path(hunks: Vec<FileHunk>) -> Vec<FileHunk> {
     let mut merged: Vec<FileHunk> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for h in hunks {
@@ -429,7 +444,10 @@ fn map_all_hunks(
     coverage_gaps
 }
 
-fn build_analysis(store: &GraphStore, hunks: &[FileHunk]) -> Result<DiffAnalysis, String> {
+pub(super) fn build_analysis(
+    store: &GraphStore,
+    hunks: &[FileHunk],
+) -> Result<DiffAnalysis, String> {
     let files_changed = hunks.len() as u64;
     let mut all_symbols: Vec<ChangedSymbol> = Vec::new();
 

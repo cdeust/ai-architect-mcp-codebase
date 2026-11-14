@@ -17,6 +17,7 @@ use crate::lsp_resolver;
 use crate::query_handlers::*;
 use crate::resolver;
 
+mod detect_changes_base;
 mod index_phase;
 mod lsp_coverage;
 mod lsp_durability;
@@ -353,14 +354,21 @@ pub(crate) fn do_detect_changes(arguments: &Value) -> Result<Value, String> {
     // Read-only tool: reuse cached handle. source: graph_cache module docs.
     let store = graph_cache::open_cached(graph_path)?;
 
-    let analysis = if let Some(text) = diff_text {
-        git_diff::analyze_diff(&store, text)?
+    let base_graph = args.get("base_graph_path").and_then(|v| v.as_str());
+    let (analysis, base_side) = if let Some(base) = base_graph {
+        let cmp = detect_changes_base::compare_with_base(&store, base, args, (base_ref, head_ref))?;
+        (cmp.head, Some(cmp.base))
+    } else if let Some(text) = diff_text {
+        (git_diff::analyze_diff(&store, text)?, None)
     } else if let Some(repo) = codebase_path {
         let repo_path = Path::new(repo);
         if !repo_path.exists() {
             return Err(format!("codebase_path does not exist: {repo}"));
         }
-        git_diff::analyze_git_diff(&store, repo_path, base_ref, head_ref)?
+        (
+            git_diff::analyze_git_diff(&store, repo_path, base_ref, head_ref)?,
+            None,
+        )
     } else {
         return Err("either 'diff_text' or 'codebase_path' must be provided".to_string());
     };
@@ -386,9 +394,17 @@ pub(crate) fn do_detect_changes(arguments: &Value) -> Result<Value, String> {
             symbols.total_count
         ));
     }
+    let base_section = base_side.as_ref().map(|b| {
+        detect_changes_base::section(
+            b,
+            base_graph.unwrap_or_default(),
+            &mut epistemic,
+            &mut reasons_list,
+        )
+    });
     let reasons = bound(to_values(&reasons_list));
 
-    Ok(json!({
+    let mut out = json!({
         "stage": 3,
         "status": "ok",
         "tool": "detect_changes",
@@ -412,8 +428,12 @@ pub(crate) fn do_detect_changes(arguments: &Value) -> Result<Value, String> {
         "epistemic_reasons": reasons.items,
         "epistemic_reasons_count": reasons.total_count,
         "epistemic_reasons_truncated": reasons.truncated,
-        "next_steps": detect_changes_next_steps(&analysis),
-    }))
+        "next_steps": detect_changes_next_steps(&analysis, base_side.as_ref()),
+    });
+    if let Some(section) = base_section {
+        out["base_snapshot"] = section;
+    }
+    Ok(out)
 }
 
 fn to_values<T: serde::Serialize>(v: &[T]) -> Vec<Value> {
@@ -424,12 +444,23 @@ fn to_values<T: serde::Serialize>(v: &[T]) -> Vec<Value> {
 
 /// Suggests follow-up tools after a `detect_changes` result. Graph-grounded:
 /// each hint is gated on a present dimension of the analysis.
-pub(crate) fn detect_changes_next_steps(analysis: &git_diff::DiffAnalysis) -> Value {
+pub(crate) fn detect_changes_next_steps(
+    analysis: &git_diff::DiffAnalysis,
+    base: Option<&git_diff::DiffAnalysis>,
+) -> Value {
     let mut steps = Vec::new();
     if !analysis.symbols_affected.is_empty() {
         steps.push(
             "drill into a changed symbol's blast radius: get_impact on a \
              `symbols_affected[].qualified_name`"
+                .to_string(),
+        );
+    }
+    if base.is_some_and(|b| !b.symbols_affected.is_empty()) {
+        steps.push(
+            "who depended on a removed or rewritten symbol: get_impact with \
+             graph_path = `base_snapshot.graph_path` on a \
+             `base_snapshot.symbols_affected[].qualified_name`"
                 .to_string(),
         );
     }
@@ -522,13 +553,13 @@ mod detect_changes_next_steps_tests {
     /// Issue #446 review: lsp_resolve tightens dependency edges, not coverage.
     #[test]
     fn lsp_resolve_only_for_dependency_reasons() {
-        let dep_only = detect_changes_next_steps(&analysis(1, 0));
+        let dep_only = detect_changes_next_steps(&analysis(1, 0), None);
         assert!(mentions(&dep_only, "lsp_resolve"));
         assert!(!mentions(&dep_only, "reach no indexed symbol"));
-        let gap_only = detect_changes_next_steps(&analysis(1, 1));
+        let gap_only = detect_changes_next_steps(&analysis(1, 1), None);
         assert!(!mentions(&gap_only, "lsp_resolve"));
         assert!(mentions(&gap_only, "reach no indexed symbol"));
-        let both = detect_changes_next_steps(&analysis(2, 1));
+        let both = detect_changes_next_steps(&analysis(2, 1), None);
         assert!(mentions(&both, "lsp_resolve"));
         assert!(mentions(&both, "reach no indexed symbol"));
     }
