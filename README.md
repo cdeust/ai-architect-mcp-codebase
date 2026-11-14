@@ -197,7 +197,9 @@ get_impact(graph_path, qualified_name: "src/main.rs::handle_tool_call")
 
 detect_changes(graph_path, codebase_path: "/path/to/repo", base_ref: "main", head_ref: "HEAD")
   → symbols the diff adds, modifies or deletes, one heuristic risk score for the
-    diff, and an epistemic label (exact or lower-bound) with its reasons
+    diff, and an epistemic label (exact or lower-bound) with its reasons;
+    with base_graph_path (a graph indexed at base_ref), base_snapshot lists the
+    base symbols the change deletes or whose lines it removes or rewrites
 
 query_graph(graph_path, graph: "missed")
   → the files the index could not fully cover, to check with grep
@@ -254,7 +256,7 @@ Finding records:         extract_finding · refine_finding · start_verification
 | `query_graph` | yes | Read-only Cypher, paged; `graph: "missed"` lists what the index did not cover. |
 | `get_impact` | yes | Reverse dependencies of a symbol or file, with affected communities and processes and an epistemic label. |
 | `get_processes` | | Lists execution flows with entry point, entry kind (`main`, `test`, `proof`, `handler`, `lib_entry`), depth and size. |
-| `detect_changes` | yes | Maps a unified diff, or `base_ref`..`head_ref`, onto the symbols, communities and processes it touches. |
+| `detect_changes` | yes | Maps a unified diff, or `base_ref`..`head_ref`, onto the symbols, communities and processes it touches; with `base_graph_path`, also onto the base snapshot's symbols. |
 | `index_history` | | Adds git history as `Commit` and `Version` nodes linked to the files and symbols each commit changed. |
 | `check_security_gates` | | Checks a list of changed symbols for auth-community touch, public-API change, unresolved imports and test-coverage gaps. |
 | `verify_semantic_diff` | | Compares a before graph and an after graph: added and removed nodes and edges, dangling references, new unresolved imports, new cycles (Tarjan SCC), and a heuristic regression score. |
