@@ -24,18 +24,27 @@ use super::cpp_unreadable::{scope_has_unreadable_statement, text_has_directive_o
 /// statement between the handler and the call could declare the name in a form this
 /// reader cannot name (`scope_has_unreadable_statement`), and no directive or erased
 /// byte lies between the handler's body and the call (`text_has_directive_or_erased`).
-pub(super) fn declared_type(source: &str, at: Node, name: &str) -> Option<String> {
+pub(super) fn declared_type(source: &str, at: Node, name: &str) -> Option<Declared> {
     let mut between = Vec::new();
     let mut scope = at.parent();
     while let Some(s) = scope {
         if let Some(found) = binding_in(source, s, at, name) {
             let body = between.last().map_or(at.start_byte(), Node::start_byte);
-            let untrusted = s.kind() == "catch_clause"
-                && (text_has_directive_or_erased(source, body, at.start_byte())
+            let unreadable_between = || {
+                text_has_directive_or_erased(source, body, at.start_byte())
                     || between
                         .iter()
-                        .any(|b| scope_has_unreadable_statement(source, (*b, at), name)));
-            return found.filter(|_| !untrusted);
+                        .any(|b| scope_has_unreadable_statement(source, (*b, at), name))
+            };
+            let untrusted = s.kind() == "catch_clause" && unreadable_between();
+            // A statement the reader cannot name may declare the receiver again
+            // (`other::Box (b);`, a declaring macro): the parameter is then not known
+            // to be the receiver, and its type keeps the path-suffix reading.
+            let parameter =
+                s.kind() == "function_definition" && !inside_a_body(s) && !unreadable_between();
+            return found
+                .filter(|_| !untrusted)
+                .map(|ty| Declared { ty, parameter });
         }
         between.push(s);
         if s.kind() == "function_definition" {
@@ -44,6 +53,31 @@ pub(super) fn declared_type(source: &str, at: Node, name: &str) -> Option<String
         scope = s.parent();
     }
     None
+}
+
+/// The type a declaration writes for the receiver, and whether that declaration is
+/// a parameter of a function defined outside any function body, with no statement
+/// between it and the call that could declare the name in a form the reader cannot
+/// name (issue #412 point 3). C++ reads the type of such a parameter in the scopes that enclose the
+/// function, never in a block: a block declaration of the same name (a local class,
+/// a block `typedef`, a block `using`) cannot hide it. A parameter of a lambda, or of
+/// a member function of a local class, is read in an enclosing block.
+/// source: ISO/IEC 14882:2017 §6.4.1 [basic.lookup.unqual] ¶6 and ¶8.
+pub(super) struct Declared {
+    pub(super) ty: String,
+    pub(super) parameter: bool,
+}
+
+/// True when `node` lies in the body of a function or a lambda.
+fn inside_a_body(node: Node) -> bool {
+    let mut scope = node.parent();
+    while let Some(s) = scope {
+        if matches!(s.kind(), "function_definition" | "lambda_expression") {
+            return true;
+        }
+        scope = s.parent();
+    }
+    false
 }
 
 /// One declaration of the name looked for: `decl` is the node whose `type` field

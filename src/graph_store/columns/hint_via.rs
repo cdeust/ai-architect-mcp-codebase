@@ -47,6 +47,13 @@ pub(crate) const RECEIVER_HINT_VIA_CPP_THIS: &str = "cpp-this";
 /// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
 pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED: &str = "cpp-declared";
 
+/// The `receiver_hint_via` of a C++ member call whose receiver is a parameter of a
+/// function defined outside any function body (`int f(Box& b) { b.m(); }`): the hint
+/// is read as for `cpp-declared`, and the resolver looks the type up in the
+/// namespaces and classes that enclose the caller, innermost first (issue #412).
+/// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
+pub(crate) const RECEIVER_HINT_VIA_CPP_PARAMETER: &str = "cpp-parameter";
+
 /// The `receiver_hint_via` of a C++ call written with a qualifier (`a::b::f()`):
 /// the hint is the qualifier. The callee name is always the last segment, so the
 /// hint is the only trace of the qualifier the resolver has.

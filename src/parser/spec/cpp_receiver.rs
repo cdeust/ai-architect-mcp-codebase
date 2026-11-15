@@ -16,6 +16,9 @@
 //   gives no hint and hides the outer declarations of that name (`cpp_declared`); so
 //   does a name no enclosing scope declares (a field, a global), a type that is a
 //   template parameter of an enclosing template or any other expression.
+// - `cpp-parameter`: as `cpp-declared`, when the declaration is a parameter of a
+//   function defined outside any function body (`cpp_declared::Declared`): its type
+//   is read in the scopes around the function, which the resolver can name.
 // - `cpp-qualifier`: the callee is written `a::b::f`; the hint is `a::b`.
 //
 // source: tree-sitter-cpp 0.23.4 node-types.json (field_expression.argument,
@@ -26,7 +29,8 @@ use tree_sitter::Node;
 
 use super::cpp_declared::{declared_type, plain_type_text};
 use crate::graph_store::{
-    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
+    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_PARAMETER,
+    RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::parser::node_text;
 
@@ -75,7 +79,14 @@ fn member_receiver(source: &str, callee: Node) -> Option<(String, &'static str)>
         "this" => Some((String::new(), RECEIVER_HINT_VIA_CPP_THIS)),
         "identifier" => {
             let name = node_text(source, argument);
-            declared_type(source, callee, &name).map(|t| (t, RECEIVER_HINT_VIA_CPP_DECLARED))
+            declared_type(source, callee, &name).map(|d| {
+                let via = if d.parameter {
+                    RECEIVER_HINT_VIA_CPP_PARAMETER
+                } else {
+                    RECEIVER_HINT_VIA_CPP_DECLARED
+                };
+                (d.ty, via)
+            })
         }
         _ => None,
     }
@@ -141,8 +152,8 @@ void f(const ns::Bloom<int>* pb, Umap& ru) {
         assert_eq!(
             calls_in(src),
             vec![
-                pair("ns::Bloom", "cpp-declared"),
-                pair("Umap", "cpp-declared"),
+                pair("ns::Bloom", "cpp-parameter"),
+                pair("Umap", "cpp-parameter"),
                 pair("Local", "cpp-declared"),
                 pair("-", "-"),
                 pair("", "cpp-this"),
@@ -152,6 +163,33 @@ void f(const ns::Bloom<int>* pb, Umap& ru) {
                 pair("", "cpp-qualifier"),
                 pair("std", "cpp-qualifier"),
                 pair("-", "-"),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_a_parameter_of_a_function_outside_any_body_is_a_cpp_parameter() {
+        // `f` and `C::g` are defined outside any function body: their parameters'
+        // types are read in the enclosing namespaces and classes. A lambda parameter
+        // and a parameter of a method of a local class are read in a block of `h`.
+        let src = "\
+namespace a { struct C { int g(Box& b) { return b.m(); } }; }
+int f(Box& b) { return b.m(); }
+int h() {
+    auto l = [](Box& b) { return b.m(); };
+    struct L { int k(Box& b) { return b.m(); } };
+    Box b;
+    return b.m();
+}";
+        let vias: Vec<String> = calls_in(src).into_iter().map(|(_, v)| v).collect();
+        assert_eq!(
+            vias,
+            [
+                "cpp-parameter",
+                "cpp-parameter",
+                "cpp-declared",
+                "cpp-declared",
+                "cpp-declared"
             ]
         );
     }

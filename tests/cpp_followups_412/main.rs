@@ -4,10 +4,11 @@
 //      `string_pad_direction::left_n`;
 //   2. `catch (Foo& e)` declared no name, so `e.f()` had no receiver type (and, below
 //      a parameter of the same name, took that parameter's type);
-//   3. (not done here, stays open on #412) a declared type is matched by path suffix:
-//      one class of that name binds, several keep the site open, as on `main`.
-//      Every receiver below whose type C++ resolves by a scope the graph does not
-//      model stays open.
+//   3. a declared type was matched by path suffix: one class of that name bound,
+//      several kept the site open. The type of a parameter of a function defined
+//      outside any body is now looked up in the scopes around the caller
+//      (`scope_lookup`); every other receiver, and every parameter whose type C++
+//      resolves by a scope the graph does not model, keeps the suffix reading.
 
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::{indexer, resolver};
@@ -20,6 +21,7 @@ mod body_receivers;
 mod catch_guard;
 mod declaring_forms;
 mod definitions;
+mod scope_lookup;
 
 fn index_and_resolve(files: &[(&str, &str)]) -> (GraphStore, common::TestTempDir) {
     let tmp = tempfile::Builder::new()
@@ -294,17 +296,16 @@ int fx4(Box& b) { return b.m(); }
 }
 
 #[test]
-fn a_type_declared_in_a_namespace_of_the_caller_is_read_by_suffix_as_on_main() {
-    // C++ reads `a::Box` for `Box` inside namespace `a`; the path-suffix reading
-    // sees two classes of that name and keeps the site open (#412 point 3 is not
-    // done here).
+fn a_parameter_type_declared_in_the_namespace_of_the_caller_binds_that_class() {
+    // C++ reads `a::Box` for `Box` inside namespace `a`, where the path-suffix
+    // reading saw two classes of that name and kept the site open.
     let src = "\
 struct Box { int m() { return 1; } };
 namespace a { struct Box { int m() { return 2; } }; int fx5(Box& b) { return b.m(); } }
 ";
     let (store, _tmp) = index_and_resolve(&[("fx5.cpp", src)]);
-    assert!(bound_methods(&store, "fx5").is_empty());
-    assert_eq!(open_reasons(&store, "fx5"), ["ambiguous_candidates"]);
+    assert_eq!(bound_methods(&store, "fx5"), ["m -> a::Box::m"]);
+    assert!(open_reasons(&store, "fx5").is_empty());
 }
 
 #[test]
