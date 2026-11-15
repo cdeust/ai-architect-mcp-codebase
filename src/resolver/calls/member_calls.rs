@@ -10,13 +10,22 @@
 // - a member call (`a.f()`, `p->f()`) on a receiver whose type the parser did
 //   not read stays open as `no_receiver_type` (`open_call`);
 // - through `this` or a receiver of a declared type, only the methods of that
-//   class and of its bases can be named. A declared type is read by path suffix,
-//   as before #412 (`family`): one class of that name binds, several keep the site
-//   open. Which declaration of a name C++ reaches (a using-declaration, a member
-//   type, a block, a structured binding) is not read from the graph. A `typedef` or
+//   class and of its bases can be named. A declared type written without a
+//   qualifier is looked up as C++ looks it up (§6.4.1, `declared_family`): the
+//   innermost scope enclosing the caller (its bases included, for a member type
+//   it inherits) that holds a class of exactly that name, and that class only. No
+//   enclosing scope holding one, or that class holding no candidate of the call,
+//   the name is read by path suffix as before #412 (`family`): one class of that
+//   name binds, several keep the site open. A `typedef` or
 //   `using` a source file writes is visible to a file that can be compiled with it in
 //   one translation unit (it includes it, it is included by it, or a third file includes
 //   both) and to any file when it is written in a header;
+// - the lookup by scope is left for the path-suffix reading wherever a
+//   declaration the graph does not hold can make the name mean another class: a
+//   `using` the caller sees, written in a scope at or inside the one that holds
+//   the class (`a_using_can_hide`), and a declaration of the name inside the
+//   caller's own body, which the parser reports as
+//   `cpp-declared-local-name` (`parser::spec::cpp_declared`);
 // - an unqualified call names, first, a method of the caller's own class or of
 //   one of its bases (implicit `this`, which hides every namesake outside the
 //   class), then a function or a constructor; never a method of another class;
@@ -29,201 +38,17 @@
 // hides a namespace-scope namesake), §12.2.2 (implicit `this`), §13.3 (overload
 // resolution needs the argument types), §10 (derived classes).
 
-use std::collections::{HashMap, HashSet};
-
-use super::includes::IncludeGraph;
+use super::cpp_classes::{names_class, path_without_file, Caller, Family};
 use super::reason::{
     Decline, Gated, SCOPE_CPP_QUALIFIER, SCOPE_CPP_RECEIVER_CLASS, SCOPE_CPP_UNQUALIFIED_CALL,
 };
 use super::*;
 use crate::graph_store::{
-    calls_through_a_pointer, GraphStore, CALLEE_SHAPE_DIRECT, CALLEE_SHAPE_INDIRECT,
-    CALLEE_SHAPE_MEMBER, RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER,
-    RECEIVER_HINT_VIA_CPP_THIS,
+    calls_through_a_pointer, CALLEE_SHAPE_DIRECT, CALLEE_SHAPE_INDIRECT, CALLEE_SHAPE_MEMBER,
+    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_LOCAL_NAME,
+    RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::language_provider::extract_file_prefix;
-use crate::parser::generic_args::{split_outside_generics, strip_generic_groups};
-
-/// The C++ classes of the graph: where each is, and the base classes it names.
-#[derive(Default)]
-pub(super) struct CppClasses {
-    /// The path of a class (its qualified name without the file) to the raw
-    /// names of its bases.
-    bases: HashMap<String, Vec<String>>,
-    /// The paths of the classes ending in a given last segment.
-    by_last: HashMap<String, Vec<String>>,
-    /// The `using` aliases and `typedef`s by last segment: what each names.
-    aliases: HashMap<String, Vec<Alias>>,
-    /// Which file includes which (a source file is seen by the files that include it).
-    includes: IncludeGraph,
-}
-
-/// A `using X = T;` or `typedef T X;`: the path of `X`, the file that writes
-/// it and the class path `T` names.
-struct Alias {
-    path: String,
-    file: String,
-    target: String,
-}
-
-/// True when a declaration written in `declared` is visible to a caller in
-/// `from` by the file alone: a header may be included by any file, a source file is
-/// a translation unit of its own and is seen by itself only.
-fn unit_sees(from: &str, declared: &str) -> bool {
-    declared == from
-        || !matches!(
-            declared.rsplit_once('.').map(|(_, ext)| ext),
-            Some(ext) if super::includes::SOURCE_EXTENSIONS.contains(&ext)
-        )
-}
-
-impl CppClasses {
-    /// True when a declaration written in `declared` is visible to a caller in
-    /// `from`: by the file alone (`unit_sees`), or because the two files can be one
-    /// translation unit (`share_a_unit`): `from` includes `declared`, `declared`
-    /// includes `from` (`using String = A;` then `#include "impl.h"`), or a third file
-    /// includes both. The order of the includes is not read.
-    fn sees(&self, from: &str, declared: &str) -> bool {
-        unit_sees(from, declared) || self.includes.share_a_unit(declared, from)
-    }
-
-    /// Reads the `bases` of every C++ class (the `Struct` nodes of the
-    /// language). A graph without the table, or without the column, yields none.
-    pub(super) fn load(store: &GraphStore, includes: IncludeGraph) -> Self {
-        let mut classes = Self {
-            includes,
-            ..Self::default()
-        };
-        let Ok(qr) =
-            store.execute_query("MATCH (s:Struct) RETURN s.qualified_name, s.bases, s.language")
-        else {
-            return classes;
-        };
-        for row in qr.rows.iter().filter(|r| r.len() >= 3 && r[2] == "cpp") {
-            let path = path_without_file(&row[0]).to_string();
-            let bases = if row[1] == "Null(String)" {
-                ""
-            } else {
-                &row[1]
-            };
-            let bases: Vec<String> = split_outside_generics(bases, ',')
-                .into_iter()
-                .map(class_path)
-                .filter(|b| !b.is_empty())
-                .collect();
-            let last = path.rsplit("::").next().unwrap_or(&path).to_string();
-            classes.by_last.entry(last).or_default().push(path.clone());
-            classes.bases.entry(path).or_default().extend(bases);
-        }
-        classes.load_aliases(store);
-        classes
-    }
-
-    /// Reads what each C++ `using` alias (`TypeAlias.target_type`) and `typedef`
-    /// (`Constant.type_annotation`) names. A constant that is no typedef is read
-    /// as one too: a receiver is declared with a type name, which no constant of
-    /// the same scope can bear.
-    fn load_aliases(&mut self, store: &GraphStore) {
-        for query in [
-            "MATCH (a:TypeAlias) RETURN a.qualified_name, a.target_type, a.language",
-            "MATCH (a:Constant) RETURN a.qualified_name, a.type_annotation, a.language",
-        ] {
-            let Ok(qr) = store.execute_query(query) else {
-                continue;
-            };
-            for row in qr.rows.iter().filter(|r| r.len() >= 3 && r[2] == "cpp") {
-                let target = class_path(&row[1]);
-                if row[1] == "Null(String)" || target.is_empty() {
-                    continue;
-                }
-                let path = path_without_file(&row[0]).to_string();
-                let file = extract_file_prefix(&row[0]).unwrap_or_default();
-                let last = path.rsplit("::").next().unwrap_or(&path).to_string();
-                self.aliases
-                    .entry(last)
-                    .or_default()
-                    .push(Alias { path, file, target });
-            }
-        }
-    }
-
-    /// The class named `name` (a path, possibly relative to a namespace), the
-    /// classes an alias of that name stands for, and every base of them, through
-    /// any depth. Of several aliases of one name, those the file `from` writes
-    /// are the ones in scope; without any, every one is possible.
-    fn family(&self, name: &str, from: &str) -> Family {
-        let mut names: HashSet<String> = HashSet::new();
-        let mut pending = vec![name.to_string()];
-        while let Some(current) = pending.pop() {
-            if current.is_empty() || !names.insert(current.clone()) {
-                continue;
-            }
-            let last = current.rsplit("::").next().unwrap_or(&current);
-            for path in self.by_last.get(last).into_iter().flatten() {
-                if names_class(path, &current) {
-                    pending.extend(self.bases.get(path).into_iter().flatten().cloned());
-                }
-            }
-            pending.extend(self.alias_targets(last, &current, from));
-        }
-        Family(names)
-    }
-
-    fn alias_targets(&self, last: &str, name: &str, from: &str) -> Vec<String> {
-        let named: Vec<&Alias> = self
-            .aliases
-            .get(last)
-            .into_iter()
-            .flatten()
-            .filter(|a| names_class(&a.path, name) && self.sees(from, &a.file))
-            .collect();
-        let local: Vec<&Alias> = named.iter().copied().filter(|a| a.file == from).collect();
-        let chosen = if local.is_empty() { named } else { local };
-        chosen.into_iter().map(|a| a.target.clone()).collect()
-    }
-}
-
-/// A set of class names, each a full path or a relative one.
-struct Family(HashSet<String>);
-
-impl Family {
-    /// True when `class`, a full path, is one of the names.
-    fn holds(&self, class: &str) -> bool {
-        self.0.iter().any(|name| names_class(class, name))
-    }
-}
-
-/// True when `name`, written as a path or relative to a namespace, designates
-/// the class of full path `path`.
-fn names_class(path: &str, name: &str) -> bool {
-    path == name || path.strip_suffix(name).is_some_and(|p| p.ends_with("::"))
-}
-
-/// `Base` of `public Base<T>`, `::ns::Base` or `ns::Base`: a class as a path,
-/// without access specifier, `virtual`, generic arguments or leading `::`.
-fn class_path(raw: &str) -> String {
-    let plain = strip_generic_groups(raw);
-    let name: String = plain
-        .split_whitespace()
-        .skip_while(|t| {
-            matches!(
-                *t,
-                "public" | "protected" | "private" | "virtual" | "typename"
-            )
-        })
-        .collect();
-    name.trim_start_matches("::").to_string()
-}
-
-/// A qualified name without its file: `etl::Bloom::width#1` of
-/// `b.cpp::etl::Bloom::width#1`.
-fn path_without_file(qn: &str) -> &str {
-    match extract_file_prefix(qn) {
-        Some(file) => qn[file.len()..].trim_start_matches("::"),
-        None => qn,
-    }
-}
-
 /// The class a method belongs to, from its qualified name.
 fn owner_of(method_qn: &str) -> Option<String> {
     let path = path_without_file(method_qn);
@@ -269,7 +94,12 @@ pub(super) fn open_call(language: &str, shape: &str, via: &str) -> Option<Gated>
             Some(Decline::PointerCall(shape)),
         ));
     }
-    let typed = via == RECEIVER_HINT_VIA_CPP_THIS || via == RECEIVER_HINT_VIA_CPP_DECLARED;
+    let typed = matches!(
+        via,
+        RECEIVER_HINT_VIA_CPP_THIS
+            | RECEIVER_HINT_VIA_CPP_DECLARED
+            | RECEIVER_HINT_VIA_CPP_DECLARED_LOCAL_NAME
+    );
     (language == "cpp" && shape == CALLEE_SHAPE_MEMBER && !typed)
         .then_some((PolicyResolution::NotFound, Some(Decline::NoReceiverType)))
 }
@@ -296,6 +126,29 @@ pub(super) fn scope(
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
         RECEIVER_HINT_VIA_CPP_DECLARED => {
+            let file = caller_file(site);
+            let scope = caller_scope(site);
+            let caller = Caller {
+                file: &file,
+                scope: &scope,
+                line: call_line(site.cs_id),
+            };
+            let family = ctx.cpp.declared_family(site.receiver_hint, &caller);
+            let mut kept = methods_of(&family, candidates);
+            if kept.is_empty() {
+                // The class the scopes name holds no candidate: the scopes the
+                // graph models are incomplete (a base it does not hold, an
+                // anonymous namespace, an alias, a declaration it has no node
+                // for), so the path-suffix reading of `main` answers. The price
+                // is a namesake of another namespace where the class C++ names
+                // has no such method at all.
+                kept = methods_of(&ctx.cpp.family(site.receiver_hint, &file), candidates);
+            }
+            (kept, SCOPE_CPP_RECEIVER_CLASS)
+        }
+        // The caller's own body declares the type's name in a form the graph
+        // holds no node for: the name is read by path suffix only.
+        RECEIVER_HINT_VIA_CPP_DECLARED_LOCAL_NAME => {
             let family = ctx.cpp.family(site.receiver_hint, &caller_file(site));
             (methods_of(&family, candidates), SCOPE_CPP_RECEIVER_CLASS)
         }
@@ -316,12 +169,29 @@ fn caller_family(ctx: &ResolveContext, site: &CallSite) -> Family {
         .flatten();
     match owner {
         Some(class) => ctx.cpp.family(&class, &caller_file(site)),
-        None => Family(HashSet::new()),
+        None => Family::default(),
     }
 }
 
 fn caller_file(site: &CallSite) -> String {
     extract_file_prefix(site.caller_qn).unwrap_or_default()
+}
+
+/// The line of a call, from its id (`f.cpp::f#1::call@3:22#2`); the last line
+/// when the id carries none, so that no member class looks declared after it.
+fn call_line(cs_id: &str) -> u64 {
+    cs_id
+        .rsplit_once("call@")
+        .and_then(|(_, at)| at.split(':').next())
+        .and_then(|line| line.parse().ok())
+        .unwrap_or(u64::MAX)
+}
+
+/// The scope the caller is written in, as a path without its file: `a` of the
+/// function `a::fx`, `a::Box` of the method `a::Box::m`, and the global scope
+/// (empty) of a function written at file scope.
+fn caller_scope(site: &CallSite) -> String {
+    owner_of(site.caller_qn).unwrap_or_default()
 }
 
 /// `f(x)`: a method of the caller's class or of a base hides every namesake

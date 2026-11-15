@@ -7,6 +7,7 @@
 use super::*;
 
 mod candidate_scope;
+mod cpp_classes;
 mod crate_scope;
 mod declarations;
 mod gates;
@@ -120,7 +121,7 @@ struct CallFacts<'a> {
     imports: super::receiver::ModuleImports,
     callables: crate::graph_store::body_kind::CallableFacts,
     includes: IncludeGraph,
-    cpp: member_calls::CppClasses,
+    cpp: cpp_classes::CppClasses,
 }
 
 impl<'a> CallFacts<'a> {
@@ -137,7 +138,7 @@ impl<'a> CallFacts<'a> {
         // Issues #373 and #380: the `use` declarations of every Rust module.
         let imports = super::receiver::ModuleImports::load(store, &evidence);
         let includes = IncludeGraph::load(store)?;
-        let cpp = member_calls::CppClasses::load(store, includes.clone());
+        let cpp = cpp_classes::CppClasses::load(store, includes.clone());
         Ok(Self {
             idx,
             file_imports,
@@ -265,7 +266,7 @@ struct ResolveContext<'a> {
     /// The files each C-family file includes (issue #404).
     includes: &'a IncludeGraph,
     /// The C++ classes and their bases (issue #406).
-    cpp: &'a member_calls::CppClasses,
+    cpp: &'a cpp_classes::CppClasses,
 }
 
 /// The per-run, read-only graph state `resolve_one_call_site` needs —
@@ -282,7 +283,7 @@ struct GraphContext<'a> {
     imports: &'a super::receiver::ModuleImports,
     callables: &'a crate::graph_store::body_kind::CallableFacts,
     includes: &'a IncludeGraph,
-    cpp: &'a member_calls::CppClasses,
+    cpp: &'a cpp_classes::CppClasses,
 }
 
 /// One `CallSite` scan row, grouped for the same reason as `GraphContext`.
