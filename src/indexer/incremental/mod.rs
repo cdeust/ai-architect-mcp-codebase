@@ -158,10 +158,11 @@ pub(super) struct Plan {
 /// test's per-file count check).
 ///
 /// The refreshed manifest keeps `prior`'s scope only when this pass ran with
-/// the same settings, computed the same Cargo map, saved a coverage report
-/// built on the previous one (issue #443, reviews of #478). An IaC reference
-/// of a file it did not re-parse is drawn again (`cross_links::redraw_iac`),
-/// so it no longer drops the scope.
+/// the same settings and saved a coverage report built on the previous one
+/// (issue #443, reviews of #478). An IaC reference of a file it did not
+/// re-parse is drawn again (`cross_links::redraw_iac`), and the Cargo map is
+/// computed again over the whole tree and written to every file
+/// (`apply_cargo_facts`), so neither drops the scope.
 pub fn index_incremental(
     codebase: &Path,
     graph_dir: &Path,
@@ -201,11 +202,17 @@ pub fn index_incremental(
     // graph it extends was built with these same settings. Different settings
     // leave files the new ones would add or drop, so the scope becomes unknown
     // and the next scope-checking caller (`analyze_codebase`) rebuilds. The
-    // same holds for a changed Cargo map, and for a coverage report that was
-    // not saved or was built without the previous one, decided below once
-    // this pass has computed them. An applied change no longer drops the
-    // scope: the next `resolve_graph` retracts the rows it does not decide
-    // again (`resolver::retract`, `resolver::retract_edges`).
+    // same holds for a coverage report that was not saved or was built
+    // without the previous one, decided below once this pass has saved it.
+    // An applied change no longer drops the scope: the next `resolve_graph`
+    // retracts the rows it does not decide again (`resolver::retract`,
+    // `resolver::retract_edges`). Nor does a changed Cargo map (a `Cargo.toml`
+    // edit, or an added, deleted or renamed `.rs` file, which is a key of the
+    // map): the parse reads none of it, this pass computes it again over the
+    // whole tree and writes it to every file, the Cargo-derived coverage gaps
+    // are never carried forward (`merge_coverage`), and the resolver reads the
+    // facts the latest pass recorded and resets the rows that follow them
+    // (issues #353 and #358) before it retracts the rest.
     let scope = options.scope();
     let settings_match = prior.scope.as_ref() == Some(&scope);
 
@@ -231,18 +238,13 @@ pub fn index_incremental(
         },
         "incremental",
     );
-    // Persist the refreshed manifest (built by classify, hashes reused), now
-    // that this pass's Cargo map is known: an edit to a `Cargo.toml` the walk
-    // does not list changes no file state, only this digest (review of #478).
-    let cargo_facts_digest = cov.facts.digest();
-    let facts_match = prior.cargo_facts.as_deref() == Some(cargo_facts_digest.as_str());
+    // Persist the refreshed manifest (built by classify, hashes reused).
     // A coverage sidecar that is not this pass's report would be carried
     // forward by the next reuse as if it were; a report built without the
     // previous one lost the unchanged files' gaps (Claude reviews of #478).
     let coverage_saved = cov.write_error.is_none() && cov.prior_loaded;
-    let scope_kept = settings_match && facts_match && coverage_saved;
+    let scope_kept = settings_match && coverage_saved;
     plan.next_manifest.scope = scope_kept.then_some(scope);
-    plan.next_manifest.cargo_facts = Some(cargo_facts_digest);
     manifest::save(manifest_path, &plan.next_manifest)?;
     // Every pass writes the facts again, even an unchanged one: the digest
     // records what was computed, not that each best-effort write landed, so a

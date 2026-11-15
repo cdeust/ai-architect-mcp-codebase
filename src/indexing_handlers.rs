@@ -175,7 +175,7 @@ fn report_meta_error(response: &mut Value, err: Option<String>) {
 fn persist_full_index_sidecars(
     req: &IndexRequest,
     result: &indexer::IndexResult,
-    snapshot: indexer::manifest::FileManifest,
+    mut snapshot: indexer::manifest::FileManifest,
 ) -> (std::path::PathBuf, Value, Option<String>) {
     // Issue #57: the coverage-honesty sidecar (parse-incomplete, skipped, and
     // quarantined files).
@@ -187,7 +187,6 @@ fn persist_full_index_sidecars(
             false
         }
     };
-    let mut snapshot = snapshot.with_cargo_facts(&result.cargo_facts_digest);
     if !coverage_saved {
         snapshot.scope = None;
     }

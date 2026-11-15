@@ -1,11 +1,11 @@
 //! Issue #443, reviews of #478: what a full rebuild does before and after the
 //! index, driven through the production entry points (`do_analyze_codebase`,
-//! `do_index_codebase`), and the Cargo map a reuse compares.
+//! `do_index_codebase`). The Cargo map a refresh computes again is in
+//! `index_phase_cargo_tests.rs`.
 
 use super::tests::{analyze, fixture, outcome};
 use crate::analyze_handlers::do_analyze_codebase;
 use crate::indexing_handlers::do_index_codebase;
-use crate::test_support::{TempDirExt, TestTempDir};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::fs;
@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 
 type Entry = fn(&Value) -> Result<Value, String>;
 
-fn full_args(repo: &Path, out: &Path) -> Value {
+pub(super) fn full_args(repo: &Path, out: &Path) -> Value {
     json!({
         "path": repo.to_string_lossy(),
         "output_dir": out.to_string_lossy(),
@@ -279,120 +279,6 @@ fn an_incremental_pass_whose_coverage_write_fails_records_no_scope() {
     assert!(m.scope.is_none(), "{:?}", m.scope);
 }
 
-/// A crate whose test calls a method through `use <crate name>::Set`: which
-/// receiver the call resolves to depends on the crate name in `Cargo.toml`,
-/// a file the `language: "rust"` walk does not list (Codex review of #478).
-fn cargo_fixture(prefix: &str, crate_name: &str) -> (PathBuf, TestTempDir) {
-    let base = tempfile::Builder::new()
-        .prefix(prefix)
-        .tempdir()
-        .expect("create temp dir")
-        .keep_managed();
-    let repo = base.join("repo");
-    fs::create_dir_all(repo.join("src")).expect("mk src");
-    fs::create_dir_all(repo.join("tests")).expect("mk tests");
-    write_cargo_toml(&repo, crate_name);
-    fs::write(
-        repo.join("src/lib.rs"),
-        "pub struct Set;\nimpl Set {\n    pub fn m(&self) {}\n}\n",
-    )
-    .expect("write lib.rs");
-    fs::write(
-        repo.join("tests/t.rs"),
-        "use old_name::Set;\n\n#[test]\nfn f() {\n    let s: Set = Set;\n    s.m();\n}\n",
-    )
-    .expect("write t.rs");
-    (repo, base)
-}
-
-/// Without `cargo` both passes record the same empty map, so the rebuild these
-/// tests expect would not happen (Claude review of #478).
-fn cargo_available() -> bool {
-    std::process::Command::new("cargo")
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success())
-}
-
-fn write_cargo_toml(repo: &Path, crate_name: &str) {
-    fs::write(
-        repo.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n"
-        ),
-    )
-    .expect("write Cargo.toml");
-}
-
-#[test]
-fn an_unchanged_cargo_crate_is_reused() {
-    if !cargo_available() {
-        return;
-    }
-    let (repo, base) = cargo_fixture("analyze443_cargo_same_", "old_name");
-    let out = base.join("out");
-    let first = analyze(&repo, &out, json!({}));
-    let second = analyze(&repo, &out, json!({}));
-    // The full and the incremental pass fingerprint the same Cargo map alike.
-    assert_eq!(second["index"]["mode"], "incremental", "{second}");
-    assert_eq!(outcome(&second), outcome(&first));
-}
-
-#[test]
-fn an_edit_to_cargo_toml_alone_rebuilds() {
-    if !cargo_available() {
-        return;
-    }
-    let (repo, base) = cargo_fixture("analyze443_cargo_edit_", "old_name");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-
-    write_cargo_toml(&repo, "new_name");
-    let second = analyze(&repo, &out, json!({}));
-    assert_eq!(second["index"]["mode"], "full", "{second}");
-
-    let fresh = analyze(&repo, &base.join("fresh"), json!({}));
-    assert_eq!(outcome(&second), outcome(&fresh));
-}
-
-#[test]
-fn an_index_codebase_pass_that_sees_the_cargo_map_move_records_no_scope() {
-    // Claude review of #478: the `index_codebase` route. Its pass refreshes the
-    // facts, so the next analysis compares equal digests: only a dropped scope
-    // makes it rebuild.
-    if !cargo_available() {
-        return;
-    }
-    let (repo, base) = cargo_fixture("analyze443_cargo_ix_", "old_name");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    write_cargo_toml(&repo, "new_name");
-    let mut args = full_args(&repo, &out);
-    args["full"] = json!(false);
-    do_index_codebase(&args).expect("index");
-    let m = crate::indexer::manifest::load(&crate::indexer::manifest::manifest_path(&out))
-        .expect("manifest");
-    assert!(m.scope.is_none(), "{:?}", m.scope);
-    let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
-}
-
-#[test]
-fn a_manifest_without_a_cargo_digest_is_not_reused() {
-    // A manifest written before the digest existed: unknown, never a match.
-    let (repo, base) = fixture("analyze443_no_digest_");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    let path = crate::indexer::manifest::manifest_path(&out);
-    let mut m: Value =
-        serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("parse");
-    assert!(m["cargo_facts"].is_string(), "precondition: {m}");
-    m.as_object_mut().expect("object").remove("cargo_facts");
-    fs::write(&path, m.to_string()).expect("write");
-    let resp = analyze(&repo, &out, json!({}));
-    assert_eq!(resp["index"]["mode"], "full", "{resp}");
-}
-
 thread_local! {
     /// The file `remove_on_first_release` removes, armed by the test.
     static REMOVE_ON_RELEASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
@@ -423,44 +309,6 @@ fn a_report_that_vanishes_before_the_refresh_is_not_reused() {
         "the report was removed during the call"
     );
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
-}
-
-fn files_with_a_target_context(graph: &Path) -> usize {
-    let store = crate::graph_store::GraphStore::open_or_create(graph).expect("open graph");
-    store
-        .execute_query("MATCH (f:File) WHERE f.target_context <> '' RETURN f.id")
-        .expect("query")
-        .rows
-        .len()
-}
-
-#[test]
-fn an_unchanged_pass_rewrites_cargo_facts_a_failed_write_lost() {
-    // Claude review of #478: every pass writes the Cargo facts again, so one
-    // that a best-effort write lost is repaired by the next pass. Clearing a
-    // column stands in for that failed write.
-    if !cargo_available() {
-        return;
-    }
-    let (repo, base) = cargo_fixture("analyze443_facts_repair_", "old_name");
-    let out = base.join("out");
-    analyze(&repo, &out, json!({}));
-    let graph = out.join("graph");
-    assert!(files_with_a_target_context(&graph) > 0, "precondition");
-    {
-        let store = crate::graph_store::GraphStore::open_or_create(&graph).expect("open graph");
-        store
-            .execute_query("MATCH (f:File) SET f.target_context = ''")
-            .expect("clear");
-    }
-    assert_eq!(files_with_a_target_context(&graph), 0);
-    let mut args = full_args(&repo, &out);
-    args["full"] = json!(false);
-    do_index_codebase(&args).expect("unchanged incremental pass");
-    assert!(
-        files_with_a_target_context(&graph) > 0,
-        "the facts are back"
-    );
 }
 
 #[test]

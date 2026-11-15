@@ -85,14 +85,6 @@ pub struct FileManifest {
     pub files: BTreeMap<String, FileState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<IndexScope>,
-    /// `CargoFacts::digest` of the pass that last wrote this manifest (review of
-    /// #478), which a reuse requires to be the map the graph holds:
-    /// the Cargo map the resolver reads comes from manifests the walk may not
-    /// list (`Cargo.toml` under `language: "rust"`, a path dependency outside
-    /// the tree), so the per-file states cannot see it change. Absent means
-    /// "unknown", never "unchanged".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cargo_facts: Option<String>,
 }
 
 impl FileManifest {
@@ -102,16 +94,7 @@ impl FileManifest {
             schema_version: MANIFEST_SCHEMA_VERSION,
             files: BTreeMap::new(),
             scope: None,
-            cargo_facts: None,
         }
-    }
-
-    /// This manifest, recording `digest` as the Cargo map of the pass that
-    /// built the graph. A full index takes its snapshot before it runs (so a
-    /// file saved during it reads as changed) and only knows the map after.
-    pub fn with_cargo_facts(mut self, digest: &str) -> Self {
-        self.cargo_facts = Some(digest.to_string());
-        self
     }
 }
 
