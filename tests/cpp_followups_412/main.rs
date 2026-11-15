@@ -4,10 +4,11 @@
 //      `string_pad_direction::left_n`;
 //   2. `catch (Foo& e)` declared no name, so `e.f()` had no receiver type (and, below
 //      a parameter of the same name, took that parameter's type);
-//   3. (not done here, stays open on #412) a declared type is matched by path suffix:
-//      one class of that name binds, several keep the site open, as on `main`.
-//      Every receiver below whose type C++ resolves by a scope the graph does not
-//      model stays open.
+//   3. a declared type was matched by path suffix: one class of that name bound,
+//      several kept the site open. A type written without a qualifier is now looked
+//      up in the scopes around the caller (`scope_lookup`); the suffix reading stays
+//      where no scope of the caller holds a class of that name, and where a
+//      declaration the graph does not model can make the name mean another class.
 
 use ai_architect_mcp::graph_store::GraphStore;
 use ai_architect_mcp::{indexer, resolver};
@@ -20,6 +21,7 @@ mod body_receivers;
 mod catch_guard;
 mod declaring_forms;
 mod definitions;
+mod scope_lookup;
 
 fn index_and_resolve(files: &[(&str, &str)]) -> (GraphStore, common::TestTempDir) {
     let tmp = tempfile::Builder::new()
@@ -231,20 +233,16 @@ fn a_typedef_of_another_file_in_the_same_scope_does_not_win_over_the_callers_own
 }
 
 #[test]
-fn a_member_type_a_base_declares_leaves_the_call_open() {
-    // `T` in `D::f` is `Base::T` (an inherited member type), not `::T`.
+fn a_member_type_a_base_declares_is_the_class_found() {
+    // `T` in `D::f` is `Base::T` (an inherited member type), not `::T`; the
+    // path-suffix reading saw two classes named `T` and kept the site open.
     let src = "\
 struct Base { struct T { int m() { return 1; } }; };
 struct T { int m() { return 2; } };
 struct D : Base { int fx1(T& t) { return t.m(); } };
 ";
     let (store, _tmp) = index_and_resolve(&[("fx1.cpp", src)]);
-    assert!(
-        bound_methods(&store, "fx1").is_empty(),
-        "{:?}",
-        bound_methods(&store, "fx1")
-    );
-    assert_eq!(open_reasons(&store, "fx1"), ["ambiguous_candidates"]);
+    assert_eq!(bound_methods(&store, "fx1"), ["m -> Base::T::m"]);
 }
 
 #[test]
@@ -294,17 +292,15 @@ int fx4(Box& b) { return b.m(); }
 }
 
 #[test]
-fn a_type_declared_in_a_namespace_of_the_caller_is_read_by_suffix_as_on_main() {
-    // C++ reads `a::Box` for `Box` inside namespace `a`; the path-suffix reading
-    // sees two classes of that name and keeps the site open (#412 point 3 is not
-    // done here).
+fn a_type_declared_in_a_namespace_of_the_caller_is_that_namespaces_class() {
+    // C++ reads `a::Box` for `Box` inside namespace `a`; the path-suffix reading saw
+    // two classes of that name and kept the site open (#412 point 3).
     let src = "\
 struct Box { int m() { return 1; } };
 namespace a { struct Box { int m() { return 2; } }; int fx5(Box& b) { return b.m(); } }
 ";
     let (store, _tmp) = index_and_resolve(&[("fx5.cpp", src)]);
-    assert!(bound_methods(&store, "fx5").is_empty());
-    assert_eq!(open_reasons(&store, "fx5"), ["ambiguous_candidates"]);
+    assert_eq!(bound_methods(&store, "fx5"), ["m -> a::Box::m"]);
 }
 
 #[test]

@@ -16,6 +16,7 @@ mod c_family;
 mod conventions;
 mod cpp;
 mod cpp_declared;
+mod cpp_local_types;
 mod cpp_macro_mask;
 mod cpp_receiver;
 mod cpp_unreadable;

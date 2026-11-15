@@ -16,6 +16,10 @@
 //   gives no hint and hides the outer declarations of that name (`cpp_declared`); so
 //   does a name no enclosing scope declares (a field, a global), a type that is a
 //   template parameter of an enclosing template or any other expression.
+// - `cpp-declared-local-name`: as `cpp-declared`, and a scope of the body
+//   declares the type's own first name before the receiver (a using-declaration,
+//   an alias, a `typedef`, a local class): the graph holds no node for such a
+//   declaration, so the resolver reads the type by path suffix only (issue #412).
 // - `cpp-qualifier`: the callee is written `a::b::f`; the hint is `a::b`.
 //
 // source: tree-sitter-cpp 0.23.4 node-types.json (field_expression.argument,
@@ -26,7 +30,8 @@ use tree_sitter::Node;
 
 use super::cpp_declared::{declared_type, plain_type_text};
 use crate::graph_store::{
-    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
+    RECEIVER_HINT_VIA_CPP_DECLARED, RECEIVER_HINT_VIA_CPP_DECLARED_LOCAL_NAME,
+    RECEIVER_HINT_VIA_CPP_QUALIFIER, RECEIVER_HINT_VIA_CPP_THIS,
 };
 use crate::parser::node_text;
 
@@ -75,7 +80,14 @@ fn member_receiver(source: &str, callee: Node) -> Option<(String, &'static str)>
         "this" => Some((String::new(), RECEIVER_HINT_VIA_CPP_THIS)),
         "identifier" => {
             let name = node_text(source, argument);
-            declared_type(source, callee, &name).map(|t| (t, RECEIVER_HINT_VIA_CPP_DECLARED))
+            declared_type(source, callee, &name).map(|d| {
+                let via = if d.local_name {
+                    RECEIVER_HINT_VIA_CPP_DECLARED_LOCAL_NAME
+                } else {
+                    RECEIVER_HINT_VIA_CPP_DECLARED
+                };
+                (d.ty, via)
+            })
         }
         _ => None,
     }

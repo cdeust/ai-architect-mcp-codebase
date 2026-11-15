@@ -15,7 +15,21 @@ use tree_sitter::Node;
 use crate::parser::generic_args::strip_generic_groups;
 use crate::parser::node_text;
 
+use super::cpp_local_types::{declares_type_name, using_declares};
 use super::cpp_unreadable::{scope_has_unreadable_statement, text_has_directive_or_erased};
+
+/// The type a scope around a call declares for its receiver.
+pub(super) struct Declared {
+    /// The type as the source writes it, without qualifier, pointer, reference
+    /// or generic arguments.
+    pub(super) ty: String,
+    /// True when a scope of the body, between the declaration and the enclosing
+    /// function, declares the type's own first name before that declaration
+    /// (`declares_type_name`): the resolver then reads the type by path suffix
+    /// and looks its name up in no enclosing scope of the caller (issue #412
+    /// point 3).
+    pub(super) local_name: bool,
+}
 
 /// The type the innermost enclosing scope declares for `name`, read at `at`.
 /// The search stops at the enclosing function: a global or a field is not read.
@@ -24,18 +38,27 @@ use super::cpp_unreadable::{scope_has_unreadable_statement, text_has_directive_o
 /// statement between the handler and the call could declare the name in a form this
 /// reader cannot name (`scope_has_unreadable_statement`), and no directive or erased
 /// byte lies between the handler's body and the call (`text_has_directive_or_erased`).
-pub(super) fn declared_type(source: &str, at: Node, name: &str) -> Option<String> {
+pub(super) fn declared_type(source: &str, at: Node, name: &str) -> Option<Declared> {
     let mut between = Vec::new();
     let mut scope = at.parent();
     while let Some(s) = scope {
         if let Some(found) = binding_in(source, s, at, name) {
             let body = between.last().map_or(at.start_byte(), Node::start_byte);
-            let untrusted = s.kind() == "catch_clause"
-                && (text_has_directive_or_erased(source, body, at.start_byte())
-                    || between
-                        .iter()
-                        .any(|b| scope_has_unreadable_statement(source, (*b, at), name)));
-            return found.filter(|_| !untrusted);
+            let masked = text_has_directive_or_erased(source, body, at.start_byte())
+                || between
+                    .iter()
+                    .any(|b| scope_has_unreadable_statement(source, (*b, at), name));
+            let ty = found
+                .ty
+                .filter(|_| !(masked && s.kind() == "catch_clause"))?;
+            // A parameter's type is looked up where the parameter is written, so
+            // the declarations of the body are none of its scopes. A statement the
+            // reader cannot name could declare the receiver, and with it another
+            // type, so the name of the type read is not looked up by scope either.
+            let local_name = masked
+                || (s.kind() != "function_definition"
+                    && declares_type_name(source, s, found.from, first_segment(&ty)));
+            return Some(Declared { ty, local_name });
         }
         between.push(s);
         if s.kind() == "function_definition" {
@@ -54,18 +77,34 @@ struct Binding<'t> {
     from: usize,
 }
 
-/// `Some(type)` when `scope` declares `name` before `call` (the last such
-/// declaration wins); the inner `None` is a declaration whose type the source
-/// does not write. `None` when `scope` does not declare the name.
-fn binding_in(source: &str, scope: Node, call: Node, name: &str) -> Option<Option<String>> {
+/// The declaration `binding_in` kept: the type the source writes for the name
+/// (none when it writes none), and the byte the declaration starts at.
+struct Found {
+    ty: Option<String>,
+    from: usize,
+}
+
+/// `Some` when `scope` declares `name` before `call` (the last such declaration
+/// wins); its `ty` is `None` for a declaration whose type the source does not
+/// write. `None` when `scope` does not declare the name.
+fn binding_in(source: &str, scope: Node, call: Node, name: &str) -> Option<Found> {
     let reader = Reader { source, name };
     let mut found = None;
     for binding in reader.bindings_of(scope) {
         if binding.from < call.start_byte() {
-            found = Some(binding.decl.and_then(|d| written_type(source, d)));
+            found = Some(Found {
+                ty: binding.decl.and_then(|d| written_type(source, d)),
+                from: binding.from,
+            });
         }
     }
     found
+}
+
+/// The first segment of a type as written: `Box` of `Box`, `other` of
+/// `other::Box`. A declaration of that name in the body re-points the whole type.
+fn first_segment(ty: &str) -> &str {
+    ty.split("::").next().unwrap_or(ty)
 }
 
 /// Reads the declarations of one name.
@@ -210,18 +249,7 @@ impl Reader<'_> {
     /// using_declaration: `using ns::e;` makes `e` visible in the block (the `name`
     /// of its qualified_identifier, or its identifier), without a type read here.
     fn using<'t>(&self, decl: Node<'t>) -> Vec<Binding<'t>> {
-        let mut cursor = decl.walk();
-        let names_it = decl.named_children(&mut cursor).any(|c| {
-            let mut last = c;
-            while last.kind() == "qualified_identifier" {
-                let Some(name) = last.child_by_field_name("name") else {
-                    break;
-                };
-                last = name;
-            }
-            last.kind() == "identifier" && node_text(self.source, last) == self.name
-        });
-        if !names_it {
+        if !using_declares(self.source, decl, self.name) {
             return Vec::new();
         }
         vec![Binding {

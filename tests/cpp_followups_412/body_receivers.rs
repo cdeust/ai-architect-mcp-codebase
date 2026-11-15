@@ -1,14 +1,17 @@
-// cpp_followups_412::body_receivers: a typed C++ receiver keeps the path-suffix
-// reading of `main` (issue #412): one class of that name binds, several keep the
-// site open. No block, signature or scope is read.
+// cpp_followups_412::body_receivers: a typed C++ receiver whose type a scope of
+// the body declares keeps the path-suffix reading of `main` (issue #412): one
+// class of that name binds, several keep the site open. The graph holds no node
+// for such a declaration, so the lookup by scope (`scope_lookup`) is not used for
+// it; the parser marks the hint `cpp-declared-local-name`.
 
 use super::*;
 
-/// A typed receiver keeps the reading of `main`: its type is read by path suffix,
-/// and with two classes of that name the site stays open as `ambiguous_candidates`. The body may declare the type's first
-/// name itself (a using-declaration, a typedef, a local class, under a label or a
-/// `case`, in the declaration of the receiver) and the graph holds no node for it:
-/// nothing here tries to prove it does not.
+/// A receiver whose type a scope of the body declares (a using-declaration, a
+/// typedef, a local class, under a label or a `case`, in the declaration of the
+/// receiver) keeps the reading of `main`: its type is read by path suffix, and
+/// with two classes of that name the site stays open as `ambiguous_candidates`.
+/// The graph holds no node for such a declaration, so no scope of the caller is
+/// read for the name.
 fn assert_open_body_receiver(file: &str, src: &str, caller: &str) {
     assert_open_for(file, src, caller, "ambiguous_candidates");
 }
@@ -152,14 +155,14 @@ fn a_lambda_parameter_is_read_where_the_body_is() {
 }
 
 #[test]
-fn a_declaration_of_another_name_in_a_body_keeps_the_suffix_reading() {
-    // The price of failing closed: the body declares `Other`, not `Box`, and the two
-    // classes named Box keep the site open, as on `main`.
-    assert_open_after_preamble(
-        "z1o.cpp",
-        "int z1o() { struct Other { int m() { return 3; } }; Box b; return b.m(); }",
-        "z1o",
+fn a_declaration_of_another_name_in_a_body_leaves_the_lookup_by_scope() {
+    // The body declares `Other`, not `Box`, so `Box` is looked up in the scopes of
+    // the caller: at file scope, the global class.
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int z1o() {{ struct Other {{ int m() {{ return 3; }} }}; Box b; return b.m(); }}\n"
     );
+    let (store, _tmp) = index_and_resolve(&[("z1o.cpp", &src)]);
+    assert_eq!(bound_methods(&store, "z1o"), ["m -> Box::m"]);
 }
 
 #[test]
@@ -170,14 +173,14 @@ fn a_body_receiver_of_one_class_of_that_name_binds_as_on_main() {
 }
 
 #[test]
-fn a_parameter_type_is_read_by_suffix_as_on_main() {
-    // The scopes around the signature are not read: the two classes named Box keep
-    // the site open.
-    assert_open_after_preamble(
-        "p1.cpp",
-        "int p1(Box& b) { struct Box { int m() { return 3; } }; return b.m(); }",
-        "p1",
+fn a_parameter_type_is_read_in_the_scopes_around_the_function() {
+    // A parameter's type is looked up where the parameter is written, so the local
+    // class of the body is none of its scopes: `Box` is the global class.
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int p1(Box& b) {{ struct Box {{ int m() {{ return 3; }} }}; return b.m(); }}\n"
     );
+    let (store, _tmp) = index_and_resolve(&[("p1.cpp", &src)]);
+    assert_eq!(bound_methods(&store, "p1"), ["m -> Box::m"]);
 }
 
 #[test]

@@ -47,6 +47,15 @@ pub(crate) const RECEIVER_HINT_VIA_CPP_THIS: &str = "cpp-this";
 /// source: parser::spec::cpp_receiver writes it, resolver::calls::member_calls reads it.
 pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED: &str = "cpp-declared";
 
+/// The `receiver_hint_via` of a C++ member call whose receiver has a declared
+/// type (as `cpp-declared`) whose own first name a scope of the caller's body
+/// declares before the receiver: a using-declaration, a `using X = T`, a
+/// `typedef` or a local class (issue #412 point 3). The graph holds no node for
+/// such a declaration, so the resolver reads the type by path suffix and looks
+/// the name up in no enclosing scope of the caller.
+/// source: parser::spec::cpp_declared writes it, resolver::calls::member_calls reads it.
+pub(crate) const RECEIVER_HINT_VIA_CPP_DECLARED_LOCAL_NAME: &str = "cpp-declared-local-name";
+
 /// The `receiver_hint_via` of a C++ call written with a qualifier (`a::b::f()`):
 /// the hint is the qualifier. The callee name is always the last segment, so the
 /// hint is the only trace of the qualifier the resolver has.
