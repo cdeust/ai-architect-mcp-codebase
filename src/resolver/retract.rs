@@ -33,41 +33,60 @@
 // (`lsp-definition`), the macro layer (`macro-expansion*`, reset by
 // `reset_macro_expansion` before the pass), and the structural rows. Only rows
 // whose `resolution_method` is a static tier label are owned here; a row the
-// pass meets again keeps its properties (trace ingest's `observed_count`), and
-// the count of a retracted caller-level row moves to `OBSERVED_CALLS_*`.
+// pass meets again keeps its other properties (trace ingest's
+// `observed_count`) and takes the confidence and method the pass decided
+// (`redecide`), and the count of a retracted caller-level row moves to
+// `OBSERVED_CALLS_*`.
 // `Uses_*`, `Imports_*`, `Implements_*` and `Extends_*` rows are retracted by
 // `retract_edges`; `Retraction` runs both around the pass.
 
 use crate::ambiguity_policy::{resolution_label, Evidence};
 use crate::graph_store::{cypher_str, symbol_name, GraphStore, NODE_CALL_SITE, REL_TABLES};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// A resolution row as the `EdgeBuffer` keys it: (rel table, from id, to id).
 pub(super) type RowKey = (String, String, String);
 
+/// The provenance of a resolution row: what a pass decided for it, or what an
+/// owned row holds before the pass.
+#[derive(Debug, Clone)]
+pub(super) struct Decision {
+    pub(super) confidence: f64,
+    pub(super) method: String,
+}
+
+/// The rows a pass met again (`EdgeBuffer::take_met`), with its decisions.
+pub(super) type Met = HashMap<RowKey, Decision>;
+
 /// What a pass may retract, read before it runs: the static call rows and the
-/// import, use, implements and extends rows of earlier passes.
+/// import, use, implements and extends rows of earlier passes, and what each
+/// of them holds.
 pub(super) struct Retraction {
     calls: HashSet<RowKey>,
     edges: HashSet<RowKey>,
+    held: HashMap<RowKey, Decision>,
 }
 
 impl Retraction {
     /// Step 1 of both modules: reads the owned rows, reopens the call sites
     /// only those rows resolve, and sets every Import back to unresolved.
     pub(super) fn begin(store: &GraphStore) -> Result<Self, String> {
-        let calls = load_static_call_rows(store)?;
-        let edges = super::retract_edges::load_owned_rows(store);
+        let mut held = HashMap::new();
+        let calls = load_static_call_rows(store, &mut held)?;
+        let edges = super::retract_edges::load_owned_rows(store, &mut held);
         reopen_static_sites(store, &calls, &edges)?;
         super::retract_edges::reopen_imports(store)?;
-        Ok(Retraction { calls, edges })
+        Ok(Retraction { calls, edges, held })
     }
 
     /// The last step: deletes the owned rows absent from `met`, the persisted
-    /// rows the pass decided again. Precondition: the pass's buffer is flushed.
-    pub(super) fn finish(self, store: &GraphStore, met: &HashSet<RowKey>) -> Result<(), String> {
+    /// rows the pass decided again, and gives each owned row of `met` the
+    /// confidence and method the pass decided for it. Precondition: the
+    /// pass's buffer is flushed.
+    pub(super) fn finish(self, store: &GraphStore, met: &Met) -> Result<(), String> {
         retract_unmet(store, &self.calls, met)?;
         super::retract_edges::retract_unmet(store, &self.edges, met)?;
+        super::redecide::apply(store, &self.held, met)?;
         Ok(())
     }
 }
@@ -108,26 +127,47 @@ fn site_tables() -> impl Iterator<Item = &'static (&'static str, &'static str, &
     call_tables().filter(|(_, from, _)| *from == NODE_CALL_SITE)
 }
 
-/// The static-tier `Calls_*` rows in the graph before the pass runs.
-fn load_static_call_rows(store: &GraphStore) -> Result<HashSet<RowKey>, String> {
-    let methods = method_list();
+/// The static-tier `Calls_*` rows in the graph before the pass runs; what
+/// each holds goes into `held`.
+fn load_static_call_rows(
+    store: &GraphStore,
+    held: &mut HashMap<RowKey, Decision>,
+) -> Result<HashSet<RowKey>, String> {
+    Ok(load_rows(store, call_tables(), &method_list(), held))
+}
+
+/// The rows of `tables` whose `resolution_method` is one of `methods` (quoted
+/// and comma-separated); what each holds goes into `held`. A table an older
+/// graph lacks has no row to retract.
+pub(super) fn load_rows<'a>(
+    store: &GraphStore,
+    tables: impl Iterator<Item = &'a (&'static str, &'static str, &'static str)>,
+    methods: &str,
+    held: &mut HashMap<RowKey, Decision>,
+) -> HashSet<RowKey> {
     let mut rows = HashSet::new();
-    for &(rel, from, to) in call_tables() {
+    for &(rel, from, to) in tables {
         let cypher = format!(
             "MATCH (a:{from})-[r:{rel}]->(b:{to}) WHERE r.resolution_method IN [{methods}] \
-             RETURN a.id, b.id"
+             RETURN a.id, b.id, r.confidence, r.resolution_method"
         );
-        // A table an older graph lacks has no row to retract.
         let Ok(qr) = store.execute_query(&cypher) else {
             continue;
         };
-        for row in qr.rows {
-            if row.len() >= 2 {
-                rows.insert((rel.to_string(), row[0].clone(), row[1].clone()));
+        for mut row in qr.rows {
+            if row.len() < 4 {
+                continue;
             }
+            let method = row.swap_remove(3);
+            // An absent confidence reads as NaN, which no decision equals.
+            let confidence = row[2].parse::<f64>().unwrap_or(f64::NAN);
+            let to_id = row.swap_remove(1);
+            let key = (rel.to_string(), row.swap_remove(0), to_id);
+            held.insert(key.clone(), Decision { confidence, method });
+            rows.insert(key);
         }
     }
-    Ok(rows)
+    rows
 }
 
 /// Step 1: sets `is_resolved = false` on the sites of `owned`'s per-site rows
@@ -217,12 +257,8 @@ fn type_resolved_sites(
 /// Precondition: `owned` was read by `load_static_call_rows` before the pass,
 /// and the pass's buffer has been flushed. Idempotent: a second call with the
 /// same arguments finds nothing left to delete.
-fn retract_unmet(
-    store: &GraphStore,
-    owned: &HashSet<RowKey>,
-    met: &HashSet<RowKey>,
-) -> Result<u64, String> {
-    let stale: BTreeSet<&RowKey> = owned.difference(met).collect();
+fn retract_unmet(store: &GraphStore, owned: &HashSet<RowKey>, met: &Met) -> Result<u64, String> {
+    let stale: BTreeSet<&RowKey> = owned.iter().filter(|k| !met.contains_key(*k)).collect();
     if stale.is_empty() {
         return Ok(0);
     }

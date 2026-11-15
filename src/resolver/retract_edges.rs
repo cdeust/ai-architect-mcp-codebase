@@ -29,9 +29,9 @@
 // of other writers keep their own life cycle: the light links (`js-regex`),
 // the IaC pass, the language server, the macro layer.
 
-use super::retract::{static_call_methods, RowKey};
+use super::retract::{load_rows, static_call_methods, Decision, Met, RowKey};
 use crate::graph_store::{cypher_str, GraphStore, REL_TABLES};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// `resolution_method` of a `Uses_*` row from a callable's return type or a
 /// type it constructs (`uses::resolve_callable_type_uses`).
@@ -73,26 +73,13 @@ fn method_list() -> String {
         .join(", ")
 }
 
-/// The owned rows in the graph before the pass runs.
-pub(super) fn load_owned_rows(store: &GraphStore) -> HashSet<RowKey> {
-    let methods = method_list();
-    let mut rows = HashSet::new();
-    for &(rel, from, to) in owned_tables() {
-        let cypher = format!(
-            "MATCH (a:{from})-[r:{rel}]->(b:{to}) WHERE r.resolution_method IN [{methods}] \
-             RETURN a.id, b.id"
-        );
-        // A table an older graph lacks has no row to retract.
-        let Ok(qr) = store.execute_query(&cypher) else {
-            continue;
-        };
-        for row in qr.rows {
-            if row.len() >= 2 {
-                rows.insert((rel.to_string(), row[0].clone(), row[1].clone()));
-            }
-        }
-    }
-    rows
+/// The owned rows in the graph before the pass runs; what each holds goes
+/// into `held`.
+pub(super) fn load_owned_rows(
+    store: &GraphStore,
+    held: &mut HashMap<RowKey, Decision>,
+) -> HashSet<RowKey> {
+    load_rows(store, owned_tables(), &method_list(), held)
 }
 
 /// Step 1: sets `is_resolved = false` on every Import that holds true, so the
@@ -111,9 +98,9 @@ pub(super) fn reopen_imports(store: &GraphStore) -> Result<(), String> {
 pub(super) fn retract_unmet(
     store: &GraphStore,
     owned: &HashSet<RowKey>,
-    met: &HashSet<RowKey>,
+    met: &Met,
 ) -> Result<u64, String> {
-    let stale: BTreeSet<&RowKey> = owned.difference(met).collect();
+    let stale: BTreeSet<&RowKey> = owned.iter().filter(|k| !met.contains_key(*k)).collect();
     if stale.is_empty() {
         return Ok(0);
     }
