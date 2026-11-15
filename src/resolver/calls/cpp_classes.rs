@@ -47,21 +47,18 @@ pub(super) struct CppClasses {
     aliases: HashMap<String, Vec<Alias>>,
     /// The using-declarations and using-directives the sources write.
     usings: Vec<Using>,
+    /// Where each class is declared: its file and first line, one per node.
+    declared_at: HashMap<String, Vec<(String, u64)>>,
     /// Which file includes which (a source file is seen by the files that include it).
     includes: IncludeGraph,
 }
 
-/// A `using ns::X;` (a declaration) or `using namespace ns;` (a directive): the
-/// scope it is written in, the file that writes it, and what it introduces.
-struct Using {
-    /// The path of the scope that holds it (`a::b`), empty at file scope.
-    scope: String,
-    /// The file that writes it.
-    file: String,
-    /// `X` of `using ns::X;`; empty for a directive.
-    name: String,
-    /// `ns` of `using namespace ns;`; empty for a declaration.
-    namespace: String,
+/// The call a declared type is looked up for: the caller's file, the scope the
+/// caller is written in (its path without the file) and the line of the call.
+pub(super) struct Caller<'a> {
+    pub(super) file: &'a str,
+    pub(super) scope: &'a str,
+    pub(super) line: u64,
 }
 
 /// A `using X = T;` or `typedef T X;`: the path of `X`, the file that writes
@@ -123,23 +120,28 @@ impl CppClasses {
         }
         classes.load_aliases(store);
         classes.load_usings(store);
+        classes.load_positions(store);
         classes
     }
 
-    /// Reads the using-declarations and using-directives of the C++ sources. The
-    /// `Import` node of a `using` has no column of its own for it: its id is
-    /// `<file>::<scope>::using:<text>` (`parser::spec::cpp::using_entry`), the text
-    /// being `ns::X` for a declaration and `namespace ns` for a directive.
-    fn load_usings(&mut self, store: &GraphStore) {
-        let Ok(qr) = store.execute_query("MATCH (i:Import) RETURN i.id, i.language") else {
+    /// Reads where each C++ class is declared. A graph without the column
+    /// yields none, and the order of declarations is then not read.
+    fn load_positions(&mut self, store: &GraphStore) {
+        let Ok(qr) = store
+            .execute_query("MATCH (s:Struct) RETURN s.qualified_name, s.start_line, s.language")
+        else {
             return;
         };
-        self.usings = qr
-            .rows
-            .iter()
-            .filter(|r| r.len() >= 2 && r[1] == "cpp")
-            .filter_map(|r| using_of(&r[0]))
-            .collect();
+        for row in qr.rows.iter().filter(|r| r.len() >= 3 && r[2] == "cpp") {
+            let Ok(line) = row[1].parse::<u64>() else {
+                continue;
+            };
+            let file = extract_file_prefix(&row[0]).unwrap_or_default();
+            self.declared_at
+                .entry(path_without_file(&row[0]).to_string())
+                .or_default()
+                .push((file, line));
+        }
     }
 
     /// Reads what each C++ `using` alias (`TypeAlias.target_type`) and `typedef`
@@ -235,19 +237,32 @@ impl CppClasses {
     /// written with a qualifier, a name no enclosing scope holds, a name two
     /// bases of the caller's class hold and a name a `using` the caller sees can
     /// re-point (`a_using_can_hide`) keep the path-suffix reading.
-    pub(super) fn declared_family(&self, name: &str, from: &str, scope: &str) -> Family {
+    pub(super) fn declared_family(&self, name: &str, caller: &Caller) -> Family {
+        let from = caller.file;
         if name.contains("::") {
             return self.family(name, from);
         }
         let mut inner: Vec<&str> = Vec::new();
-        for enclosing in enclosing_scopes(scope) {
+        for enclosing in enclosing_scopes(caller.scope) {
             inner.push(enclosing);
-            let found = self.classes_named_in(enclosing, name);
+            // An alias of that name in this scope is what C++ names; which
+            // translation unit reaches it is `alias_targets`' reading.
+            if self.an_alias_is_declared_in(enclosing, name, from) {
+                break;
+            }
+            let Some(found) = self.classes_named_in(enclosing, name) else {
+                break;
+            };
             match found.as_slice() {
                 // No scope holds the name here: the enclosing scope is next.
                 [] => continue,
-                // One class: the one C++ names, unless a `using` can re-point it.
-                [path] if !self.a_using_can_hide(name, from, &inner) => {
+                // One class: the one C++ names, unless a `using` can re-point it
+                // or a member class is declared after the call (a parameter's
+                // type is read where the parameter is written).
+                [path]
+                    if !self.a_using_can_hide(name, from, &inner)
+                        && !self.declared_after(path, enclosing, caller) =>
+                {
                     return self.family_of_path(path, from)
                 }
                 // Two bases of the caller's class declare the name, or a `using`
@@ -258,15 +273,40 @@ impl CppClasses {
         self.family(name, from)
     }
 
+    /// True when an alias (`using X = T`, `typedef`) of exactly `scope::name`
+    /// is written in a file `from` sees.
+    fn an_alias_is_declared_in(&self, scope: &str, name: &str, from: &str) -> bool {
+        let path = qualify(scope, name);
+        self.aliases
+            .get(name)
+            .into_iter()
+            .flatten()
+            .any(|a| a.path == path && self.sees(from, &a.file))
+    }
+
+    /// True when `path`, a member class of the class `scope`, is declared only
+    /// in the caller's file and after the call: it is not in scope where a
+    /// parameter's type is read (§6.4.1/7), so the class found cannot be trusted.
+    fn declared_after(&self, path: &str, scope: &str, caller: &Caller) -> bool {
+        if !self.holds_class_exactly(scope) {
+            return false;
+        }
+        let positions = self.declared_at.get(path).map_or(&[][..], Vec::as_slice);
+        !positions.is_empty()
+            && positions
+                .iter()
+                .all(|(file, line)| file == caller.file && *line > caller.line)
+    }
+
     /// The classes of exactly `scope::name`, and, when `scope` is a class, of
     /// `base::name` for every base of it: where C++ finds a member type it
     /// inherits. An alias (`using`, `typedef`) is not read here: which
     /// translation unit reaches which alias is the reading of `alias_targets`,
     /// which the path-suffix reading keeps.
-    fn classes_named_in(&self, scope: &str, name: &str) -> Vec<String> {
+    fn classes_named_in(&self, scope: &str, name: &str) -> Option<Vec<String>> {
         let mut holders = vec![scope.to_string()];
         holders.extend(
-            self.class_and_bases(scope)
+            self.class_and_bases(scope)?
                 .into_iter()
                 .filter(|base| base != scope),
         );
@@ -277,7 +317,7 @@ impl CppClasses {
             .collect();
         found.sort_unstable();
         found.dedup();
-        found
+        Some(found)
     }
 
     /// True when the graph holds a class of exactly `path`.
@@ -290,18 +330,31 @@ impl CppClasses {
     /// The paths of the class `path` and of every class a base of it names,
     /// through any depth. A base is written relative to a scope, so it is read
     /// by path suffix; a base of no class of the graph is dropped. Empty when
-    /// `path` is no class (a namespace, the global scope).
-    fn class_and_bases(&self, path: &str) -> Vec<String> {
-        let mut out = Vec::new();
+    /// `path` is no class (a namespace, the global scope); `None` when a base
+    /// names several classes, which one C++ names being unknown here.
+    fn class_and_bases(&self, path: &str) -> Option<Vec<String>> {
+        let mut out: Vec<String> = Vec::new();
+        let mut kept: HashSet<String> = HashSet::new();
+        let mut seen: HashSet<String> = HashSet::new();
         let mut pending = vec![Seed::exact(path)];
         while let Some(current) = pending.pop() {
-            for class in self
+            // A seed is expanded once: a cycle or many namesakes naming one base
+            // stays linear in the classes of that name (review 1 of #542).
+            if !seen.insert(format!("{}{}", u8::from(current.exact), current.name)) {
+                continue;
+            }
+            let named: Vec<&String> = self
                 .by_last
                 .get(last_segment(&current.name))
                 .into_iter()
                 .flatten()
-            {
-                if current.designates(class) && !out.contains(class) {
+                .filter(|class| current.designates(class))
+                .collect();
+            if named.len() > 1 {
+                return None;
+            }
+            for class in named {
+                if kept.insert(class.clone()) {
                     out.push(class.clone());
                     pending.extend(
                         self.bases
@@ -313,42 +366,8 @@ impl CppClasses {
                 }
             }
         }
-        out
+        Some(out)
     }
-
-    /// True when a `using` the file `from` sees, written in one of the scopes
-    /// `inner` (the scopes of the caller from its own out to the one that holds
-    /// the class found), can make `name` mean another class: a using-declaration
-    /// of that name, or a using-directive on a namespace that holds a class of
-    /// that name. C++ then names what the `using` introduces; the graph holds no
-    /// edge from a `using` to its target, so the lookup by scope is not used.
-    fn a_using_can_hide(&self, name: &str, from: &str, inner: &[&str]) -> bool {
-        self.usings
-            .iter()
-            .filter(|u| inner.contains(&u.scope.as_str()) && self.sees(from, &u.file))
-            .any(|u| {
-                u.name == name
-                    || (!u.namespace.is_empty()
-                        && self.holds_class_exactly(&qualify(&u.namespace, name)))
-            })
-    }
-}
-
-/// The `using` an `Import` node's id spells, `None` for any other import: the
-/// id is `<file>::<scope>::using:<text>`, the text `ns::X` for a declaration and
-/// `namespace ns` for a directive (`parser::spec::cpp::using_entry`).
-fn using_of(import_id: &str) -> Option<Using> {
-    let (scope, text) = path_without_file(import_id).split_once("using:")?;
-    let (name, namespace) = match text.trim().strip_prefix("namespace ") {
-        Some(ns) => (String::new(), class_path(ns)),
-        None => (last_segment(&class_path(text)).to_string(), String::new()),
-    };
-    (!name.is_empty() || !namespace.is_empty()).then(|| Using {
-        scope: scope.trim_end_matches("::").to_string(),
-        file: extract_file_prefix(import_id).unwrap_or_default(),
-        name,
-        namespace,
-    })
 }
 
 /// A name to look a class up by: a path matched exactly, or a name as the source
@@ -466,6 +485,12 @@ pub(super) fn path_without_file(qn: &str) -> &str {
         None => qn,
     }
 }
+
+#[path = "cpp_classes_usings.rs"]
+mod usings;
+#[cfg(test)]
+use usings::using_of;
+use usings::Using;
 
 #[cfg(test)]
 #[path = "cpp_classes_tests.rs"]

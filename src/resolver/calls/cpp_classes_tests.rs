@@ -165,6 +165,15 @@ fn a_typedef_of_an_included_source_file_is_in_scope() {
     assert!(!family.holds("lib::S"), "z.cpp does not include x.cpp");
 }
 
+/// A caller in `file`, written in `scope`, whose line is unknown.
+fn at<'a>(file: &'a str, scope: &'a str) -> Caller<'a> {
+    Caller {
+        file,
+        scope,
+        line: u64::MAX,
+    }
+}
+
 fn using_declaration(classes: &mut CppClasses, scope: &str, file: &str, name: &str) {
     classes.usings.push(Using {
         scope: scope.to_string(),
@@ -194,7 +203,7 @@ fn a_declared_type_names_the_class_of_the_innermost_scope_that_holds_one() {
     // `namespace a { int f(Box& b) { return b.m(); } }` with `a::Box` and two
     // namesakes: C++ names `a::Box` (§6.4.1), and the path suffix named all three.
     let classes = classes_of(&["Box", "a::Box", "other::Box"]);
-    let family = classes.declared_family("Box", "x.cpp", "a");
+    let family = classes.declared_family("Box", &at("x.cpp", "a"));
     assert!(family.holds("a::Box"));
     assert!(!family.holds("Box") && !family.holds("other::Box"));
 }
@@ -203,21 +212,23 @@ fn a_declared_type_names_the_class_of_the_innermost_scope_that_holds_one() {
 fn a_declared_type_of_a_method_is_looked_up_in_its_class_then_its_namespaces() {
     let classes = classes_of(&["a::C::Box", "a::Box"]);
     assert!(classes
-        .declared_family("Box", "x.cpp", "a::C")
+        .declared_family("Box", &at("x.cpp", "a::C"))
         .holds("a::C::Box"));
-    assert!(classes.declared_family("Box", "x.cpp", "a").holds("a::Box"));
+    assert!(classes
+        .declared_family("Box", &at("x.cpp", "a"))
+        .holds("a::Box"));
 }
 
 #[test]
 fn a_declared_type_no_scope_of_the_caller_holds_keeps_the_path_suffix_reading() {
     let classes = classes_of(&["shapes::Box"]);
-    let family = classes.declared_family("Box", "x.cpp", "a");
+    let family = classes.declared_family("Box", &at("x.cpp", "a"));
     assert!(
         family.holds("shapes::Box"),
         "the reading of main: one class of that name binds"
     );
     let classes = classes_of(&["shapes::Box", "other::Box"]);
-    let family = classes.declared_family("Box", "x.cpp", "a");
+    let family = classes.declared_family("Box", &at("x.cpp", "a"));
     assert!(
         family.holds("shapes::Box") && family.holds("other::Box"),
         "and several keep the site open"
@@ -227,7 +238,7 @@ fn a_declared_type_no_scope_of_the_caller_holds_keeps_the_path_suffix_reading() 
 #[test]
 fn a_class_of_a_scope_of_the_caller_hides_a_namesake_deeper_in_another_namespace() {
     let classes = classes_of(&["a::Box", "x::a::Box"]);
-    let family = classes.declared_family("Box", "x.cpp", "a");
+    let family = classes.declared_family("Box", &at("x.cpp", "a"));
     assert!(family.holds("a::Box") && !family.holds("x::a::Box"));
 }
 
@@ -235,7 +246,7 @@ fn a_class_of_a_scope_of_the_caller_hides_a_namesake_deeper_in_another_namespace
 fn the_bases_of_the_class_found_by_scope_are_of_its_family() {
     let mut classes = classes_of(&["a::Box", "a::Base", "other::Box"]);
     with_base(&mut classes, "a::Box", "Base");
-    let family = classes.declared_family("Box", "x.cpp", "a");
+    let family = classes.declared_family("Box", &at("x.cpp", "a"));
     assert!(family.holds("a::Base") && !family.holds("other::Box"));
 }
 
@@ -246,7 +257,7 @@ fn a_name_an_alias_introduces_keeps_the_path_suffix_reading() {
     // of that name are both possible, as on `main`.
     let mut classes = classes_of(&["other::Impl", "far::Handle"]);
     alias(&mut classes, "a::Handle", "x.cpp", "other::Impl");
-    let family = classes.declared_family("Handle", "x.cpp", "a");
+    let family = classes.declared_family("Handle", &at("x.cpp", "a"));
     assert!(family.holds("other::Impl") && family.holds("far::Handle"));
 }
 
@@ -256,7 +267,7 @@ fn a_member_type_a_base_of_the_callers_class_declares_is_the_class_found() {
     // not the global `T`.
     let mut classes = classes_of(&["Base::T", "T", "D", "Base"]);
     with_base(&mut classes, "D", "Base");
-    let family = classes.declared_family("T", "x.cpp", "D");
+    let family = classes.declared_family("T", &at("x.cpp", "D"));
     assert!(family.holds("Base::T") && !family.holds("T"));
 }
 
@@ -266,7 +277,7 @@ fn a_member_type_two_bases_declare_keeps_the_path_suffix_reading() {
     classes
         .bases
         .insert("D".to_string(), vec!["L".to_string(), "R".to_string()]);
-    let family = classes.declared_family("T", "x.cpp", "D");
+    let family = classes.declared_family("T", &at("x.cpp", "D"));
     assert!(family.holds("L::T") && family.holds("R::T"));
 }
 
@@ -274,7 +285,7 @@ fn a_member_type_two_bases_declare_keeps_the_path_suffix_reading() {
 fn a_declared_type_written_with_a_qualifier_keeps_the_path_suffix_reading() {
     // A namespace alias is not tracked, so a written qualifier is read as before.
     let classes = classes_of(&["x::other::Box", "a::other::Box"]);
-    let family = classes.declared_family("other::Box", "x.cpp", "a");
+    let family = classes.declared_family("other::Box", &at("x.cpp", "a"));
     assert!(family.holds("x::other::Box") && family.holds("a::other::Box"));
 }
 
@@ -285,7 +296,7 @@ fn a_using_declaration_of_a_scope_walked_keeps_the_path_suffix_reading() {
     // the two classes keep the site open instead of binding `a::Box`.
     let mut classes = classes_of(&["a::Box", "other::Box"]);
     using_declaration(&mut classes, "a::b", "x.cpp", "Box");
-    let family = classes.declared_family("Box", "x.cpp", "a::b");
+    let family = classes.declared_family("Box", &at("x.cpp", "a::b"));
     assert!(family.holds("a::Box") && family.holds("other::Box"));
 }
 
@@ -293,7 +304,7 @@ fn a_using_declaration_of_a_scope_walked_keeps_the_path_suffix_reading() {
 fn a_using_directive_on_a_namespace_that_holds_a_namesake_keeps_the_suffix_reading() {
     let mut classes = classes_of(&["a::Box", "other::Box"]);
     using_directive(&mut classes, "a::b", "x.cpp", "other");
-    let family = classes.declared_family("Box", "x.cpp", "a::b");
+    let family = classes.declared_family("Box", &at("x.cpp", "a::b"));
     assert!(family.holds("a::Box") && family.holds("other::Box"));
 }
 
@@ -301,7 +312,7 @@ fn a_using_directive_on_a_namespace_that_holds_a_namesake_keeps_the_suffix_readi
 fn a_using_directive_on_a_namespace_without_the_name_does_not_stop_the_lookup() {
     let mut classes = classes_of(&["a::Box", "other::Box"]);
     using_directive(&mut classes, "a::b", "x.cpp", "empty");
-    let family = classes.declared_family("Box", "x.cpp", "a::b");
+    let family = classes.declared_family("Box", &at("x.cpp", "a::b"));
     assert!(family.holds("a::Box") && !family.holds("other::Box"));
 }
 
@@ -309,7 +320,7 @@ fn a_using_directive_on_a_namespace_without_the_name_does_not_stop_the_lookup() 
 fn a_using_of_a_scope_the_lookup_never_walked_does_not_stop_it() {
     let mut classes = classes_of(&["a::Box", "other::Box"]);
     using_declaration(&mut classes, "z", "x.cpp", "Box");
-    let family = classes.declared_family("Box", "x.cpp", "a");
+    let family = classes.declared_family("Box", &at("x.cpp", "a"));
     assert!(family.holds("a::Box") && !family.holds("other::Box"));
 }
 
@@ -317,7 +328,7 @@ fn a_using_of_a_scope_the_lookup_never_walked_does_not_stop_it() {
 fn a_using_the_callers_file_does_not_see_does_not_stop_the_lookup() {
     let mut classes = classes_of(&["a::Box", "other::Box"]);
     using_declaration(&mut classes, "a", "y.cpp", "Box");
-    let family = classes.declared_family("Box", "x.cpp", "a");
+    let family = classes.declared_family("Box", &at("x.cpp", "a"));
     assert!(
         family.holds("a::Box") && !family.holds("other::Box"),
         "a using of another source file is no declaration in scope"
@@ -350,4 +361,90 @@ fn a_using_is_read_from_the_id_of_its_import_node() {
         using_of("x.cpp::include:stdio.h").is_none(),
         "an include is no using"
     );
+}
+
+#[test]
+fn a_directive_on_a_namespace_written_relative_to_its_scope_keeps_the_suffix_reading() {
+    // `namespace a::b { namespace inner { struct Box; } using namespace inner; }`:
+    // the directive writes `inner`, the class is `a::b::inner::Box`.
+    let mut classes = classes_of(&["a::Box", "a::b::inner::Box"]);
+    using_directive(&mut classes, "a::b", "x.cpp", "inner");
+    let family = classes.declared_family("Box", &at("x.cpp", "a::b"));
+    assert!(family.holds("a::Box") && family.holds("a::b::inner::Box"));
+}
+
+#[test]
+fn a_base_that_names_several_classes_keeps_the_path_suffix_reading() {
+    // `a::D : Base` with `a::Base` and `unrelated::Base`: which one C++ names is
+    // not read here, so the member type of `unrelated::Base` is not chosen.
+    let mut classes = classes_of(&[
+        "T",
+        "unrelated::Base::T",
+        "a::Base",
+        "unrelated::Base",
+        "a::D",
+    ]);
+    with_base(&mut classes, "a::D", "Base");
+    let family = classes.declared_family("T", &at("x.cpp", "a::D"));
+    assert!(family.holds("T") && family.holds("unrelated::Base::T"));
+}
+
+#[test]
+fn an_alias_of_a_scope_walked_keeps_the_path_suffix_reading() {
+    // `namespace a { using Box = other::Impl; }` with a global `Box`: C++ names the
+    // alias, so the global class is not chosen.
+    let mut classes = classes_of(&["Box", "other::Impl"]);
+    alias(&mut classes, "a::Box", "x.cpp", "other::Impl");
+    let family = classes.declared_family("Box", &at("x.cpp", "a"));
+    assert!(family.holds("Box") && family.holds("other::Impl"));
+}
+
+#[test]
+fn a_member_class_declared_after_the_call_is_not_the_class_found() {
+    // `struct C { int f(Box& b) { return b.m(); } struct Box {}; };`: the parameter's
+    // `Box` is the global one; `C::Box` is declared after it.
+    let mut classes = classes_of(&["Box", "C", "C::Box"]);
+    classes
+        .declared_at
+        .insert("C::Box".to_string(), vec![("x.cpp".to_string(), 9)]);
+    let caller = Caller {
+        file: "x.cpp",
+        scope: "C",
+        line: 4,
+    };
+    let family = classes.declared_family("Box", &caller);
+    assert!(family.holds("Box") && family.holds("C::Box"));
+    let later = Caller { line: 12, ..caller };
+    assert!(classes.declared_family("Box", &later).holds("C::Box"));
+    assert!(!classes.declared_family("Box", &later).holds("Box"));
+}
+
+#[test]
+fn a_using_of_a_scope_whose_name_ends_in_using_is_read_whole() {
+    let declaration = using_of("x.cpp::housing::using:other::Box").expect("a declaration");
+    assert_eq!(
+        (declaration.scope.as_str(), declaration.name.as_str()),
+        ("housing", "Box")
+    );
+}
+
+#[test]
+fn many_namesakes_that_name_their_own_name_as_a_base_are_expanded_once() {
+    // Review 1 of #542: `namespace nI { struct A : A {}; }` for many I made
+    // `class_and_bases` cubic in the number of classes named `A`. Each seed is
+    // now expanded once, so this finishes at once instead of hanging.
+    let paths: Vec<String> = (0..2000).map(|i| format!("n{i}::A")).collect();
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut classes = classes_of(&refs);
+    for path in &paths {
+        with_base(&mut classes, path, "A");
+    }
+    for path in paths.iter().take(200) {
+        let scope = path.as_str();
+        let _ = classes.declared_family("m", &at("x.cpp", scope));
+        assert!(
+            classes.class_and_bases(scope).is_none(),
+            "the base `A` names 2000 classes"
+        );
+    }
 }

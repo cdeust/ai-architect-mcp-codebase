@@ -38,7 +38,7 @@
 // hides a namespace-scope namesake), §12.2.2 (implicit `this`), §13.3 (overload
 // resolution needs the argument types), §10 (derived classes).
 
-use super::cpp_classes::{names_class, path_without_file, Family};
+use super::cpp_classes::{names_class, path_without_file, Caller, Family};
 use super::reason::{
     Decline, Gated, SCOPE_CPP_QUALIFIER, SCOPE_CPP_RECEIVER_CLASS, SCOPE_CPP_UNQUALIFIED_CALL,
 };
@@ -127,9 +127,13 @@ pub(super) fn scope(
         }
         RECEIVER_HINT_VIA_CPP_DECLARED => {
             let file = caller_file(site);
-            let family = ctx
-                .cpp
-                .declared_family(site.receiver_hint, &file, &caller_scope(site));
+            let scope = caller_scope(site);
+            let caller = Caller {
+                file: &file,
+                scope: &scope,
+                line: call_line(site.cs_id),
+            };
+            let family = ctx.cpp.declared_family(site.receiver_hint, &caller);
             let mut kept = methods_of(&family, candidates);
             if kept.is_empty() {
                 // The class the scopes name holds no candidate: the scopes the
@@ -171,6 +175,16 @@ fn caller_family(ctx: &ResolveContext, site: &CallSite) -> Family {
 
 fn caller_file(site: &CallSite) -> String {
     extract_file_prefix(site.caller_qn).unwrap_or_default()
+}
+
+/// The line of a call, from its id (`f.cpp::f#1::call@3:22#2`); the last line
+/// when the id carries none, so that no member class looks declared after it.
+fn call_line(cs_id: &str) -> u64 {
+    cs_id
+        .rsplit_once("call@")
+        .and_then(|(_, at)| at.split(':').next())
+        .and_then(|line| line.parse().ok())
+        .unwrap_or(u64::MAX)
 }
 
 /// The scope the caller is written in, as a path without its file: `a` of the

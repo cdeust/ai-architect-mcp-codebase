@@ -152,3 +152,58 @@ namespace a { struct Box { int m() { return 2; } };
     let (store, _tmp) = index_and_resolve(&[("un.cpp", src)]);
     assert_eq!(bound_methods(&store, "un"), ["m -> a::Box::m"]);
 }
+
+/// The four cases of the Codex review of #542: each keeps the reading of `main`
+/// (two candidates, the site open) instead of binding a class C++ does not name.
+fn assert_open(file: &str, src: &str, caller: &str) {
+    let (store, _tmp) = index_and_resolve(&[(file, src)]);
+    assert!(
+        bound_methods(&store, caller).is_empty(),
+        "{:?}",
+        bound_methods(&store, caller)
+    );
+    assert_eq!(open_reasons(&store, caller), ["ambiguous_candidates"]);
+}
+
+#[test]
+fn a_directive_on_a_namespace_written_relative_to_its_scope_leaves_the_call_open() {
+    assert_open(
+        "rel.cpp",
+        "namespace a { struct Box { int m() { return 1; } };\n\
+         namespace b { namespace inner { struct Box { int m() { return 2; } }; }\n\
+         using namespace inner;\nint rd(Box& x) { return x.m(); } } }\n",
+        "rd",
+    );
+}
+
+#[test]
+fn a_base_that_names_classes_of_two_namespaces_leaves_the_call_open() {
+    assert_open(
+        "ub.cpp",
+        "struct T { int m() { return 1; } };\n\
+         namespace unrelated { struct Base { struct T { int m() { return 2; } }; }; }\n\
+         namespace a { struct Base {}; struct D : Base { int bf(T& t) { return t.m(); } }; }\n",
+        "bf",
+    );
+}
+
+#[test]
+fn an_alias_of_the_callers_namespace_leaves_the_call_open() {
+    assert_open(
+        "al.cpp",
+        "struct Box { int m() { return 1; } };\n\
+         namespace other { struct Impl { int m() { return 2; } }; }\n\
+         namespace a { using Box = other::Impl; int af(Box& x) { return x.m(); } }\n",
+        "af",
+    );
+}
+
+#[test]
+fn a_member_class_declared_after_a_method_is_not_its_parameters_type() {
+    assert_open(
+        "late.cpp",
+        "struct Box { int m() { return 1; } };\n\
+         struct C {\n  int lf(Box& b) { return b.m(); }\n  struct Box { int m() { return 2; } };\n};\n",
+        "lf",
+    );
+}
