@@ -164,6 +164,15 @@ fn child(mode: &str) {
             let response = super::do_export_wiki_skeleton(&export_args(graph.as_ref()))
                 .expect("export under the filter");
             assert_eq!(response["status"], "ok", "{response}");
+            // The export reads through `graph_cache`, a thread-local that
+            // keeps the graph open. Left there, the graph closes while the
+            // test thread's storage is destroyed, after `CHILD_DONE`; under
+            // `cargo llvm-cov` that close crashed the child in 4 runs of 30
+            // (SIGSEGV; SIGABRT twice in the `cargo llvm-cov` job of #549),
+            // and in none of 60 once closed here. Closing it here also puts
+            // the close under the filter.
+            crate::graph_store::release_open_handles(graph.as_ref())
+                .expect("close the cached graph");
         }
         "socket" => {
             let _ = std::net::TcpStream::connect(("127.0.0.1", 9));
@@ -177,7 +186,8 @@ fn child(mode: &str) {
 }
 
 /// Runs `test` of this binary again under `mode`; returns its exit status
-/// and standard output.
+/// and its standard output followed by its standard error, so a failure shows
+/// both.
 fn run_child(
     test: &str,
     mode: &str,
@@ -192,7 +202,9 @@ fn run_child(
     let out = cmd.output().expect("run the child");
     (
         out.status,
-        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stdout).into_owned()
+            + "\n--- stderr ---\n"
+            + &String::from_utf8_lossy(&out.stderr),
     )
 }
 
