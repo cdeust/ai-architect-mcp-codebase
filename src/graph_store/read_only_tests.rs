@@ -6,9 +6,12 @@
 // Scope: the engine gate covers DATABASE writes (CREATE/DELETE/DROP — however
 // spelled, since the classification comes from the compiled plan, not a
 // keyword scan) and the query timeout. It does NOT cover
-// COPY/EXPORT/IMPORT/ATTACH; those are blocked upstream by the lexical gate,
-// and `engine_gate_does_not_cover_filesystem_writes` below is the measurement
-// that says why the lexical layer has to exist.
+// COPY TO/EXPORT; those are blocked upstream by the lexical gate, and
+// `engine_gate_does_not_cover_filesystem_writes` below is the measurement
+// that says why the lexical layer has to exist. Since lbug 0.22 the engine
+// also refuses IMPORT, ATTACH and DETACH (see
+// `engine_classifies_every_filesystem_statement_as_read_only`); the lexical
+// gate still blocks them.
 
 use super::*;
 
@@ -176,23 +179,33 @@ fn engine_gate_does_not_cover_filesystem_writes() {
 ///
 /// This test fails the day lbug closes any of these gaps, which is when the
 /// corresponding lexical entry may be revisited WITH EVIDENCE.
+///
+/// Re-derived 2026-11-15 for lbug 0.22.3 (Pipeline run 43705435039, job
+/// `unit`, then measured statement by statement): the engine now refuses
+/// `IMPORT DATABASE`, `ATTACH` and `DETACH` with `read_only_query_required`,
+/// so those gaps have closed and the three move to the refused set, where the
+/// test fails if the engine ever reopens one. `COPY .. TO` and `EXPORT
+/// DATABASE` still pass the engine gate. `USE` of an unattached database fails
+/// at execution (`No database named ..`), not on read-only grounds, so it
+/// stays in the first set. The lexical entries are all kept: they are the
+/// barrier that does not depend on the linked engine version, and removing a
+/// security gate is a separate decision from upgrading the engine.
 #[test]
 fn engine_classifies_every_filesystem_statement_as_read_only() {
     let (dir, store) = store_with_one_function();
     let scratch = dir.path().join("scratch");
-    let probes = [
+    // Order matters: EXPORT creates `scratch`, and the binder rejects an
+    // IMPORT of a missing directory before the read-only check is reached,
+    // which would hide the refusal asserted below.
+    let not_refused = [
         format!(
             "COPY (MATCH (n:Function) RETURN n.id) TO '{}'",
             dir.path().join("probe.csv").display()
         ),
         format!("EXPORT DATABASE '{}'", scratch.display()),
-        format!("IMPORT DATABASE '{}'", scratch.display()),
-        format!("ATTACH '{}' AS probe_db (dbtype lbug)", scratch.display()),
-        "DETACH probe_db".to_string(),
         "USE probe_db".to_string(),
     ];
-
-    for cypher in &probes {
+    for cypher in &not_refused {
         if let Err(e) = store.execute_read_only_query(cypher, 30_000) {
             assert!(
                 !e.contains("read_only_query_required"),
@@ -201,6 +214,22 @@ fn engine_classifies_every_filesystem_statement_as_read_only() {
                  re-derive the denylist entry with this as evidence. Error: {e}"
             );
         }
+    }
+
+    let refused = [
+        format!("IMPORT DATABASE '{}'", scratch.display()),
+        format!("ATTACH '{}' AS probe_db (dbtype lbug)", scratch.display()),
+        "DETACH probe_db".to_string(),
+    ];
+    for cypher in &refused {
+        let refusal = store.execute_read_only_query(cypher, 30_000).err();
+        assert!(
+            refusal
+                .as_deref()
+                .is_some_and(|e| e.contains("read_only_query_required")),
+            "lbug 0.22.3 refuses `{cypher}` as a write; the engine has reopened \
+             that gap, so its lexical entry is again the only barrier: {refusal:?}"
+        );
     }
 }
 
