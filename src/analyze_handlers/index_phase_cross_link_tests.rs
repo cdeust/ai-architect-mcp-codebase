@@ -46,7 +46,8 @@ const DEPLOYMENT: &str = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  na
      envFrom:\n            - configMapRef:\n                name: app-config\n";
 
 /// The name-match edge from the unchanged Deployment to `configmap.yaml`.
-const CONFIG_MAP_REFERENCE: &str = "Imports_IacResource_File|deployment.yaml::k8s::0|configmap.yaml";
+const CONFIG_MAP_REFERENCE: &str =
+    "Imports_IacResource_File|deployment.yaml::k8s::0|configmap.yaml";
 
 fn config_map(name: &str) -> String {
     format!("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {name}\ndata:\n  k: v\n")
