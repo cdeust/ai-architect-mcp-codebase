@@ -41,37 +41,100 @@ fn an_added_js_target_links_an_unchanged_importer() {
     assert_eq!(outcome(&second), outcome(&fresh));
 }
 
+const DEPLOYMENT: &str = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  \
+     template:\n    spec:\n      containers:\n        - name: web\n          image: web:latest\n          \
+     envFrom:\n            - configMapRef:\n                name: app-config\n";
+
+/// The name-match edge from the unchanged Deployment to `configmap.yaml`.
+const CONFIG_MAP_REFERENCE: &str =
+    "Imports_IacResource_File|deployment.yaml::k8s::0|configmap.yaml";
+
+fn config_map(name: &str) -> String {
+    format!("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {name}\ndata:\n  k: v\n")
+}
+
 #[test]
-fn a_renamed_config_map_rebuilds_and_drops_the_unchanged_reference() {
+fn a_renamed_config_map_drops_the_unchanged_reference_without_a_rebuild() {
     // Only the ConfigMap's `metadata.name` changes: the unchanged Deployment's
-    // name-match edge no longer holds, and nothing draws IaC references of a
-    // file the refresh does not re-parse, so the call rebuilds in full.
-    let (repo, base) = temp_repo("analyze523_iac_");
-    fs::write(
-        repo.join("deployment.yaml"),
-        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  template:\n    \
-         spec:\n      containers:\n        - name: web\n          image: web:latest\n          \
-         envFrom:\n            - configMapRef:\n                name: app-config\n",
-    )
-    .expect("deployment.yaml");
-    let config_map = |name: &str| {
-        format!("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {name}\ndata:\n  k: v\n")
-    };
+    // name-match edge no longer holds. The refresh draws the IaC layer again
+    // instead of rebuilding (issue #443; the rebuild of #527).
+    let (repo, base) = temp_repo("analyze443_iac_rename_");
+    fs::write(repo.join("deployment.yaml"), DEPLOYMENT).expect("deployment.yaml");
     fs::write(repo.join("configmap.yaml"), config_map("app-config")).expect("configmap.yaml");
     let auto = json!({ "language": "auto" });
     let out = base.join("out");
     let first = analyze(&repo, &out, auto.clone());
-    let reference = "Imports_IacResource_File|deployment.yaml::k8s::0|configmap.yaml";
     assert!(
-        edge_rows(&first).iter().any(|r| r == reference),
+        edge_rows(&first).iter().any(|r| r == CONFIG_MAP_REFERENCE),
         "the first run draws the name-match edge: {:?}",
         edge_rows(&first)
     );
 
     fs::write(repo.join("configmap.yaml"), config_map("other")).expect("rename");
     let second = analyze(&repo, &out, auto.clone());
-    assert_eq!(second["index"]["mode"], "full", "{second}");
-    assert!(!edge_rows(&second).iter().any(|r| r == reference));
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert!(!edge_rows(&second).iter().any(|r| r == CONFIG_MAP_REFERENCE));
+    let fresh = analyze(&repo, &base.join("fresh"), auto);
+    assert_eq!(outcome(&second), outcome(&fresh));
+}
+
+#[test]
+fn an_added_config_map_gives_the_unchanged_deployment_its_reference() {
+    // The Deployment names `app-config`, absent in the first run. A fresh
+    // analysis after `configmap.yaml` is added draws the name-match edge from
+    // the unchanged Deployment; the reparsed-only IaC step did not.
+    let (repo, base) = temp_repo("analyze443_iac_add_");
+    fs::write(repo.join("deployment.yaml"), DEPLOYMENT).expect("deployment.yaml");
+    let auto = json!({ "language": "auto" });
+    let out = base.join("out");
+    let first = analyze(&repo, &out, auto.clone());
+    assert!(!edge_rows(&first).iter().any(|r| r == CONFIG_MAP_REFERENCE));
+
+    fs::write(repo.join("configmap.yaml"), config_map("app-config")).expect("add");
+    let second = analyze(&repo, &out, auto.clone());
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert!(
+        edge_rows(&second).iter().any(|r| r == CONFIG_MAP_REFERENCE),
+        "the unchanged Deployment references the added ConfigMap: {:?}",
+        edge_rows(&second)
+    );
+    let fresh = analyze(&repo, &base.join("fresh"), auto);
+    assert_eq!(outcome(&second), outcome(&fresh));
+}
+
+#[test]
+fn a_deleted_base_overlay_drops_the_unchanged_kustomize_reference() {
+    // `overlay/kustomization.yaml` (unchanged) names `../base`, whose
+    // Kustomization the second run deletes: the module-to-module edge goes,
+    // and the reference falls back to what a fresh analysis draws.
+    let (repo, base) = temp_repo("analyze443_iac_kustomize_");
+    fs::create_dir_all(repo.join("base")).expect("mk base");
+    fs::create_dir_all(repo.join("overlay")).expect("mk overlay");
+    fs::write(
+        repo.join("base/kustomization.yaml"),
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - configmap.yaml\n",
+    )
+    .expect("base kustomization");
+    fs::write(repo.join("base/configmap.yaml"), config_map("app-config")).expect("base cm");
+    fs::write(
+        repo.join("overlay/kustomization.yaml"),
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../base\n",
+    )
+    .expect("overlay kustomization");
+    let auto = json!({ "language": "auto" });
+    let out = base.join("out");
+    let first = analyze(&repo, &out, auto.clone());
+    let module_edge = "Imports_IacModule_IacModule|overlay/kustomization.yaml::kustomize|base/kustomization.yaml::kustomize";
+    assert!(
+        edge_rows(&first).iter().any(|r| r == module_edge),
+        "the first run draws the base edge: {:?}",
+        edge_rows(&first)
+    );
+
+    fs::remove_file(repo.join("base/kustomization.yaml")).expect("delete base");
+    let second = analyze(&repo, &out, auto.clone());
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert!(!edge_rows(&second).iter().any(|r| r == module_edge));
     let fresh = analyze(&repo, &base.join("fresh"), auto);
     assert_eq!(outcome(&second), outcome(&fresh));
 }

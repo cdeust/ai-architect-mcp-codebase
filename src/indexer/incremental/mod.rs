@@ -159,8 +159,9 @@ pub(super) struct Plan {
 ///
 /// The refreshed manifest keeps `prior`'s scope only when this pass ran with
 /// the same settings, computed the same Cargo map, saved a coverage report
-/// built on the previous one (issue #443, reviews of #478), and moved no IaC
-/// reference of a file it did not re-parse (`cross_links`, review of #523).
+/// built on the previous one (issue #443, reviews of #478). An IaC reference
+/// of a file it did not re-parse is drawn again (`cross_links::redraw_iac`),
+/// so it no longer drops the scope.
 pub fn index_incremental(
     codebase: &Path,
     graph_dir: &Path,
@@ -208,9 +209,6 @@ pub fn index_incremental(
     let scope = options.scope();
     let settings_match = prior.scope.as_ref() == Some(&scope);
 
-    // Read before the pass: an IaC reference of an unchanged file may move
-    // with this change set, and nothing draws it again (`cross_links`).
-    let iac_stale = cross_links::iac_references_stale(&store, &plan.change_set);
     let (reparsed, reparsed_gaps) =
         apply_changes(&store, codebase, &plan.change_set, &current, policy)?;
 
@@ -242,7 +240,7 @@ pub fn index_incremental(
     // forward by the next reuse as if it were; a report built without the
     // previous one lost the unchanged files' gaps (Claude reviews of #478).
     let coverage_saved = cov.write_error.is_none() && cov.prior_loaded;
-    let scope_kept = settings_match && facts_match && coverage_saved && !iac_stale;
+    let scope_kept = settings_match && facts_match && coverage_saved;
     plan.next_manifest.scope = scope_kept.then_some(scope);
     plan.next_manifest.cargo_facts = Some(cargo_facts_digest);
     manifest::save(manifest_path, &plan.next_manifest)?;
@@ -272,7 +270,8 @@ pub fn index_incremental(
 /// cross-file edges into modified files, purge the changed/deleted/renamed-old
 /// nodes, re-parse the changed/added/renamed-new files, prune orphaned
 /// directories, re-derive light-link edges out of the re-parsed files, and
-/// re-link the snapshot. Returns the number of files re-parsed
+/// re-link the snapshot, and draw the IaC layer again when a reference of an
+/// unchanged file may have moved. Returns the number of files re-parsed
 /// (changed + added + renamed-new).
 ///
 /// This is the shared core of both incremental entry points: the local
@@ -308,6 +307,11 @@ pub(super) fn apply_changes(
     for r in &changes.renamed {
         reparsed_set.insert(r.new_file.rel.clone());
     }
+
+    // Read before the purge: an IaC reference of a file this pass does not
+    // re-parse may move with this change set, and the reparsed-only IaC step
+    // would leave it (`cross_links`, Codex review of #523).
+    let iac_redraw = cross_links::iac_references_stale(store, changes);
 
     // ---- 1. Snapshot inbound cross-file edges into MODIFIED files' symbols --
     // (Deleted/renamed-old files are NOT snapshotted: their inbound edges must
@@ -404,7 +408,9 @@ pub(super) fn apply_changes(
     // reference edges target stable File nodes, so an unchanged referencer's edge
     // into a reparsed file is not disturbed. Parse gaps fold into the collector
     // so the coverage sidecar carries the IaC honesty signal too.
-    if !reparsed_files.is_empty() {
+    // When a reference of an unchanged file may move, step 6 draws the whole
+    // layer instead.
+    if !iac_redraw && !reparsed_files.is_empty() {
         match super::iac::run_iac_pass_for(store, codebase, &reparsed_files, &all_files) {
             Ok(gaps) => super::fold_iac_gaps(&mut collector, gaps),
             Err(e) => eprintln!("incremental: IaC pass skipped: {e}"),
@@ -414,6 +420,15 @@ pub(super) fn apply_changes(
     // ---- 5. Re-link the snapshotted inbound cross-file edges -----------------
     relink_inbound_edges(store, &saved_edges)?;
     stale_sites::restore_sites_with_edge(store, &reopened)?;
+
+    // ---- 6. Draw the IaC layer again when a reference may have moved --------
+    // Last, so no edge step 5 restored into an IaC node outlives the redraw.
+    // A failure fails the pass (the callers rebuild): a layer left half drawn
+    // is not the one a full index draws.
+    if iac_redraw {
+        let gaps = cross_links::redraw_iac(store, codebase, &all_files, &reparsed_set)?;
+        super::fold_iac_gaps(&mut collector, gaps);
+    }
 
     Ok((reparsed_set.len() as u64, collector.into_files()))
 }
