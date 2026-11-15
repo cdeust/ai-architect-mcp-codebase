@@ -7,7 +7,7 @@
 // source: stages/stage-3b.md §4, §5
 
 use crate::ambiguity_policy::{self, Context as PolicyContext, Resolution as PolicyResolution};
-use crate::graph_store::{is_known_rel_table, GraphStore, PropEdgeList};
+use crate::graph_store::{is_known_rel_table, GraphStore};
 use crate::language_provider::extract_file_prefix_or_self;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,12 +17,14 @@ mod calls;
 mod cfg_select;
 mod cfg_twins;
 pub(crate) mod cfg_verdict;
+mod edge_buffer;
 mod extends;
 mod implements;
 mod imports;
 mod nested_scope;
 mod phases;
 mod receiver;
+mod redecide;
 mod retract;
 mod retract_edges;
 #[cfg(test)]
@@ -34,6 +36,33 @@ use extends::{resolve_one_extends_base, ExtendsCandidate, ExtendsContext};
 use imports::resolve_glob_import;
 #[cfg(test)]
 use uses::extract_type_identifiers;
+
+pub use edge_buffer::EdgeBuffer;
+
+/// Outcome of staging one edge. All three variants mean the *reference*
+/// resolved to a real target — they differ only in whether a DB write is
+/// needed. Callers that count `resolved` refs must treat all three as
+/// resolved; only `Inserted` causes a new row to be written on flush.
+///
+/// source: issue #28 — before this type existed, `add` returned a plain
+/// `bool` (true only for `Inserted`), so a ref whose edge was already
+/// persisted from a prior `resolve_graph` run (`AlreadyPersisted`) or whose
+/// edge collapsed with another ref resolving to the same target within this
+/// run (`DuplicateInRun`, e.g. two call sites in one function calling the
+/// same callee) was silently dropped from the `resolved` counter, even
+/// though the reference legitimately resolved. That is what collapsed
+/// `resolution_rate` toward 0 on re-run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddOutcome {
+    /// Newly staged in this run; will be written to the store on flush.
+    Inserted,
+    /// This exact (rel_table, from, to) edge already exists in the store
+    /// from a previous `resolve_graph` run.
+    AlreadyPersisted,
+    /// This exact edge was already staged earlier in this same run (a
+    /// different reference resolved to the identical target).
+    DuplicateInRun,
+}
 
 /// Counter of edges dropped because their dynamically-formatted
 /// table name doesn't appear in REL_TABLES. Producers that build
@@ -266,137 +295,10 @@ pub fn resolve_graph(store: &GraphStore) -> Result<ResolutionResult, String> {
     let mut buf = EdgeBuffer::new(existing);
 
     let tallies = phases::run_phases(store, &idx, &file_imports, &mut buf)?;
-    let met = std::mem::take(&mut buf.met);
+    let met = buf.take_met();
     buf.flush(store)?;
     retraction.finish(store, &met)?;
     Ok(tallies.into_result(start))
-}
-
-// ---------------------------------------------------------------------------
-// EdgeBuffer — in-memory staging area for resolution edges.
-//
-// Collects all resolved edges across phases, deduplicates via a HashSet of
-// (rel_table, from, to) triples, and flushes grouped by rel_table through
-// GraphStore::bulk_insert_edges at the end. Eliminates per-edge MATCH+CREATE
-// round-trips and the idempotency sub-query that used to run before every
-// insert_resolution_edge call.
-// source: Fermi audit April 2026 — resolver was bottlenecked by this loop.
-// ---------------------------------------------------------------------------
-
-/// Outcome of staging one edge. All three variants mean the *reference*
-/// resolved to a real target — they differ only in whether a DB write is
-/// needed. Callers that count `resolved` refs must treat all three as
-/// resolved; only `Inserted` causes a new row to be written on flush.
-///
-/// source: issue #28 — before this type existed, `add` returned a plain
-/// `bool` (true only for `Inserted`), so a ref whose edge was already
-/// persisted from a prior `resolve_graph` run (`AlreadyPersisted`) or whose
-/// edge collapsed with another ref resolving to the same target within this
-/// run (`DuplicateInRun`, e.g. two call sites in one function calling the
-/// same callee) was silently dropped from the `resolved` counter, even
-/// though the reference legitimately resolved. That is what collapsed
-/// `resolution_rate` toward 0 on re-run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AddOutcome {
-    /// Newly staged in this run; will be written to the store on flush.
-    Inserted,
-    /// This exact (rel_table, from, to) edge already exists in the store
-    /// from a previous `resolve_graph` run.
-    AlreadyPersisted,
-    /// This exact edge was already staged earlier in this same run (a
-    /// different reference resolved to the identical target).
-    DuplicateInRun,
-}
-
-pub struct EdgeBuffer {
-    by_table: HashMap<String, PropEdgeList>,
-    /// Edges that existed in the store before this run started. Read-only
-    /// after construction — never mutated by `add`.
-    persisted: HashSet<(String, String, String)>,
-    /// Edges staged during this run (superset check happens against
-    /// `persisted` first, so this set never overlaps it).
-    staged: HashSet<(String, String, String)>,
-    /// The `persisted` edges this run decided again (`AlreadyPersisted`). A
-    /// persisted row of the static tiers outside this set is retracted after
-    /// the flush (issue #443, `retract` and `retract_edges`).
-    met: HashSet<(String, String, String)>,
-}
-
-impl EdgeBuffer {
-    fn new(existing: HashSet<(String, String, String)>) -> Self {
-        Self {
-            by_table: HashMap::new(),
-            persisted: existing,
-            staged: HashSet::new(),
-            met: HashSet::new(),
-        }
-    }
-
-    /// Stages an edge for the given (rel_table, from, to) key.
-    ///
-    /// precondition: `rel_table` is a schema-known relationship table (the
-    /// caller has already checked `check_known_rel_table`).
-    /// postcondition: returns the outcome (see `AddOutcome`); on
-    /// `Inserted`, the edge is queued in `by_table` for `flush`. On
-    /// `AlreadyPersisted` / `DuplicateInRun`, no new row is queued — the
-    /// edge is either already in the store or already staged this run.
-    pub fn add(
-        &mut self,
-        rel_table: &str,
-        from_id: &str,
-        to_id: &str,
-        confidence: f64,
-        method: &str,
-    ) -> AddOutcome {
-        let key = (
-            rel_table.to_string(),
-            from_id.to_string(),
-            to_id.to_string(),
-        );
-        if self.persisted.contains(&key) {
-            self.met.insert(key);
-            return AddOutcome::AlreadyPersisted;
-        }
-        if self.staged.contains(&key) {
-            return AddOutcome::DuplicateInRun;
-        }
-        self.staged.insert(key);
-        let props = vec![
-            ("confidence".to_string(), confidence.to_string()),
-            ("resolution_method".to_string(), format!("'{method}'")),
-        ];
-        self.by_table
-            .entry(rel_table.to_string())
-            .or_default()
-            .push((from_id.to_string(), to_id.to_string(), props));
-        AddOutcome::Inserted
-    }
-
-    fn flush(self, store: &GraphStore) -> Result<(), String> {
-        // Tolerate unknown rel tables: the resolver builds rel-table
-        // names dynamically from caller+target labels (e.g.
-        // Calls_Method_Struct when a method calls a struct constructor),
-        // but REL_TABLES only declares a subset of label pairs. Skipping
-        // the unknown ones with a warning lets every valid table still
-        // flush. Previously, one unknown table aborted the whole flush
-        // via ``?`` and dropped every resolved edge — which is why
-        // downstream consumers (Cortex viz) saw zero Calls/Imports rows.
-        for (table, edges) in &self.by_table {
-            match store.bulk_insert_edges(table, edges) {
-                Ok(_) => {}
-                Err(e) if e.contains("unknown relationship type") => {
-                    eprintln!(
-                        "resolver: skipping {} edges on unknown rel table {} ({})",
-                        edges.len(),
-                        table,
-                        e,
-                    );
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Reads all resolution edges currently in the graph so the EdgeBuffer's
