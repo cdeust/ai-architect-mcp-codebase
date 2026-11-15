@@ -28,14 +28,14 @@
 //!    falls back to the full rebuild (§13 — no silent path); a failed
 //!    coverage-sidecar write fails the call;
 //! 6. that pass keeps the manifest's scope (`IncrementalResult::scope_kept`):
-//!    it computed the same Cargo map (`FileManifest::cargo_facts`) as the pass
-//!    that wrote the manifest, and built its coverage report on the previous
-//!    one. The map is read from manifests the walk may not list — `Cargo.toml`
-//!    under `language: "rust"`, a path dependency outside the tree — so the
-//!    per-file states cannot see it move. The IaC references of a file it
-//!    did not re-parse are drawn again when they may have moved
+//!    it built its coverage report on the previous one. The IaC references of
+//!    a file it did not re-parse are drawn again when they may have moved
 //!    (`indexer::incremental::cross_links::redraw_iac`), so they no longer
-//!    drop the scope.
+//!    drop the scope. Nor does a moved Cargo map (a `Cargo.toml` edit, even
+//!    one the `language: "rust"` walk does not list, or an added, deleted or
+//!    renamed `.rs` file): the pass computes it again over the whole tree and
+//!    writes it to every file, and the resolver reads the facts the latest
+//!    pass recorded (see below).
 //!
 //! # Why an edited tree is reused
 //!
@@ -47,6 +47,11 @@
 //! implements and extends rows (`resolver::retract_edges`, #513) it does not
 //! decide again, and reopens the sites and imports they alone resolved, so
 //! resolving the refreshed graph gives the rows a fresh analysis gives.
+//! The rows that follow the Cargo map (a twin chosen under the build profile,
+//! a receiver typed through a `use` of a workspace crate) are reset before
+//! each resolve (issues #353 and #358), so they follow the map the latest
+//! pass recorded. A moved map used to rebuild in full after the incremental
+//! pass had already run (Claude review of #523).
 //! The refresh also draws again the light links of unchanged files when the
 //! file set moves, which resolve against it, and the whole IaC layer when a
 //! reference between manifests may have moved (`cross_links`).
@@ -211,11 +216,9 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
         return Err(format!("coverage sidecar write failed: {e}"));
     }
     // The pass's own verdict on whether its manifest still vouches for the
-    // graph (Claude review of #478): a different or unrecorded Cargo map, or a
-    // report built without the previous one, for instance because the sidecar
-    // vanished after `reusable_manifest` loaded it. The Cargo map comes from
-    // manifests the walk may not list (`Cargo.toml` under `language: "rust"`),
-    // and `resolve_graph` keeps the rows an earlier map accepted.
+    // graph (Claude review of #478): different settings, or a report built
+    // without the previous one, for instance because the sidecar vanished
+    // after `reusable_manifest` loaded it.
     if !inc.scope_kept {
         eprintln!(
             "[ap] analyze_codebase: the refresh could not vouch for the graph; rebuilding in full"
@@ -252,7 +255,6 @@ fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
         prepare_full_rebuild(&req.codebase, &req.output_dir, &req.graph_dir, &req.options)?;
     let result =
         indexer::index_codebase_with_language(&req.codebase, &req.graph_dir, &req.options)?;
-    let snapshot = snapshot.with_cargo_facts(&result.cargo_facts_digest);
     let sidecar_err = super::persist_analyze_sidecars(req, &result.coverage, snapshot)?;
     Ok(IndexPhase {
         summary: json!({
@@ -278,6 +280,10 @@ mod rebuild_tests;
 #[cfg(test)]
 #[path = "index_phase_change_tests.rs"]
 mod change_tests;
+
+#[cfg(test)]
+#[path = "index_phase_cargo_tests.rs"]
+mod cargo_tests;
 
 #[cfg(test)]
 #[path = "index_phase_cross_link_tests.rs"]
