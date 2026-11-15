@@ -17,14 +17,15 @@
 //     far less than a rebuild.
 //   - IaC references also resolve by name against other files' IaC nodes:
 //     renaming only a ConfigMap's `metadata.name` leaves the unchanged
-//     Deployment's `Imports_IacResource_File`. Drawing them again would mean
-//     re-emitting every manifest's nodes; until that invalidation exists, a
-//     pass that may have moved one says so (`iac_references_stale`) and the
-//     caller rebuilds.
+//     Deployment's `Imports_IacResource_File`. A reference is drawn from the
+//     parsed manifests of the whole tree at once, so the cure is to draw the
+//     IaC layer again in full (`redraw_iac`) whenever one may have moved
+//     (`iac_references_stale`): one read per IaC candidate, far less than a
+//     rebuild of every code file (issue #443, replaces the rebuild of #527).
 
 use super::mutate::purge_outbound_light_links;
 use super::{ChangeSet, Discovered};
-use crate::graph_store::{GraphStore, NODE_IAC_MODULE, NODE_IAC_RESOURCE};
+use crate::graph_store::{GraphStore, NODE_IAC_IMAGE, NODE_IAC_MODULE, NODE_IAC_RESOURCE};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -77,7 +78,8 @@ pub(super) fn relink_unchanged_sources(
 /// differ from a fresh index's: the graph held IaC nodes before the pass, and
 /// the pass adds, deletes or renames a file, or re-parses one the IaC pass may
 /// read. A graph whose IaC nodes cannot be counted reads as stale (§13: an
-/// unknown state is never read as clean). Call it before `apply_changes`.
+/// unknown state is never read as clean), which costs a redraw, never a wrong
+/// edge. Call it before the purge of `apply_changes`.
 pub(super) fn iac_references_stale(store: &GraphStore, changes: &ChangeSet) -> bool {
     let iac_file_changed = changes
         .changed
@@ -91,6 +93,34 @@ pub(super) fn iac_references_stale(store: &GraphStore, changes: &ChangeSet) -> b
             .execute_query(&format!("MATCH (n:{label}) RETURN n.id LIMIT 1"))
             .map_or(true, |qr| !qr.rows.is_empty())
     })
+}
+
+/// Draws the whole IaC layer again: deletes every IacResource, IacModule and
+/// IacImage node with its edges, then runs the IaC pass over `all_files`, as a
+/// full index does (`indexer::record_iac_gaps`). Call it last in
+/// `apply_changes`, after the inbound edges are re-linked, so no restored edge
+/// survives into an IaC node the redraw replaces.
+///
+/// Preconditions: the graph holds a File node for every file of `all_files`.
+/// Postcondition on `Ok(gaps)`: the IaC nodes and edges are the ones a full
+/// index of the current tree draws; `gaps` holds the IaC parse gaps of the
+/// files in `reparsed` only, since the coverage of an unchanged file is carried
+/// forward and its IaC gaps depend on its own text alone. An `Err` leaves the
+/// layer partly drawn: the caller fails the pass, and both callers of
+/// `index_incremental` then rebuild in full.
+pub(super) fn redraw_iac(
+    store: &GraphStore,
+    codebase: &Path,
+    all_files: &[PathBuf],
+    reparsed: &HashSet<String>,
+) -> Result<crate::indexer::iac::IacGaps, String> {
+    for label in [NODE_IAC_RESOURCE, NODE_IAC_MODULE, NODE_IAC_IMAGE] {
+        store.execute_query(&format!("MATCH (n:{label}) DETACH DELETE n"))?;
+    }
+    let mut gaps = crate::indexer::iac::run_iac_pass(store, codebase, all_files)?;
+    gaps.partial.retain(|(rel, _)| reparsed.contains(rel));
+    gaps.skipped.retain(|(rel, _)| reparsed.contains(rel));
+    Ok(gaps)
 }
 
 #[cfg(test)]

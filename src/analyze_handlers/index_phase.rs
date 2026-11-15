@@ -32,9 +32,10 @@
 //!    that wrote the manifest, and built its coverage report on the previous
 //!    one. The map is read from manifests the walk may not list — `Cargo.toml`
 //!    under `language: "rust"`, a path dependency outside the tree — so the
-//!    per-file states cannot see it move. Nor does it keep the scope when
-//!    the IaC references of a file it did not re-parse may have moved
-//!    (`indexer::incremental::cross_links`, Codex review of #523).
+//!    per-file states cannot see it move. The IaC references of a file it
+//!    did not re-parse are drawn again when they may have moved
+//!    (`indexer::incremental::cross_links::redraw_iac`), so they no longer
+//!    drop the scope.
 //!
 //! # Why an edited tree is reused
 //!
@@ -47,7 +48,8 @@
 //! decide again, and reopens the sites and imports they alone resolved, so
 //! resolving the refreshed graph gives the rows a fresh analysis gives.
 //! The refresh also draws again the light links of unchanged files when the
-//! file set moves, which resolve against it (`cross_links`).
+//! file set moves, which resolve against it, and the whole IaC layer when a
+//! reference between manifests may have moved (`cross_links`).
 //! `index_phase_change_tests.rs` and `index_phase_cross_link_tests.rs` check
 //! every edit kind against a fresh analysis of the same tree.
 //!
