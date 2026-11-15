@@ -251,3 +251,65 @@ fn an_artifact_with_the_columns_but_no_canonical_marker_is_refused_on_import() {
     let refused = import_compatible_artifact(&repo, &fresh).expect_err("no marker");
     assert!(refused.contains("full reindex required"), "{refused}");
 }
+
+/// What a bootstrap that gives up leaves in its output directory (review of
+/// #543): neither the graph nor a manifest, so the full index that follows
+/// starts from nothing instead of refreshing a graph no manifest vouches for.
+fn assert_nothing_left(outcome: &BootstrapOutcome, out: &Path, graph: &Path) {
+    assert!(
+        matches!(outcome, BootstrapOutcome::Reindex(_)),
+        "expected Reindex, got {outcome:?}"
+    );
+    assert!(!graph.exists(), "the failed bootstrap left its graph");
+    let manifest = indexer::manifest::manifest_path(out);
+    assert!(!manifest.exists(), "the failed bootstrap left a manifest");
+}
+
+#[test]
+fn a_refused_import_leaves_no_graph_and_no_manifest_behind() {
+    // The old-shape graph unpacks, with the bundled manifest beside it, then
+    // the column guard refuses it.
+    let (tmp, repo) = exported_repo(true, None);
+    let out = tmp.path().join("fresh");
+    let graph = out.join("graph");
+    fs::create_dir_all(&out).expect("mk fresh");
+    let outcome = bootstrap(&repo, &out, &graph, false);
+    assert_nothing_left(&outcome, &out, &graph);
+}
+
+#[test]
+fn a_failed_fill_leaves_no_graph_behind() {
+    // The artifact names a commit this clone does not hold and bundles no
+    // manifest, so the fill cannot classify the tree and fails after the
+    // import has unpacked the graph.
+    let (tmp, repo) = exported_repo(false, None);
+    let exported = artifact::read_artifact_meta(&repo).expect("meta");
+    artifact::export_artifact(
+        &tmp.path().join("out").join("graph"),
+        &repo,
+        exported.node_count,
+        exported.edge_count,
+        None,
+        None,
+    )
+    .expect("export again, without a manifest");
+    let meta_path = repo
+        .join(artifact::ARTIFACT_DIR)
+        .join(artifact::ARTIFACT_META);
+    let mut meta: Value =
+        serde_json::from_slice(&fs::read(&meta_path).expect("read meta")).expect("parse meta");
+    meta["commit"] = json!("0".repeat(40));
+    fs::write(&meta_path, serde_json::to_vec(&meta).expect("encode")).expect("write meta");
+
+    let out = tmp.path().join("fresh");
+    let graph = out.join("graph");
+    fs::create_dir_all(&out).expect("mk fresh");
+    let outcome = bootstrap(&repo, &out, &graph, false);
+    match &outcome {
+        BootstrapOutcome::Reindex(Some(note)) => {
+            assert_eq!(note["reason"], json!("stale_artifact_fill_failed"))
+        }
+        other => panic!("expected a refused fill, got {other:?}"),
+    }
+    assert_nothing_left(&outcome, &out, &graph);
+}

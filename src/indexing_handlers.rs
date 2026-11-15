@@ -248,6 +248,9 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
     // staleness contract lives in `attempt_bootstrap`; any path that does NOT
     // import falls through below carrying an assertable `bootstrap_skipped`.
     let mut bootstrap_skipped: Option<Value> = None;
+    // A bootstrap that gave up leaves no graph to refresh (review of #543):
+    // whatever it could not remove is never read as a prior local graph.
+    let mut bootstrap_gave_up = false;
     if req.want_bootstrap && !req.graph_dir.exists() {
         match attempt_bootstrap(
             &req.codebase,
@@ -258,11 +261,16 @@ pub(crate) fn do_index_codebase(arguments: &Value) -> Result<Value, String> {
             &req.options,
         ) {
             BootstrapOutcome::Imported(resp) => return Ok(resp),
-            BootstrapOutcome::Reindex(note) => bootstrap_skipped = note,
+            BootstrapOutcome::Reindex(note) => {
+                bootstrap_skipped = note;
+                bootstrap_gave_up = true;
+            }
         }
     }
-    if let Some(resp) = try_incremental_index(&req) {
-        return Ok(resp);
+    if !bootstrap_gave_up {
+        if let Some(resp) = try_incremental_index(&req) {
+            return Ok(resp);
+        }
     }
 
     // lbug creates the database itself; a stale artifact from a prior run (a

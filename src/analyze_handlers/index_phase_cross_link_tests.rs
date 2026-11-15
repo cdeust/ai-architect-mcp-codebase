@@ -102,39 +102,76 @@ fn an_added_config_map_gives_the_unchanged_deployment_its_reference() {
     assert_eq!(outcome(&second), outcome(&fresh));
 }
 
-#[test]
-fn a_deleted_base_overlay_drops_the_unchanged_kustomize_reference() {
-    // `overlay/kustomization.yaml` (unchanged) names `../base`, whose
-    // Kustomization the second run deletes: the module-to-module edge goes,
-    // and the reference falls back to what a fresh analysis draws.
-    let (repo, base) = temp_repo("analyze443_iac_kustomize_");
+/// The overlay-to-base edge of the kustomize fixture.
+const KUSTOMIZE_BASE_EDGE: &str = "Imports_IacModule_IacModule|overlay/kustomization.yaml::kustomize|base/kustomization.yaml::kustomize";
+
+fn kustomization(resources: &[&str]) -> String {
+    let list: String = resources.iter().map(|r| format!("  - {r}\n")).collect();
+    format!("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n{list}")
+}
+
+/// An overlay that names `../base`, whose Kustomization lists one ConfigMap,
+/// analyzed once into `out`. Returns the repository and the temp root.
+fn kustomize_fixture(prefix: &str) -> (PathBuf, TestTempDir) {
+    let (repo, base) = temp_repo(prefix);
     fs::create_dir_all(repo.join("base")).expect("mk base");
     fs::create_dir_all(repo.join("overlay")).expect("mk overlay");
     fs::write(
         repo.join("base/kustomization.yaml"),
-        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - configmap.yaml\n",
+        kustomization(&["configmap.yaml"]),
     )
     .expect("base kustomization");
     fs::write(repo.join("base/configmap.yaml"), config_map("app-config")).expect("base cm");
     fs::write(
         repo.join("overlay/kustomization.yaml"),
-        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../base\n",
+        kustomization(&["../base"]),
     )
     .expect("overlay kustomization");
-    let auto = json!({ "language": "auto" });
-    let out = base.join("out");
-    let first = analyze(&repo, &out, auto.clone());
-    let module_edge = "Imports_IacModule_IacModule|overlay/kustomization.yaml::kustomize|base/kustomization.yaml::kustomize";
+    let first = analyze(&repo, &base.join("out"), json!({ "language": "auto" }));
     assert!(
-        edge_rows(&first).iter().any(|r| r == module_edge),
+        edge_rows(&first).iter().any(|r| r == KUSTOMIZE_BASE_EDGE),
         "the first run draws the base edge: {:?}",
         edge_rows(&first)
     );
+    (repo, base)
+}
 
+#[test]
+fn a_deleted_base_overlay_drops_the_unchanged_kustomize_reference() {
+    // `overlay/kustomization.yaml` (unchanged) names `../base`, whose
+    // Kustomization the second run deletes: the module-to-module edge goes,
+    // and the reference falls back to what a fresh analysis draws.
+    let (repo, base) = kustomize_fixture("analyze443_iac_kustomize_");
+    let auto = json!({ "language": "auto" });
     fs::remove_file(repo.join("base/kustomization.yaml")).expect("delete base");
-    let second = analyze(&repo, &out, auto.clone());
+    let second = analyze(&repo, &base.join("out"), auto.clone());
     assert_eq!(second["index"]["mode"], "incremental", "{second}");
-    assert!(!edge_rows(&second).iter().any(|r| r == module_edge));
+    assert!(!edge_rows(&second).iter().any(|r| r == KUSTOMIZE_BASE_EDGE));
+    let fresh = analyze(&repo, &base.join("fresh"), auto);
+    assert_eq!(outcome(&second), outcome(&fresh));
+}
+
+#[test]
+fn an_edited_base_kustomization_keeps_the_unchanged_overlay_reference() {
+    // The base is re-parsed while the overlay that names it is not: the
+    // re-link of inbound edges runs on the base's new IacModule node, then the
+    // redraw replaces the layer (review of #543). The base edge stays, and the
+    // added resource gets its edge, as in a fresh analysis.
+    let (repo, base) = kustomize_fixture("analyze543_iac_kustomize_edit_");
+    let auto = json!({ "language": "auto" });
+    fs::write(repo.join("base/extra.yaml"), config_map("more-config")).expect("add resource");
+    fs::write(
+        repo.join("base/kustomization.yaml"),
+        kustomization(&["configmap.yaml", "extra.yaml"]),
+    )
+    .expect("edit base");
+    let second = analyze(&repo, &base.join("out"), auto.clone());
+    assert_eq!(second["index"]["mode"], "incremental", "{second}");
+    assert!(
+        edge_rows(&second).iter().any(|r| r == KUSTOMIZE_BASE_EDGE),
+        "the unchanged overlay keeps its base edge: {:?}",
+        edge_rows(&second)
+    );
     let fresh = analyze(&repo, &base.join("fresh"), auto);
     assert_eq!(outcome(&second), outcome(&fresh));
 }

@@ -20,7 +20,8 @@ mod read_only_gate;
 mod row_limit_tests;
 
 pub(crate) use graph_paths::{
-    prepare_full_rebuild, validate_graph_path_safe, write_graph_meta, FORBIDDEN_GRAPH_PATH_PREFIXES,
+    discard_graph, prepare_full_rebuild, validate_graph_path_safe, write_graph_meta,
+    FORBIDDEN_GRAPH_PATH_PREFIXES,
 };
 // Both full paths now go through `prepare_full_rebuild` (#478); only the
 // handle-cache tests still call this directly.

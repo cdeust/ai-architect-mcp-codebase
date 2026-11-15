@@ -218,6 +218,26 @@ pub(crate) enum BootstrapOutcome {
     Reindex(Option<Value>),
 }
 
+/// `Reindex(note)` once an import was attempted: removes the graph, the
+/// manifest and the other sidecars the attempt unpacked or wrote (review of
+/// #543). A failed fill can leave a half-filled graph beside the bundled
+/// manifest; `do_index_codebase` would then refresh it incrementally from that
+/// manifest instead of indexing in full, and read a half-drawn IaC layer as
+/// clean. The call began with no graph, so nothing it removes predates it. A
+/// removal that fails is logged: `do_index_codebase` skips the incremental
+/// path after any `Reindex`, and its `prepare_full_rebuild` retries the
+/// removal and refuses to index if it fails again.
+fn reindex_from_nothing(
+    output_dir: &Path,
+    graph_dir: &Path,
+    note: Option<Value>,
+) -> BootstrapOutcome {
+    if let Err(e) = discard_graph(output_dir, graph_dir) {
+        eprintln!("[ap] could not discard the failed bootstrap's graph: {e}");
+    }
+    BootstrapOutcome::Reindex(note)
+}
+
 /// Decides how to bootstrap from the committed artifact. Never hard-errors:
 /// every non-import path logs its reason and returns `Reindex` so the caller
 /// falls back to a full index EXPLICITLY (§13 — no silent path).
@@ -316,7 +336,7 @@ pub(crate) fn bootstrap_import(
             "[ap] artifact bootstrap failed ({e}); falling back to full index of {}",
             codebase.display()
         );
-        return BootstrapOutcome::Reindex(None);
+        return reindex_from_nothing(output_dir, graph_dir, None);
     }
     let meta_err = write_graph_meta(output_dir, codebase).err().inspect(|e| {
         eprintln!("[ap] graph meta sidecar write failed (bootstrap succeeded): {e}");
@@ -366,7 +386,7 @@ pub(crate) fn bootstrap_import_and_fill(
             "[ap] artifact bootstrap failed ({e}); falling back to full index of {}",
             codebase.display()
         );
-        return BootstrapOutcome::Reindex(None);
+        return reindex_from_nothing(output_dir, graph_dir, None);
     }
     // The bundled manifest (unpacked alongside the graph) is the artifact-sha
     // baseline the content-hash fallback classifies against when git can't diff.
@@ -384,7 +404,7 @@ pub(crate) fn bootstrap_import_and_fill(
             eprintln!("[ap] artifact bootstrap fill failed ({e}); falling back to a full index");
             let mut note = serde_json::to_value(&info).unwrap_or_else(|_| json!({}));
             note["reason"] = json!("stale_artifact_fill_failed");
-            return BootstrapOutcome::Reindex(Some(note));
+            return reindex_from_nothing(output_dir, graph_dir, Some(note));
         }
     };
     // `meta.json` last, as everywhere else: the fill rewrites the manifest, so a

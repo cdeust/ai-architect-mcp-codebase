@@ -132,6 +132,15 @@ pub(crate) fn prepare_full_rebuild_within(
         Some(cap) => crate::indexer::full_manifest_within(codebase, options, cap),
         None => crate::indexer::full_manifest(codebase, options),
     }?;
+    discard_graph(output_dir, graph_dir)?;
+    Ok(snapshot)
+}
+
+/// Steps 2 and 3 of `prepare_full_rebuild`: releases the cached handles on
+/// `graph_dir`, forgets the sidecars in `output_dir` that vouch for it, then
+/// removes it. Also called when an artifact bootstrap gives up, so the full
+/// index that follows starts from nothing (review of #543). Absent is fine.
+pub(crate) fn discard_graph(output_dir: &Path, graph_dir: &Path) -> Result<(), String> {
     if graph_dir.exists() {
         crate::graph_store::release_open_handles(graph_dir)?;
     }
@@ -140,7 +149,7 @@ pub(crate) fn prepare_full_rebuild_within(
         // Prior run may have left a dir OR a single-file db; remove either.
         remove_stale_graph_artifact(graph_dir)?;
     }
-    Ok(snapshot)
+    Ok(())
 }
 
 /// Write a ``meta.json`` sidecar in ``output_dir`` recording the ABSOLUTE
