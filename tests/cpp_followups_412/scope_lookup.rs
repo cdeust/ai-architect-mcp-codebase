@@ -159,3 +159,14 @@ namespace a { typedef impl::Real Box; int sl12(Box& b) { return b.m(); } }
 ";
     assert_binds("sl12.cpp", src, "sl12", "m -> impl::Real::m");
 }
+
+#[test]
+fn a_method_defined_out_of_its_class_looks_the_type_up_from_its_class() {
+    // `int a::C::sl13(Box&)` reads `Box` in `a::C`, then `a`: `a::Box`.
+    let src = "\
+struct Box { int m() { return 1; } };
+namespace a { struct Box { int m() { return 2; } }; struct C { int sl13(Box& b); }; }
+int a::C::sl13(Box& b) { return b.m(); }
+";
+    assert_binds("sl13.cpp", src, "sl13", "m -> a::Box::m");
+}

@@ -241,10 +241,15 @@ impl CppClasses {
                 .filter(|a| !(class && (a.target == path || a.target == last)))
                 .map(|a| a.target.clone())
                 .collect();
+            // An alias another file writes is visible only when the two files may be
+            // one translation unit (`sees`), which the graph cannot confirm: the
+            // lookup commits to an alias the caller's own file writes only.
+            let all_local = aliases.iter().all(|a| a.file == from);
             match (class, other_aliases.is_empty()) {
                 (true, true) => return Some(Found::Class(path)),
                 (true, false) => return None,
-                (false, false) => return Some(Found::Aliases(other_aliases)),
+                (false, false) if all_local => return Some(Found::Aliases(other_aliases)),
+                (false, false) => return None,
                 (false, true) => {}
             }
             if self.bases.get(&scope).is_some_and(|b| !b.is_empty()) {

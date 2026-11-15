@@ -170,14 +170,22 @@ fn a_body_receiver_of_one_class_of_that_name_binds_as_on_main() {
 }
 
 #[test]
-fn a_parameter_type_is_read_by_suffix_as_on_main() {
-    // The scopes around the signature are not read: the two classes named Box keep
-    // the site open.
-    assert_open_after_preamble(
-        "p1.cpp",
-        "int p1(Box& b) { struct Box { int m() { return 3; } }; return b.m(); }",
-        "p1",
+fn a_parameter_type_is_read_in_the_scopes_around_the_function() {
+    // The parameter's `Box` is looked up around `p1`, in the global scope: `::Box`.
+    // The local class declared in the body comes after the signature and cannot
+    // hide it (issue #412 point 3).
+    let src = format!(
+        "{OTHER_BOX_AND_GLOBAL_BOX}int p1(Box& b) {{ struct Box {{ int m() {{ return 3; }} }}; return b.m(); }}\n"
     );
+    let (store, _tmp) = index_and_resolve(&[("p1.cpp", &src)]);
+    let targets = store
+        .execute_query(
+            "MATCH (cs:CallSite)-[:Calls_CallSite_Method]->(m:Method) \
+             WHERE cs.id CONTAINS 'p1#' RETURN m.start_line",
+        )
+        .expect("query target line");
+    let lines: Vec<&str> = targets.rows.iter().map(|r| r[0].as_str()).collect();
+    assert_eq!(lines, ["2"], "the global Box of line 2");
 }
 
 #[test]
