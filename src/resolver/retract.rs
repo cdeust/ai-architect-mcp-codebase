@@ -417,14 +417,15 @@ fn supported_by_site(
 /// `IN [...]` query per 500 sites and per table, which cost 1.3 s of a second
 /// `analyze_codebase` on ripgrep (issue #443). The scans return the sites of
 /// every row outside `ignored`. That includes the `lsp-definition` rows the
-/// graph holds (they persist after the language server stops) but no
-/// `macro-expansion` row, only because `resolve_graph` runs
-/// `reset_macro_expansion`, which deletes them, before `Retraction::begin`
-/// calls this. Only the
-/// ids that are also in `sites` are kept, so `with_row` is bounded by
-/// `|sites|`; each scan's result is still loaded whole by `execute_query`
-/// before the filter, so the peak grows with that table's `lsp-definition`
-/// rows.
+/// graph still holds: an earlier pass's rows stay after the language server
+/// stops, except those to a twin the build compiles out, which `resolve_graph`
+/// deletes (`cfg_verdict::reset_compiled_out_lsp_rows`) before
+/// `Retraction::begin` calls this. It includes no `macro-expansion` row, only
+/// because `resolve_graph` runs `reset_macro_expansion`, which deletes them,
+/// before that call too. Only the ids that are also in `sites` are kept, so
+/// `with_row` is bounded by `|sites|`; each scan's result is still loaded
+/// whole by `execute_query` before the filter, so the peak grows with that
+/// table's `lsp-definition` rows.
 fn reopen_sites_without_row(
     store: &GraphStore,
     sites: &BTreeSet<&str>,

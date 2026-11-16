@@ -84,6 +84,47 @@ pub(super) fn edge_rows(resp: &Value) -> Vec<String> {
     rows
 }
 
+/// Every relationship row of the graph with every property its table holds
+/// (read from the engine's catalog, `table_info`), as sorted
+/// `table|from|to|p=v|...`
+/// strings: `edge_rows` compares the endpoints only, so a pass that rewrote a
+/// row's `confidence` or `resolution_method` would still compare equal
+/// (issue #443, review of #555).
+pub(super) fn edge_rows_with_properties(resp: &Value) -> Vec<String> {
+    let path = PathBuf::from(resp["graph_path"].as_str().expect("graph_path"));
+    let store = crate::graph_store::GraphStore::open_or_create(&path).expect("open graph");
+    let mut rows = Vec::new();
+    for &(rel, from, to) in crate::graph_store::REL_TABLES {
+        // table_info columns are (property id, name, type, default, ...).
+        let info = format!(
+            "CALL table_info({}) RETURN *",
+            crate::graph_store::cypher_str(rel)
+        );
+        let props: Vec<String> = store
+            .execute_query(&info)
+            .unwrap_or_else(|e| panic!("{info}: {e}"))
+            .rows
+            .iter()
+            .map(|row| row[1].to_string())
+            .collect();
+        let ret: String = props.iter().map(|p| format!(", r.{p}")).collect();
+        let q = format!("MATCH (a:{from})-[r:{rel}]->(b:{to}) RETURN a.id, b.id{ret}");
+        let qr = store
+            .execute_query(&q)
+            .unwrap_or_else(|e| panic!("{q}: {e}"));
+        rows.extend(qr.rows.iter().map(|r| {
+            let values: String = props
+                .iter()
+                .zip(&r[2..])
+                .map(|(p, v)| format!("|{p}={v}"))
+                .collect();
+            format!("{rel}|{}|{}{values}", r[0], r[1])
+        }));
+    }
+    rows.sort();
+    rows
+}
+
 /// Every node of the graph as sorted `label|id` strings, and the resolution
 /// flag of every call site and import as `label|id|is_resolved`: an edited
 /// graph that left a stale node behind, or a site resolved by a row a fresh

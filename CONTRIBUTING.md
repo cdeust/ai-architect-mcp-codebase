@@ -130,7 +130,7 @@ is tested against published reference implementations. Changes here:
 ## Testing
 
 ```bash
-cargo test                              # full suite (1441 tests, measured 2026-08-26 on CI/ubuntu)
+cargo test                              # full suite (3800+ tests, the README badge)
 cargo test --release                    # same suite, release profile
 cargo test --release -- --test-threads=1   # serial mode (debugging flakes)
 cargo bench                             # micro-benchmarks

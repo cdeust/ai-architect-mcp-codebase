@@ -1,10 +1,11 @@
 //! Issue #443: past `MAX_TOUCHED_PCT` of the tree changed, analyze rebuilds
 //! instead of refreshing, and the declined refresh leaves the previous state
 //! as it was: the manifest, the coverage sidecar, every node and every
-//! relationship row (the schema DDL that runs before the decline aside). Driven through `do_analyze_codebase` with the bound in force
-//! (the shared `analyze` helper lifts it).
+//! relationship row with its properties (the schema DDL that runs before the
+//! decline aside). Driven through `do_analyze_codebase` with the bound in
+//! force (the shared `analyze` helper lifts it).
 
-use super::tests::outcome;
+use super::tests::{edge_rows_with_properties, outcome};
 use super::MAX_TOUCHED_PCT;
 use crate::analyze_handlers::do_analyze_codebase;
 use crate::test_support::{TempDirExt, TestTempDir};
@@ -95,6 +96,7 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
     let sidecar = crate::indexer::coverage::coverage_path(&out);
     let coverage_before = fs::read(&sidecar).expect("coverage sidecar");
     let graph_before = outcome(&first);
+    let properties_before = edge_rows_with_properties(&first);
     edit(&repo, at_bound() + 1);
     let prior = crate::indexer::manifest::load(&manifest).expect("load");
     let refresh = crate::indexer::index_incremental_bounded(
@@ -136,5 +138,19 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
     assert_eq!(
         graph_after["edges"], graph_before["edges"],
         "edges untouched"
+    );
+    // `outcome` compares each row's endpoints only; the properties of every
+    // row, `confidence` and `resolution_method` among them, are compared here
+    // (review of #555).
+    let properties_after = edge_rows_with_properties(&first);
+    assert!(
+        properties_before
+            .iter()
+            .any(|r| r.contains("|resolution_method=")),
+        "the rows compared carry their properties"
+    );
+    assert_eq!(
+        properties_after, properties_before,
+        "edge properties untouched"
     );
 }
