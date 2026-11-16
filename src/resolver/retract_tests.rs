@@ -187,3 +187,57 @@ fn a_retracted_caller_row_keeps_its_runtime_count_as_an_observed_call() {
         .rows;
     assert_eq!(observed, [["7".to_string()]]);
 }
+
+#[test]
+fn begin_reopens_only_the_static_sites_no_other_writer_resolves() {
+    // `reopen_sites_without_row` reads the rows of the other writers in one
+    // scan per table instead of one `IN [...]` query per 500 sites and table
+    // (issue #443: 1.3 s of a 7.6 s second `analyze_codebase` on ripgrep).
+    // The answer must not change: a site a language-server row also resolves
+    // keeps its flag, every other static site is reopened until the pass
+    // decides it again.
+    let repo = Repo::new(&[
+        (
+            "a.rs",
+            "pub fn alpha() {\n    beta();\n}\npub fn gamma() {\n    beta();\n}\n",
+        ),
+        ("b.rs", "pub fn beta() {}\n"),
+    ]);
+    let store = GraphStore::open_or_create(&repo.graph).expect("open");
+    let flags = |store: &GraphStore| -> Vec<String> {
+        let mut rows: Vec<String> = store
+            .execute_query(
+                "MATCH (c:CallSite) WHERE c.callee_name = 'beta' RETURN c.id, c.is_resolved",
+            )
+            .expect("flags")
+            .rows
+            .into_iter()
+            .map(|r| r.join(" ").to_lowercase())
+            .collect();
+        rows.sort();
+        rows
+    };
+    let before = flags(&store);
+    assert_eq!(before.len(), 2, "control: two sites: {before:?}");
+    assert!(
+        before.iter().all(|r| r.ends_with(" true")),
+        "control: both resolve statically: {before:?}"
+    );
+    let lsp_site = before[0].split(' ').next().unwrap().to_string();
+    store
+        .execute_query(&format!(
+            "MATCH (c:CallSite {{id: '{lsp_site}'}}), (t:Function {{id: 'b.rs::beta'}}) \
+             CREATE (c)-[:Calls_CallSite_Function {{confidence: 1.0, \
+             resolution_method: 'lsp-definition'}}]->(t)"
+        ))
+        .expect("a language-server row on one site");
+
+    let _retraction = super::retract::Retraction::begin(&store).expect("begin");
+    let after = flags(&store);
+    let other_site = before[1].split(' ').next().unwrap();
+    assert_eq!(
+        after,
+        vec![format!("{lsp_site} true"), format!("{other_site} false")],
+        "{after:?}"
+    );
+}
