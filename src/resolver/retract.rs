@@ -412,10 +412,13 @@ fn supported_by_site(
 /// call row other than rows whose method is in `ignored` (a quoted list). A
 /// site another writer also resolves keeps its flag.
 ///
-/// The other writers' rows are read with one scan per call table and matched
-/// in memory: the rows outside `ignored` are few, while `sites` holds every
-/// statically resolved site, and one `IN [...]` query per 500 of them and per
-/// table cost 1.3 s of a second `analyze_codebase` on ripgrep (issue #443).
+/// The other writers' rows are read with one scan per `Calls_CallSite_*`
+/// table (four, `site_tables()`) and matched in memory, instead of one
+/// `IN [...]` query per 500 sites and per table, which cost 1.3 s of a second
+/// `analyze_codebase` on ripgrep (issue #443). Without language-server rows
+/// the scans return nothing; with them, they return every `lsp-definition`
+/// site, so only the ids that are also in `sites` are kept: the set held in
+/// memory is bounded by `|sites|`, not by the number of such rows.
 fn reopen_sites_without_row(
     store: &GraphStore,
     sites: &BTreeSet<&str>,
@@ -430,7 +433,12 @@ fn reopen_sites_without_row(
             "MATCH (c:CallSite)-[r:{rel}]->() WHERE NOT r.resolution_method IN [{ignored}] \
              RETURN DISTINCT c.id"
         ))?;
-        with_row.extend(qr.rows.into_iter().filter_map(|r| r.into_iter().next()));
+        with_row.extend(
+            qr.rows
+                .into_iter()
+                .filter_map(|r| r.into_iter().next())
+                .filter(|id| sites.contains(id.as_str())),
+        );
     }
     let open: Vec<&str> = sites
         .iter()
