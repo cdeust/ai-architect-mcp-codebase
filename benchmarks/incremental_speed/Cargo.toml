@@ -8,6 +8,9 @@ edition = "2021"
 license = "MIT"
 description = "Performance benchmark for issue #62/#55: incremental re-index and artifact bootstrap-fill vs a full index, on a fixed git fixture. Re-homes the wall-clock claim that issue #74 removed from the correctness suite — with recorded hardware/toolchain and committed results."
 publish = false
+# Two bins since #443 (`crossover`): keeps `cargo run -p incremental-speed-bench
+# --release`, the command MANIFEST.md documents, on the original benchmark.
+default-run = "incremental_speed_bench"
 
 [[bin]]
 name = "incremental_speed_bench"
