@@ -133,7 +133,10 @@ trend, not a clean figure. The clean rows put the crossover between 40% and 50%.
 The crossover moves down as the tree shrinks (between 40 and 50% at 456 files,
 between 20 and 30% at 125, between 5 and 10% at 24): the refresh has a fixed
 cost (opening the graph, the resolver's whole-graph pass) that a small rebuild
-does not exceed by much. 40% is therefore the bound that never rebuilds where
-the refresh measured faster on any of the three corpora; below it, on small
-trees, the refresh can lose up to about a second to a rebuild. Not measured: a
+does not exceed by much. `analyze_codebase` declines the refresh when the
+files to re-parse or purge exceed 40% of the tree (`touched * 100 > 40 *
+files`): on `src/` it refreshes up to 182 files and rebuilds from 183, so the
+40% row above, where the refresh measured 1.2 s faster, is rebuilt; no row
+past it measured the refresh faster. Below the bound, on small trees, the
+refresh can lose up to about a second to a rebuild. Not measured: a
 tree larger than 456 files (ripgrep, django), another language, other hardware.
