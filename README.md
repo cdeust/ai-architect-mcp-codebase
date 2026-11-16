@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95.0_pinned-dea584.svg" alt="Rust 1.95.0, pinned by rust-toolchain.toml">
   <img src="https://img.shields.io/badge/Tools-28-orange" alt="28 MCP tools">
-  <img src="https://img.shields.io/badge/Tests-3700+_passing-brightgreen" alt="3700+ tests">
+  <img src="https://img.shields.io/badge/Tests-3800+_passing-brightgreen" alt="3800+ tests">
   <img src="https://img.shields.io/badge/Coverage-94%25-brightgreen" alt="94% line coverage">
   <a href="https://www.bestpractices.dev/projects/13845"><img src="https://www.bestpractices.dev/projects/13845/badge" alt="OpenSSF Best Practices"></a>
   <img src="https://img.shields.io/badge/Languages-11-blueviolet" alt="11 languages">
@@ -213,7 +213,9 @@ the result matches a fresh analysis of the same tree (#443). A change of
 `language`, `dependency_scope`, `exclude_dirs` or `full_ast`, another codebase
 root, a new server version, `lsp: true` (now or on the run that built the
 graph), a symlinked or artifact-imported graph, a missing or unreadable
-coverage sidecar, a file that was unreadable when the graph was built, or
+coverage sidecar, a file that was unreadable when the graph was built, more
+than 40% of the tree's files changed, added, deleted or renamed (past that
+share a rebuild measured faster, `benchmarks/incremental_speed/MANIFEST.md`), or
 `full: true` rebuilds from scratch. A `Cargo.toml` edit (even under
 `language: "rust"`, whose walk skips that file) is refreshed too: the Cargo map
 is computed again over the whole tree on every pass. So are the references
@@ -539,7 +541,7 @@ In this codebase:
 
 ```bash
 cargo build --release
-cargo test                                            # full suite (3700+ tests)
+cargo test                                            # full suite (3800+ tests)
 cargo test --test graph_accuracy                      # structural accuracy gate
 cargo clippy --all-targets -- -D warnings             # zero warnings, enforced in CI
 python3 scripts/check_doc_claims.py                   # README numbers against their sources

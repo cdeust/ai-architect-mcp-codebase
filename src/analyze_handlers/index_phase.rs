@@ -24,7 +24,9 @@
 //!    `chmod +r` moves no mtime, so the refresh would carry such a file
 //!    forward unparsed, and the full rebuild retries it;
 //! 5. the incremental pass, which re-parses the files changed, added, deleted
-//!    or renamed since that manifest, succeeds. A failed pass is logged and
+//!    or renamed since that manifest, succeeds. Over `MAX_TOUCHED_PCT` of the
+//!    tree it declines before touching a file's rows: past that share a
+//!    rebuild is the cheaper path (measured, see the constant). A failed pass is logged and
 //!    falls back to the full rebuild (§13 — no silent path); a failed
 //!    coverage-sidecar write fails the call;
 //! 6. that pass keeps the manifest's scope (`IncrementalResult::scope_kept`):
@@ -184,8 +186,34 @@ fn graph_has_lsp_rows(graph_dir: &std::path::Path) -> bool {
         .map_or(true, |n| n > 0)
 }
 
-/// `Ok(None)`: not applicable, the refresh pass failed, or it dropped the
-/// scope (each logged).
+/// Over this share of the tree changed (changed, added, deleted or renamed
+/// files, in percent of the current files), the refresh costs more than a
+/// rebuild, so the call rebuilds. source: measured, `incremental_speed`
+/// `crossover` on this repository's `src/` (456 Rust files, Linux x86_64, 4
+/// CPUs, release, min of 3), index plus resolve on each path: 40% edited,
+/// 18.2 s incremental against 19.4 s full; 50%, 23.0 s against 17.8 s.
+/// `benchmarks/incremental_speed/MANIFEST.md` has the whole sweep.
+const MAX_TOUCHED_PCT: u64 = 40;
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: the refresh tests check the incremental path on trees of a
+    /// few files, where one edit is already over `MAX_TOUCHED_PCT`; they lift
+    /// the bound so the refresh still runs. Per thread, so per test.
+    pub(super) static TOUCHED_PCT_LIFTED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+fn max_touched_pct() -> u64 {
+    #[cfg(test)]
+    if TOUCHED_PCT_LIFTED.with(|c| c.get()) {
+        return u64::MAX;
+    }
+    MAX_TOUCHED_PCT
+}
+
+/// `Ok(None)`: not applicable, the refresh pass failed or declined a change
+/// set over `MAX_TOUCHED_PCT`, or it dropped the scope (each logged).
 /// `Err`: the pass ran but its coverage report did not reach the sidecar, so
 /// the response could not stand behind any coverage receipt (same rule as the
 /// full path, `persist_analyze_sidecars`).
@@ -197,14 +225,23 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
     // Re-parses the changed, added and renamed files, purges the deleted
     // ones, and refreshes the manifest, the coverage sidecar and the Cargo
     // facts; with nothing changed it re-parses nothing.
-    let inc = match indexer::index_incremental(
+    let inc = match indexer::index_incremental_bounded(
         &req.codebase,
         &req.graph_dir,
         &manifest_path,
         &req.options,
         &prior,
+        max_touched_pct(),
     ) {
-        Ok(inc) => inc,
+        Ok(indexer::Refresh::Applied(inc)) => *inc,
+        Ok(indexer::Refresh::Declined { touched, files }) => {
+            eprintln!(
+                "[ap] analyze_codebase: {touched} of {files} files changed, over \
+                 {}%; rebuilding in full",
+                max_touched_pct()
+            );
+            return Ok(None);
+        }
         Err(e) => {
             eprintln!(
                 "[ap] analyze_codebase: incremental refresh failed ({e}); rebuilding in full"
@@ -288,3 +325,7 @@ mod cargo_tests;
 #[cfg(test)]
 #[path = "index_phase_cross_link_tests.rs"]
 mod cross_link_tests;
+
+#[cfg(test)]
+#[path = "index_phase_bound_tests.rs"]
+mod bound_tests;

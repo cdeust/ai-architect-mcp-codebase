@@ -8,10 +8,19 @@ edition = "2021"
 license = "MIT"
 description = "Performance benchmark for issue #62/#55: incremental re-index and artifact bootstrap-fill vs a full index, on a fixed git fixture. Re-homes the wall-clock claim that issue #74 removed from the correctness suite — with recorded hardware/toolchain and committed results."
 publish = false
+# Two bins since #443 (`crossover`): keeps `cargo run -p incremental-speed-bench
+# --release`, the command MANIFEST.md documents, on the original benchmark.
+default-run = "incremental_speed_bench"
 
 [[bin]]
 name = "incremental_speed_bench"
 path = "src/main.rs"
+
+# Issue #443: incremental refresh vs full rebuild for a growing share of
+# edited files, to read the switch-over threshold from measurements.
+[[bin]]
+name = "crossover"
+path = "src/crossover.rs"
 
 [dependencies]
 # The library under test — drives the real indexer/artifact/fill machinery, so

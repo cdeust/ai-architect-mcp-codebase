@@ -1,0 +1,224 @@
+{
+  "corpora": [
+    {
+      "arch": "x86_64",
+      "attempts_min_of": 3,
+      "corpus": "src/ (this repository, at the commit of the run)",
+      "cpus": 4,
+      "files": 456,
+      "os": "linux",
+      "rows": [
+        {
+          "edited_files": 5,
+          "full_ms": 18129,
+          "incremental_ms": 5353,
+          "scope_kept": true,
+          "share_pct": 1
+        },
+        {
+          "edited_files": 23,
+          "full_ms": 17725,
+          "incremental_ms": 7380,
+          "scope_kept": true,
+          "share_pct": 5
+        },
+        {
+          "edited_files": 46,
+          "full_ms": 17031,
+          "incremental_ms": 8272,
+          "scope_kept": true,
+          "share_pct": 10
+        },
+        {
+          "edited_files": 92,
+          "full_ms": 17315,
+          "incremental_ms": 12240,
+          "scope_kept": true,
+          "share_pct": 20
+        },
+        {
+          "edited_files": 137,
+          "full_ms": 18285,
+          "incremental_ms": 14557,
+          "scope_kept": true,
+          "share_pct": 30
+        },
+        {
+          "edited_files": 183,
+          "full_ms": 19444,
+          "incremental_ms": 18228,
+          "scope_kept": true,
+          "share_pct": 40
+        },
+        {
+          "edited_files": 228,
+          "full_ms": 17845,
+          "incremental_ms": 22955,
+          "scope_kept": true,
+          "share_pct": 50
+        },
+        {
+          "edited_files": 342,
+          "full_ms": 27401,
+          "incremental_ms": 29482,
+          "scope_kept": true,
+          "share_pct": 75
+        },
+        {
+          "edited_files": 456,
+          "full_ms": 24432,
+          "incremental_ms": 52100,
+          "scope_kept": true,
+          "share_pct": 100
+        }
+      ],
+      "load_note": "rows at 75% and 100% ran while a cargo build compiled on the same 4 CPUs: they show the trend, not a clean figure"
+    },
+    {
+      "arch": "x86_64",
+      "attempts_min_of": 3,
+      "corpus": "src/parser/ (this repository, at the commit of the run)",
+      "cpus": 4,
+      "files": 125,
+      "os": "linux",
+      "rows": [
+        {
+          "edited_files": 2,
+          "full_ms": 4259,
+          "incremental_ms": 2120,
+          "scope_kept": true,
+          "share_pct": 1
+        },
+        {
+          "edited_files": 7,
+          "full_ms": 4113,
+          "incremental_ms": 2593,
+          "scope_kept": true,
+          "share_pct": 5
+        },
+        {
+          "edited_files": 13,
+          "full_ms": 4415,
+          "incremental_ms": 3797,
+          "scope_kept": true,
+          "share_pct": 10
+        },
+        {
+          "edited_files": 25,
+          "full_ms": 4031,
+          "incremental_ms": 3199,
+          "scope_kept": true,
+          "share_pct": 20
+        },
+        {
+          "edited_files": 38,
+          "full_ms": 4319,
+          "incremental_ms": 4947,
+          "scope_kept": true,
+          "share_pct": 30
+        },
+        {
+          "edited_files": 50,
+          "full_ms": 4163,
+          "incremental_ms": 4617,
+          "scope_kept": true,
+          "share_pct": 40
+        },
+        {
+          "edited_files": 63,
+          "full_ms": 3917,
+          "incremental_ms": 5762,
+          "scope_kept": true,
+          "share_pct": 50
+        },
+        {
+          "edited_files": 94,
+          "full_ms": 4019,
+          "incremental_ms": 6590,
+          "scope_kept": true,
+          "share_pct": 75
+        },
+        {
+          "edited_files": 125,
+          "full_ms": 4471,
+          "incremental_ms": 6939,
+          "scope_kept": true,
+          "share_pct": 100
+        }
+      ]
+    },
+    {
+      "arch": "x86_64",
+      "attempts_min_of": 3,
+      "corpus": "src/graph_store/ (this repository, at the commit of the run)",
+      "cpus": 4,
+      "files": 24,
+      "os": "linux",
+      "rows": [
+        {
+          "edited_files": 1,
+          "full_ms": 1272,
+          "incremental_ms": 1030,
+          "scope_kept": true,
+          "share_pct": 1
+        },
+        {
+          "edited_files": 2,
+          "full_ms": 1227,
+          "incremental_ms": 1186,
+          "scope_kept": true,
+          "share_pct": 5
+        },
+        {
+          "edited_files": 3,
+          "full_ms": 1179,
+          "incremental_ms": 1629,
+          "scope_kept": true,
+          "share_pct": 10
+        },
+        {
+          "edited_files": 5,
+          "full_ms": 1158,
+          "incremental_ms": 1343,
+          "scope_kept": true,
+          "share_pct": 20
+        },
+        {
+          "edited_files": 8,
+          "full_ms": 1186,
+          "incremental_ms": 1612,
+          "scope_kept": true,
+          "share_pct": 30
+        },
+        {
+          "edited_files": 10,
+          "full_ms": 1243,
+          "incremental_ms": 1852,
+          "scope_kept": true,
+          "share_pct": 40
+        },
+        {
+          "edited_files": 12,
+          "full_ms": 1241,
+          "incremental_ms": 2144,
+          "scope_kept": true,
+          "share_pct": 50
+        },
+        {
+          "edited_files": 18,
+          "full_ms": 1215,
+          "incremental_ms": 2091,
+          "scope_kept": true,
+          "share_pct": 75
+        },
+        {
+          "edited_files": 24,
+          "full_ms": 1122,
+          "incremental_ms": 1780,
+          "scope_kept": true,
+          "share_pct": 100
+        }
+      ]
+    }
+  ]
+}

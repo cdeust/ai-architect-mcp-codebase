@@ -1,0 +1,122 @@
+//! Issue #443: past `MAX_TOUCHED_PCT` of the tree changed, analyze rebuilds
+//! instead of refreshing, and the declined refresh leaves the previous state
+//! as it was. Driven through `do_analyze_codebase` with the bound in force
+//! (the shared `analyze` helper lifts it).
+
+use super::tests::outcome;
+use super::MAX_TOUCHED_PCT;
+use crate::analyze_handlers::do_analyze_codebase;
+use crate::test_support::{TempDirExt, TestTempDir};
+use serde_json::{json, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Ten files: one edit is 10 % of the tree, so the bound falls between two
+/// whole numbers of edited files.
+const FILES: usize = 10;
+
+fn tree(prefix: &str) -> (PathBuf, TestTempDir) {
+    let base = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("temp dir")
+        .keep_managed();
+    let src = base.join("repo/src");
+    fs::create_dir_all(&src).expect("mk src");
+    let mods: String = (0..FILES).map(|i| format!("mod m{i};\n")).collect();
+    fs::write(src.join("lib.rs"), mods).expect("lib.rs");
+    for i in 0..FILES {
+        fs::write(
+            src.join(format!("m{i}.rs")),
+            format!("pub fn f{i}() {{}}\n"),
+        )
+        .expect("m");
+    }
+    (base.join("repo"), base)
+}
+
+fn run(repo: &Path, out: &Path, full: bool) -> Value {
+    let resp = do_analyze_codebase(&json!({
+        "path": repo.to_string_lossy(),
+        "output_dir": out.to_string_lossy(),
+        "language": "rust",
+        "full": full,
+    }))
+    .expect("analyze");
+    assert_eq!(resp["status"], "ok", "{resp}");
+    resp
+}
+
+/// Edits `k` module files, each calling its neighbour, so the edit moves edges.
+fn edit(repo: &Path, k: usize) {
+    for i in 0..k {
+        let next = (i + 1) % FILES;
+        let body = format!("pub fn f{i}() {{ crate::m{next}::f{next}(); }}\n");
+        fs::write(repo.join(format!("src/m{i}.rs")), body).expect("edit");
+    }
+}
+
+/// The largest number of the tree's files (`FILES` modules plus `lib.rs`) the
+/// bound still refreshes.
+fn at_bound() -> usize {
+    (FILES + 1) * MAX_TOUCHED_PCT as usize / 100
+}
+
+#[test]
+fn a_change_set_at_the_bound_is_refreshed() {
+    let (repo, base) = tree("analyze443_bound_at_");
+    let out = base.join("out");
+    run(&repo, &out, false);
+    edit(&repo, at_bound());
+    let resp = run(&repo, &out, false);
+    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
+}
+
+#[test]
+fn a_change_set_over_the_bound_is_rebuilt_like_a_fresh_analysis() {
+    let (repo, base) = tree("analyze443_bound_over_");
+    let out = base.join("out");
+    run(&repo, &out, false);
+    edit(&repo, at_bound() + 1);
+    let resp = run(&repo, &out, false);
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    let fresh = run(&repo, &base.join("fresh"), true);
+    assert_eq!(outcome(&resp), outcome(&fresh));
+}
+
+#[test]
+fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
+    let (repo, base) = tree("analyze443_bound_declined_");
+    let out = base.join("out");
+    let first = run(&repo, &out, false);
+    let manifest = crate::indexer::manifest::manifest_path(&out);
+    let before = fs::read(&manifest).expect("manifest");
+    let rows = outcome(&first)["nodes"].clone();
+    edit(&repo, at_bound() + 1);
+    let prior = crate::indexer::manifest::load(&manifest).expect("load");
+    let refresh = crate::indexer::index_incremental_bounded(
+        &repo,
+        &out.join("graph"),
+        &manifest,
+        &crate::indexer::IndexOptions {
+            language_filter: Some(crate::parser::Language::Rust),
+            ..Default::default()
+        },
+        &prior,
+        MAX_TOUCHED_PCT,
+    )
+    .expect("bounded refresh");
+    let crate::indexer::Refresh::Declined { touched, files } = refresh else {
+        panic!("over the bound, the refresh must decline");
+    };
+    assert_eq!(
+        (touched, files),
+        ((at_bound() + 1) as u64, (FILES + 1) as u64)
+    );
+    assert_eq!(
+        fs::read(&manifest).expect("manifest"),
+        before,
+        "manifest untouched"
+    );
+    assert_eq!(outcome(&first)["nodes"], rows, "graph rows untouched");
+}
