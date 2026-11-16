@@ -228,25 +228,46 @@ fn type_resolved_sites(
         "MATCH (cs:CallSite) WHERE cs.is_resolved = true AND NOT ({macro_site}) \
          RETURN cs.id, cs.callee_name"
     ))?;
-    let mut with_row: HashSet<String> = HashSet::new();
-    for &(rel, _, _) in site_tables() {
-        let qr = store.execute_query(&format!(
-            "MATCH (c:CallSite)-[r:{rel}]->() RETURN DISTINCT c.id"
-        ))?;
-        with_row.extend(qr.rows.into_iter().filter_map(|r| r.into_iter().next()));
-    }
-    let mut open: Vec<String> = resolved
+    // The candidates first, in memory; only they are checked for a per-site
+    // row, so a pass no longer reads every `Calls_CallSite_*` id of the graph
+    // (Claude review of #527).
+    let candidates: Vec<String> = resolved
         .rows
         .into_iter()
-        .filter(|r| r.len() >= 2 && !with_row.contains(&r[0]))
+        .filter(|r| r.len() >= 2)
         .filter(|r| {
             let caller = super::extract_caller_from_callsite_id(&r[0]);
             uses.contains(&(caller.as_str(), symbol_name(&r[1])))
         })
         .map(|mut r| r.swap_remove(0))
         .collect();
+    let with_row = sites_with_site_row(store, &candidates)?;
+    let mut open: Vec<String> = candidates
+        .into_iter()
+        .filter(|id| !with_row.contains(id))
+        .collect();
     open.sort_unstable();
     Ok(open)
+}
+
+/// The sites of `ids` that hold a per-site `Calls_*` row of any writer,
+/// checked in chunks of `IN [...]`.
+fn sites_with_site_row(store: &GraphStore, ids: &[String]) -> Result<HashSet<String>, String> {
+    let mut with_row = HashSet::new();
+    for chunk in ids.chunks(500) {
+        let list = chunk
+            .iter()
+            .map(|id| cypher_str(id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for &(rel, _, _) in site_tables() {
+            let qr = store.execute_query(&format!(
+                "MATCH (c:CallSite)-[r:{rel}]->() WHERE c.id IN [{list}] RETURN DISTINCT c.id"
+            ))?;
+            with_row.extend(qr.rows.into_iter().filter_map(|r| r.into_iter().next()));
+        }
+    }
+    Ok(with_row)
 }
 
 /// Step 3: deletes the rows of `owned` absent from `met` (the persisted rows
