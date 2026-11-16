@@ -411,6 +411,11 @@ fn supported_by_site(
 /// Sets `is_resolved = false` on the sites of `sites` that hold no per-site
 /// call row other than rows whose method is in `ignored` (a quoted list). A
 /// site another writer also resolves keeps its flag.
+///
+/// The other writers' rows are read with one scan per call table and matched
+/// in memory: the rows outside `ignored` are few, while `sites` holds every
+/// statically resolved site, and one `IN [...]` query per 500 of them and per
+/// table cost 1.3 s of a second `analyze_codebase` on ripgrep (issue #443).
 fn reopen_sites_without_row(
     store: &GraphStore,
     sites: &BTreeSet<&str>,
@@ -419,24 +424,17 @@ fn reopen_sites_without_row(
     if sites.is_empty() {
         return Ok(());
     }
-    let filter = format!(" AND NOT r.resolution_method IN [{ignored}]");
-    let ids: Vec<&str> = sites.iter().copied().collect();
     let mut with_row: HashSet<String> = HashSet::new();
-    for chunk in ids.chunks(500) {
-        let list = chunk
-            .iter()
-            .map(|id| cypher_str(id))
-            .collect::<Vec<_>>()
-            .join(", ");
-        for &(rel, _, _) in site_tables() {
-            let qr = store.execute_query(&format!(
-                "MATCH (c:CallSite)-[r:{rel}]->() WHERE c.id IN [{list}]{filter} RETURN c.id"
-            ))?;
-            with_row.extend(qr.rows.into_iter().filter_map(|r| r.into_iter().next()));
-        }
+    for &(rel, _, _) in site_tables() {
+        let qr = store.execute_query(&format!(
+            "MATCH (c:CallSite)-[r:{rel}]->() WHERE NOT r.resolution_method IN [{ignored}] \
+             RETURN DISTINCT c.id"
+        ))?;
+        with_row.extend(qr.rows.into_iter().filter_map(|r| r.into_iter().next()));
     }
-    let open: Vec<&str> = ids
-        .into_iter()
+    let open: Vec<&str> = sites
+        .iter()
+        .copied()
         .filter(|id| !with_row.contains(*id))
         .collect();
     store.mark_callsites_unresolved(&open)
