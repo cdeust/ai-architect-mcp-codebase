@@ -109,6 +109,11 @@ pub(super) fn restore_sites_with_edge(store: &GraphStore, ids: &[String]) -> Res
 /// (`resolver::retract`) can no longer see it; this one runs before the purge.
 /// `restore_sites_with_edge` leaves them open, and the next resolve decides
 /// them again.
+///
+/// One scan of the resolved sites, filtered in memory by caller and callee
+/// name, instead of one `starts_with` scan per caller (Claude review of
+/// #527): the caller is read back from the site id the way the resolver's own
+/// check reads it (`extract_caller_from_callsite_id`).
 fn sites_typed_into(
     store: &GraphStore,
     target: &str,
@@ -126,22 +131,23 @@ fn sites_typed_into(
             uses.insert((row[0].clone(), symbol_name(&row[1]).to_string()));
         }
     }
-    let mut ids = HashSet::new();
-    let callers: HashSet<&str> = uses.iter().map(|(c, _)| c.as_str()).collect();
-    for caller in callers {
-        let qr = store.execute_query(&format!(
-            "MATCH (c:CallSite) WHERE c.is_resolved = true AND starts_with(c.id, {}) \
-             RETURN c.id, c.callee_name",
-            cypher_str(&format!("{caller}::call@"))
-        ))?;
-        for row in qr.rows.into_iter().filter(|r| r.len() >= 2) {
-            let owner = row[0].split("::").next().unwrap_or("");
-            let named = uses.contains(&(caller.to_string(), symbol_name(&row[1]).to_string()));
-            if named && !skip.contains(owner) {
-                ids.insert(row[0].clone());
-            }
-        }
+    if uses.is_empty() {
+        return Ok(HashSet::new());
     }
+    let qr = store.execute_query(
+        "MATCH (c:CallSite) WHERE c.is_resolved = true RETURN c.id, c.callee_name",
+    )?;
+    let ids = qr
+        .rows
+        .into_iter()
+        .filter(|r| r.len() >= 2)
+        .filter(|r| !skip.contains(r[0].split("::").next().unwrap_or("")))
+        .filter(|r| {
+            let caller = crate::resolver::extract_caller_from_callsite_id(&r[0]);
+            uses.contains(&(caller, symbol_name(&r[1]).to_string()))
+        })
+        .map(|mut r| r.swap_remove(0))
+        .collect();
     Ok(ids)
 }
 
