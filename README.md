@@ -213,7 +213,9 @@ the result matches a fresh analysis of the same tree (#443). A change of
 `language`, `dependency_scope`, `exclude_dirs` or `full_ast`, another codebase
 root, a new server version, `lsp: true` (now or on the run that built the
 graph), a symlinked or artifact-imported graph, a missing or unreadable
-coverage sidecar, a file that was unreadable when the graph was built, or
+coverage sidecar, a file that was unreadable when the graph was built, more
+than 40% of the tree's files changed, added, deleted or renamed (past that
+share a rebuild measured faster, `benchmarks/incremental_speed/MANIFEST.md`), or
 `full: true` rebuilds from scratch. A `Cargo.toml` edit (even under
 `language: "rust"`, whose walk skips that file) is refreshed too: the Cargo map
 is computed again over the whole tree on every pass. So are the references

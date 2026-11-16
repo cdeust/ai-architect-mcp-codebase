@@ -13,6 +13,12 @@ publish = false
 name = "incremental_speed_bench"
 path = "src/main.rs"
 
+# Issue #443: incremental refresh vs full rebuild for a growing share of
+# edited files, to read the switch-over threshold from measurements.
+[[bin]]
+name = "crossover"
+path = "src/crossover.rs"
+
 [dependencies]
 # The library under test — drives the real indexer/artifact/fill machinery, so
 # the measured operations are the ones the tools run.

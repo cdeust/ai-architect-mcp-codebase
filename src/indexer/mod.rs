@@ -33,7 +33,8 @@ use batch::{SymbolBatch, SYMBOL_FLUSH_THRESHOLD};
 
 use coverage::{no_extraction_by_extension, CoverageCollector, CoverageReport};
 pub use incremental::{
-    fill_after_bootstrap, full_manifest, index_incremental, FillMethod, FillResult,
+    fill_after_bootstrap, full_manifest, index_incremental, index_incremental_bounded, FillMethod,
+    FillResult, Refresh,
 };
 // For the bin's `prepare_full_rebuild_within`, a test seam; the lib has no caller.
 #[allow(unused_imports)]

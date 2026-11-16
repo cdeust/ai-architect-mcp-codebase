@@ -43,6 +43,9 @@ pub(super) fn analyze(repo: &Path, out: &Path, extra: Value) -> Value {
     for (k, v) in extra.as_object().expect("object") {
         args[k] = v.clone();
     }
+    // These tests check the refresh on trees of a few files, under the
+    // touched-share bound (`index_phase_bound_tests.rs` checks the bound).
+    super::TOUCHED_PCT_LIFTED.with(|c| c.set(true));
     let resp = do_analyze_codebase(&args).expect("analyze");
     assert_eq!(resp["status"], "ok", "{resp}");
     resp

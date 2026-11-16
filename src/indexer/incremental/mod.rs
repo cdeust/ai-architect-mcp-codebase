@@ -43,6 +43,8 @@
 //   * `mutate`    — the graph-mutation primitives: purge (symbols/File node/
 //     FileContent/light-links), orphan-directory pruning, and re-parse of a
 //     modified or new file.
+//   * `bounded`   — `index_incremental_bounded`, which declines past a share
+//     of the tree changed so `analyze_codebase` rebuilds (issue #443).
 //   * `edges`     — the inbound cross-file edge snapshot/re-link pair that
 //     keeps a resolved graph's edges into a changed file from being orphaned
 //     by its purge.
@@ -65,6 +67,7 @@ use super::{light_link, IncrementalResult, IndexOptions};
 use std::collections::BTreeMap;
 
 mod bootstrap;
+mod bounded;
 mod change_check;
 mod classify;
 mod coverage;
@@ -75,6 +78,7 @@ mod mutate;
 mod stale_sites;
 
 pub use bootstrap::{fill_after_bootstrap, FillMethod, FillResult};
+pub use bounded::{index_incremental_bounded, Refresh};
 use change_check::check_total_bytes;
 use classify::{classify, discover};
 pub(super) use coverage::apply_cargo_facts;
@@ -170,6 +174,20 @@ pub fn index_incremental(
     options: &IndexOptions,
     prior: &FileManifest,
 ) -> Result<IncrementalResult, String> {
+    match refresh(codebase, graph_dir, manifest_path, options, prior, None)? {
+        Refresh::Applied(r) => Ok(*r),
+        Refresh::Declined { .. } => Err("an unbounded refresh never declines".into()),
+    }
+}
+
+fn refresh(
+    codebase: &Path,
+    graph_dir: &Path,
+    manifest_path: &Path,
+    options: &IndexOptions,
+    prior: &FileManifest,
+    max_touched_pct: Option<u64>,
+) -> Result<Refresh, String> {
     let start = Instant::now();
     let store = GraphStore::open_or_create(graph_dir)?;
     store.require_entry_metadata()?;
@@ -198,6 +216,12 @@ pub fn index_incremental(
     // hashes anything (review of #478).
     check_total_bytes(&current, super::MAX_TOTAL_BYTES)?;
     let mut plan = classify(prior, &current);
+    let cs = &plan.change_set;
+    let touched = (cs.changed.len() + cs.added.len() + cs.deleted.len() + cs.renamed.len()) as u64;
+    let files = current.len() as u64;
+    if max_touched_pct.is_some_and(|pct| touched * 100 > pct.saturating_mul(files)) {
+        return Ok(Refresh::Declined { touched, files });
+    }
     // Issue #443: the refreshed manifest vouches for the graph only when the
     // graph it extends was built with these same settings. Different settings
     // leave files the new ones would add or drop, so the scope becomes unknown
@@ -253,7 +277,7 @@ pub fn index_incremental(
     apply_cargo_facts(&store, &cov.facts);
 
     // Intentionally NO node_count()/edge_count() here — see `IncrementalResult`.
-    Ok(IncrementalResult {
+    Ok(Refresh::Applied(Box::new(IncrementalResult {
         graph_path: graph_dir.to_path_buf(),
         changed: plan.change_set.changed.len() as u64,
         added: plan.change_set.added.len() as u64,
@@ -265,7 +289,7 @@ pub fn index_incremental(
         coverage: cov.report,
         coverage_write_error: cov.write_error,
         scope_kept,
-    })
+    })))
 }
 
 /// Applies a classified `ChangeSet` to the open graph: snapshot inbound

@@ -68,3 +68,72 @@ That is a benchmark's job — report numbers with their hardware and their
 variance — not a gate's. The correctness of #55/#62 (graph parity, exact change
 partition, fill method) stays a hard gate in `tests/artifact_incremental_fill.rs`
 and `tests/incremental_index.rs`, green on every machine and profile.
+
+## Switch-over share (issue #443): `crossover`
+
+`analyze_codebase` refreshes the previous graph when at most
+`MAX_TOUCHED_PCT` (40) percent of the tree's files changed, and rebuilds
+otherwise (`src/analyze_handlers/index_phase.rs`). The share comes from this
+sweep: for each share of edited files (each gains a function), the base graph
+is built as analyze leaves it (manifest, coverage sidecar, resolved edges),
+then the refresh (`index_incremental` + `resolve_graph`) is timed against
+the rebuild (manifest snapshot + `index_codebase_with_language` +
+`resolve_graph`). Clustering and the search index run over the whole graph
+on both paths and are left out.
+
+- **Hardware:** Linux x86_64, 4 CPUs (cloud container), 15 GiB.
+- **Toolchain:** rustc 1.95.0 (`rust-toolchain.toml`), lbug built from source
+  (`LBUG_BUILD_FROM_SOURCE=1 ZSTD_SYS_USE_PKG_CONFIG=1`, as in CI).
+- **Date:** 2026-11-16. **Profile:** release, min of 3.
+- **Command:** `cargo run -p incremental-speed-bench --release --bin crossover -- <corpus>`.
+- **Results:** `results_crossover.json`.
+
+### `src/` (456 Rust files)
+| edited | files | incremental + resolve | full + resolve |
+|---:|---:|---:|---:|
+| 1% | 5 | 5353 ms | 18129 ms |
+| 5% | 23 | 7380 ms | 17725 ms |
+| 10% | 46 | 8272 ms | 17031 ms |
+| 20% | 92 | 12240 ms | 17315 ms |
+| 30% | 137 | 14557 ms | 18285 ms |
+| 40% | 183 | 18228 ms | 19444 ms |
+| 50% | 228 | 22955 ms | 17845 ms |
+| 75% | 342 | 29482 ms | 27401 ms |
+| 100% | 456 | 52100 ms | 24432 ms |
+
+The 75% and 100% rows ran while a cargo build used the same CPUs: they show the
+trend, not a clean figure. The clean rows put the crossover between 40% and 50%.
+
+### `src/parser/` (125 files)
+| edited | files | incremental + resolve | full + resolve |
+|---:|---:|---:|---:|
+| 1% | 2 | 2120 ms | 4259 ms |
+| 5% | 7 | 2593 ms | 4113 ms |
+| 10% | 13 | 3797 ms | 4415 ms |
+| 20% | 25 | 3199 ms | 4031 ms |
+| 30% | 38 | 4947 ms | 4319 ms |
+| 40% | 50 | 4617 ms | 4163 ms |
+| 50% | 63 | 5762 ms | 3917 ms |
+| 75% | 94 | 6590 ms | 4019 ms |
+| 100% | 125 | 6939 ms | 4471 ms |
+
+### `src/graph_store/` (24 files)
+| edited | files | incremental + resolve | full + resolve |
+|---:|---:|---:|---:|
+| 1% | 1 | 1030 ms | 1272 ms |
+| 5% | 2 | 1186 ms | 1227 ms |
+| 10% | 3 | 1629 ms | 1179 ms |
+| 20% | 5 | 1343 ms | 1158 ms |
+| 30% | 8 | 1612 ms | 1186 ms |
+| 40% | 10 | 1852 ms | 1243 ms |
+| 50% | 12 | 2144 ms | 1241 ms |
+| 75% | 18 | 2091 ms | 1215 ms |
+| 100% | 24 | 1780 ms | 1122 ms |
+
+The crossover moves down as the tree shrinks (between 40 and 50% at 456 files,
+between 20 and 30% at 125, between 5 and 10% at 24): the refresh has a fixed
+cost (opening the graph, the resolver's whole-graph pass) that a small rebuild
+does not exceed by much. 40% is therefore the bound that never rebuilds where
+the refresh measured faster on any of the three corpora; below it, on small
+trees, the refresh can lose up to about a second to a rebuild. Not measured: a
+tree larger than 456 files (ripgrep, django), another language, other hardware.
