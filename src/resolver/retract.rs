@@ -418,9 +418,9 @@ fn supported_by_site(
 /// `analyze_codebase` on ripgrep (issue #443). The scans return the sites of
 /// every row outside `ignored`. That includes the `lsp-definition` rows the
 /// graph still holds: an earlier pass's rows stay after the language server
-/// stops, except those to a twin the build compiles out, which `resolve_graph`
-/// deletes (`cfg_verdict::reset_compiled_out_lsp_rows`) before
-/// `Retraction::begin` calls this. It includes no `macro-expansion` row, only
+/// stops, except those to a twin compiled out for its caller, which
+/// `resolve_graph` deletes (`cfg_verdict::reset_compiled_out_lsp_rows`)
+/// before `Retraction::begin` calls this. It includes no `macro-expansion` row, only
 /// because `resolve_graph` runs `reset_macro_expansion`, which deletes them,
 /// before that call too. Only the ids that are also in `sites` are kept, so
 /// `with_row` is bounded by `|sites|`; each scan's result is still loaded
