@@ -17,6 +17,14 @@ use std::path::{Path, PathBuf};
 /// whole numbers of edited files.
 const FILES: usize = 10;
 
+/// Each module function calls its predecessor, so the graph holds `Calls_*`
+/// rows the resolver wrote before any edit (review of #556); `edit` moves
+/// them to the successor.
+fn seeded_body(i: usize) -> String {
+    let prev = (i + FILES - 1) % FILES;
+    format!("pub fn f{i}() {{ crate::m{prev}::f{prev}(); }}\n")
+}
+
 fn tree(prefix: &str) -> (PathBuf, TestTempDir) {
     let base = tempfile::Builder::new()
         .prefix(prefix)
@@ -28,11 +36,7 @@ fn tree(prefix: &str) -> (PathBuf, TestTempDir) {
     let mods: String = (0..FILES).map(|i| format!("mod m{i};\n")).collect();
     fs::write(src.join("lib.rs"), mods).expect("lib.rs");
     for i in 0..FILES {
-        fs::write(
-            src.join(format!("m{i}.rs")),
-            format!("pub fn f{i}() {{}}\n"),
-        )
-        .expect("m");
+        fs::write(src.join(format!("m{i}.rs")), seeded_body(i)).expect("m");
     }
     (base.join("repo"), base)
 }
@@ -49,7 +53,8 @@ fn run(repo: &Path, out: &Path, full: bool) -> Value {
     resp
 }
 
-/// Edits `k` module files, each calling its neighbour, so the edit moves edges.
+/// Edits `k` module files, each now calling its successor instead of its
+/// predecessor, so the edit moves edges.
 fn edit(repo: &Path, k: usize) {
     for i in 0..k {
         let next = (i + 1) % FILES;
@@ -129,28 +134,26 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
         "coverage sidecar untouched"
     );
     // `outcome` reads the graph on disk again: every node and its resolution
-    // flag, and every relationship row (review of #552).
+    // flag (review of #552). The relationship rows are compared below with
+    // their properties, which implies their endpoints (review of #556).
     let graph_after = outcome(&first);
     assert_eq!(
         graph_after["nodes"], graph_before["nodes"],
         "nodes untouched"
     );
-    assert_eq!(
-        graph_after["edges"], graph_before["edges"],
-        "edges untouched"
-    );
-    // `outcome` compares each row's endpoints only; the properties of every
-    // row, `confidence` and `resolution_method` among them, are compared here
-    // (review of #555).
+    // The properties of every row, `confidence` and `resolution_method`
+    // among them (review of #555), including the `Calls_*` rows the resolver
+    // wrote from the seeded calls, not only the constant `Defines_*` rows
+    // (review of #556).
     let properties_after = edge_rows_with_properties(&first);
     assert!(
         properties_before
             .iter()
-            .any(|r| r.contains("|resolution_method=")),
-        "the rows compared carry their properties"
+            .any(|r| r.starts_with("Calls_") && r.contains("|resolution_method=")),
+        "the rows compared include resolver-written call rows with their properties: {properties_before:?}"
     );
     assert_eq!(
         properties_after, properties_before,
-        "edge properties untouched"
+        "edge rows and their properties untouched"
     );
 }
