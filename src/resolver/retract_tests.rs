@@ -241,3 +241,76 @@ fn begin_reopens_only_the_static_sites_no_other_writer_resolves() {
         "{after:?}"
     );
 }
+
+#[test]
+fn begin_keeps_a_site_whose_language_server_row_is_in_any_call_table() {
+    // `reopen_sites_without_row` scans every `Calls_CallSite_*` table, not only
+    // `Calls_CallSite_Function` (review of #553, issue #443). A site whose only
+    // other-writer row targets a Method keeps its flag like one whose row
+    // targets a Function; a site with static rows only is reopened.
+    let repo = Repo::new(&[
+        (
+            "a.rs",
+            "pub fn alpha() {\n    beta();\n}\npub fn gamma() {\n    beta();\n}\n\
+             pub fn delta() {\n    beta();\n}\n",
+        ),
+        (
+            "b.rs",
+            "pub fn beta() {}\npub struct S;\nimpl S {\n    pub fn m(&self) {}\n}\n",
+        ),
+    ]);
+    let store = GraphStore::open_or_create(&repo.graph).expect("open");
+    let flags = |store: &GraphStore| -> Vec<String> {
+        let mut rows: Vec<String> = store
+            .execute_query(
+                "MATCH (c:CallSite) WHERE c.callee_name = 'beta' RETURN c.id, c.is_resolved",
+            )
+            .expect("flags")
+            .rows
+            .into_iter()
+            .map(|r| r.join(" ").to_lowercase())
+            .collect();
+        rows.sort();
+        rows
+    };
+    let before = flags(&store);
+    assert_eq!(before.len(), 3, "control: three sites: {before:?}");
+    assert!(
+        before.iter().all(|r| r.ends_with(" true")),
+        "control: all resolve statically: {before:?}"
+    );
+    let site = |i: usize| before[i].split(' ').next().unwrap().to_string();
+    let method = store
+        .execute_query("MATCH (m:Method) WHERE m.name = 'm' RETURN m.id")
+        .expect("method")
+        .rows;
+    assert_eq!(method.len(), 1, "control: one method `m`: {method:?}");
+    let method_id = &method[0][0];
+    for (site_id, rel, target) in [
+        (site(0), "Calls_CallSite_Function", "b.rs::beta".to_string()),
+        (site(1), "Calls_CallSite_Method", method_id.clone()),
+    ] {
+        let label = if rel.ends_with("Method") {
+            "Method"
+        } else {
+            "Function"
+        };
+        store
+            .execute_query(&format!(
+                "MATCH (c:CallSite {{id: '{site_id}'}}), (t:{label} {{id: '{target}'}}) \
+                 CREATE (c)-[:{rel} {{confidence: 1.0, \
+                 resolution_method: 'lsp-definition'}}]->(t)"
+            ))
+            .expect("a language-server row");
+    }
+
+    let _retraction = super::retract::Retraction::begin(&store).expect("begin");
+    assert_eq!(
+        flags(&store),
+        vec![
+            format!("{} true", site(0)),
+            format!("{} true", site(1)),
+            format!("{} false", site(2)),
+        ]
+    );
+}
