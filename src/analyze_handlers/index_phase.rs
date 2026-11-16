@@ -192,7 +192,10 @@ fn graph_has_lsp_rows(graph_dir: &std::path::Path) -> bool {
 /// `crossover` on this repository's `src/` (456 Rust files, Linux x86_64, 4
 /// CPUs, release, min of 3), index plus resolve on each path: 40% edited,
 /// 18.2 s incremental against 19.4 s full; 50%, 23.0 s against 17.8 s.
-/// `benchmarks/incremental_speed/MANIFEST.md` has the whole sweep.
+/// The bound is exclusive (`touched * 100 > 40 * files`), so on those 456
+/// files it refreshes up to 182 and rebuilds from 183, the 40% row itself,
+/// where the refresh measured 1.2 s faster: the rule gives up that row to a
+/// rebuild. `benchmarks/incremental_speed/MANIFEST.md` has the whole sweep.
 const MAX_TOUCHED_PCT: u64 = 40;
 
 #[cfg(test)]

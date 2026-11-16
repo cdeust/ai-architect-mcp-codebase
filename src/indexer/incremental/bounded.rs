@@ -19,7 +19,10 @@ pub enum Refresh {
 
 /// `index_incremental` that declines when the files to re-parse or purge
 /// exceed `max_touched_pct` percent of the current tree; the manifest, the
-/// coverage sidecar and every file's rows are then left as they were.
+/// coverage sidecar and every file's rows are then left as they were. The
+/// schema is not: `ensure_cfg_active_columns` and `ensure_rel_tables` run
+/// before the change set is classified, so a graph written before a column or
+/// a relationship table existed gains it, empty, even when the pass declines.
 pub fn index_incremental_bounded(
     codebase: &Path,
     graph_dir: &Path,

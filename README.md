@@ -214,8 +214,9 @@ the result matches a fresh analysis of the same tree (#443). A change of
 root, a new server version, `lsp: true` (now or on the run that built the
 graph), a symlinked or artifact-imported graph, a missing or unreadable
 coverage sidecar, a file that was unreadable when the graph was built, more
-than 40% of the tree's files changed, added, deleted or renamed (past that
-share a rebuild measured faster, `benchmarks/incremental_speed/MANIFEST.md`), or
+than 40% of the tree's files changed, added, deleted or renamed (a rebuild
+measured faster from 50% of 456 files, and from lower shares of smaller trees,
+`benchmarks/incremental_speed/MANIFEST.md`), or
 `full: true` rebuilds from scratch. A `Cargo.toml` edit (even under
 `language: "rust"`, whose walk skips that file) is refreshed too: the Cargo map
 is computed again over the whole tree on every pass. So are the references

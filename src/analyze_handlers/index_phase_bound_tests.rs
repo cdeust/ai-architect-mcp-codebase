@@ -1,6 +1,7 @@
 //! Issue #443: past `MAX_TOUCHED_PCT` of the tree changed, analyze rebuilds
 //! instead of refreshing, and the declined refresh leaves the previous state
-//! as it was. Driven through `do_analyze_codebase` with the bound in force
+//! as it was: the manifest, the coverage sidecar, every node and every
+//! relationship row (the schema DDL that runs before the decline aside). Driven through `do_analyze_codebase` with the bound in force
 //! (the shared `analyze` helper lifts it).
 
 use super::tests::outcome;
@@ -91,7 +92,9 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
     let first = run(&repo, &out, false);
     let manifest = crate::indexer::manifest::manifest_path(&out);
     let before = fs::read(&manifest).expect("manifest");
-    let rows = outcome(&first)["nodes"].clone();
+    let sidecar = crate::indexer::coverage::coverage_path(&out);
+    let coverage_before = fs::read(&sidecar).expect("coverage sidecar");
+    let graph_before = outcome(&first);
     edit(&repo, at_bound() + 1);
     let prior = crate::indexer::manifest::load(&manifest).expect("load");
     let refresh = crate::indexer::index_incremental_bounded(
@@ -118,5 +121,20 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
         before,
         "manifest untouched"
     );
-    assert_eq!(outcome(&first)["nodes"], rows, "graph rows untouched");
+    assert_eq!(
+        fs::read(&sidecar).expect("coverage sidecar"),
+        coverage_before,
+        "coverage sidecar untouched"
+    );
+    // `outcome` reads the graph on disk again: every node and its resolution
+    // flag, and every relationship row (review of #552).
+    let graph_after = outcome(&first);
+    assert_eq!(
+        graph_after["nodes"], graph_before["nodes"],
+        "nodes untouched"
+    );
+    assert_eq!(
+        graph_after["edges"], graph_before["edges"],
+        "edges untouched"
+    );
 }
