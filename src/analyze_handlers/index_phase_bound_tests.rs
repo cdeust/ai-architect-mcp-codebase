@@ -5,7 +5,7 @@
 //! decline aside). Driven through `do_analyze_codebase` with the bound in
 //! force (the shared `analyze` helper lifts it).
 
-use super::tests::{edge_rows_with_properties, outcome};
+use super::tests::{edge_rows_with_properties, node_rows, outcome};
 use super::MAX_TOUCHED_PCT;
 use crate::analyze_handlers::do_analyze_codebase;
 use crate::test_support::{TempDirExt, TestTempDir};
@@ -100,7 +100,7 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
     let before = fs::read(&manifest).expect("manifest");
     let sidecar = crate::indexer::coverage::coverage_path(&out);
     let coverage_before = fs::read(&sidecar).expect("coverage sidecar");
-    let graph_before = outcome(&first);
+    let nodes_before = node_rows(&first);
     let properties_before = edge_rows_with_properties(&first);
     edit(&repo, at_bound() + 1);
     let prior = crate::indexer::manifest::load(&manifest).expect("load");
@@ -133,24 +133,24 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
         coverage_before,
         "coverage sidecar untouched"
     );
-    // `outcome` reads the graph on disk again: every node and its resolution
-    // flag (review of #552). The relationship rows are compared below with
-    // their properties, which implies their endpoints (review of #556).
-    let graph_after = outcome(&first);
-    assert_eq!(
-        graph_after["nodes"], graph_before["nodes"],
-        "nodes untouched"
-    );
+    // The graph on disk is read again: every node and its resolution flag
+    // (review of #552), with `node_rows` alone rather than the whole `outcome`
+    // (review of #557). The relationship rows are compared below with their
+    // properties, which implies their endpoints (review of #556).
+    assert_eq!(node_rows(&first), nodes_before, "nodes untouched");
     // The properties of every row, `confidence` and `resolution_method`
     // among them (review of #555), including the `Calls_*` rows the resolver
     // wrote from the seeded calls, not only the constant `Defines_*` rows
     // (review of #556).
     let properties_after = edge_rows_with_properties(&first);
+    // One resolver-written row pinned with its value: every `Calls_*` row has
+    // a `|resolution_method=` field, null included, so its presence alone
+    // proved only that a call row exists (review of #557).
+    let pinned = "Calls_Function_Function|src/m1.rs::f1|src/m0.rs::f0\
+                  |confidence=0.9|resolution_method=import-scope-lookup|";
     assert!(
-        properties_before
-            .iter()
-            .any(|r| r.starts_with("Calls_") && r.contains("|resolution_method=")),
-        "the rows compared include resolver-written call rows with their properties: {properties_before:?}"
+        properties_before.iter().any(|r| r.starts_with(pinned)),
+        "the rows compared include the resolver-written call m1::f1 -> m0::f0 with its method: {properties_before:?}"
     );
     assert_eq!(
         properties_after, properties_before,
