@@ -133,9 +133,10 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
         coverage_before,
         "coverage sidecar untouched"
     );
-    // The graph on disk is read again: every node and its resolution flag
-    // (review of #552), with `node_rows` alone rather than the whole `outcome`
-    // (review of #557). The relationship rows are compared below with their
+    // The graph on disk is read again: every node, and the resolution flag of
+    // the call sites and imports, the only nodes `node_rows` reads it for
+    // (review of #552, wording of #558), with `node_rows` alone rather than
+    // the whole `outcome` (review of #557). The relationship rows are compared below with their
     // properties, which implies their endpoints (review of #556).
     assert_eq!(node_rows(&first), nodes_before, "nodes untouched");
     // The properties of every row, `confidence` and `resolution_method`
@@ -145,11 +146,21 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
     let properties_after = edge_rows_with_properties(&first);
     // One resolver-written row pinned with its value: every `Calls_*` row has
     // a `|resolution_method=` field, null included, so its presence alone
-    // proved only that a call row exists (review of #557).
-    let pinned = "Calls_Function_Function|src/m1.rs::f1|src/m0.rs::f0\
-                  |confidence=0.9|resolution_method=import-scope-lookup|";
+    // proved only that a call row exists (review of #557). The value is the
+    // policy's for an import match, not a copy of it, so a deliberate change
+    // of the policy moves the pin with it (review of #558).
+    let evidence = crate::ambiguity_policy::Evidence::ImportMatch;
+    // The trailing `|` and `starts_with` rely on `observed_count` following
+    // `resolution_method` in the table's columns: the row goes on after the
+    // pin, so an equality here would never hold (review of #558).
+    let pinned = format!(
+        "Calls_Function_Function|src/m1.rs::f1|src/m0.rs::f0\
+         |confidence={}|resolution_method={}|",
+        crate::ambiguity_policy::confidence_for(evidence),
+        crate::ambiguity_policy::resolution_label(evidence),
+    );
     assert!(
-        properties_before.iter().any(|r| r.starts_with(pinned)),
+        properties_before.iter().any(|r| r.starts_with(&pinned)),
         "the rows compared include the resolver-written call m1::f1 -> m0::f0 with its method: {properties_before:?}"
     );
     assert_eq!(
