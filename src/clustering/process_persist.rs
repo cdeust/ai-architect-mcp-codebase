@@ -11,16 +11,16 @@
 // pending per table; the peak adds to that the rows of the one process being
 // traced, which `add_participants` pushes before the next flush. Holding every
 // row until the end made the peak grow as entries x symbols reached: O(N^2)
-// for N public functions that all reach one hub which itself reaches O(N)
-// symbols (review of #561).
+// whenever N entries each reach O(N) symbols, for example N public functions
+// that all reach one hub which itself reaches O(N) symbols (review of #561).
 //
 // Calls: the edge tables cost the same bulk calls as one final write, since
 // only full chunks are written early. The `Process` table costs one call per
 // early flush plus the final one, because the nodes of the pending edges must
 // exist before those edges MATCH them. Early flushes are not bounded by
-// ceil(N / BULK_BATCH_SIZE): when every process adds at least
-// `BULK_BATCH_SIZE` edges, every process flushes, so `Process` costs up to one
-// call per entry. Each early flush writes at least one full edge chunk or one
+// ceil(N / BULK_BATCH_SIZE): the trigger counts per table, so when every
+// process adds at least `BULK_BATCH_SIZE` edges to one table, every process
+// flushes, and `Process` costs up to one call per entry. Each early flush writes at least one full edge chunk or one
 // full chunk of nodes, so the `Process` calls stay at most the edge chunks
 // written early, plus floor(N / BULK_BATCH_SIZE), plus the final call
 // (review of #563).

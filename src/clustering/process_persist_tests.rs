@@ -288,10 +288,17 @@ fn entry(id: &str, label: &str) -> super::super::EntryPoint {
 /// `ParticipatesIn` table lands exactly on a full chunk every fifth process
 /// and must then be empty: a `>=` turned into `>` keeps the 500 rows. After
 /// every flush each table must hold exactly what was added modulo one chunk.
+/// The landing is counted, not assumed: it happens only while
+/// `BULK_BATCH_SIZE` is a multiple of 5 (review of #564, note 2).
 #[test]
 fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
     const PROCESSES: usize = 12;
+    assert_eq!(
+        BULK_BATCH_SIZE % 5,
+        0,
+        "the fixture lands on a chunk only when BULK_BATCH_SIZE is a multiple of 5"
+    );
     let per_process = BULK_BATCH_SIZE / 5;
     let Functions {
         _tmp,
@@ -302,11 +309,21 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     } = store_with_functions("process_batch_exact_", per_process);
 
     let mut batch = super::ProcessBatch::default();
+    let mut landings = 0;
     for (k, id) in ids.iter().cycle().take(PROCESSES).enumerate() {
         let process_id = format!("process::{k}::{id}");
         batch.add_process(&entry(id, "Function"), &process_id, per_process as u64, 1);
         batch.add_participants(&depths, &process_id, &labels);
+        let before = participates_pending(&batch);
         batch.flush_full_chunks(&store).expect("flush");
+        if before == BULK_BATCH_SIZE {
+            assert_eq!(
+                participates_pending(&batch),
+                0,
+                "one flush empties the table"
+            );
+            landings += 1;
+        }
         let done = k + 1;
         let (_, tables) = batch.pending();
         let expected = vec![
@@ -321,6 +338,7 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
         ];
         assert_eq!(tables, expected, "after process {done}");
     }
+    assert_eq!(landings, PROCESSES / 5, "the table landed on a full chunk");
     batch.write(&store).expect("write");
 
     let participants = rows(
@@ -362,4 +380,14 @@ fn process_batch_writes_the_nodes_once_they_fill_a_chunk_without_edges() {
         [[(BULK_BATCH_SIZE + extra).to_string()]],
         "{processes:?}"
     );
+}
+
+/// Pending `ParticipatesIn_Function_Process` rows of `batch`.
+fn participates_pending(batch: &super::ProcessBatch) -> usize {
+    batch
+        .pending()
+        .1
+        .into_iter()
+        .find(|(table, _)| table == "ParticipatesIn_Function_Process")
+        .map_or(0, |(_, n)| n)
 }
