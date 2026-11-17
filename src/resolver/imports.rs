@@ -165,13 +165,21 @@ pub(super) fn resolve_glob_import(
     let Some(candidates) = idx.by_parent_module.get(module_path) else {
         return 0;
     };
+    // The glob names the module, so each member it brings in is matched by
+    // the import path, the evidence of a single import that names its
+    // target: its confidence and label come from the policy, not a copy of
+    // them (review of #560). source: issue #30 policy (`confidence_for`,
+    // `resolution_label`).
+    let evidence = ambiguity_policy::Evidence::ImportMatch;
+    let confidence = ambiguity_policy::confidence_for(evidence);
+    let method = ambiguity_policy::resolution_label(evidence);
     let mut count = 0u64;
     for entry in candidates {
         let table = format!("Imports_File_{}", entry.label);
         if !check_known_rel_table(&table, file_id, &entry.id) {
             continue;
         }
-        buf.add(&table, file_id, &entry.id, 0.9, "import-scope-lookup");
+        buf.add(&table, file_id, &entry.id, confidence, method);
         count += 1;
     }
     count
