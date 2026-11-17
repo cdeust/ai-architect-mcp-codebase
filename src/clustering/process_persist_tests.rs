@@ -288,8 +288,11 @@ fn entry(id: &str, label: &str) -> super::super::EntryPoint {
 /// `ParticipatesIn` table lands exactly on a full chunk every fifth process
 /// and must then be empty: a `>=` turned into `>` keeps the 500 rows. After
 /// every flush each table must hold exactly what was added modulo one chunk.
-/// The landing is counted, not assumed: it happens only while
-/// `BULK_BATCH_SIZE` is a multiple of 5 (review of #564, note 2).
+/// The landings are counted, not assumed. A table can land on a chunk
+/// whatever `BULK_BATCH_SIZE` is (with 6, `per_process` is 1 and it lands at
+/// processes 6 and 12); it is the expected count, `PROCESSES / 5`, that holds
+/// only while `BULK_BATCH_SIZE` is a multiple of 5 (review of #564, note 2;
+/// review of #565, note 1).
 #[test]
 fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
@@ -297,7 +300,7 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     assert_eq!(
         BULK_BATCH_SIZE % 5,
         0,
-        "the fixture lands on a chunk only when BULK_BATCH_SIZE is a multiple of 5"
+        "the expected landing count, PROCESSES / 5, assumes BULK_BATCH_SIZE is a multiple of 5"
     );
     let per_process = BULK_BATCH_SIZE / 5;
     let Functions {

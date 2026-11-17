@@ -20,10 +20,10 @@
 // exist before those edges MATCH them. Early flushes are not bounded by
 // ceil(N / BULK_BATCH_SIZE): the trigger counts per table, so when every
 // process adds at least `BULK_BATCH_SIZE` edges to one table, every process
-// flushes, and `Process` costs up to one call per entry. Each early flush writes at least one full edge chunk or one
-// full chunk of nodes, so the `Process` calls stay at most the edge chunks
-// written early, plus floor(N / BULK_BATCH_SIZE), plus the final call
-// (review of #563).
+// flushes, and `Process` costs up to one call per entry. Each early flush
+// writes at least one full edge chunk or one full chunk of nodes, so the
+// `Process` calls stay at most the edge chunks written early, plus
+// floor(N / BULK_BATCH_SIZE), plus the final call (review of #563).
 
 use super::EntryPoint;
 use crate::graph_store::{
