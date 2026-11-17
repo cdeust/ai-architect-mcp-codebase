@@ -206,7 +206,7 @@ fn process_batch_keeps_less_than_one_chunk_per_table_between_processes() {
         batch.flush_full_chunks(&store).expect("flush");
         let (nodes, tables) = batch.pending();
         assert!(nodes < BULK_BATCH_SIZE, "{nodes} pending Process rows");
-        for pending in tables {
+        for (_, pending) in tables {
             assert!(pending < BULK_BATCH_SIZE, "{pending} pending edge rows");
             peak = peak.max(pending);
         }
@@ -226,4 +226,140 @@ fn process_batch_keeps_less_than_one_chunk_per_table_between_processes() {
         "MATCH (:Function)-[r:EntryPointOf_Function_Process]->(:Process) RETURN count(*)",
     );
     assert_eq!(entries, [[N.to_string()]], "{entries:?}");
+}
+
+/// A store holding `n` functions `lib.rs::f0..`, their id -> label map, and
+/// the depth map of a process that reaches all of them at depth 1.
+struct Functions {
+    _tmp: crate::test_support::TestTempDir,
+    store: GraphStore,
+    ids: Vec<String>,
+    labels: HashMap<String, String>,
+    depths: HashMap<String, u64>,
+}
+
+fn store_with_functions(prefix: &str, n: usize) -> Functions {
+    use crate::graph_store::{cypher_str, NODE_FUNCTION};
+    let tmp = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("tempdir")
+        .keep_managed();
+    let store = GraphStore::open_or_create(&tmp.join("graph")).unwrap();
+    store.create_schema().unwrap();
+    let ids: Vec<String> = (0..n).map(|i| format!("lib.rs::f{i}")).collect();
+    let functions: Vec<Vec<(String, String)>> = ids
+        .iter()
+        .map(|id| {
+            vec![
+                ("id".to_string(), cypher_str(id)),
+                ("name".to_string(), cypher_str(id)),
+            ]
+        })
+        .collect();
+    store.bulk_insert_nodes(NODE_FUNCTION, &functions).unwrap();
+    let labels = ids
+        .iter()
+        .map(|id| (id.clone(), "Function".to_string()))
+        .collect();
+    let depths = ids.iter().map(|id| (id.clone(), 1)).collect();
+    Functions {
+        _tmp: tmp,
+        store,
+        ids,
+        labels,
+        depths,
+    }
+}
+
+fn entry(id: &str, label: &str) -> super::super::EntryPoint {
+    super::super::EntryPoint {
+        id: id.to_string(),
+        label: label.into(),
+        name: id.to_string(),
+        qualified_name: id.to_string(),
+        kind: "lib_entry".into(),
+        confidence: 0.6,
+    }
+}
+
+/// Review of #563, note 3: the boundary of the edge trigger, whatever the
+/// fixture size. Each process adds `BULK_BATCH_SIZE / 5` participants, so the
+/// `ParticipatesIn` table lands exactly on a full chunk every fifth process
+/// and must then be empty: a `>=` turned into `>` keeps the 500 rows. After
+/// every flush each table must hold exactly what was added modulo one chunk.
+#[test]
+fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
+    use crate::graph_store::BULK_BATCH_SIZE;
+    const PROCESSES: usize = 12;
+    let per_process = BULK_BATCH_SIZE / 5;
+    let Functions {
+        _tmp,
+        store,
+        ids,
+        labels,
+        depths,
+    } = store_with_functions("process_batch_exact_", per_process);
+
+    let mut batch = super::ProcessBatch::default();
+    for (k, id) in ids.iter().cycle().take(PROCESSES).enumerate() {
+        let process_id = format!("process::{k}::{id}");
+        batch.add_process(&entry(id, "Function"), &process_id, per_process as u64, 1);
+        batch.add_participants(&depths, &process_id, &labels);
+        batch.flush_full_chunks(&store).expect("flush");
+        let done = k + 1;
+        let (_, tables) = batch.pending();
+        let expected = vec![
+            (
+                "EntryPointOf_Function_Process".to_string(),
+                done % BULK_BATCH_SIZE,
+            ),
+            (
+                "ParticipatesIn_Function_Process".to_string(),
+                (done * per_process) % BULK_BATCH_SIZE,
+            ),
+        ];
+        assert_eq!(tables, expected, "after process {done}");
+    }
+    batch.write(&store).expect("write");
+
+    let participants = rows(
+        &store,
+        "MATCH (:Function)-[r:ParticipatesIn_Function_Process]->(:Process) RETURN count(*)",
+    );
+    assert_eq!(
+        participants,
+        [[(PROCESSES * per_process).to_string()]],
+        "{participants:?}"
+    );
+}
+
+/// Review of #563, note 3: the node trigger. Entries whose label has no
+/// `EntryPointOf` table and no participants leave every edge table empty, so
+/// only the nodes can fill a chunk; the batch must then write them.
+#[test]
+fn process_batch_writes_the_nodes_once_they_fill_a_chunk_without_edges() {
+    use crate::graph_store::BULK_BATCH_SIZE;
+    let extra = 3;
+    let Functions { _tmp, store, .. } = store_with_functions("process_batch_nodes_", 0);
+
+    let mut batch = super::ProcessBatch::default();
+    for k in 0..BULK_BATCH_SIZE + extra {
+        let id = format!("lib.rs::C{k}");
+        batch.add_process(&entry(&id, "Class"), &format!("process::{id}"), 0, 0);
+        batch.flush_full_chunks(&store).expect("flush");
+        let (nodes, tables) = batch.pending();
+        assert!(tables.is_empty(), "{tables:?}");
+        assert_eq!(nodes, (k + 1) % BULK_BATCH_SIZE, "after process {}", k + 1);
+    }
+    let written = rows(&store, "MATCH (p:Process) RETURN count(*)");
+    assert_eq!(written, [[BULK_BATCH_SIZE.to_string()]], "{written:?}");
+    batch.write(&store).expect("write");
+
+    let processes = rows(&store, "MATCH (p:Process) RETURN count(*)");
+    assert_eq!(
+        processes,
+        [[(BULK_BATCH_SIZE + extra).to_string()]],
+        "{processes:?}"
+    );
 }
