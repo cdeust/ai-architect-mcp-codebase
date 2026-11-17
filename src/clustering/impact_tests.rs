@@ -148,7 +148,7 @@ fn get_impact_reports_community_membership() {
 fn get_impact_reports_process_participation() {
     let (_dir, store) = empty_store();
     let fn_qn = "app::svc::handler";
-    // `get_impact`'s process query returns `p.name`; `persist_process_node`
+    // `get_impact`'s process query returns `p.name`; `ProcessBatch::add_process`
     // sets `name` == the process id, so we assert against the id here.
     let process_id = "process::entry::app::main";
 
