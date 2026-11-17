@@ -320,7 +320,7 @@ fn bfs_from_entry(
 
 /// Loads id -> label for every Function and Method in the graph. One scan
 /// per label (two total) replaces the per-node probes that used to fire
-/// inside persist_participates_in.
+/// for each participant of each process.
 fn build_call_target_labels(store: &GraphStore) -> Result<HashMap<String, String>, String> {
     let mut map = HashMap::new();
     for label in &["Function", "Method"] {
@@ -372,15 +372,17 @@ pub fn trace_processes(store: &GraphStore) -> Result<u64, String> {
     store.require_entry_metadata()?;
     let entries = detect_entry_points(store)?;
     let call_edges = collect_call_edges(store)?;
-    // Single scan: build id -> label once so persist_participates_in needs
-    // zero database probes. source: Fermi audit April 2026.
+    // Single scan: build id -> label once so `ProcessBatch::add_participants`
+    // needs zero database probes. source: Fermi audit April 2026.
     let id_to_label = build_call_target_labels(store)?;
-    // Every process is traced in memory first, then written with one bulk
-    // call per table: one `CREATE` and one `MATCH ... CREATE` per process cost
-    // 1.8 s of a second `analyze_codebase` on ripgrep (issue #443).
+    // The processes are written in bulk chunks, not one statement each: one
+    // `CREATE` and one `MATCH ... CREATE` per process cost 1.8 s of a second
+    // `analyze_codebase` on ripgrep (issue #443). Full chunks are written
+    // between processes, so the rows held in memory stay bounded.
     let mut batch = ProcessBatch::default();
     for entry in &entries {
         trace_one_process(&mut batch, entry, &call_edges, &id_to_label);
+        batch.flush_full_chunks(store)?;
     }
     batch.write(store)?;
     Ok(entries.len() as u64)

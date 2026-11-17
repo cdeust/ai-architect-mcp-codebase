@@ -1,13 +1,25 @@
-// clustering::process_persist — the writes of `trace_processes`.
+// clustering::process::process_persist — the writes of `trace_processes`.
 //
-// The processes are accumulated in memory and written with one bulk call per
-// table, after every process has been traced: the `Process` nodes first, then
-// the `EntryPointOf_*` and `ParticipatesIn_*` edges, which MATCH them. The
-// rows are the ones the per-process `CREATE` and `MATCH ... CREATE` used to
-// write, one statement per process (issue #443).
+// The processes are accumulated in memory and written in bulk calls: the
+// `Process` nodes first, then the `EntryPointOf_*` and `ParticipatesIn_*`
+// edges, which MATCH them. The rows are the ones the per-process `CREATE` and
+// `MATCH ... CREATE` used to write, one statement per process (issue #443).
+//
+// Memory is bounded: after each process, `flush_full_chunks` writes every
+// table that holds at least one full `BULK_BATCH_SIZE` chunk, and keeps only
+// the remainder. The rows alive between two processes are therefore fewer
+// than `BULK_BATCH_SIZE` per table, plus the rows of the one process being
+// traced. Holding every row until the end made the peak grow as entries x
+// symbols reached: O(N^2) for N public functions that all reach one hub
+// (review of #561). The edge tables cost the same bulk calls as one final
+// write, since only full chunks are written early; the `Process` table costs
+// at most one more call per early flush, because the nodes of the pending
+// edges must exist before those edges MATCH them.
 
 use super::EntryPoint;
-use crate::graph_store::{cypher_str, is_known_rel_table, GraphStore, PropEdgeList};
+use crate::graph_store::{
+    cypher_str, is_known_rel_table, GraphStore, PropEdgeList, BULK_BATCH_SIZE,
+};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -80,13 +92,50 @@ impl ProcessBatch {
         }
     }
 
+    /// Writes the full `BULK_BATCH_SIZE` chunks of every edge table, and
+    /// keeps the remainder. Called between two processes, so every pending
+    /// edge's `Process` node is pending or already written: the pending nodes
+    /// are written first. With no full edge chunk, the nodes are written only
+    /// once they fill a chunk themselves.
+    pub(super) fn flush_full_chunks(&mut self, store: &GraphStore) -> Result<(), String> {
+        let full_edges = self.edges.values().any(|e| e.len() >= BULK_BATCH_SIZE);
+        if !full_edges && self.nodes.len() < BULK_BATCH_SIZE {
+            return Ok(());
+        }
+        self.write_nodes(store)?;
+        for (rel, edges) in &mut self.edges {
+            let full = edges.len() - edges.len() % BULK_BATCH_SIZE;
+            if full == 0 {
+                continue;
+            }
+            store.bulk_insert_edges(rel, &edges[..full])?;
+            edges.drain(..full);
+        }
+        Ok(())
+    }
+
     /// Nodes first: every edge MATCHes its `Process` endpoint.
-    pub(super) fn write(self, store: &GraphStore) -> Result<(), String> {
-        store.bulk_insert_nodes("Process", &self.nodes)?;
+    pub(super) fn write(mut self, store: &GraphStore) -> Result<(), String> {
+        self.write_nodes(store)?;
         for (rel, edges) in &self.edges {
             store.bulk_insert_edges(rel, edges)?;
         }
         Ok(())
+    }
+
+    fn write_nodes(&mut self, store: &GraphStore) -> Result<(), String> {
+        store.bulk_insert_nodes("Process", &self.nodes)?;
+        self.nodes.clear();
+        Ok(())
+    }
+
+    /// The rows not yet written: `Process` nodes, then each edge table.
+    #[cfg(test)]
+    pub(super) fn pending(&self) -> (usize, Vec<usize>) {
+        (
+            self.nodes.len(),
+            self.edges.values().map(|e| e.len()).collect(),
+        )
     }
 }
 
