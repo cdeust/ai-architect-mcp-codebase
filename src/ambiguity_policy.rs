@@ -329,7 +329,12 @@ mod tests {
             } => {
                 assert_eq!(target.qn, "a::helper");
                 assert_eq!(evidence, Evidence::ImportMatch);
-                assert_eq!(confidence, confidence_for(Evidence::ImportMatch));
+                // The values, not the policy compared with itself (review of
+                // #559): the tests that build their pin from the policy
+                // (`index_phase_bound_tests.rs`) rely on this one for them.
+                // source: issue #30 policy (`confidence_for`, `resolution_label`).
+                assert_eq!(confidence, 0.9);
+                assert_eq!(resolution_label(evidence), "import-scope-lookup");
             }
             other => panic!("expected Resolved, got {other:?}"),
         }

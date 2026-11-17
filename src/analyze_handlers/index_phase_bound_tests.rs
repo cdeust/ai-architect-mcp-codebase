@@ -136,8 +136,9 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
     // The graph on disk is read again: every node, and the resolution flag of
     // the call sites and imports, the only nodes `node_rows` reads it for
     // (review of #552, wording of #558), with `node_rows` alone rather than
-    // the whole `outcome` (review of #557). The relationship rows are compared below with their
-    // properties, which implies their endpoints (review of #556).
+    // the whole `outcome` (review of #557). The relationship rows are
+    // compared below with their properties, which implies their endpoints
+    // (review of #556).
     assert_eq!(node_rows(&first), nodes_before, "nodes untouched");
     // The properties of every row, `confidence` and `resolution_method`
     // among them (review of #555), including the `Calls_*` rows the resolver
@@ -146,9 +147,12 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
     let properties_after = edge_rows_with_properties(&first);
     // One resolver-written row pinned with its value: every `Calls_*` row has
     // a `|resolution_method=` field, null included, so its presence alone
-    // proved only that a call row exists (review of #557). The value is the
-    // policy's for an import match, not a copy of it, so a deliberate change
-    // of the policy moves the pin with it (review of #558).
+    // proved only that a call row exists (review of #557). The confidence and
+    // the method are the policy's for an import match, not a copy of them
+    // (review of #558): a deliberate change of those two values moves the pin
+    // with it. The evidence is fixed: the row is the one the import rule
+    // decides, so a change of the tier that decides it fails here (review of
+    // #559). The values themselves are pinned in the policy's own tests.
     let evidence = crate::ambiguity_policy::Evidence::ImportMatch;
     // The trailing `|` and `starts_with` rely on `observed_count` following
     // `resolution_method` in the table's columns: the row goes on after the
