@@ -7,14 +7,23 @@
 //
 // Memory is bounded: after each process, `flush_full_chunks` writes every
 // table that holds at least one full `BULK_BATCH_SIZE` chunk, and keeps only
-// the remainder. The rows alive between two processes are therefore fewer
-// than `BULK_BATCH_SIZE` per table, plus the rows of the one process being
-// traced. Holding every row until the end made the peak grow as entries x
-// symbols reached: O(N^2) for N public functions that all reach one hub
-// (review of #561). The edge tables cost the same bulk calls as one final
-// write, since only full chunks are written early; the `Process` table costs
-// at most one more call per early flush, because the nodes of the pending
-// edges must exist before those edges MATCH them.
+// the remainder. Right after a flush, fewer than `BULK_BATCH_SIZE` rows are
+// pending per table; the peak adds to that the rows of the one process being
+// traced, which `add_participants` pushes before the next flush. Holding every
+// row until the end made the peak grow as entries x symbols reached: O(N^2)
+// for N public functions that all reach one hub which itself reaches O(N)
+// symbols (review of #561).
+//
+// Calls: the edge tables cost the same bulk calls as one final write, since
+// only full chunks are written early. The `Process` table costs one call per
+// early flush plus the final one, because the nodes of the pending edges must
+// exist before those edges MATCH them. Early flushes are not bounded by
+// ceil(N / BULK_BATCH_SIZE): when every process adds at least
+// `BULK_BATCH_SIZE` edges, every process flushes, so `Process` costs up to one
+// call per entry. Each early flush writes at least one full edge chunk or one
+// full chunk of nodes, so the `Process` calls stay at most the edge chunks
+// written early, plus floor(N / BULK_BATCH_SIZE), plus the final call
+// (review of #563).
 
 use super::EntryPoint;
 use crate::graph_store::{
@@ -96,7 +105,11 @@ impl ProcessBatch {
     /// keeps the remainder. Called between two processes, so every pending
     /// edge's `Process` node is pending or already written: the pending nodes
     /// are written first. With no full edge chunk, the nodes are written only
-    /// once they fill a chunk themselves.
+    /// once they fill a chunk themselves. In `trace_processes` that second
+    /// trigger never fires alone, since every entry there is a `Function`
+    /// with an `EntryPointOf` edge, so that table holds at least as many
+    /// pending rows as the nodes; it bounds the nodes of a batch whose
+    /// entries have no `EntryPointOf` table.
     pub(super) fn flush_full_chunks(&mut self, store: &GraphStore) -> Result<(), String> {
         let full_edges = self.edges.values().any(|e| e.len() >= BULK_BATCH_SIZE);
         if !full_edges && self.nodes.len() < BULK_BATCH_SIZE {
@@ -129,13 +142,17 @@ impl ProcessBatch {
         Ok(())
     }
 
-    /// The rows not yet written: `Process` nodes, then each edge table.
+    /// The rows not yet written: `Process` nodes, then each edge table by
+    /// name, sorted.
     #[cfg(test)]
-    pub(super) fn pending(&self) -> (usize, Vec<usize>) {
-        (
-            self.nodes.len(),
-            self.edges.values().map(|e| e.len()).collect(),
-        )
+    pub(super) fn pending(&self) -> (usize, Vec<(String, usize)>) {
+        let mut tables: Vec<(String, usize)> = self
+            .edges
+            .iter()
+            .map(|(rel, e)| (rel.clone(), e.len()))
+            .collect();
+        tables.sort();
+        (self.nodes.len(), tables)
     }
 }
 
