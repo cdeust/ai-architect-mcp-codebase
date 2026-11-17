@@ -1,5 +1,9 @@
-use crate::graph_store::{cypher_str, GraphStore, PropEdgeList};
+use crate::graph_store::GraphStore;
 use std::collections::{HashMap, VecDeque};
+
+#[path = "process_persist.rs"]
+mod process_persist;
+use process_persist::ProcessBatch;
 
 pub struct ProcessInfo {
     pub name: String,
@@ -265,25 +269,17 @@ fn detect_lib_entries(store: &GraphStore, entries: &mut Vec<EntryPoint>) -> Resu
 const MAX_BFS_DEPTH: u64 = 20;
 
 fn trace_one_process(
-    store: &GraphStore,
+    batch: &mut ProcessBatch,
     entry: &EntryPoint,
     call_edges: &HashMap<String, Vec<String>>,
     id_to_label: &HashMap<String, String>,
-) -> Result<ProcessInfo, String> {
+) {
     let process_id = format!("process::{}", entry.qualified_name);
     let depths = bfs_from_entry(&entry.id, call_edges);
     let max_depth = depths.values().copied().max().unwrap_or(0);
     let symbol_count = depths.len() as u64;
-    persist_process_node(store, entry, &process_id, symbol_count, max_depth)?;
-    persist_participates_in(store, &depths, &process_id, id_to_label)?;
-
-    Ok(ProcessInfo {
-        name: process_id,
-        entry_point: entry.qualified_name.clone(),
-        entry_kind: entry.kind.clone(),
-        depth: max_depth,
-        node_count: symbol_count,
-    })
+    batch.add_process(entry, &process_id, symbol_count, max_depth);
+    batch.add_participants(&depths, &process_id, id_to_label);
 }
 
 /// BFS from an entry point along Calls edges, returning every reachable
@@ -320,82 +316,6 @@ fn bfs_from_entry(
         }
     }
     depths
-}
-
-fn persist_process_node(
-    store: &GraphStore,
-    entry: &EntryPoint,
-    process_id: &str,
-    symbol_count: u64,
-    max_depth: u64,
-) -> Result<(), String> {
-    let proc_lit = cypher_str(process_id);
-    store.insert_node(
-        "Process",
-        &[
-            ("id", &proc_lit),
-            ("name", &proc_lit),
-            ("entry_point_id", &cypher_str(&entry.id)),
-            ("entry_kind", &cypher_str(&entry.kind)),
-            ("entry_confidence", &entry.confidence.to_string()),
-            ("depth", &max_depth.to_string()),
-            ("symbol_count", &symbol_count.to_string()),
-        ],
-    )?;
-    let ep_rel = format!("EntryPointOf_{}_Process", entry.label);
-    // EntryPointOf tables only defined for Function/Method per REL_TABLES.
-    if !crate::graph_store::is_known_rel_table(&ep_rel) {
-        eprintln!(
-            "clustering: skipping EntryPointOf for non-callable label {}",
-            entry.label
-        );
-        return Ok(());
-    }
-    store.insert_edge(
-        &ep_rel,
-        &entry.id,
-        process_id,
-        &[("confidence", &entry.confidence.to_string())],
-    )
-}
-
-fn persist_participates_in(
-    store: &GraphStore,
-    depths: &HashMap<String, u64>,
-    process_id: &str,
-    id_to_label: &HashMap<String, String>,
-) -> Result<(), String> {
-    // Group edges by rel table, bulk-insert per group.
-    // source: Fermi audit April 2026 — was 2 probe queries per visited node
-    //         plus a per-row CREATE; now zero probes and one bulk call per rel.
-    let mut by_rel: HashMap<String, PropEdgeList> = HashMap::new();
-    for (node_id, depth) in depths {
-        let lbl = match id_to_label.get(node_id) {
-            Some(l) => l,
-            None => continue,
-        };
-        let rel = format!("ParticipatesIn_{lbl}_Process");
-        // ParticipatesIn tables only defined for Function/Method per
-        // REL_TABLES. Filter at producer side instead of swallowing the
-        // bulk_insert error (which previously dropped real edges too).
-        if !crate::graph_store::is_known_rel_table(&rel) {
-            continue;
-        }
-        // source: ordering fix — persist the real BFS depth (step number in
-        // the process's call chain) instead of a hardcoded 0. The depth was
-        // computed in bfs_from_entry and discarded here, collapsing the chain
-        // into an unordered set. `depth` is the shortest-path distance from
-        // the entry point, so a consumer can order participants by it.
-        by_rel.entry(rel).or_default().push((
-            node_id.clone(),
-            process_id.to_string(),
-            vec![("depth".into(), depth.to_string())],
-        ));
-    }
-    for (rel, edges) in &by_rel {
-        store.bulk_insert_edges(rel, edges)?;
-    }
-    Ok(())
 }
 
 /// Loads id -> label for every Function and Method in the graph. One scan
@@ -455,12 +375,15 @@ pub fn trace_processes(store: &GraphStore) -> Result<u64, String> {
     // Single scan: build id -> label once so persist_participates_in needs
     // zero database probes. source: Fermi audit April 2026.
     let id_to_label = build_call_target_labels(store)?;
-    let mut count = 0u64;
+    // Every process is traced in memory first, then written with one bulk
+    // call per table: one `CREATE` and one `MATCH ... CREATE` per process cost
+    // 1.8 s of a second `analyze_codebase` on ripgrep (issue #443).
+    let mut batch = ProcessBatch::default();
     for entry in &entries {
-        trace_one_process(store, entry, &call_edges, &id_to_label)?;
-        count += 1;
+        trace_one_process(&mut batch, entry, &call_edges, &id_to_label);
     }
-    Ok(count)
+    batch.write(store)?;
+    Ok(entries.len() as u64)
 }
 
 // ---------------------------------------------------------------------------
