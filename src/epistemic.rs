@@ -64,8 +64,8 @@ impl Boundary {
 // source: GitNexus ScopeResolver measured per-relation resolution-confidence —
 // CALLS 0.90, EXTENDS/IMPLEMENTS 0.85, ACCESSES 0.80. AP's `Uses_` edge is the
 // field/type-access relation (== GitNexus ACCESSES, 0.80); AP's `Imports_` edge
-// is measured at 0.90 by the resolver's import-scope-lookup path
-// (resolver.rs:374 `buf.add(..., 0.9, "import-scope-lookup")`). Structural edges
+// is written at 0.90 by the resolver's import paths, single and glob
+// (`resolver/imports.rs`, `confidence_for(Evidence::ImportMatch)`). Structural edges
 // (Contains/Defines/HasMethod/...) are exact by construction → 1.0.
 pub fn relation_confidence_floor(rel_or_prefix: &str) -> f64 {
     if rel_or_prefix.starts_with("Calls_") {

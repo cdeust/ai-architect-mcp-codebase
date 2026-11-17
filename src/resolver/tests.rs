@@ -280,3 +280,39 @@ fn bench_glob_import_scaling() {
     );
     assert_eq!(total_edges as usize, modules * symbols_per_module);
 }
+
+/// A glob import writes each member at the policy's values for an import
+/// match, not at a copy of them (review of #560: `resolve_glob_import`
+/// hard-coded `0.9, "import-scope-lookup"` and no test tied it to
+/// `confidence_for`).
+#[test]
+fn a_glob_import_writes_the_policy_values_of_an_import_match() {
+    let entry = SymbolEntry {
+        id: "src/b.rs::helper".to_string(),
+        label: "Function".to_string(),
+        qualified_name: "b::helper".to_string(),
+    };
+    let idx = SymbolIndex {
+        by_name: HashMap::from([("helper".to_string(), vec![entry.clone()])]),
+        by_qn: HashMap::from([("b::helper".to_string(), entry.clone())]),
+        by_parent_module: HashMap::from([("b".to_string(), vec![entry])]),
+    };
+    let mut buf = EdgeBuffer::new(HashSet::new());
+    assert_eq!(resolve_glob_import(&idx, &mut buf, "src/a.rs", "b"), 1);
+    let evidence = ambiguity_policy::Evidence::ImportMatch;
+    let expected = vec![
+        (
+            "confidence".to_string(),
+            ambiguity_policy::confidence_for(evidence).to_string(),
+        ),
+        (
+            "resolution_method".to_string(),
+            format!("'{}'", ambiguity_policy::resolution_label(evidence)),
+        ),
+    ];
+    let rows = &buf.by_table["Imports_File_Function"];
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "src/a.rs");
+    assert_eq!(rows[0].1, "src/b.rs::helper");
+    assert_eq!(rows[0].2, expected);
+}

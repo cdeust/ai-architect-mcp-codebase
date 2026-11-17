@@ -150,9 +150,12 @@ fn a_declined_refresh_leaves_the_manifest_and_the_graph_rows_as_they_were() {
     // proved only that a call row exists (review of #557). The confidence and
     // the method are the policy's for an import match, not a copy of them
     // (review of #558): a deliberate change of those two values moves the pin
-    // with it. The evidence is fixed: the row is the one the import rule
-    // decides, so a change of the tier that decides it fails here (review of
-    // #559). The values themselves are pinned in the policy's own tests.
+    // with it. The evidence is fixed: the call is spelled by its written path
+    // (`crate::m0::f0()`, no `use`), so the written-path gate (`named()` in
+    // `resolver/calls/candidate_scope.rs`) records `ImportMatch` for it, and
+    // a change of the tier that decides it fails here (reviews of #559 and
+    // #560). The values themselves are pinned by the policy's own test and
+    // by `tests/kotlin_ambiguous_calls.rs`, one test on each side.
     let evidence = crate::ambiguity_policy::Evidence::ImportMatch;
     // The trailing `|` and `starts_with` rely on `observed_count` following
     // `resolution_method` in the table's columns: the row goes on after the
