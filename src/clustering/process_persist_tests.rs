@@ -409,10 +409,12 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
 /// `ParticipatesIn` table holds `BULK_BATCH_SIZE + EXTRA` rows at process
 /// `EXTRA`. The participant remainder, `EXTRA` rows, is what kills a write
 /// of the wrong end of the table (`edges[len - full..]`) (review of #571,
-/// note 2). The compile-time bound on `EXTRA` gives that requirement a clear
-/// message; `EXTRA = 0` could not run anyway, since no participant would be
-/// added and `processes[EXTRA - 1]` would not compile (review of #572,
-/// note 3).
+/// note 2). The compile-time bound on `EXTRA` states both halves of that
+/// requirement with a clear message: `EXTRA > 0`, so that the remainder is
+/// not empty (with `EXTRA = 0` no participant would be added and
+/// `processes[EXTRA - 1]` would not compile), and `EXTRA < BULK_BATCH_SIZE`,
+/// so that the remainder is a partial chunk the flush keeps, not a full one
+/// it writes (review of #572, note 3, and review of #573, note 3).
 #[test]
 fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
