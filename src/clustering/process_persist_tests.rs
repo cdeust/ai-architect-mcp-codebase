@@ -214,18 +214,24 @@ fn process_batch_keeps_less_than_one_chunk_per_table_between_processes() {
     batch.write(&store).expect("write");
 
     assert!(peak > 0, "the bound was never exercised");
-    let participants = rows(
-        &store,
-        "MATCH (:Function)-[r:ParticipatesIn_Function_Process]->(:Process) RETURN count(*)",
-    );
-    assert_eq!(participants, [[(N * N).to_string()]], "{participants:?}");
-    let processes = rows(&store, "MATCH (p:Process) RETURN count(*)");
-    assert_eq!(processes, [[N.to_string()]], "{processes:?}");
-    let entries = rows(
-        &store,
-        "MATCH (:Function)-[r:EntryPointOf_Function_Process]->(:Process) RETURN count(*)",
-    );
-    assert_eq!(entries, [[N.to_string()]], "{entries:?}");
+    // Review of #570, note 2: N * N rows are not a multiple of the chunk, so
+    // flushes leave remainders; each row must be written once, which a total
+    // per table does not show.
+    let processes: Vec<(String, String)> = ids
+        .iter()
+        .map(|id| (id.clone(), format!("process::{id}")))
+        .collect();
+    let nodes = rows(&store, "MATCH (p:Process) RETURN p.id");
+    let mut expected_nodes: Vec<Vec<String>> =
+        processes.iter().map(|(_, p)| vec![p.clone()]).collect();
+    expected_nodes.sort();
+    assert_eq!(nodes, expected_nodes, "Process nodes");
+    assert_each_edge_once(&store, "EntryPointOf_Function_Process", &processes);
+    let participants: Vec<(String, String)> = processes
+        .iter()
+        .flat_map(|(_, p)| ids.iter().map(move |f| (f.clone(), p.clone())))
+        .collect();
+    assert_each_edge_once(&store, "ParticipatesIn_Function_Process", &participants);
 }
 
 /// A store holding `n` functions `lib.rs::f0..`, their id -> label map, and
@@ -368,22 +374,34 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     assert_each_edge_once(&store, "ParticipatesIn_Function_Process", &participants);
 }
 
-/// Review of #569, note 3: `EntryPointOf` through an early flush. Entries
-/// with no participant leave `EntryPointOf_Function_Process` the only edge
-/// table, one row per process, so it fills a chunk at the
-/// `BULK_BATCH_SIZE`-th process: the flush must write the pending `Process`
-/// nodes, then that chunk, and keep nothing of either. After every process
-/// both hold what was added modulo one chunk; after the flush that lands, the
-/// store holds each entry edge of the first chunk once, and after the final
-/// write each of them all.
+/// Review of #569, note 3, and review of #570, note 1: `EntryPointOf`
+/// through an early flush that only the edge trigger fires. Every process
+/// adds one `Process` node and one `EntryPointOf` row and no participant,
+/// except process `EXTRA`, which reaches every function: its
+/// `ParticipatesIn` table then holds more than one chunk and its flush writes
+/// the `EXTRA` pending nodes and that chunk, but keeps the `EXTRA` entry
+/// edges and the `EXTRA` participants past the chunk. From there the entry
+/// edges lead the nodes by `EXTRA`, so at the `BULK_BATCH_SIZE`-th process
+/// `EntryPointOf_Function_Process` holds a full chunk while the nodes hold
+/// `EXTRA` fewer: the node trigger alone does not fire, and the flush must
+/// still write the pending nodes, then that chunk, and keep nothing of
+/// either. After every process the pending rows are checked; after the flush
+/// that lands, the store holds each entry edge of the first chunk once, and
+/// after the final write every row once, including the participants that
+/// the first flush left as a remainder (review of #570, note 2).
 #[test]
 fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
     const REL: &str = "EntryPointOf_Function_Process";
-    let extra = 3;
+    const PARTICIPATES: &str = "ParticipatesIn_Function_Process";
+    const EXTRA: usize = 3;
     let Functions {
-        _tmp, store, ids, ..
-    } = store_with_functions("process_batch_entries_", BULK_BATCH_SIZE + extra);
+        _tmp,
+        store,
+        ids,
+        labels,
+        depths,
+    } = store_with_functions("process_batch_entries_", BULK_BATCH_SIZE + EXTRA);
     let processes: Vec<(String, String)> = ids
         .iter()
         .map(|id| (id.clone(), format!("process::{id}")))
@@ -391,18 +409,32 @@ fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
 
     let mut batch = super::ProcessBatch::default();
     for (k, (id, process_id)) in processes.iter().enumerate() {
-        batch.add_process(&entry(id, "Function"), process_id, 0, 0);
-        batch.flush_full_chunks(&store).expect("flush");
         let done = k + 1;
-        let (nodes, tables) = batch.pending();
+        batch.add_process(&entry(id, "Function"), process_id, 0, 0);
+        if done == EXTRA {
+            batch.add_participants(&depths, process_id, &labels);
+        }
+        if done == BULK_BATCH_SIZE {
+            let (nodes, tables) = batch.pending();
+            assert_eq!(
+                (nodes, tables[0].clone()),
+                (BULK_BATCH_SIZE - EXTRA, (REL.to_string(), BULK_BATCH_SIZE)),
+                "only the edge trigger fires at process {done}"
+            );
+        }
+        batch.flush_full_chunks(&store).expect("flush");
+        let pending_nodes = match done {
+            d if d < EXTRA => d,
+            d if d < BULK_BATCH_SIZE => d - EXTRA,
+            d => d - BULK_BATCH_SIZE,
+        };
+        let mut expected = vec![(REL.to_string(), done % BULK_BATCH_SIZE)];
+        if done >= EXTRA {
+            expected.push((PARTICIPATES.to_string(), EXTRA));
+        }
         assert_eq!(
-            nodes,
-            done % BULK_BATCH_SIZE,
-            "Process nodes after process {done}"
-        );
-        assert_eq!(
-            tables,
-            [(REL.to_string(), done % BULK_BATCH_SIZE)],
+            batch.pending(),
+            (pending_nodes, expected),
             "after process {done}"
         );
         if done == BULK_BATCH_SIZE {
@@ -412,6 +444,12 @@ fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     batch.write(&store).expect("write");
 
     assert_each_edge_once(&store, REL, &processes);
+    let process_id = &processes[EXTRA - 1].1;
+    let participants: Vec<(String, String)> = ids
+        .iter()
+        .map(|f| (f.clone(), process_id.clone()))
+        .collect();
+    assert_each_edge_once(&store, PARTICIPATES, &participants);
 }
 
 /// The store holds exactly the `rel` edges `expected` names by
@@ -419,18 +457,13 @@ fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
 fn assert_each_edge_once(store: &GraphStore, rel: &str, expected: &[(String, String)]) {
     let written = rows(
         store,
-        &format!("MATCH (s)-[r:{rel}]->(p:Process) RETURN s.id, p.id, count(*)"),
+        &format!("MATCH (s)-[:{rel}]->(p:Process) RETURN s.id, p.id, count(*)"),
     );
     let mut want: Vec<Vec<String>> = expected
         .iter()
         .map(|(s, p)| vec![s.clone(), p.clone(), "1".to_string()])
         .collect();
     want.sort();
-    assert_eq!(
-        written.len(),
-        want.len(),
-        "{rel}: rows by source and Process"
-    );
     assert_eq!(written, want, "{rel}");
 }
 
