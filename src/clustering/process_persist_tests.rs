@@ -399,14 +399,20 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
 /// including the participants that the first flush left as a remainder
 /// (review of #570, note 2, and review of #571, note 3).
 ///
-/// Which mutants each part kills (review of #571, note 1): a trigger without
-/// `full_edges` already fails at process `EXTRA`, through the
-/// `ParticipatesIn` table, which then holds more than a chunk while the
-/// nodes hold `EXTRA`. The `BULK_BATCH_SIZE`-th process kills only a
-/// narrower mutant, a trigger that leaves `EntryPointOf` out. The
-/// participant remainder is `EXTRA`, so `EXTRA` must not be 0, or a write of
-/// the wrong end of the table (`edges[len - full..]`) would pass (review of
-/// #571, note 2).
+/// Which mutants each part kills (review of #571, note 1, and review of
+/// #572, note 1): a trigger without `full_edges` already fails at process
+/// `EXTRA`, through the `ParticipatesIn` table, which then holds more than a
+/// chunk while the nodes hold `EXTRA`. The `BULK_BATCH_SIZE`-th process,
+/// where `EntryPointOf` holds exactly one chunk, kills two mutants that
+/// process `EXTRA` lets through: a trigger that leaves `EntryPointOf` out,
+/// and a `full_edges` that compares with `>` instead of `>=`, since the
+/// `ParticipatesIn` table holds `BULK_BATCH_SIZE + EXTRA` rows at process
+/// `EXTRA`. The participant remainder, `EXTRA` rows, is what kills a write
+/// of the wrong end of the table (`edges[len - full..]`) (review of #571,
+/// note 2). The compile-time bound on `EXTRA` gives that requirement a clear
+/// message; `EXTRA = 0` could not run anyway, since no participant would be
+/// added and `processes[EXTRA - 1]` would not compile (review of #572,
+/// note 3).
 #[test]
 fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
