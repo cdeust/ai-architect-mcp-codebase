@@ -283,16 +283,13 @@ fn entry(id: &str, label: &str) -> super::super::EntryPoint {
     }
 }
 
-/// Review of #563, note 3: the boundary of the edge trigger, whatever the
-/// fixture size. Each process adds `BULK_BATCH_SIZE / 5` participants, so the
-/// `ParticipatesIn` table lands exactly on a full chunk every fifth process
-/// and must then be empty: a `>=` turned into `>` keeps the 500 rows. After
-/// every flush each table must hold exactly what was added modulo one chunk.
-/// The landings are counted, not assumed. A table can land on a chunk
-/// whatever `BULK_BATCH_SIZE` is (with 6, `per_process` is 1 and it lands at
-/// processes 6 and 12); it is the expected count, `PROCESSES / 5`, that holds
-/// only while `BULK_BATCH_SIZE` is a multiple of 5 (review of #564, note 2;
-/// review of #565, note 1).
+/// Review of #563, note 3: the boundary of the edge trigger. The first
+/// assertion requires `BULK_BATCH_SIZE` (500) to be a multiple of 5. Each
+/// process then adds `BULK_BATCH_SIZE / 5` participants, so the
+/// `ParticipatesIn` table holds exactly one full chunk at every fifth process
+/// and one flush must empty it: a `>=` turned into `>` keeps the chunk. After
+/// every flush each table must hold what was added modulo one chunk, and the
+/// landings are counted, `PROCESSES / 5` of them (reviews of #564, #565, #566).
 #[test]
 fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
