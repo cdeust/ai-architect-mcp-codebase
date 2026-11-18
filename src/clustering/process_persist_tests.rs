@@ -191,6 +191,7 @@ fn process_batch_keeps_less_than_one_chunk_per_table_between_processes() {
 
     let mut batch = super::ProcessBatch::default();
     let mut peak = 0;
+    let mut remainders = 0;
     for id in &ids {
         let entry = super::super::EntryPoint {
             id: id.clone(),
@@ -203,7 +204,11 @@ fn process_batch_keeps_less_than_one_chunk_per_table_between_processes() {
         let process_id = format!("process::{id}");
         batch.add_process(&entry, &process_id, N as u64, 1);
         batch.add_participants(&depths, &process_id, &labels);
+        let before = participates_pending(&batch);
         batch.flush_full_chunks(&store).expect("flush");
+        if before >= BULK_BATCH_SIZE && participates_pending(&batch) > 0 {
+            remainders += 1;
+        }
         let (nodes, tables) = batch.pending();
         assert!(nodes < BULK_BATCH_SIZE, "{nodes} pending Process rows");
         for (_, pending) in tables {
@@ -214,9 +219,12 @@ fn process_batch_keeps_less_than_one_chunk_per_table_between_processes() {
     batch.write(&store).expect("write");
 
     assert!(peak > 0, "the bound was never exercised");
-    // Review of #570, note 2: N * N rows are not a multiple of the chunk, so
-    // flushes leave remainders; each row must be written once, which a total
-    // per table does not show.
+    // Review of #570, note 2: flushes that leave a remainder; each row must be
+    // written once, which a total per table does not show. A write of the
+    // wrong end of the table (`edges[len - full..]`) only shows when the
+    // remainder is not empty, so the remainders are counted, not assumed from
+    // N (review of #571, note 2).
+    assert!(remainders > 0, "no flush left a ParticipatesIn remainder");
     let processes: Vec<(String, String)> = ids
         .iter()
         .map(|id| (id.clone(), format!("process::{id}")))
@@ -387,14 +395,28 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
 /// still write the pending nodes, then that chunk, and keep nothing of
 /// either. After every process the pending rows are checked; after the flush
 /// that lands, the store holds each entry edge of the first chunk once, and
-/// after the final write every row once, including the participants that
-/// the first flush left as a remainder (review of #570, note 2).
+/// after the final write every `Process` node by id and every edge once,
+/// including the participants that the first flush left as a remainder
+/// (review of #570, note 2, and review of #571, note 3).
+///
+/// Which mutants each part kills (review of #571, note 1): a trigger without
+/// `full_edges` already fails at process `EXTRA`, through the
+/// `ParticipatesIn` table, which then holds more than a chunk while the
+/// nodes hold `EXTRA`. The `BULK_BATCH_SIZE`-th process kills only a
+/// narrower mutant, a trigger that leaves `EntryPointOf` out. The
+/// participant remainder is `EXTRA`, so `EXTRA` must not be 0, or a write of
+/// the wrong end of the table (`edges[len - full..]`) would pass (review of
+/// #571, note 2).
 #[test]
 fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
     const REL: &str = "EntryPointOf_Function_Process";
     const PARTICIPATES: &str = "ParticipatesIn_Function_Process";
     const EXTRA: usize = 3;
+    const _: () = assert!(
+        EXTRA > 0 && EXTRA < BULK_BATCH_SIZE,
+        "the participant remainder EXTRA must be a non-empty partial chunk"
+    );
     let Functions {
         _tmp,
         store,
@@ -443,6 +465,11 @@ fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     }
     batch.write(&store).expect("write");
 
+    let nodes = rows(&store, "MATCH (p:Process) RETURN p.id");
+    let mut expected_nodes: Vec<Vec<String>> =
+        processes.iter().map(|(_, p)| vec![p.clone()]).collect();
+    expected_nodes.sort();
+    assert_eq!(nodes, expected_nodes, "Process nodes");
     assert_each_edge_once(&store, REL, &processes);
     let process_id = &processes[EXTRA - 1].1;
     let participants: Vec<(String, String)> = ids
