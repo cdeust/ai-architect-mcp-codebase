@@ -284,12 +284,13 @@ fn entry(id: &str, label: &str) -> super::super::EntryPoint {
 }
 
 /// Review of #563, note 3: the boundary of the edge trigger. The first
-/// assertion requires `BULK_BATCH_SIZE` (500) to be a multiple of 5. Each
-/// process then adds `BULK_BATCH_SIZE / 5` participants, so the
-/// `ParticipatesIn` table holds exactly one full chunk at every fifth process
-/// and one flush must empty it: a `>=` turned into `>` keeps the chunk. After
-/// every flush each table must hold what was added modulo one chunk, and the
-/// landings are counted, `PROCESSES / 5` of them (reviews of #564, #565, #566).
+/// assertion requires `BULK_BATCH_SIZE` to be a multiple of 5. Each process
+/// then adds `BULK_BATCH_SIZE / 5` participants, so the `ParticipatesIn`
+/// table holds exactly one full chunk at every fifth process and one flush
+/// must empty it: a `>=` turned into `>` keeps the chunk. After every flush
+/// each edge table must hold what was added modulo one chunk, the `Process`
+/// nodes only those added since the last flush, and the landings are
+/// counted, `PROCESSES / 5` of them (reviews of #564, #565, #566, #567).
 #[test]
 fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
@@ -325,7 +326,8 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
             landings += 1;
         }
         let done = k + 1;
-        let (_, tables) = batch.pending();
+        let (nodes, tables) = batch.pending();
+        assert_eq!(nodes, done % 5, "Process nodes after process {done}");
         let expected = vec![
             (
                 "EntryPointOf_Function_Process".to_string(),
