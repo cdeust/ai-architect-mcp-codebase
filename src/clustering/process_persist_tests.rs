@@ -287,10 +287,13 @@ fn entry(id: &str, label: &str) -> super::super::EntryPoint {
 /// assertion requires `BULK_BATCH_SIZE` to be a multiple of 5. Each process
 /// then adds `BULK_BATCH_SIZE / 5` participants, so the `ParticipatesIn`
 /// table holds exactly one full chunk at every fifth process and one flush
-/// must empty it: a `>=` turned into `>` keeps the chunk. After every flush
-/// each edge table must hold what was added modulo one chunk, the `Process`
-/// nodes only those added since the last flush, and the landings are
-/// counted, `PROCESSES / 5` of them (reviews of #564, #565, #566, #567).
+/// must empty it: a `>=` turned into `>` keeps the chunk. After every process
+/// (its `flush_full_chunks` call, which may write nothing) each edge table
+/// must hold what was added modulo one chunk, the `Process` nodes only those
+/// added since the last flush, and the landings are counted, `PROCESSES / 5`
+/// of them. The final write must leave every row in the store: the
+/// `Process` nodes, the `EntryPointOf` edges and the `ParticipatesIn` edges
+/// (reviews of #564, #565, #566, #567, #568).
 #[test]
 fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
@@ -343,15 +346,20 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
     assert_eq!(landings, PROCESSES / 5, "the table landed on a full chunk");
     batch.write(&store).expect("write");
 
-    let participants = rows(
-        &store,
-        "MATCH (:Function)-[r:ParticipatesIn_Function_Process]->(:Process) RETURN count(*)",
-    );
-    assert_eq!(
-        participants,
-        [[(PROCESSES * per_process).to_string()]],
-        "{participants:?}"
-    );
+    for (cypher, expected) in [
+        ("MATCH (p:Process) RETURN count(*)", PROCESSES),
+        (
+            "MATCH (:Function)-[r:EntryPointOf_Function_Process]->(:Process) RETURN count(*)",
+            PROCESSES,
+        ),
+        (
+            "MATCH (:Function)-[r:ParticipatesIn_Function_Process]->(:Process) RETURN count(*)",
+            PROCESSES * per_process,
+        ),
+    ] {
+        let written = rows(&store, cypher);
+        assert_eq!(written, [[expected.to_string()]], "{cypher}: {written:?}");
+    }
 }
 
 /// Review of #563, note 3: the node trigger. Entries whose label has no
