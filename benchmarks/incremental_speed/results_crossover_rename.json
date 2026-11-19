@@ -1,0 +1,53 @@
+{
+  "arch": "x86_64",
+  "attempts_min_of": 3,
+  "change": "rename",
+  "corpus": "src",
+  "cpus": 4,
+  "files": 460,
+  "os": "linux",
+  "rows": [
+    {
+      "full_ms": 17856,
+      "incremental_ms": 5390,
+      "renamed_files": 46,
+      "scope_kept": true,
+      "share_pct": 10
+    },
+    {
+      "full_ms": 17790,
+      "incremental_ms": 8448,
+      "renamed_files": 92,
+      "scope_kept": true,
+      "share_pct": 20
+    },
+    {
+      "full_ms": 19033,
+      "incremental_ms": 11750,
+      "renamed_files": 138,
+      "scope_kept": true,
+      "share_pct": 30
+    },
+    {
+      "full_ms": 17674,
+      "incremental_ms": 13578,
+      "renamed_files": 184,
+      "scope_kept": true,
+      "share_pct": 40
+    },
+    {
+      "full_ms": 19427,
+      "incremental_ms": 15896,
+      "renamed_files": 230,
+      "scope_kept": true,
+      "share_pct": 50
+    },
+    {
+      "full_ms": 19641,
+      "incremental_ms": 22778,
+      "renamed_files": 345,
+      "scope_kept": true,
+      "share_pct": 75
+    }
+  ]
+}

@@ -159,10 +159,57 @@ crossover -- --delete src`. **Results:** `results_crossover_delete.json`.
 | 75% | 345 | 8844 ms | 4823 ms |
 
 The refresh wins every row up to 50% and loses at 75%, so the 40% bound
-declines no deletion the refresh measured slower on. Over the current files
+refreshes no deletion the refresh measured slower on; it gives up the 50%
+row, rebuilt in 9.3 s where the refresh took 7.5 s. Over the current files
 alone, the 30% row (138 of 460, read as 138 of 322, 43%) was rebuilt in
-13.6 s where the refresh took 6.2 s. Not measured: mixed edits and deletions,
-renames, another tree size.
+13.6 s where the refresh took 6.2 s. Mixed edits and deletions, and renames,
+are measured below; another tree size is not.
+
+### Mixed edits and deletions: `--mixed`, `src/` (460 Rust files)
+Same sweep, but of the chosen files every other one is edited (it gains a
+function, as in the edit sweep) and the rest are deleted, so one change set
+both re-parses and purges. The share is of the tree before the change, the
+bound's denominator. 2026-11-19, same hardware and toolchain, release, min
+of 3. **Command:** `cargo run -p incremental-speed-bench --release --bin
+crossover -- --mixed src`. **Results:** `results_crossover_mixed.json`.
+
+| edited + deleted | files | incremental + resolve | full + resolve |
+|---:|---:|---:|---:|
+| 10% | 46 | 5505 ms | 16882 ms |
+| 20% | 92 | 7525 ms | 15302 ms |
+| 30% | 138 | 9557 ms | 14809 ms |
+| 40% | 184 | 12504 ms | 13825 ms |
+| 50% | 230 | 14612 ms | 12875 ms |
+| 75% | 345 | 18358 ms | 10958 ms |
+
+The refresh wins up to 40% and loses from 50%: the crossover lies between
+40% and 50%, as for edits alone, and the 40% bound refreshes every row the
+refresh won and rebuilds every row it lost.
+
+### Renames: `--rename`, `src/` (460 Rust files)
+Same sweep, but each chosen file is moved to `<stem>_crossover_renamed.<ext>`
+in its directory, content unchanged. The manifest pairs the two ends by
+content hash, so the bound counts one touched file per rename, over the
+current files; the refresh purges the old path and parses the new one.
+2026-11-19, same hardware and toolchain, release, min of 3. **Command:**
+`cargo run -p incremental-speed-bench --release --bin crossover -- --rename
+src`. **Results:** `results_crossover_rename.json`.
+
+| renamed | files | incremental + resolve | full + resolve |
+|---:|---:|---:|---:|
+| 10% | 46 | 5390 ms | 17856 ms |
+| 20% | 92 | 8448 ms | 17790 ms |
+| 30% | 138 | 11750 ms | 19033 ms |
+| 40% | 184 | 13578 ms | 17674 ms |
+| 50% | 230 | 15896 ms | 19427 ms |
+| 75% | 345 | 22778 ms | 19641 ms |
+
+The refresh wins up to 50% and loses at 75%. The 40% bound refreshes no
+rename the refresh measured slower on; like deletions, it gives up the 50%
+row, rebuilt in 19.4 s where the refresh took 15.9 s. One bound serves every
+kind of change, and edits, alone or mixed, lose at 50%, so it stays at 40%.
+Not measured: another tree size, another language, renames with edits (the
+hash then differs, and the pair counts as one deletion and one addition).
 
 ## Second call on an unchanged tree (issue #443): `second_call`
 
