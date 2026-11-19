@@ -418,17 +418,23 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
 /// `(BULK_BATCH_SIZE + EXTRA) % BULK_BATCH_SIZE` participant rows, always
 /// less than a chunk; the compile-time bound on `EXTRA` states both halves of
 /// what the test needs with a clear message: `EXTRA > 0`, so that the
-/// remainder is not empty (with `EXTRA = 0` no participant would be added and
-/// `processes[EXTRA - 1]` would not compile), and `EXTRA < BULK_BATCH_SIZE`,
-/// so that the remainder equals `EXTRA`, which the expected pending
-/// `ParticipatesIn` count relies on (`EXTRA = BULK_BATCH_SIZE + 3` would
-/// still leave a remainder, of 3 rows, not `EXTRA`) (review of #572, note 3,
-/// review of #573, note 3, and review of #575, note 3). The second half also
-/// puts process `EXTRA` before process `BULK_BATCH_SIZE`: the pending-node
-/// expectation `BULK_BATCH_SIZE - EXTRA` at process `BULK_BATCH_SIZE` and the
-/// `pending_nodes` arms, `d < EXTRA` then `d < BULK_BATCH_SIZE`, rely on
-/// that order; the edge expectations do not (review of #574, note 3, and
-/// review of #575, note 2).
+/// remainder is not empty (with `EXTRA = 0` no participant would be added;
+/// rustc reports the `const` assert first, and rejects `processes[EXTRA - 1]`
+/// too, but only through the deny-by-default `arithmetic_overflow` lint),
+/// and `EXTRA < BULK_BATCH_SIZE`, so that the
+/// remainder equals `EXTRA`, which the expected pending `ParticipatesIn`
+/// count relies on (`EXTRA = BULK_BATCH_SIZE + 3` would still leave a
+/// remainder, of 3 rows, not `EXTRA`) (review of #572, note 3, review of
+/// #573, note 3, review of #575, note 3, and review of #576, note 2). The
+/// second half also puts process `EXTRA` before process `BULK_BATCH_SIZE`:
+/// the pending-node expectation `BULK_BATCH_SIZE - EXTRA` at process
+/// `BULK_BATCH_SIZE` and the `pending_nodes` arms, `d < EXTRA` then
+/// `d < BULK_BATCH_SIZE`, rely on that order; the edge expectations do not,
+/// but the two mutants process `BULK_BATCH_SIZE` kills are killed only
+/// because of it: with `EXTRA > BULK_BATCH_SIZE`, the nodes hold
+/// `BULK_BATCH_SIZE` rows at that process, the node trigger fires, and both
+/// mutants pass (review of #574, note 3, review of #575, note 2, and review
+/// of #576, note 1).
 #[test]
 fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
@@ -437,7 +443,8 @@ fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     const EXTRA: usize = 3;
     const _: () = assert!(
         EXTRA > 0 && EXTRA < BULK_BATCH_SIZE,
-        "EXTRA must lie in 1..BULK_BATCH_SIZE: the participant remainder is EXTRA rows"
+        "EXTRA must lie in 1..BULK_BATCH_SIZE: the participant remainder is EXTRA rows, \
+         and process EXTRA comes before process BULK_BATCH_SIZE"
     );
     let Functions {
         _tmp,
