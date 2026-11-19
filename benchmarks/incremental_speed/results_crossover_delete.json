@@ -1,0 +1,53 @@
+{
+  "arch": "x86_64",
+  "attempts_min_of": 3,
+  "change": "delete",
+  "corpus": "src",
+  "cpus": 4,
+  "files": 460,
+  "os": "linux",
+  "rows": [
+    {
+      "deleted_files": 46,
+      "full_ms": 18141,
+      "incremental_ms": 4054,
+      "scope_kept": true,
+      "share_pct": 10
+    },
+    {
+      "deleted_files": 92,
+      "full_ms": 15419,
+      "incremental_ms": 5628,
+      "scope_kept": true,
+      "share_pct": 20
+    },
+    {
+      "deleted_files": 138,
+      "full_ms": 13616,
+      "incremental_ms": 6165,
+      "scope_kept": true,
+      "share_pct": 30
+    },
+    {
+      "deleted_files": 184,
+      "full_ms": 11661,
+      "incremental_ms": 7130,
+      "scope_kept": true,
+      "share_pct": 40
+    },
+    {
+      "deleted_files": 230,
+      "full_ms": 9268,
+      "incremental_ms": 7511,
+      "scope_kept": true,
+      "share_pct": 50
+    },
+    {
+      "deleted_files": 345,
+      "full_ms": 4823,
+      "incremental_ms": 8844,
+      "scope_kept": true,
+      "share_pct": 75
+    }
+  ]
+}

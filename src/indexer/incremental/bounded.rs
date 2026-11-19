@@ -12,13 +12,17 @@ pub enum Refresh {
     /// More than the bound's share of the tree changed: the pass stopped after
     /// classifying, before it touched a file's rows, and the caller rebuilds.
     Declined {
+        /// Changed, added, deleted and renamed files.
         touched: u64,
+        /// The current files plus the deleted ones: every file the change set
+        /// can name (review of #552, note 2).
         files: u64,
     },
 }
 
 /// `index_incremental` that declines when the files to re-parse or purge
-/// exceed `max_touched_pct` percent of the current tree; the manifest, the
+/// exceed `max_touched_pct` percent of the tree on both sides of the change
+/// (the current files plus the deleted ones); the manifest, the
 /// coverage sidecar and every file's rows are then left as they were. The
 /// schema is not: `ensure_cfg_active_columns` and `ensure_rel_tables` run
 /// before the change set is classified, so a graph written before a column or

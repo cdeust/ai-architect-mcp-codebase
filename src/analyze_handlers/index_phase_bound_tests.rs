@@ -63,6 +63,15 @@ fn edit(repo: &Path, k: usize) {
     }
 }
 
+/// Deletes `k` module files. `lib.rs` keeps their `mod` lines: the indexer
+/// does not compile the tree, and the module files left are the same either
+/// way.
+fn delete(repo: &Path, k: usize) {
+    for i in 0..k {
+        fs::remove_file(repo.join(format!("src/m{i}.rs"))).expect("delete");
+    }
+}
+
 /// The largest number of the tree's files (`FILES` modules plus `lib.rs`) the
 /// bound still refreshes.
 fn at_bound() -> usize {
@@ -85,6 +94,55 @@ fn a_change_set_over_the_bound_is_rebuilt_like_a_fresh_analysis() {
     let out = base.join("out");
     run(&repo, &out, false);
     edit(&repo, at_bound() + 1);
+    let resp = run(&repo, &out, false);
+    assert_eq!(resp["index"]["mode"], "full", "{resp}");
+    let fresh = run(&repo, &base.join("fresh"), true);
+    assert_eq!(outcome(&resp), outcome(&fresh));
+}
+
+/// Review of #552, note 2: a deleted file is counted in the share's
+/// denominator as well as in its numerator. Over the current files alone, the
+/// deletions at the bound read as 4 of 7 (57%) and the refresh, which parses
+/// nothing here, was declined.
+#[test]
+fn deletions_at_the_bound_are_refreshed() {
+    let (repo, base) = tree("analyze443_bound_delete_at_");
+    let out = base.join("out");
+    run(&repo, &out, false);
+    delete(&repo, at_bound());
+    let resp = run(&repo, &out, false);
+    assert_eq!(resp["index"]["mode"], "incremental", "{resp}");
+}
+
+/// One deletion past the bound declines, and the counts name the whole tree
+/// before the change: the current files plus the deleted ones.
+#[test]
+fn deletions_over_the_bound_decline_over_the_tree_on_both_sides() {
+    let (repo, base) = tree("analyze443_bound_delete_over_");
+    let out = base.join("out");
+    run(&repo, &out, false);
+    delete(&repo, at_bound() + 1);
+    let manifest = crate::indexer::manifest::manifest_path(&out);
+    let prior = crate::indexer::manifest::load(&manifest).expect("load");
+    let refresh = crate::indexer::index_incremental_bounded(
+        &repo,
+        &out.join("graph"),
+        &manifest,
+        &crate::indexer::IndexOptions {
+            language_filter: Some(crate::parser::Language::Rust),
+            ..Default::default()
+        },
+        &prior,
+        MAX_TOUCHED_PCT,
+    )
+    .expect("bounded refresh");
+    let crate::indexer::Refresh::Declined { touched, files } = refresh else {
+        panic!("over the bound, the refresh must decline");
+    };
+    assert_eq!(
+        (touched, files),
+        ((at_bound() + 1) as u64, (FILES + 1) as u64)
+    );
     let resp = run(&repo, &out, false);
     assert_eq!(resp["index"]["mode"], "full", "{resp}");
     let fresh = run(&repo, &base.join("fresh"), true);
