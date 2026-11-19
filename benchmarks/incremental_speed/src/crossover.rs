@@ -101,17 +101,34 @@ impl Change {
             Change::Delete => std::fs::remove_file(path).unwrap(),
             Change::Mixed if i.is_multiple_of(2) => edit(path, i),
             Change::Mixed => std::fs::remove_file(path).unwrap(),
-            Change::Rename => std::fs::rename(path, renamed(path)).unwrap(),
+            Change::Rename => {
+                let to = renamed(path);
+                // A corpus that already holds the destination would have it
+                // replaced, and the row would measure a deletion too.
+                assert!(
+                    std::fs::symlink_metadata(&to).is_err(),
+                    "rename destination {} already exists in the corpus",
+                    to.display()
+                );
+                std::fs::rename(path, &to).expect("rename inside the scratch copy");
+            }
         }
     }
 }
 
-/// `dir/stem.ext` -> `dir/stem_crossover_renamed.ext`: a name no corpus file
-/// carries, in the same directory and language.
+/// `dir/stem.ext` -> `dir/stem_crossover_renamed.ext`, in the same directory
+/// and language. `apply` refuses a destination the corpus already holds.
+/// The stem stays an `OsStr`, so a non-UTF-8 name is renamed, not a panic.
 fn renamed(path: &Path) -> PathBuf {
-    let stem = path.file_stem().and_then(|x| x.to_str()).unwrap();
-    let ext = path.extension().and_then(|x| x.to_str()).unwrap();
-    path.with_file_name(format!("{stem}_crossover_renamed.{ext}"))
+    // `source_files` keeps only paths with a supported extension, so both the
+    // stem and the extension exist.
+    let mut name = path
+        .file_stem()
+        .expect("source file has a stem")
+        .to_os_string();
+    name.push("_crossover_renamed.");
+    name.push(path.extension().expect("source file has an extension"));
+    path.with_file_name(name)
 }
 
 fn copy_tree(src: &Path, dst: &Path) {
@@ -183,9 +200,22 @@ fn build_base(repo: &Path, out: &Path) -> PathBuf {
     graph
 }
 
-fn time_incremental(repo: &Path, base_out: &Path, scratch: &Path) -> (u64, bool) {
+/// The change set the refresh classified, as `index_incremental` reports it:
+/// the counts the 40% bound of `analyze_codebase` is computed from, observed
+/// instead of assumed from what the sweep did to the files.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Partition {
+    changed: u64,
+    added: u64,
+    deleted: u64,
+    renamed: u64,
+    unchanged: u64,
+}
+
+fn time_incremental(repo: &Path, base_out: &Path, scratch: &Path) -> (u64, bool, Partition) {
     let mut best = u64::MAX;
     let mut scope_kept = true;
+    let mut partition = None;
     for a in 0..ATTEMPTS {
         let out = scratch.join(format!("inc_{a}"));
         remove_path(&out);
@@ -201,8 +231,21 @@ fn time_incremental(repo: &Path, base_out: &Path, scratch: &Path) -> (u64, bool)
         resolver::resolve_graph(&store).unwrap();
         best = best.min(t.elapsed().as_millis() as u64);
         scope_kept &= inc.scope_kept;
+        let p = Partition {
+            changed: inc.changed,
+            added: inc.added,
+            deleted: inc.deleted,
+            renamed: inc.renamed,
+            unchanged: inc.unchanged,
+        };
+        // Every attempt refreshes the same base graph against the same tree.
+        assert!(
+            partition.is_none_or(|q| q == p),
+            "attempts classified the change set differently"
+        );
+        partition = Some(p);
     }
-    (best, scope_kept)
+    (best, scope_kept, partition.expect("ATTEMPTS > 0"))
 }
 
 fn time_full(repo: &Path, scratch: &Path) -> u64 {
@@ -257,12 +300,14 @@ fn main() {
             let rel = files[i * n / k].strip_prefix(&pristine).unwrap();
             change.apply(&repo.join(rel), i);
         }
-        let (inc_ms, scope_kept) = time_incremental(&repo, &base_out, tmp.path());
+        let (inc_ms, scope_kept, p) = time_incremental(&repo, &base_out, tmp.path());
         let full_ms = time_full(&repo, tmp.path());
         eprintln!("share {share:>3}% ({k:>4} files): incremental {inc_ms} ms, full {full_ms} ms");
         rows.push(json!({
             "share_pct": share, (change.count_key()): k,
             "incremental_ms": inc_ms, "full_ms": full_ms, "scope_kept": scope_kept,
+            "changed": p.changed, "added": p.added, "deleted": p.deleted,
+            "renamed": p.renamed, "unchanged": p.unchanged,
         }));
     }
     let report = json!({

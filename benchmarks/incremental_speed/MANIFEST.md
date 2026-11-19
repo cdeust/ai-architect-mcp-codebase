@@ -170,46 +170,61 @@ Same sweep, but of the chosen files every other one is edited (it gains a
 function, as in the edit sweep) and the rest are deleted, so one change set
 both re-parses and purges. The share is of the tree before the change, the
 bound's denominator. 2026-11-19, same hardware and toolchain, release, min
-of 3. **Command:** `cargo run -p incremental-speed-bench --release --bin
-crossover -- --mixed src`. **Results:** `results_crossover_mixed.json`.
+of 3 (re-run with the observed partition, review of #580). **Command:**
+`cargo run -p incremental-speed-bench --release --bin crossover -- --mixed
+src`. **Results:** `results_crossover_mixed.json`.
 
-| edited + deleted | files | incremental + resolve | full + resolve |
-|---:|---:|---:|---:|
-| 10% | 46 | 5505 ms | 16882 ms |
-| 20% | 92 | 7525 ms | 15302 ms |
-| 30% | 138 | 9557 ms | 14809 ms |
-| 40% | 184 | 12504 ms | 13825 ms |
-| 50% | 230 | 14612 ms | 12875 ms |
-| 75% | 345 | 18358 ms | 10958 ms |
+| edited + deleted | files | changed / deleted | incremental + resolve | full + resolve |
+|---:|---:|---:|---:|---:|
+| 10% | 46 | 23 / 23 | 6684 ms | 20280 ms |
+| 20% | 92 | 46 / 46 | 9714 ms | 17745 ms |
+| 30% | 138 | 69 / 69 | 11455 ms | 18325 ms |
+| 40% | 184 | 92 / 92 | 15772 ms | 16017 ms |
+| 50% | 230 | 115 / 115 | 16330 ms | 14706 ms |
+| 75% | 345 | 173 / 172 | 21410 ms | 12618 ms |
 
-The refresh wins up to 40% and loses from 50%: the crossover lies between
-40% and 50%, as for edits alone, and the 40% bound refreshes every row the
-refresh won and rebuilds every row it lost.
+The refresh wins up to 40% (by 0.2 s there) and loses from 50%: the
+crossover lies between 40% and 50%, as for edits alone.
 
 ### Renames: `--rename`, `src/` (460 Rust files)
 Same sweep, but each chosen file is moved to `<stem>_crossover_renamed.<ext>`
-in its directory, content unchanged. The manifest pairs the two ends by
-content hash, so the bound counts one touched file per rename, over the
-current files; the refresh purges the old path and parses the new one.
-2026-11-19, same hardware and toolchain, release, min of 3. **Command:**
-`cargo run -p incremental-speed-bench --release --bin crossover -- --rename
-src`. **Results:** `results_crossover_rename.json`.
+in its directory, content unchanged; the sweep refuses a destination the
+corpus already holds, so no row also measures a deletion. The manifest pairs
+the two ends by content hash: every row reports `renamed` equal to the files
+moved, and no addition or deletion, so the bound counts one touched file per
+rename, over the current files; the refresh purges the old path and parses
+the new one. 2026-11-19, same hardware and toolchain, release, min of 3
+(re-run with the observed partition, review of #580). **Command:** `cargo
+run -p incremental-speed-bench --release --bin crossover -- --rename src`.
+**Results:** `results_crossover_rename.json`.
 
-| renamed | files | incremental + resolve | full + resolve |
-|---:|---:|---:|---:|
-| 10% | 46 | 5390 ms | 17856 ms |
-| 20% | 92 | 8448 ms | 17790 ms |
-| 30% | 138 | 11750 ms | 19033 ms |
-| 40% | 184 | 13578 ms | 17674 ms |
-| 50% | 230 | 15896 ms | 19427 ms |
-| 75% | 345 | 22778 ms | 19641 ms |
+| renamed | files | renamed (observed) | incremental + resolve | full + resolve |
+|---:|---:|---:|---:|---:|
+| 10% | 46 | 46 | 6458 ms | 20130 ms |
+| 20% | 92 | 92 | 10441 ms | 20277 ms |
+| 30% | 138 | 138 | 12640 ms | 20139 ms |
+| 40% | 184 | 184 | 15216 ms | 20498 ms |
+| 50% | 230 | 230 | 18059 ms | 20828 ms |
+| 75% | 345 | 345 | 24752 ms | 22602 ms |
 
-The refresh wins up to 50% and loses at 75%. The 40% bound refreshes no
-rename the refresh measured slower on; like deletions, it gives up the 50%
-row, rebuilt in 19.4 s where the refresh took 15.9 s. One bound serves every
-kind of change, and edits, alone or mixed, lose at 50%, so it stays at 40%.
-Not measured: another tree size, another language, renames with edits (the
-hash then differs, and the pair counts as one deletion and one addition).
+The refresh wins up to 50% and loses at 75%.
+
+### What the bound does with these rows
+The sweep times the unbounded `index_incremental`, so which rows
+`analyze_codebase` refreshes is computed from the bound's rule
+(`touched * 100 > 40 * files` rebuilds) over the observed partition, not
+timed through `index_incremental_bounded`. In both sweeps the partition
+covers 461 files (`unchanged` plus the touched ones), one more than the 460
+`.rs` files the sweep chooses from: the denominator is 461, so the bound
+refreshes up to 184 touched files and rebuilds from 185. The 40% rows (184)
+are therefore the last ones refreshed, by less than one file
+(18400 against 18440), and the 50% rows are rebuilt. For mixed changes that
+refreshes every row the refresh won and rebuilds every row it lost; for
+renames, like deletions, it gives up the 50% row, rebuilt in 20.8 s where
+the refresh took 18.1 s. One bound serves every kind of change, and edits,
+alone or mixed, lose at 50%, so it stays at 40%. Not measured: another tree
+size, another language, renames with edits (the hash then differs, and the
+pair counts as one deletion and one addition).
 
 ## Second call on an unchanged tree (issue #443): `second_call`
 

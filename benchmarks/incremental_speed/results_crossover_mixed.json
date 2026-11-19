@@ -8,46 +8,76 @@
   "os": "linux",
   "rows": [
     {
+      "added": 0,
+      "changed": 23,
+      "deleted": 23,
       "edited_or_deleted_files": 46,
-      "full_ms": 16882,
-      "incremental_ms": 5505,
+      "full_ms": 20280,
+      "incremental_ms": 6684,
+      "renamed": 0,
       "scope_kept": true,
-      "share_pct": 10
+      "share_pct": 10,
+      "unchanged": 415
     },
     {
+      "added": 0,
+      "changed": 46,
+      "deleted": 46,
       "edited_or_deleted_files": 92,
-      "full_ms": 15302,
-      "incremental_ms": 7525,
+      "full_ms": 17745,
+      "incremental_ms": 9714,
+      "renamed": 0,
       "scope_kept": true,
-      "share_pct": 20
+      "share_pct": 20,
+      "unchanged": 369
     },
     {
+      "added": 0,
+      "changed": 69,
+      "deleted": 69,
       "edited_or_deleted_files": 138,
-      "full_ms": 14809,
-      "incremental_ms": 9557,
+      "full_ms": 18325,
+      "incremental_ms": 11455,
+      "renamed": 0,
       "scope_kept": true,
-      "share_pct": 30
+      "share_pct": 30,
+      "unchanged": 323
     },
     {
+      "added": 0,
+      "changed": 92,
+      "deleted": 92,
       "edited_or_deleted_files": 184,
-      "full_ms": 13825,
-      "incremental_ms": 12504,
+      "full_ms": 16017,
+      "incremental_ms": 15772,
+      "renamed": 0,
       "scope_kept": true,
-      "share_pct": 40
+      "share_pct": 40,
+      "unchanged": 277
     },
     {
+      "added": 0,
+      "changed": 115,
+      "deleted": 115,
       "edited_or_deleted_files": 230,
-      "full_ms": 12875,
-      "incremental_ms": 14612,
+      "full_ms": 14706,
+      "incremental_ms": 16330,
+      "renamed": 0,
       "scope_kept": true,
-      "share_pct": 50
+      "share_pct": 50,
+      "unchanged": 231
     },
     {
+      "added": 0,
+      "changed": 173,
+      "deleted": 172,
       "edited_or_deleted_files": 345,
-      "full_ms": 10958,
-      "incremental_ms": 18358,
+      "full_ms": 12618,
+      "incremental_ms": 21410,
+      "renamed": 0,
       "scope_kept": true,
-      "share_pct": 75
+      "share_pct": 75,
+      "unchanged": 116
     }
   ]
 }
