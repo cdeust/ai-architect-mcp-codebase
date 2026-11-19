@@ -140,3 +140,26 @@ files`): on `src/` it refreshes up to 182 files and rebuilds from 183, so the
 past it measured the refresh faster. Below the bound, on small trees, the
 refresh can lose up to about a second to a rebuild. Not measured: a
 tree larger than 456 files (ripgrep, django), another language, other hardware.
+
+### Deletions: `--delete`, `src/` (460 Rust files)
+Same sweep, but each share of the files is deleted instead of edited, so the
+refresh parses nothing and only purges (review of #552, note 2). The share is
+of the tree before the deletion, which is the bound's denominator: the current
+files plus the deleted ones. 2026-11-19, same hardware and toolchain, release,
+min of 3. **Command:** `cargo run -p incremental-speed-bench --release --bin
+crossover -- --delete src`. **Results:** `results_crossover_delete.json`.
+
+| deleted | files | incremental + resolve | full + resolve |
+|---:|---:|---:|---:|
+| 10% | 46 | 4054 ms | 18141 ms |
+| 20% | 92 | 5628 ms | 15419 ms |
+| 30% | 138 | 6165 ms | 13616 ms |
+| 40% | 184 | 7130 ms | 11661 ms |
+| 50% | 230 | 7511 ms | 9268 ms |
+| 75% | 345 | 8844 ms | 4823 ms |
+
+The refresh wins every row up to 50% and loses at 75%, so the 40% bound
+declines no deletion the refresh measured slower on. Over the current files
+alone, the 30% row (138 of 460, read as 138 of 322, 43%) was rebuilt in
+13.6 s where the refresh took 6.2 s. Not measured: mixed edits and deletions,
+renames, another tree size.

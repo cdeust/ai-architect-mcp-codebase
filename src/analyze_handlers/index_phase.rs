@@ -187,7 +187,8 @@ fn graph_has_lsp_rows(graph_dir: &std::path::Path) -> bool {
 }
 
 /// Over this share of the tree changed (changed, added, deleted or renamed
-/// files, in percent of the current files), the refresh costs more than a
+/// files, in percent of the current files plus the deleted ones), the refresh
+/// costs more than a
 /// rebuild, so the call rebuilds. source: measured, `incremental_speed`
 /// `crossover` on this repository's `src/` (456 Rust files, Linux x86_64, 4
 /// CPUs, release, min of 3), index plus resolve on each path: 40% edited,
@@ -195,7 +196,10 @@ fn graph_has_lsp_rows(graph_dir: &std::path::Path) -> bool {
 /// The bound is exclusive (`touched * 100 > 40 * files`), so on those 456
 /// files it refreshes up to 182 and rebuilds from 183, the 40% row itself,
 /// where the refresh measured 1.2 s faster: the rule gives up that row to a
-/// rebuild. `benchmarks/incremental_speed/MANIFEST.md` has the whole sweep.
+/// rebuild. Deleting files only, the refresh measured faster up to 50% of the
+/// tree (`crossover --delete`, 460 files: 7.5 s against 9.3 s at 50%, 8.8 s
+/// against 4.8 s at 75%). `benchmarks/incremental_speed/MANIFEST.md` has both
+/// sweeps.
 const MAX_TOUCHED_PCT: u64 = 40;
 
 #[cfg(test)]
