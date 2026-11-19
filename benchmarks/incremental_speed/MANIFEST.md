@@ -163,3 +163,40 @@ declines no deletion the refresh measured slower on. Over the current files
 alone, the 30% row (138 of 460, read as 138 of 322, 43%) was rebuilt in
 13.6 s where the refresh took 6.2 s. Not measured: mixed edits and deletions,
 renames, another tree size.
+
+## Second call on an unchanged tree (issue #443): `second_call`
+
+The issue asks that a second `analyze_codebase` on an unchanged repository be
+at least 5 times faster than the first. A wall-clock ratio is not a gate here
+(issue #74, above), so this binary measures it. It starts the server binary,
+speaks MCP over its stdio as a client does, and calls `analyze_codebase` three
+times with the same `path` and `output_dir`: the first call builds the graph
+(`index.mode` = `full`), the next two find nothing changed and refresh it
+(`incremental`, 0 files re-parsed). Each round starts from an empty
+`output_dir`; the minimum of 3 rounds is kept per call. `total_ms` is the
+server's `total_elapsed_ms`; `rest_ms` is that total less the search phase and,
+on a refresh, the index phase, so on a refresh it is resolve plus cluster.
+
+- **Hardware:** Linux x86_64, 4 CPUs (cloud container), 15 GiB.
+- **Toolchain:** rustc 1.95.0 (`rust-toolchain.toml`), lbug built from source
+  (`LBUG_BUILD_FROM_SOURCE=1 ZSTD_SYS_USE_PKG_CONFIG=1`, as in CI).
+- **Date:** 2026-11-19. **Profile:** release, min of 3.
+- **Command:** `cargo build --release --bin ai-architect-mcp-codebase`, then
+  `cargo run -p incremental-speed-bench --release --bin second_call --
+  target/release/ai-architect-mcp-codebase <corpus>`.
+- **Results:** `results_second_call_ripgrep.json`, `results_second_call_src.json`.
+
+| corpus | files | first (full) | second | third | first / second | index (2nd) | resolve + cluster (2nd) | search (2nd) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| ripgrep `fdf7d95` | 226 | 14944 ms | 3142 ms | 3078 ms | 4.76× | 1054 ms | 2028 ms | 60 ms |
+| this repository's `src/` at `bf36835` | 461 | 22015 ms | 9657 ms | 9664 ms | 2.28× | 75 ms | 9419 ms | 163 ms |
+
+Neither corpus reaches 5×. On a refresh that re-parses nothing, the index
+phase costs 75 ms on `src/` and about 1 s on ripgrep, and the search index
+under 0.2 s; resolve and cluster, which run over the whole graph on every call
+(`analyze_handlers::do_analyze_codebase`), make 65% of the second call on
+ripgrep and 98% on `src/`. The third call costs what the second does, so the
+first refresh leaves nothing the next one redoes. Not measured: django (7,008
+files, the issue's other corpus), another language, other hardware. Why the
+index phase of an unchanged ripgrep costs 1 s against 75 ms on `src/` is not
+measured either.

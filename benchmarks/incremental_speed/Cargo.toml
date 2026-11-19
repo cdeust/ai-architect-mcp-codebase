@@ -22,6 +22,12 @@ path = "src/main.rs"
 name = "crossover"
 path = "src/crossover.rs"
 
+# Issue #443: `analyze_codebase` called again on an unchanged tree, through the
+# server's stdio, against the "at least 5 times faster" the issue asks.
+[[bin]]
+name = "second_call"
+path = "src/second_call.rs"
+
 [dependencies]
 # The library under test — drives the real indexer/artifact/fill machinery, so
 # the measured operations are the ones the tools run.
