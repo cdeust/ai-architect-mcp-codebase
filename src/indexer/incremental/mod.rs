@@ -218,7 +218,12 @@ fn refresh(
     let mut plan = classify(prior, &current);
     let cs = &plan.change_set;
     let touched = (cs.changed.len() + cs.added.len() + cs.deleted.len() + cs.renamed.len()) as u64;
-    let files = current.len() as u64;
+    // The share is taken of every file on either side of the change: the
+    // current files plus the deleted ones, which are gone from `current` but
+    // counted in `touched` (review of #552, note 2). Over `current` alone,
+    // deleting 29 of 100 files read as 29 of 71 (41%) and declined a refresh
+    // that parses nothing. A renamed file is one of the current files.
+    let files = (current.len() + cs.deleted.len()) as u64;
     if max_touched_pct.is_some_and(|pct| touched * 100 > pct.saturating_mul(files)) {
         return Ok(Refresh::Declined { touched, files });
     }
