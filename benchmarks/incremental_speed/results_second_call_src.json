@@ -1,0 +1,42 @@
+{
+  "arch": "x86_64",
+  "calls": [
+    {
+      "call": 1,
+      "files": 461,
+      "index_ms": null,
+      "mode": "full",
+      "rest_ms": 21864,
+      "search_ms": 151,
+      "speedup_vs_first": "1.00",
+      "total_ms": 22015,
+      "wall_ms": 22316
+    },
+    {
+      "call": 2,
+      "files": 461,
+      "index_ms": 75,
+      "mode": "incremental",
+      "rest_ms": 9419,
+      "search_ms": 163,
+      "speedup_vs_first": "2.28",
+      "total_ms": 9657,
+      "wall_ms": 9976
+    },
+    {
+      "call": 3,
+      "files": 461,
+      "index_ms": 75,
+      "mode": "incremental",
+      "rest_ms": 9447,
+      "search_ms": 142,
+      "speedup_vs_first": "2.28",
+      "total_ms": 9664,
+      "wall_ms": 9940
+    }
+  ],
+  "corpus": "src",
+  "cpus": 4,
+  "os": "linux",
+  "rounds_min_of": 3
+}
