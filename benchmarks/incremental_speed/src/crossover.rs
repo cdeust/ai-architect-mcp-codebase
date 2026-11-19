@@ -21,7 +21,14 @@
 // refresh then parses nothing and only purges, which is what the bound's
 // denominator for deletions is read from (review of #552, note 2).
 //
-// Usage: `cargo run -p incremental-speed-bench --release --bin crossover -- [--delete] [<corpus_dir>]`
+// With `--mixed`, the share is split: every other chosen file is edited, the
+// rest deleted, so one change set both re-parses and purges. With `--rename`,
+// each chosen file is moved to a new name in its directory, content kept: the
+// manifest pairs the two ends by content hash and the refresh purges the old
+// path and parses the new one (`mod.rs`, "Rename detection"). Both answer the
+// "Not measured" line of the `--delete` sweep in MANIFEST.md (#443).
+//
+// Usage: `cargo run -p incremental-speed-bench --release --bin crossover -- [--delete|--mixed|--rename] [<corpus_dir>]`
 // (default: the repository's own `src/`). Prints one JSON object.
 
 use ai_architect_mcp::graph_store::GraphStore;
@@ -34,9 +41,78 @@ use std::time::Instant;
 const ATTEMPTS: usize = 3;
 /// Shares of the corpus's files edited, in percent.
 const SHARES: &[usize] = &[1, 5, 10, 20, 30, 40, 50, 75, 100];
-/// Shares of the corpus's files deleted with `--delete`: around the bound, and
-/// short of the whole tree, which would leave nothing to index.
+/// Shares of the corpus's files deleted with `--delete` (and touched with
+/// `--mixed` or `--rename`): around the bound, and short of the whole tree,
+/// which with deletions would leave nothing to index.
 const DELETE_SHARES: &[usize] = &[10, 20, 30, 40, 50, 75];
+
+/// What happens to each chosen file of a share.
+#[derive(Clone, Copy, PartialEq)]
+enum Change {
+    Edit,
+    Delete,
+    /// Even-numbered chosen files edited, odd-numbered ones deleted.
+    Mixed,
+    /// Moved to a new name in the same directory, content unchanged.
+    Rename,
+}
+
+impl Change {
+    fn from_args(args: &[String]) -> Change {
+        let mut change = Change::Edit;
+        for a in args {
+            let c = match a.as_str() {
+                "--delete" => Change::Delete,
+                "--mixed" => Change::Mixed,
+                "--rename" => Change::Rename,
+                _ => continue,
+            };
+            assert!(
+                change == Change::Edit,
+                "pass at most one of --delete, --mixed, --rename"
+            );
+            change = c;
+        }
+        change
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Change::Edit => "edit",
+            Change::Delete => "delete",
+            Change::Mixed => "mixed",
+            Change::Rename => "rename",
+        }
+    }
+
+    /// The report key that counts the touched files of a row.
+    fn count_key(self) -> &'static str {
+        match self {
+            Change::Edit => "edited_files",
+            Change::Delete => "deleted_files",
+            Change::Mixed => "edited_or_deleted_files",
+            Change::Rename => "renamed_files",
+        }
+    }
+
+    fn apply(self, path: &Path, i: usize) {
+        match self {
+            Change::Edit => edit(path, i),
+            Change::Delete => std::fs::remove_file(path).unwrap(),
+            Change::Mixed if i.is_multiple_of(2) => edit(path, i),
+            Change::Mixed => std::fs::remove_file(path).unwrap(),
+            Change::Rename => std::fs::rename(path, renamed(path)).unwrap(),
+        }
+    }
+}
+
+/// `dir/stem.ext` -> `dir/stem_crossover_renamed.ext`: a name no corpus file
+/// carries, in the same directory and language.
+fn renamed(path: &Path) -> PathBuf {
+    let stem = path.file_stem().and_then(|x| x.to_str()).unwrap();
+    let ext = path.extension().and_then(|x| x.to_str()).unwrap();
+    path.with_file_name(format!("{stem}_crossover_renamed.{ext}"))
+}
 
 fn copy_tree(src: &Path, dst: &Path) {
     let meta = std::fs::symlink_metadata(src).expect("stat");
@@ -147,10 +223,10 @@ fn time_full(repo: &Path, scratch: &Path) -> u64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let delete = args.iter().any(|a| a == "--delete");
+    let change = Change::from_args(&args);
     let corpus = args
         .iter()
-        .find(|a| *a != "--delete")
+        .find(|a| !a.starts_with("--"))
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src"));
     let tmp = tempfile::Builder::new()
@@ -165,7 +241,12 @@ fn main() {
     let n = files.len();
     let repo = tmp.path().join("repo");
     let mut rows = Vec::new();
-    for &share in if delete { DELETE_SHARES } else { SHARES } {
+    let shares = if change == Change::Edit {
+        SHARES
+    } else {
+        DELETE_SHARES
+    };
+    for &share in shares {
         remove_path(&repo);
         copy_tree(&pristine, &repo);
         let base_out = tmp.path().join("base");
@@ -174,28 +255,19 @@ fn main() {
         // Spread the edits over the tree: every (n/k)-th file.
         for i in 0..k {
             let rel = files[i * n / k].strip_prefix(&pristine).unwrap();
-            if delete {
-                std::fs::remove_file(repo.join(rel)).unwrap();
-            } else {
-                edit(&repo.join(rel), i);
-            }
+            change.apply(&repo.join(rel), i);
         }
         let (inc_ms, scope_kept) = time_incremental(&repo, &base_out, tmp.path());
         let full_ms = time_full(&repo, tmp.path());
         eprintln!("share {share:>3}% ({k:>4} files): incremental {inc_ms} ms, full {full_ms} ms");
-        let touched_key = if delete {
-            "deleted_files"
-        } else {
-            "edited_files"
-        };
         rows.push(json!({
-            "share_pct": share, (touched_key): k,
+            "share_pct": share, (change.count_key()): k,
             "incremental_ms": inc_ms, "full_ms": full_ms, "scope_kept": scope_kept,
         }));
     }
     let report = json!({
         "corpus": corpus.display().to_string(), "files": n,
-        "change": if delete { "delete" } else { "edit" },
+        "change": change.name(),
         "attempts_min_of": ATTEMPTS, "arch": std::env::consts::ARCH,
         "os": std::env::consts::OS, "cpus": std::thread::available_parallelism().map(|p| p.get()).unwrap_or(0),
         "rows": rows,
