@@ -219,11 +219,13 @@ fn process_batch_keeps_less_than_one_chunk_per_table_between_processes() {
     batch.write(&store).expect("write");
 
     assert!(peak > 0, "the bound was never exercised");
-    // Review of #570, note 2: flushes that leave a remainder; each row must be
-    // written once, which a total per table does not show. A write of the
-    // wrong end of the table (`edges[len - full..]`) only shows when the
-    // remainder is not empty, so the remainders are counted, not assumed from
-    // N (review of #571, note 2).
+    // Review of #570, note 2: flushes that write a chunk and keep a
+    // remainder; each row must be written once, which a total per table does
+    // not show. A write of the wrong end of the table (`edges[len - full..]`)
+    // only shows when a flush writes at least one full chunk
+    // (`before >= BULK_BATCH_SIZE`) and keeps a non-empty remainder, so those
+    // flushes are counted, not assumed from N (review of #571, note 2, and
+    // review of #574, note 1).
     assert!(remainders > 0, "no flush left a ParticipatesIn remainder");
     let processes: Vec<(String, String)> = ids
         .iter()
@@ -409,12 +411,17 @@ fn process_batch_flushes_an_edge_table_that_lands_exactly_on_a_chunk() {
 /// `ParticipatesIn` table holds `BULK_BATCH_SIZE + EXTRA` rows at process
 /// `EXTRA`. The participant remainder, `EXTRA` rows, is what kills a write
 /// of the wrong end of the table (`edges[len - full..]`) (review of #571,
-/// note 2). The compile-time bound on `EXTRA` states both halves of that
-/// requirement with a clear message: `EXTRA > 0`, so that the remainder is
-/// not empty (with `EXTRA = 0` no participant would be added and
-/// `processes[EXTRA - 1]` would not compile), and `EXTRA < BULK_BATCH_SIZE`,
-/// so that the remainder is a partial chunk the flush keeps, not a full one
-/// it writes (review of #572, note 3, and review of #573, note 3).
+/// note 2), so that remainder must be a non-empty partial chunk. The
+/// compile-time bound on `EXTRA` states both halves of that requirement with
+/// a clear message: `EXTRA > 0`, so that the remainder is not empty (with
+/// `EXTRA = 0` no participant would be added and `processes[EXTRA - 1]` would
+/// not compile), and `EXTRA < BULK_BATCH_SIZE`, so that the remainder is a
+/// partial chunk the flush keeps, not a full one it writes (review of #572,
+/// note 3, and review of #573, note 3). The second half also puts process
+/// `EXTRA` before process `BULK_BATCH_SIZE`: the pending-node expectation
+/// `BULK_BATCH_SIZE - EXTRA` at process `BULK_BATCH_SIZE` and the
+/// `pending_nodes` arms, `d < EXTRA` then `d < BULK_BATCH_SIZE`, rely on
+/// that order (review of #574, note 3).
 #[test]
 fn process_batch_flushes_entry_edges_once_they_fill_a_chunk() {
     use crate::graph_store::BULK_BATCH_SIZE;
