@@ -183,7 +183,11 @@ fn main() {
         let (inc_ms, scope_kept) = time_incremental(&repo, &base_out, tmp.path());
         let full_ms = time_full(&repo, tmp.path());
         eprintln!("share {share:>3}% ({k:>4} files): incremental {inc_ms} ms, full {full_ms} ms");
-        let touched_key = if delete { "deleted_files" } else { "edited_files" };
+        let touched_key = if delete {
+            "deleted_files"
+        } else {
+            "edited_files"
+        };
         rows.push(json!({
             "share_pct": share, (touched_key): k,
             "incremental_ms": inc_ms, "full_ms": full_ms, "scope_kept": scope_kept,
