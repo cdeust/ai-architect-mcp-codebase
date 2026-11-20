@@ -341,9 +341,51 @@ fn an_inherited_method_the_file_does_not_prove_carries_nothing() {
             format!("class Base:\n{run}class Worker(Base):\n    pass\nBase.run = other\n"),
             "the inherited method patched from outside",
         ),
+        (
+            format!("class Base:\n{run}class Worker(Base):\n    __slots__ = ('run',)\n"),
+            "a slot of that name shadows it",
+        ),
+        (
+            format!("class Base:\n{run}class Worker(Base):\n    __slots__ = ('x',)\n"),
+            "any slots on the chain decline",
+        ),
+        (
+            format!("class Worker(Base):\n    pass\nclass Base:\n{run}"),
+            "the base is written after the class: a builtin or unbound name then",
+        ),
+        (
+            "class Outer:\n    class Base:\n        def run(self):\n            pass\nclass Worker(Base):\n    pass\n"
+                .to_string(),
+            "the only class of the base's name is nested in another class",
+        ),
+        (
+            format!("class Base:\n{run}class Worker(Base):\n{run}    run = other\n"),
+            "the class binds it twice while a base binds it once",
+        ),
     ] {
         assert_eq!(hint_of(&format!("{classes}{use_it}"), "w.run"), vec![], "{why}");
     }
+}
+
+#[test]
+fn a_private_method_name_carries_nothing() {
+    // `x.__run()` is compiled to `x._<Class>__run()` by the class the call is
+    // written in, not by the class of `x`: own or inherited, no hint.
+    let private = "    def __run(self):\n        pass\n";
+    let inherited = format!(
+        "class Base:\n{private}class Child(Base):\n    def _Child__run(self):\n        pass\n    \
+         def invoke(self):\n        c = Child()\n        c.__run()\n"
+    );
+    assert_eq!(hint_of(&inherited, "c.__run"), vec![], "inherited");
+    let own = format!(
+        "class Worker:\n{private}class Other:\n    def invoke(self):\n        \
+         w = Worker()\n        w.__run()\n"
+    );
+    assert_eq!(
+        hint_of(&own, "w.__run"),
+        vec![],
+        "own, called from another class"
+    );
 }
 
 /// Every node kind and field name the module matches on exists in the

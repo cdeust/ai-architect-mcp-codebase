@@ -35,7 +35,14 @@
 //   `object` (reference: Python data model, section 3.2, "Custom classes",
 //   and the C3 MRO of Python 2.3); when one class of that set binds `m`, the
 //   lookup finds that class's `m` whatever the order. Two ancestors binding
-//   `m` decline: the order would decide, and it is not computed here.
+//   `m` decline: the order would decide, and it is not computed here. An
+//   inherited `m` also declines when a class of the chain declares
+//   `__slots__` (a slot named `m` would shadow it). A private `m` (`__m`,
+//   mangled by the class the call is written in) declines in every case.
+//   Every class of the chain is a statement of the module, and each base is
+//   written before the class that names it: a class statement evaluates its
+//   bases when it runs, so a later or nested class of that name is not the
+//   base (a builtin `ValueError` or `object` would be).
 //   The hint names `O`, the class whose own `m` the call reaches.
 //
 // "Not a plain read" is decided by an allowlist of read positions
@@ -56,6 +63,7 @@
 // `function_definition`, `lambda`, `delete_statement`, `wildcard_import`, and
 // the kinds and field names listed in `READ_FIELDS` and `READ_PARENT_KINDS`.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
@@ -74,6 +82,20 @@ const INSTANCE_HOOKS: &[&str] = &["__new__", "__getattribute__"];
 /// The attribute whose assignment changes an instance's class.
 /// source: Python data model, section 3.2 ("Special attributes").
 const CLASS_ATTRIBUTE: &str = "__class__";
+
+/// The class attribute whose names become slot descriptors of that class,
+/// shadowing a method of the same name on a base.
+/// source: Python data model, section 3.3.2.4 ("__slots__").
+const SLOTS: &str = "__slots__";
+
+/// True when `name` is a private name, rewritten by the compiler to
+/// `_<Class>__name` inside a class body: two leading underscores and not two
+/// trailing ones. The rewrite depends on the class the CALL is written in,
+/// which `T`'s own body does not tell.
+/// source: Python reference, section 6.2.1.1 ("Private name mangling").
+fn is_mangled(name: &str) -> bool {
+    name.starts_with("__") && !name.ends_with("__")
+}
 
 /// A byte span `[start, end)`.
 type Span = (usize, usize);
@@ -98,6 +120,9 @@ struct FileFacts {
     attribute_writes: HashSet<String>,
     /// The file has a `from m import *`: any name may be bound by it.
     star_import: bool,
+    /// `method_owner` answers by `(T, m)`: they depend on the file alone, so
+    /// many calls of one method on one class walk the chain once.
+    owners: RefCell<HashMap<(String, String), Option<String>>>,
 }
 
 /// One occurrence of a name that is not a plain read.
@@ -110,6 +135,9 @@ struct Occurrence {
 struct ClassFacts {
     span: Span,
     decorated: bool,
+    /// The class statement is a statement of the module (decorated or not),
+    /// so its name is a module global once it has run.
+    module_level: bool,
     /// The base names; `None` when a base is not a plain identifier or the
     /// class statement takes a keyword (`metaclass=..`).
     bases: Option<Vec<String>>,
@@ -162,7 +190,7 @@ impl PyReceiverScopes {
         if !facts.is_the_file_class(ty, outer) {
             return None;
         }
-        facts.method_owner(ty, method).map(str::to_string)
+        facts.cached_method_owner(ty, method)
     }
 
     fn facts(&mut self, source: &str, call_node: Node) -> &FileFacts {
@@ -206,9 +234,23 @@ impl FileFacts {
     /// postcondition: `Some(ty)` when `ty`'s body binds `m` once; `Some(O)`
     /// for the one ancestor `O` binding `m` when `ty`'s body does not;
     /// `None` for a hooked, decorated or unseen chain, a written attribute
-    /// `m` or `__class__`, or when no class or several bind `m`.
+    /// `m` or `__class__`, a private (mangled) `m`, an inherited `m` on a
+    /// chain that declares `__slots__`, or when no class or several bind `m`.
+    fn cached_method_owner(&self, ty: &str, m: &str) -> Option<String> {
+        let key = (ty.to_string(), m.to_string());
+        if let Some(owner) = self.owners.borrow().get(&key) {
+            return owner.clone();
+        }
+        let owner = self.method_owner(ty, m).map(str::to_string);
+        self.owners.borrow_mut().insert(key, owner.clone());
+        owner
+    }
+
     fn method_owner<'f>(&'f self, ty: &'f str, m: &str) -> Option<&'f str> {
-        if self.attribute_writes.contains(m) || self.attribute_writes.contains(CLASS_ATTRIBUTE) {
+        if is_mangled(m)
+            || self.attribute_writes.contains(m)
+            || self.attribute_writes.contains(CLASS_ATTRIBUTE)
+        {
             return None;
         }
         let own = self.sole_class(ty)?;
@@ -218,7 +260,16 @@ impl FileFacts {
             0 => {}
             _ => return None,
         }
-        // `ty` does not bind `m`: exactly one ancestor binds it, exactly once.
+        // `ty` does not bind `m`: exactly one ancestor binds it, exactly once,
+        // and no class of the chain declares slots, whose descriptors could
+        // shadow it (the slot names are strings, not occurrences of `m`).
+        let slotted = chain.iter().any(|&name| {
+            self.sole_class(name)
+                .is_some_and(|class| !within(self.occurrences(SLOTS), class.span).is_empty())
+        });
+        if slotted {
+            return None;
+        }
         let mut owners = chain.iter().filter_map(|&name| {
             let count = within(self.occurrences(m), self.sole_class(name)?.span).len();
             (name != ty && count > 0).then_some((name, count))
@@ -233,16 +284,31 @@ impl FileFacts {
     /// declares once, undecorated, without a class keyword, and binding no
     /// instance hook; `None` otherwise.
     fn plain_chain<'f>(&'f self, ty: &'f str) -> Option<Vec<&'f str>> {
-        let mut seen: Vec<&str> = Vec::new();
+        let mut chain: Vec<&str> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
         let mut pending = vec![ty];
         while let Some(name) = pending.pop() {
-            if seen.contains(&name) {
+            if !seen.insert(name) {
                 // A diamond reaches a class twice; a cycle cannot be a class
                 // chain, and Python refuses it at class creation.
                 continue;
             }
-            seen.push(name);
+            chain.push(name);
             let class = self.sole_class(name)?;
+            // A class statement of the module evaluates its bases when it
+            // runs: a base must be written before it, or the name is a
+            // builtin or unbound at that point. Each base is itself checked
+            // to be a statement of the module when the walk reaches it.
+            if !class.module_level
+                || class
+                    .bases
+                    .iter()
+                    .flatten()
+                    .filter_map(|base| self.sole_class(base))
+                    .any(|base| base.span.0 >= class.span.0)
+            {
+                return None;
+            }
             let hooked = INSTANCE_HOOKS
                 .iter()
                 .any(|hook| !within(self.occurrences(hook), class.span).is_empty());
@@ -251,7 +317,7 @@ impl FileFacts {
             }
             pending.extend(class.bases.as_ref()?.iter().map(String::as_str));
         }
-        Some(seen)
+        Some(chain)
     }
 }
 
@@ -466,8 +532,19 @@ fn record_class(source: &str, n: Node, f: &Frame, classes: &mut HashMap<String, 
         .push(ClassFacts {
             span: span(n),
             decorated: f.parent_kind == "decorated_definition",
+            module_level: is_module_statement(n),
             bases,
         });
+}
+
+/// True when `n` (or the `decorated_definition` wrapping it) is a direct
+/// statement of the module.
+fn is_module_statement(n: Node) -> bool {
+    let mut statement = n;
+    if let Some(p) = n.parent().filter(|p| p.kind() == "decorated_definition") {
+        statement = p;
+    }
+    statement.parent().is_some_and(|p| p.kind() == "module")
 }
 
 fn span(n: Node) -> Span {
