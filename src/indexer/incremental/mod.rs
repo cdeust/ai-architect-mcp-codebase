@@ -279,7 +279,7 @@ fn refresh(
     // records what was computed, not that each best-effort write landed, so a
     // pass that skipped them would make a failed write permanent (Claude
     // review of #478).
-    apply_cargo_facts(&store, &cov.facts);
+    let cargo_facts_digest = apply_cargo_facts(&store, &cov.facts);
 
     // Intentionally NO node_count()/edge_count() here — see `IncrementalResult`.
     Ok(Refresh::Applied(Box::new(IncrementalResult {
@@ -294,6 +294,7 @@ fn refresh(
         coverage: cov.report,
         coverage_write_error: cov.write_error,
         scope_kept,
+        cargo_facts_digest,
     })))
 }
 

@@ -30,6 +30,7 @@ pub(crate) use symbol_name::symbol_name;
 mod membership;
 mod recovery;
 mod schema;
+pub mod seal;
 mod serialize;
 mod writes;
 pub(crate) use cfg_active::cfg_gates_in;
@@ -181,8 +182,12 @@ impl GraphStore {
     /// by-construction `system_config()` (test bound, prod override, or the
     /// issue #25 production default — see that function's doc comment for
     /// the precedence rule).
+    ///
+    /// It withdraws the graph's analysis seal first (issue #443, `seal`): a
+    /// handle opened here may write, and the seal must not outlive a write.
     pub fn open_or_create(path: &Path) -> Result<Self, String> {
         release_open_handles(path)?;
+        seal::withdraw(path)?;
         Self::open_or_create_with_config(path, system_config()?)
     }
 

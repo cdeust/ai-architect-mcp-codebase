@@ -96,6 +96,15 @@ pub(crate) struct CargoFacts {
 }
 
 impl CargoFacts {
+    /// SHA-256 of the facts' `Debug` rendering. Every field is a `BTreeMap`,
+    /// a `BTreeSet` or a scalar, so the rendering is the same for the same
+    /// facts. Issue #443: a `Cargo.toml` edit moves the facts without moving
+    /// any file the walk lists, so `analyze_codebase` compares this digest
+    /// before it reuses a resolve (`analyze_handlers::seal`).
+    pub(crate) fn digest(&self) -> String {
+        crate::indexer::manifest::hash_bytes(format!("{self:?}").as_bytes())
+    }
+
     /// What the resolver reads to accept a receiver type named through a `use`
     /// (issues #348, #349 and #358).
     pub(crate) fn crate_evidence(&self) -> crate::graph_store::import_roots::CrateEvidence {

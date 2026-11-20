@@ -61,7 +61,8 @@
 //! every edit kind against a fresh analysis of the same tree.
 //!
 //! The later phases (resolve, LSP, cluster, search index) run over the whole
-//! graph either way.
+//! graph either way, except on a refresh that touched no file after a finished
+//! analysis of the same graph: `seal` then reuses that analysis's results.
 //!
 //! # What a reused graph keeps that a fresh analysis lacks
 //!
@@ -90,6 +91,11 @@ pub(super) struct IndexPhase {
     pub(super) coverage: CoverageReport,
     /// A best-effort sidecar (manifest or meta) write that failed.
     pub(super) sidecar_err: Option<String>,
+    /// Files the refresh changed, added, deleted or renamed; `None` on the
+    /// full path (`seal::reuse`, issue #443).
+    pub(super) touched: Option<u64>,
+    /// Digest of the Cargo facts this phase wrote, `None` when a write failed.
+    pub(super) cargo_facts_digest: Option<String>,
 }
 
 /// Runs phase 1. The coverage sidecar is on disk when this returns `Ok`, and
@@ -285,6 +291,8 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
         graph_path: inc.graph_path,
         coverage: inc.coverage,
         sidecar_err,
+        touched: Some(inc.changed + inc.added + inc.deleted + inc.renamed),
+        cargo_facts_digest: inc.cargo_facts_digest,
     }))
 }
 
@@ -310,6 +318,8 @@ fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
         graph_path: result.graph_path,
         coverage: result.coverage,
         sidecar_err,
+        touched: None,
+        cargo_facts_digest: result.cargo_facts_digest,
     })
 }
 

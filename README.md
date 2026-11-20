@@ -221,7 +221,11 @@ measured faster from 50% of 456 files, and from lower shares of smaller trees,
 `language: "rust"`, whose walk skips that file) is refreshed too: the Cargo map
 is computed again over the whole tree on every pass. So are the references
 between infrastructure-as-code files, drawn again when one may have moved. The
-response's `index.mode` says which path ran.
+response's `index.mode` says which path ran. When the refresh touched no file,
+the previous analysis of that graph finished with the same `resolution_param`
+and Cargo facts, and no tool opened the graph for writing since, resolve,
+cluster and the search index are not run again: their results are reused, and
+each of the three blocks carries `reused: true`.
 
 ## 28 MCP Tools
 

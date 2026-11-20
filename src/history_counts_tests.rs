@@ -31,6 +31,7 @@ fn incremental(graph: &Path) -> IncrementalResult {
         coverage: crate::indexer::coverage::CoverageReport::new("incremental", 0),
         coverage_write_error: None,
         scope_kept: false,
+        cargo_facts_digest: None,
     }
 }
 

@@ -22,6 +22,7 @@ mod index_phase;
 mod lsp_coverage;
 mod lsp_durability;
 mod lsp_outcome;
+mod seal;
 use lsp_outcome::LspOutcome;
 
 mod lsp_tool;
@@ -171,9 +172,7 @@ fn graph_totals(graph_dir: &std::path::Path) -> Value {
 /// The four phases' counts, as one response.
 fn analyze_envelope(
     index: &index_phase::IndexPhase,
-    resolve_result: &resolver::ResolutionResult,
-    cluster_result: &clustering::ClusteringResult,
-    search_index_result: &search::SearchIndexResult,
+    derived: &seal::Derived,
     lsp_result: &LspOutcome,
     total_ms: u64,
 ) -> Value {
@@ -184,25 +183,9 @@ fn analyze_envelope(
         "graph_path": index.graph_path.to_string_lossy(),
         "index": index.summary,
         "graph": graph_totals(&index.graph_path),
-        "resolve": {
-            "phase": "static",
-            "total_edges": resolve_result.total_edges,
-            "no_call_macro_sites": resolve_result.no_call_macro_sites,
-            "resolution_rate": format!("{:.2}",
-                if resolve_result.total_refs > 0 {
-                    resolve_result.total_edges as f64 / resolve_result.total_refs as f64
-                } else { 0.0 }),
-        },
-        "cluster": {
-            "community_count": cluster_result.communities,
-            "modularity": format!("{:.6}", cluster_result.modularity),
-            "process_count": cluster_result.processes,
-        },
-        "search_index": {
-            "bm25_doc_count": search_index_result.bm25_doc_count,
-            "vector_doc_count": search_index_result.vector_doc_count,
-            "elapsed_ms": search_index_result.elapsed_ms,
-        },
+        "resolve": derived.resolve,
+        "cluster": derived.cluster,
+        "search_index": derived.search_index,
         "lsp_resolve": lsp_result.counts(),
         "lsp_status": lsp_result.status(),
         "total_elapsed_ms": total_ms,
@@ -213,34 +196,54 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let args = arguments.as_object().ok_or("arguments must be an object")?;
     let req = AnalyzeRequest::prepare(args)?;
     let total_start = std::time::Instant::now();
+    // Issue #443: read and remove the previous analysis's seal before anything
+    // opens the graph.
+    let prior = seal::take(&req)?;
 
     // Phase 1: index, or reuse the previous graph when nothing changed (issue
     // #443), with coverage + manifest written before the metadata commit point.
     let mut index_result = index_phase::run(&req)?;
     let sidecar_err = index_result.sidecar_err.take();
+    let (derived, lsp_result) = match seal::reuse(prior, &index_result) {
+        // Nothing the sealed phases ran over has moved: their results stand.
+        Some(derived) => (derived, LspOutcome::Disabled),
+        None => derive(&req, &mut index_result)?,
+    };
+
+    let mut response = analyze_envelope(
+        &index_result,
+        &derived,
+        &lsp_result,
+        total_start.elapsed().as_millis() as u64,
+    );
+    response["coverage"] = crate::indexing_handlers::coverage_summary(&index_result.coverage);
+    let wrote_sidecars = sidecar_err.is_none();
+    report_sidecar_error(&mut response, sidecar_err);
+    // Last: every handle on the graph is closed, `graph_totals` included.
+    seal::write(&req, &index_result, &derived, wrote_sidecars);
+    Ok(response)
+}
+
+/// Phases 2 to 4 over the graph phase 1 left.
+fn derive(
+    req: &AnalyzeRequest,
+    index_result: &mut index_phase::IndexPhase,
+) -> Result<(seal::Derived, LspOutcome), String> {
     // Phase 2: resolve, then optionally refine with an LSP.
     let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
     let resolve_result = resolver::resolve_graph(&store)?;
-    let lsp_result = lsp_phase(&req, &store);
-    fold_lsp_coverage(&req, &mut index_result.coverage, &lsp_result)?;
+    let lsp_result = lsp_phase(req, &store);
+    fold_lsp_coverage(req, &mut index_result.coverage, &lsp_result)?;
     // Phase 3: cluster. Phase 4: build the BM25 + TF-IDF search index.
     let cluster_result = clustering::cluster_graph(&store, req.gamma)?;
     let search_index_result = search::build_search_index(&store, &req.output_dir, &req.codebase)?;
     // Issue #352: the same durability check `lsp_resolve` makes, at the end of
     // the analysis, when nothing else will write through this handle.
     let lsp_result = confirm_lsp_rows(lsp_result, store, &index_result.graph_path);
-
-    let mut response = analyze_envelope(
-        &index_result,
-        &resolve_result,
-        &cluster_result,
-        &search_index_result,
-        &lsp_result,
-        total_start.elapsed().as_millis() as u64,
-    );
-    response["coverage"] = crate::indexing_handlers::coverage_summary(&index_result.coverage);
-    report_sidecar_error(&mut response, sidecar_err);
-    Ok(response)
+    Ok((
+        seal::Derived::from_results(&resolve_result, &cluster_result, &search_index_result),
+        lsp_result,
+    ))
 }
 
 /// Full-rebuild path only (`index_phase::full`): writes coverage and the
