@@ -294,6 +294,7 @@ fn refresh(
         coverage: cov.report,
         coverage_write_error: cov.write_error,
         scope_kept,
+        cargo_digest: cov.facts.digest(),
     })))
 }
 

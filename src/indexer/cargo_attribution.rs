@@ -96,6 +96,17 @@ pub(crate) struct CargoFacts {
 }
 
 impl CargoFacts {
+    /// Lowercase hex SHA-256 of everything the pass writes from these facts
+    /// to the graph (`apply_cargo_facts`), so two passes can tell whether the
+    /// Cargo map moved between them (issue #443: `analyze_codebase` skips its
+    /// later phases only when it did not). Every field is a `bool`, a
+    /// `String`, a `&'static str` or an ordered `BTreeMap`/`BTreeSet` of
+    /// them, so the `Debug` text is a deterministic function of the value;
+    /// it is compared only by the same server version (the stamp records it).
+    pub(crate) fn digest(&self) -> String {
+        super::manifest::hash_bytes(format!("{self:?}").as_bytes())
+    }
+
     /// What the resolver reads to accept a receiver type named through a `use`
     /// (issues #348, #349 and #358).
     pub(crate) fn crate_evidence(&self) -> crate::graph_store::import_roots::CrateEvidence {

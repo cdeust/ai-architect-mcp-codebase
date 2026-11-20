@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 /// a file the `language: "rust"` walk does not list (Codex review of #478).
 /// `lib.rs` also holds a pair of `#[cfg(feature = "x")]` twins and a caller,
 /// so which twin the call reaches depends on the default features.
-fn cargo_fixture(prefix: &str, crate_name: &str) -> (PathBuf, TestTempDir) {
+pub(super) fn cargo_fixture(prefix: &str, crate_name: &str) -> (PathBuf, TestTempDir) {
     let base = tempfile::Builder::new()
         .prefix(prefix)
         .tempdir()
@@ -48,14 +48,14 @@ fn cargo_fixture(prefix: &str, crate_name: &str) -> (PathBuf, TestTempDir) {
 
 /// Without `cargo` every pass records the same empty map, so these tests
 /// would not see the map move (Claude review of #478).
-fn cargo_available() -> bool {
+pub(super) fn cargo_available() -> bool {
     std::process::Command::new("cargo")
         .arg("--version")
         .output()
         .is_ok_and(|o| o.status.success())
 }
 
-fn write_cargo_toml(repo: &Path, crate_name: &str, features: &str) {
+pub(super) fn write_cargo_toml(repo: &Path, crate_name: &str, features: &str) {
     fs::write(
         repo.join("Cargo.toml"),
         format!(

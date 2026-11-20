@@ -61,7 +61,8 @@
 //! every edit kind against a fresh analysis of the same tree.
 //!
 //! The later phases (resolve, LSP, cluster, search index) run over the whole
-//! graph either way.
+//! graph either way, except when the refresh changed nothing and the graph is
+//! still the one the previous analysis finished (`analysis_stamp`).
 //!
 //! # What a reused graph keeps that a fresh analysis lacks
 //!
@@ -90,6 +91,13 @@ pub(super) struct IndexPhase {
     pub(super) coverage: CoverageReport,
     /// A best-effort sidecar (manifest or meta) write that failed.
     pub(super) sidecar_err: Option<String>,
+    /// `CargoFacts::digest` of the Cargo facts this phase wrote.
+    pub(super) cargo_digest: String,
+    /// True only on the incremental path with no file changed, added,
+    /// deleted or renamed: the index stage of the graph is the one the
+    /// previous analysis left, apart from the Cargo facts, which every pass
+    /// writes again (`cargo_digest` says whether they moved).
+    pub(super) tree_unchanged: bool,
 }
 
 /// Runs phase 1. The coverage sidecar is on disk when this returns `Ok`, and
@@ -271,6 +279,7 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
     }
     // The manifest was saved by the pass; `meta.json` lands last and names it.
     let sidecar_err = write_graph_meta(&req.output_dir, &req.codebase).err();
+    let tree_unchanged = inc.changed + inc.added + inc.deleted + inc.renamed == 0;
     Ok(Some(IndexPhase {
         summary: json!({
             "mode": "incremental",
@@ -285,6 +294,8 @@ fn try_reuse(req: &AnalyzeRequest) -> Result<Option<IndexPhase>, String> {
         graph_path: inc.graph_path,
         coverage: inc.coverage,
         sidecar_err,
+        cargo_digest: inc.cargo_digest,
+        tree_unchanged,
     }))
 }
 
@@ -310,6 +321,8 @@ fn full(req: &AnalyzeRequest) -> Result<IndexPhase, String> {
         graph_path: result.graph_path,
         coverage: result.coverage,
         sidecar_err,
+        cargo_digest: result.cargo_digest,
+        tree_unchanged: false,
     })
 }
 
@@ -336,3 +349,7 @@ mod cross_link_tests;
 #[cfg(test)]
 #[path = "index_phase_bound_tests.rs"]
 mod bound_tests;
+
+#[cfg(test)]
+#[path = "index_phase_stamp_tests.rs"]
+mod stamp_tests;

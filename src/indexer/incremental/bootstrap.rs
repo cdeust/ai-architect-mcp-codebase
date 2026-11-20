@@ -154,6 +154,7 @@ pub fn fill_after_bootstrap(
             coverage_write_error: cov.write_error,
             // A bootstrap fill writes no scope (`manifest_from_discovered`).
             scope_kept: false,
+            cargo_digest: cov.facts.digest(),
         },
         method,
     })
