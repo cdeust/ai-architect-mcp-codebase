@@ -167,22 +167,34 @@ fn overlay_cargo_attributions(
 ///   default build cannot be shown to compile stays `unknown`, never `active`.
 /// - Writes `File.target_context` on every file (issue #354): what the Cargo
 ///   package says the file is; a file no target reaches gets `''`.
+///
+/// Returns the digest of `facts` when every write landed, `None` when one
+/// failed (each failure is logged). `analyze_codebase` reuses the previous
+/// resolve only when the graph holds the same facts it resolved against
+/// (issue #443, `analyze_handlers::seal`); a failed write leaves rows it cannot
+/// vouch for.
 pub(in crate::indexer) fn apply_cargo_facts(
     store: &crate::graph_store::GraphStore,
     facts: &cargo_attribution::CargoFacts,
-) {
+) -> Option<String> {
+    let mut landed = true;
     if let Err(e) = store.write_crate_evidence(&facts.crate_evidence()) {
         eprintln!("[ap] crate evidence not recorded: {e}");
+        landed = false;
     }
     if let Err(e) = super::super::cfg_active::write(store, &facts.file_features, &facts.file_cfg) {
         eprintln!("[ap] cfg_active pass skipped: {e}");
+        landed = false;
     }
     if let Err(e) = store.write_target_contexts(&facts.target_contexts) {
         eprintln!("[ap] target_context pass skipped: {e}");
+        landed = false;
     }
     if let Err(e) = store.write_file_cfg(&facts.file_cfg) {
         eprintln!("[ap] file cfg pass skipped: {e}");
+        landed = false;
     }
+    landed.then(|| facts.digest())
 }
 
 /// What one incremental pass or bootstrap fill observed for the sidecar: the
