@@ -157,6 +157,8 @@ pub struct IndexResult {
     /// Coverage-honesty report (issue #57): which files were parse-incomplete,
     /// skipped, or quarantined. The composition root persists it to the sidecar.
     pub coverage: CoverageReport,
+    /// `CargoFacts::digest` of the facts this pass wrote (issue #443).
+    pub cargo_digest: String,
 }
 
 /// Outcome of an incremental (changed-files-only) re-index (issue #62).
@@ -187,6 +189,10 @@ pub struct IncrementalResult {
     /// Whether the saved manifest kept `prior`'s scope, so still vouches for
     /// the graph; `analyze_codebase` reuses a graph only then (review of #478).
     pub scope_kept: bool,
+    /// `CargoFacts::digest` of the facts this pass wrote (issue #443):
+    /// every pass writes them again, so `analyze_codebase` compares this with
+    /// the previous analysis's before it skips the later phases.
+    pub cargo_digest: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +362,7 @@ pub fn index_codebase_with_language(
     // type named through a `use` (issues #348, #349 and #358); every `#[cfg]`
     // twin learns whether the default build compiles it (issue #353).
     incremental::apply_cargo_facts(&store, &facts);
+    let cargo_digest = facts.digest();
 
     store.write_canonical_marker()?;
     store.write_code_context_marker()?;
@@ -395,6 +402,7 @@ pub fn index_codebase_with_language(
         files_indexed,
         elapsed_ms,
         coverage,
+        cargo_digest,
     })
 }
 

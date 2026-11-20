@@ -158,6 +158,9 @@ pub struct SearchIndexResult {
     pub elapsed_ms: u64,
 }
 
+/// Directory under `output_dir` that `build_search_index` writes.
+pub const SEARCH_INDEX_DIR: &str = "search_index";
+
 /// Builds both BM25 (Tantivy) and vector (TF-IDF) indexes.
 /// Call after the graph is fully built (post-clustering).
 /// Index is stored at `<output_dir>/search_index/`.
@@ -183,7 +186,7 @@ pub fn build_search_index(
     codebase_root: &Path,
 ) -> Result<SearchIndexResult, String> {
     let start = Instant::now();
-    let index_dir = output_dir.join("search_index");
+    let index_dir = output_dir.join(SEARCH_INDEX_DIR);
 
     let bm25_dir = index_dir.join("bm25");
     let bm25_count = bm25::build_index(store, &bm25_dir, codebase_root)?;

@@ -17,6 +17,7 @@ use crate::lsp_resolver;
 use crate::query_handlers::*;
 use crate::resolver;
 
+mod analysis_stamp;
 mod detect_changes_base;
 mod index_phase;
 mod lsp_coverage;
@@ -168,12 +169,42 @@ fn graph_totals(graph_dir: &std::path::Path) -> Value {
     }
 }
 
-/// The four phases' counts, as one response.
-fn analyze_envelope(
-    index: &index_phase::IndexPhase,
+/// The response blocks of resolve, cluster and the search index: what an
+/// unchanged tree's next analysis repeats (`analysis_stamp`).
+fn later_phases(
     resolve_result: &resolver::ResolutionResult,
     cluster_result: &clustering::ClusteringResult,
     search_index_result: &search::SearchIndexResult,
+) -> analysis_stamp::LaterPhases {
+    analysis_stamp::LaterPhases {
+        resolve: json!({
+            "phase": "static",
+            "total_edges": resolve_result.total_edges,
+            "no_call_macro_sites": resolve_result.no_call_macro_sites,
+            "resolution_rate": format!("{:.2}",
+                if resolve_result.total_refs > 0 {
+                    resolve_result.total_edges as f64 / resolve_result.total_refs as f64
+                } else { 0.0 }),
+        }),
+        cluster: json!({
+            "community_count": cluster_result.communities,
+            "modularity": format!("{:.6}", cluster_result.modularity),
+            "process_count": cluster_result.processes,
+        }),
+        search_index: json!({
+            "bm25_doc_count": search_index_result.bm25_doc_count,
+            "vector_doc_count": search_index_result.vector_doc_count,
+            "elapsed_ms": search_index_result.elapsed_ms,
+        }),
+    }
+}
+
+/// The four phases' counts, as one response. `phases_reused` is true when
+/// `phases` are the previous analysis's, repeated on an unchanged tree.
+fn analyze_envelope(
+    index: &index_phase::IndexPhase,
+    phases: &analysis_stamp::LaterPhases,
+    phases_reused: bool,
     lsp_result: &LspOutcome,
     total_ms: u64,
 ) -> Value {
@@ -184,25 +215,10 @@ fn analyze_envelope(
         "graph_path": index.graph_path.to_string_lossy(),
         "index": index.summary,
         "graph": graph_totals(&index.graph_path),
-        "resolve": {
-            "phase": "static",
-            "total_edges": resolve_result.total_edges,
-            "no_call_macro_sites": resolve_result.no_call_macro_sites,
-            "resolution_rate": format!("{:.2}",
-                if resolve_result.total_refs > 0 {
-                    resolve_result.total_edges as f64 / resolve_result.total_refs as f64
-                } else { 0.0 }),
-        },
-        "cluster": {
-            "community_count": cluster_result.communities,
-            "modularity": format!("{:.6}", cluster_result.modularity),
-            "process_count": cluster_result.processes,
-        },
-        "search_index": {
-            "bm25_doc_count": search_index_result.bm25_doc_count,
-            "vector_doc_count": search_index_result.vector_doc_count,
-            "elapsed_ms": search_index_result.elapsed_ms,
-        },
+        "resolve": phases.resolve,
+        "cluster": phases.cluster,
+        "search_index": phases.search_index,
+        "phases_reused": phases_reused,
         "lsp_resolve": lsp_result.counts(),
         "lsp_status": lsp_result.status(),
         "total_elapsed_ms": total_ms,
@@ -214,33 +230,57 @@ pub(crate) fn do_analyze_codebase(arguments: &Value) -> Result<Value, String> {
     let req = AnalyzeRequest::prepare(args)?;
     let total_start = std::time::Instant::now();
 
+    // Removed before phase 1 writes anything: a call that fails from here on
+    // leaves no stamp vouching for the graph (issue #443).
+    let stamp = analysis_stamp::take(&req);
     // Phase 1: index, or reuse the previous graph when nothing changed (issue
     // #443), with coverage + manifest written before the metadata commit point.
     let mut index_result = index_phase::run(&req)?;
     let sidecar_err = index_result.sidecar_err.take();
-    // Phase 2: resolve, then optionally refine with an LSP.
-    let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
-    let resolve_result = resolver::resolve_graph(&store)?;
-    let lsp_result = lsp_phase(&req, &store);
-    fold_lsp_coverage(&req, &mut index_result.coverage, &lsp_result)?;
-    // Phase 3: cluster. Phase 4: build the BM25 + TF-IDF search index.
-    let cluster_result = clustering::cluster_graph(&store, req.gamma)?;
-    let search_index_result = search::build_search_index(&store, &req.output_dir, &req.codebase)?;
-    // Issue #352: the same durability check `lsp_resolve` makes, at the end of
-    // the analysis, when nothing else will write through this handle.
-    let lsp_result = confirm_lsp_rows(lsp_result, store, &index_result.graph_path);
+    let (phases, phases_reused, lsp_result) = match stamp.and_then(|s| s.reusable(&index_result)) {
+        // The graph is the one the previous analysis finished: resolve,
+        // cluster and the search index would decide the same rows.
+        Some(phases) => (phases, true, LspOutcome::Disabled),
+        None => {
+            let (phases, lsp_result) = run_later_phases(&req, &mut index_result)?;
+            (phases, false, lsp_result)
+        }
+    };
 
     let mut response = analyze_envelope(
         &index_result,
-        &resolve_result,
-        &cluster_result,
-        &search_index_result,
+        &phases,
+        phases_reused,
         &lsp_result,
         total_start.elapsed().as_millis() as u64,
     );
     response["coverage"] = crate::indexing_handlers::coverage_summary(&index_result.coverage);
     report_sidecar_error(&mut response, sidecar_err);
+    // Last, with every handle of this call closed. A language-server pass
+    // leaves rows a static analysis does not, so it vouches for nothing.
+    if !matches!(lsp_result, LspOutcome::Completed(_)) {
+        analysis_stamp::record(&req, &index_result.cargo_digest, phases);
+    }
     Ok(response)
+}
+
+/// Phases 2 to 4 over the whole graph: resolve (then the optional LSP pass),
+/// cluster, and the search index.
+fn run_later_phases(
+    req: &AnalyzeRequest,
+    index_result: &mut index_phase::IndexPhase,
+) -> Result<(analysis_stamp::LaterPhases, LspOutcome), String> {
+    let store = graph_store::GraphStore::open_or_create(&index_result.graph_path)?;
+    let resolve_result = resolver::resolve_graph(&store)?;
+    let lsp_result = lsp_phase(req, &store);
+    fold_lsp_coverage(req, &mut index_result.coverage, &lsp_result)?;
+    let cluster_result = clustering::cluster_graph(&store, req.gamma)?;
+    let search_index_result = search::build_search_index(&store, &req.output_dir, &req.codebase)?;
+    // Issue #352: the same durability check `lsp_resolve` makes, at the end of
+    // the analysis, when nothing else will write through this handle.
+    let lsp_result = confirm_lsp_rows(lsp_result, store, &index_result.graph_path);
+    let phases = later_phases(&resolve_result, &cluster_result, &search_index_result);
+    Ok((phases, lsp_result))
 }
 
 /// Full-rebuild path only (`index_phase::full`): writes coverage and the
