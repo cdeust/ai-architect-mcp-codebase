@@ -52,6 +52,38 @@ pub(super) struct Derived {
     pub(super) search_index: Value,
 }
 
+impl Derived {
+    /// The three phases' results, as the response reports them and the seal
+    /// records them.
+    pub(super) fn from_results(
+        resolve_result: &crate::resolver::ResolutionResult,
+        cluster_result: &crate::clustering::ClusteringResult,
+        search_index_result: &crate::search::SearchIndexResult,
+    ) -> Self {
+        Derived {
+            resolve: json!({
+                "phase": "static",
+                "total_edges": resolve_result.total_edges,
+                "no_call_macro_sites": resolve_result.no_call_macro_sites,
+                "resolution_rate": format!("{:.2}",
+                    if resolve_result.total_refs > 0 {
+                        resolve_result.total_edges as f64 / resolve_result.total_refs as f64
+                    } else { 0.0 }),
+            }),
+            cluster: json!({
+                "community_count": cluster_result.communities,
+                "modularity": format!("{:.6}", cluster_result.modularity),
+                "process_count": cluster_result.processes,
+            }),
+            search_index: json!({
+                "bm25_doc_count": search_index_result.bm25_doc_count,
+                "vector_doc_count": search_index_result.vector_doc_count,
+                "elapsed_ms": search_index_result.elapsed_ms,
+            }),
+        }
+    }
+}
+
 /// A seal that passed conditions 1 to 3; `reuse` checks 4 and 5.
 pub(super) struct Prior {
     cargo_facts_sha256: String,

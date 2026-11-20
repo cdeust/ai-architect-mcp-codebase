@@ -169,36 +169,6 @@ fn graph_totals(graph_dir: &std::path::Path) -> Value {
     }
 }
 
-/// The results of resolve, cluster and the search index, as the response
-/// reports them and the seal records them (`seal`, issue #443).
-fn derived_blocks(
-    resolve_result: &resolver::ResolutionResult,
-    cluster_result: &clustering::ClusteringResult,
-    search_index_result: &search::SearchIndexResult,
-) -> seal::Derived {
-    seal::Derived {
-        resolve: json!({
-            "phase": "static",
-            "total_edges": resolve_result.total_edges,
-            "no_call_macro_sites": resolve_result.no_call_macro_sites,
-            "resolution_rate": format!("{:.2}",
-                if resolve_result.total_refs > 0 {
-                    resolve_result.total_edges as f64 / resolve_result.total_refs as f64
-                } else { 0.0 }),
-        }),
-        cluster: json!({
-            "community_count": cluster_result.communities,
-            "modularity": format!("{:.6}", cluster_result.modularity),
-            "process_count": cluster_result.processes,
-        }),
-        search_index: json!({
-            "bm25_doc_count": search_index_result.bm25_doc_count,
-            "vector_doc_count": search_index_result.vector_doc_count,
-            "elapsed_ms": search_index_result.elapsed_ms,
-        }),
-    }
-}
-
 /// The four phases' counts, as one response.
 fn analyze_envelope(
     index: &index_phase::IndexPhase,
@@ -271,7 +241,7 @@ fn derive(
     // the analysis, when nothing else will write through this handle.
     let lsp_result = confirm_lsp_rows(lsp_result, store, &index_result.graph_path);
     Ok((
-        derived_blocks(&resolve_result, &cluster_result, &search_index_result),
+        seal::Derived::from_results(&resolve_result, &cluster_result, &search_index_result),
         lsp_result,
     ))
 }
