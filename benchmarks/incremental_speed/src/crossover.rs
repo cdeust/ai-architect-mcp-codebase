@@ -319,3 +319,53 @@ fn main() {
     });
     println!("{}", serde_json::to_string_pretty(&report).unwrap());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A destination the corpus already holds is refused, and both files are
+    /// left as they were (review of #581). Before the fix, `rename` replaced
+    /// the destination and the row also measured a deletion.
+    #[test]
+    fn rename_refuses_an_existing_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.rs");
+        let dst = renamed(&src);
+        std::fs::write(&src, "fn a() {}\n").unwrap();
+        std::fs::write(&dst, "fn b() {}\n").unwrap();
+        let r = std::panic::catch_unwind(|| Change::Rename.apply(&src, 0));
+        assert!(r.is_err(), "a rename onto an existing file must be refused");
+        assert_eq!(std::fs::read_to_string(&src).unwrap(), "fn a() {}\n");
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "fn b() {}\n");
+    }
+
+    #[test]
+    fn rename_moves_the_file_in_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.rs");
+        std::fs::write(&src, "fn a() {}\n").unwrap();
+        Change::Rename.apply(&src, 0);
+        assert!(!src.exists());
+        let dst = dir.path().join("a_crossover_renamed.rs");
+        assert_eq!(std::fs::read_to_string(dst).unwrap(), "fn a() {}\n");
+    }
+
+    /// A non-UTF-8 stem is renamed, not a panic (review of #581). Before the
+    /// fix, `renamed` unwrapped `to_str()`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rename_keeps_a_non_utf8_stem() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join(OsStr::from_bytes(b"caf\xe9.rs"));
+        std::fs::write(&src, "fn a() {}\n").unwrap();
+        Change::Rename.apply(&src, 0);
+        let dst = dir
+            .path()
+            .join(OsStr::from_bytes(b"caf\xe9_crossover_renamed.rs"));
+        assert!(!src.exists());
+        assert_eq!(std::fs::read_to_string(dst).unwrap(), "fn a() {}\n");
+    }
+}
