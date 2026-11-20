@@ -106,7 +106,9 @@ pub(super) fn rust_local_receiver_gate(
 /// `T`'s own `m` never reach this gate, because the parser emits no hint for
 /// them: a TypeScript `static m` (`ts_receiver::FileFacts::instance_method_of`),
 /// a Python class that is decorated, has a base outside the file or binds
-/// `__new__` (`py_receiver::FileFacts::builds_instance_with_own`).
+/// `__new__` (`py_receiver::FileFacts::method_owner`). For a Python `m` that
+/// `T` inherits, the parser's hint already names the one base of the file
+/// that binds `m`, so this gate binds that base's `m`.
 ///
 /// postcondition: `None` when the gate does not apply (another language, no
 /// `constructed` hint, callee not `<ident>.<m>`-shaped) AND when the file holds no

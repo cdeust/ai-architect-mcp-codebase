@@ -22,12 +22,21 @@
 // - `T` is the class of this file and nothing else: the file binds `T` once,
 //   by a `class T` statement, no function enclosing the call binds it, and the
 //   file has no `from m import *`.
-// - `T(..)` builds an instance of `T` and `x.m` is `T`'s own `m`: neither `T`
-//   nor a class on its base chain is decorated, takes a class keyword
-//   (`metaclass=`), or binds `__new__` or `__getattribute__`; every base is a
-//   class this file declares once (a base it cannot see declines); `T`'s body
-//   binds `m` exactly once; and no statement of the file writes an attribute
-//   named `m` or `__class__` (`self.run = fn`, `Worker.run = fn`).
+// - `T(..)` builds an instance of `T` and `x.m` is the `m` of one class `O`
+//   of the file: neither `T` nor a class on its base chain is decorated, takes
+//   a class keyword (`metaclass=`), or binds `__new__` or `__getattribute__`;
+//   every base is a class this file declares once (a base it cannot see
+//   declines); no statement of the file writes an attribute named `m` or
+//   `__class__` (`self.run = fn`, `Worker.run = fn`); and either `T`'s body
+//   binds `m` exactly once (`O = T`), or `T`'s body does not bind `m` and
+//   exactly one class `O` among `T`'s bases and their bases binds it, exactly
+//   once. Attribute lookup on an instance walks `T`'s method resolution order,
+//   which holds `T` and every class on its base chain and nothing else but
+//   `object` (reference: Python data model, section 3.2, "Custom classes",
+//   and the C3 MRO of Python 2.3); when one class of that set binds `m`, the
+//   lookup finds that class's `m` whatever the order. Two ancestors binding
+//   `m` decline: the order would decide, and it is not computed here.
+//   The hint names `O`, the class whose own `m` the call reaches.
 //
 // "Not a plain read" is decided by an allowlist of read positions
 // (`is_read`): an occurrence in a position the list does not name counts as a
@@ -150,10 +159,10 @@ impl PyReceiverScopes {
             return None;
         };
         let ty = only.constructor.as_deref()?;
-        if !facts.is_the_file_class(ty, outer) || !facts.builds_instance_with_own(ty, method) {
+        if !facts.is_the_file_class(ty, outer) {
             return None;
         }
-        Some(ty.to_string())
+        facts.method_owner(ty, method).map(str::to_string)
     }
 
     fn facts(&mut self, source: &str, call_node: Node) -> &FileFacts {
@@ -190,40 +199,59 @@ impl FileFacts {
         self.sole_class(ty).is_some() && within(self.occurrences(ty), outer).is_empty()
     }
 
-    /// True when `ty(..)` builds a plain instance of `ty` and `.m` on it is
-    /// the `m` that `ty`'s own body binds once. See the module header.
-    fn builds_instance_with_own(&self, ty: &str, m: &str) -> bool {
+    /// The class `O` whose own `m` the call `ty(..).m` reaches, when `ty(..)`
+    /// builds a plain instance of `ty` and one class of `ty`'s chain binds
+    /// `m` once. See the module header.
+    ///
+    /// postcondition: `Some(ty)` when `ty`'s body binds `m` once; `Some(O)`
+    /// for the one ancestor `O` binding `m` when `ty`'s body does not;
+    /// `None` for a hooked, decorated or unseen chain, a written attribute
+    /// `m` or `__class__`, or when no class or several bind `m`.
+    fn method_owner<'f>(&'f self, ty: &'f str, m: &str) -> Option<&'f str> {
         if self.attribute_writes.contains(m) || self.attribute_writes.contains(CLASS_ATTRIBUTE) {
-            return false;
+            return None;
         }
-        let Some(own) = self.sole_class(ty) else {
-            return false;
-        };
-        if within(self.occurrences(m), own.span).len() != 1 {
-            return false;
+        let own = self.sole_class(ty)?;
+        let chain = self.plain_chain(ty)?;
+        match within(self.occurrences(m), own.span).len() {
+            1 => return Some(ty),
+            0 => {}
+            _ => return None,
         }
-        let mut seen: HashSet<&str> = HashSet::new();
+        // `ty` does not bind `m`: exactly one ancestor binds it, exactly once.
+        let mut owners = chain.iter().filter_map(|&name| {
+            let count = within(self.occurrences(m), self.sole_class(name)?.span).len();
+            (name != ty && count > 0).then_some((name, count))
+        });
+        match (owners.next(), owners.next()) {
+            (Some((owner, 1)), None) => Some(owner),
+            _ => None,
+        }
+    }
+
+    /// `ty` and every class on its base chain, when each is a class this file
+    /// declares once, undecorated, without a class keyword, and binding no
+    /// instance hook; `None` otherwise.
+    fn plain_chain<'f>(&'f self, ty: &'f str) -> Option<Vec<&'f str>> {
+        let mut seen: Vec<&str> = Vec::new();
         let mut pending = vec![ty];
         while let Some(name) = pending.pop() {
-            if !seen.insert(name) {
-                // A cycle cannot be a class chain.
-                return false;
+            if seen.contains(&name) {
+                // A diamond reaches a class twice; a cycle cannot be a class
+                // chain, and Python refuses it at class creation.
+                continue;
             }
-            let Some(class) = self.sole_class(name) else {
-                return false;
-            };
+            seen.push(name);
+            let class = self.sole_class(name)?;
             let hooked = INSTANCE_HOOKS
                 .iter()
                 .any(|hook| !within(self.occurrences(hook), class.span).is_empty());
             if class.decorated || hooked {
-                return false;
+                return None;
             }
-            match &class.bases {
-                Some(bases) => pending.extend(bases.iter().map(String::as_str)),
-                None => return false,
-            }
+            pending.extend(class.bases.as_ref()?.iter().map(String::as_str));
         }
-        true
+        Some(seen)
     }
 }
 

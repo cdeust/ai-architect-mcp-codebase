@@ -265,6 +265,87 @@ fn a_base_class_of_the_file_without_hooks_keeps_the_hint() {
     assert_eq!(hint_of(src, "w.run"), constructed("Worker"));
 }
 
+#[test]
+fn an_inherited_method_carries_the_one_ancestor_that_binds_it() {
+    let use_it = "def f():\n    w = Worker()\n    w.run()\n";
+    let run = "    def run(self):\n        pass\n";
+    for (classes, owner, why) in [
+        (
+            format!("class Base:\n{run}class Worker(Base):\n    pass\n"),
+            "Base",
+            "one base",
+        ),
+        (
+            format!("class Root:\n{run}class Mid(Root):\n    pass\nclass Worker(Mid):\n    pass\n"),
+            "Root",
+            "a base of a base",
+        ),
+        (
+            format!(
+                "class Root:\n{run}class L(Root):\n    pass\nclass R(Root):\n    pass\n\
+                 class Worker(L, R):\n    pass\n"
+            ),
+            "Root",
+            "a diamond reaching the one owner twice",
+        ),
+        (
+            format!("class Base:\n{run}class Worker(Base):\n{run}"),
+            "Worker",
+            "an override is the class's own",
+        ),
+    ] {
+        assert_eq!(
+            hint_of(&format!("{classes}{use_it}"), "w.run"),
+            constructed(owner),
+            "{why}"
+        );
+    }
+}
+
+#[test]
+fn an_inherited_method_the_file_does_not_prove_carries_nothing() {
+    let use_it = "def f():\n    w = Worker()\n    w.run()\n";
+    let run = "    def run(self):\n        pass\n";
+    for (classes, why) in [
+        (
+            format!("class L:\n{run}class R:\n{run}class Worker(L, R):\n    pass\n"),
+            "two bases bind it: the MRO order would decide",
+        ),
+        (
+            format!("class Root:\n{run}class Mid(Root):\n{run}class Worker(Mid):\n    pass\n"),
+            "two ancestors bind it",
+        ),
+        (
+            format!("class Base:\n{run}    run = other\nclass Worker(Base):\n    pass\n"),
+            "the ancestor binds it twice",
+        ),
+        (
+            format!(
+                "class Base:\n{run}class Worker(Base):\n    def __new__(cls):\n        return other()\n"
+            ),
+            "__new__ on the class",
+        ),
+        (
+            format!("@registered\nclass Base:\n{run}class Worker(Base):\n    pass\n"),
+            "a decorated ancestor",
+        ),
+        (
+            format!("class Base(metaclass=Meta):\n{run}class Worker(Base):\n    pass\n"),
+            "an ancestor with a class keyword",
+        ),
+        (
+            format!("from lib import Root\nclass Base(Root):\n{run}class Worker(Base):\n    pass\n"),
+            "an ancestor whose base the file cannot see",
+        ),
+        (
+            format!("class Base:\n{run}class Worker(Base):\n    pass\nBase.run = other\n"),
+            "the inherited method patched from outside",
+        ),
+    ] {
+        assert_eq!(hint_of(&format!("{classes}{use_it}"), "w.run"), vec![], "{why}");
+    }
+}
+
 /// Every node kind and field name the module matches on exists in the
 /// grammar it is compiled against: a renamed kind would silently never match.
 #[test]

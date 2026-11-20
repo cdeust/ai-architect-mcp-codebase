@@ -226,10 +226,10 @@ fn a_class_of_another_file_is_not_bound_by_this_gate() {
 }
 
 #[test]
-fn a_method_the_class_inherits_is_not_bound_by_this_gate() {
-    // `Child` does not define `run`: the hint would name a class without that
-    // method, so none is emitted and the call keeps the answer it had before
-    // this gate (open: inherited methods are a later slice of issue #444).
+fn a_method_the_class_inherits_binds_to_the_base_that_defines_it() {
+    // `Child` does not define `run`; its one base of the file does. A second
+    // class owning `run` makes a name-only match impossible, so the edge can
+    // only come from the inherited lookup.
     let inherited = "\
 class Base:
     def run(self, n):
@@ -240,11 +240,50 @@ class Child(Base):
     pass
 
 
+class Other:
+    def run(self, n):
+        return -n
+
+
 def go():
     c = Child()
     return c.run(3)
 ";
     let (store, _res, _root) = index_and_resolve("inherited", &[("shapes.py", inherited)]);
+    assert_eq!(
+        method_calls_from(&store, "shapes.py::go"),
+        bound("shapes.py::Base::run")
+    );
+    assert_eq!(
+        sites_of(&store, "shapes.py::go", "c.run"),
+        [("true".to_string(), "shapes.py::Base::run".to_string())]
+    );
+}
+
+#[test]
+fn a_method_two_ancestors_define_stays_unresolved() {
+    // `Child(Left, Right)` with both bases defining `run`: the MRO order would
+    // decide, which the parser does not compute, so no hint and no edge.
+    let two = "\
+class Left:
+    def run(self, n):
+        return n
+
+
+class Right:
+    def run(self, n):
+        return -n
+
+
+class Child(Left, Right):
+    pass
+
+
+def go():
+    c = Child()
+    return c.run(3)
+";
+    let (store, _res, _root) = index_and_resolve("two_bases", &[("shapes.py", two)]);
     assert_eq!(
         method_calls_from(&store, "shapes.py::go"),
         Vec::<(String, String)>::new()
