@@ -1,7 +1,9 @@
 """check_index_cost.py holds the README's indexing-cost row to a re-measurement (#448)."""
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -94,6 +96,24 @@ class IndexResult(unittest.TestCase):
     def test_no_answer_fails(self):
         with self.assertRaises(SystemExit):
             gate.index_result("")
+
+
+class RunServer(unittest.TestCase):
+    def test_reads_the_peak_of_the_server_and_not_of_an_earlier_larger_child(self):
+        # An earlier child that touches 200 MiB, as the clone might.
+        subprocess.run([sys.executable, "-c", "b = bytearray(200 * 2**20)"], check=True)
+        server = "import sys; data = sys.stdin.read(); b = bytearray(20 * 2**20); print(data.strip())"
+        status, out, err, rss = gate.run_server([sys.executable, "-c", server], "hello\n", dict(os.environ))
+        self.assertEqual((status, out.strip(), err), (0, "hello", ""))
+        self.assertGreater(rss, 20)
+        self.assertLess(rss, 150)
+
+    def test_reports_a_failing_exit_status(self):
+        status, _, err, _ = gate.run_server(
+            [sys.executable, "-c", "import sys; sys.stdin.read(); sys.exit('boom')"], "", dict(os.environ)
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("boom", err)
 
 
 class DiskMib(unittest.TestCase):

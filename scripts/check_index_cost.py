@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -191,40 +192,72 @@ def disk_mib(path: Path) -> float:
     return sum(f.stat().st_blocks * 512 for f in files) / 2**20
 
 
-def measure(binary: Path, corpus: Path, work: Path) -> Cost:
-    """Post: the cost of one fresh default index of `corpus` by `binary`.
+def run_server(command: list[str], payload: str, environment: dict) -> tuple[int, str, str, float]:
+    """Post: (exit status, stdout, stderr, peak RSS in MiB) of `command` fed
+    `payload`.
 
-    Peak RSS is `ru_maxrss` of RUSAGE_CHILDREN; the server is this process's
-    only child that has exited when it is read (the git clone ran before and
-    is counted too, but it is far smaller than the index)."""
+    The peak is the server's own `ru_maxrss`, read with `os.wait4` on its pid.
+    RUSAGE_CHILDREN reports the largest of every child this process has
+    reaped, the git clone of django included, so it cannot say which process
+    peaked: Pipeline run 45261972670 (job e2e) read 1,142 MiB that way after a
+    clone, where a run on an existing checkout (no clone) read 541 MiB."""
+    process = subprocess.Popen(
+        command,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+    streams: dict[str, str] = {}
+
+    def drain(name: str, stream) -> None:
+        with stream:
+            streams[name] = stream.read()
+
+    readers = [
+        threading.Thread(target=drain, args=("out", process.stdout)),
+        threading.Thread(target=drain, args=("err", process.stderr)),
+    ]
+    for reader in readers:
+        reader.start()
+    process.stdin.write(payload)
+    process.stdin.close()
+    timer = threading.Timer(INDEX_TIMEOUT_S, process.kill)
+    timer.start()
+    try:
+        _, status, usage = os.wait4(process.pid, 0)
+    finally:
+        timer.cancel()
+    process.returncode = os.waitstatus_to_exitcode(status)
+    for reader in readers:
+        reader.join()
+    # ru_maxrss is KiB on Linux, the only platform the e2e job runs on.
+    return process.returncode, streams.get("out", ""), streams.get("err", ""), usage.ru_maxrss / 1024
+
+
+def measure(binary: Path, corpus: Path, work: Path) -> Cost:
+    """Post: the cost of one fresh default index of `corpus` by `binary`."""
     output_dir = work / "out"
     output_dir.mkdir()
     environment = {**os.environ}
     environment.pop("AP_PROFILE", None)
     payload = "\n".join(map(json.dumps, requests(corpus, output_dir))) + "\n"
     started = time.monotonic()
-    run = subprocess.run(
-        [str(binary), "--profile", "full"],
-        env=environment,
-        input=payload,
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        check=False,
-        timeout=INDEX_TIMEOUT_S,
-    )
+    status, stdout, stderr, rss_mib = run_server([str(binary), "--profile", "full"], payload, environment)
     wall = time.monotonic() - started
-    if run.returncode != 0:
-        raise SystemExit(f"{binary} exited {run.returncode}:\n{run.stderr[-4000:]}")
-    body = index_result(run.stdout)
-    # ru_maxrss is KiB on Linux, the only platform the e2e job runs on.
-    rss_mib = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024
+    if status != 0:
+        raise SystemExit(f"{binary} exited {status}:\n{stderr[-4000:]}")
+    body = index_result(stdout)
     graph = Path(body.get("graph_path") or output_dir / "graph")
     disk = disk_mib(graph)
+    clone_mib = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024
     print(
         f"django {DJANGO_TAG}: {body.get('files_indexed')} files, "
         f"{body.get('node_count')} nodes, {body.get('edge_count')} edges, "
-        f"{wall:.0f} s, {rss_mib:.0f} MiB peak RSS, {disk:.0f} MiB on disk"
+        f"{wall:.0f} s, {rss_mib:.0f} MiB peak RSS (server; largest child of "
+        f"this process {clone_mib:.0f} MiB), {disk:.0f} MiB on disk"
     )
     return Cost(wall, rss_mib, disk, int(body["node_count"]))
 
