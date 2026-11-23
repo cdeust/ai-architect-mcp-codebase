@@ -97,8 +97,17 @@ a fresh empty `output_dir`, `"full": true` and the row's `full_ast`. Wall
 time is measured around that call. Peak RSS is `ru_maxrss` from
 `getrusage(RUSAGE_CHILDREN)` in the driver after the server exits; each row
 ran in its own driver process whose only child was the server, so it is the
-server's peak. Disk is `du -sm <output_dir>/graph`. Nothing in CI re-runs this measurement yet, so
-it is correct for this commit and this machine only.
+server's peak. Disk is `du -sm <output_dir>/graph`.
+
+The `e2e` job of the Pipeline re-runs the `false` row with the same
+procedure (`scripts/check_index_cost.py`, issue #448) on the binary it has
+just built: the node count must equal the README's, and wall time, peak RSS
+and graph size must stay under twice the README's figures, a ceiling below
+the smallest gap the 2026-10-10 audit reported (peak memory, 3.2 times). The
+runner is not the table's machine, so only the node count is compared
+exactly. Re-run on 2026-11-23 at `8c1a9ff` on a 4-vCPU Linux x86_64
+container: 6,748 files, 219,874 nodes, 219,318 edges, 44 s, 541 MiB peak RSS,
+114 MiB on disk. The `true` row (twelve minutes) is not re-run.
 
 ## Bulk insert strategies
 
