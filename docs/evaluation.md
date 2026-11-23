@@ -97,8 +97,20 @@ a fresh empty `output_dir`, `"full": true` and the row's `full_ast`. Wall
 time is measured around that call. Peak RSS is `ru_maxrss` from
 `getrusage(RUSAGE_CHILDREN)` in the driver after the server exits; each row
 ran in its own driver process whose only child was the server, so it is the
-server's peak. Disk is `du -sm <output_dir>/graph`. Nothing in CI re-runs this measurement yet, so
-it is correct for this commit and this machine only.
+server's peak. Disk is `du -sm <output_dir>/graph`.
+
+Re-checked in CI: `scripts/check_index_cost.py` runs this procedure, and the
+`e2e` command of `ci.json` runs it on the `false` row after the release build,
+on a fresh shallow clone of django `5.1.3`. It fails when either this table or
+README's disagrees with the measurement: `Nodes` and `Edges` exactly, wall
+time, peak RSS and graph size within 35 %. The `true` row (about 12 minutes) is
+not run in CI; `--rows false,true` runs it by hand. Re-measured on 2026-11-23
+at main `8c1a9ff`, same machine class, three runs of the `false` row: 48, 45
+and 45 s; 540, 540 and 542 MiB; 115 MiB each time; 219,874 nodes and 219,318
+edges each time, the counts of the table. The node and edge counts are
+therefore compared exactly; the 35 % band is about twice the largest drift
+seen (wall time, 15 % below the table), and a hosted runner may still differ by
+more, which the first pipeline run on one shows.
 
 ## Bulk insert strategies
 

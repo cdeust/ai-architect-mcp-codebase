@@ -13,8 +13,8 @@ once per requested row, and fails when the published figures and the
 measurement disagree:
 
 - `Nodes` and `Edges` must be equal: the graph of a fixed tree by a fixed
-  binary is deterministic (two runs of each row gave the same counts, see
-  `docs/evaluation.md`), so any difference is a change of the indexer that the
+  binary is deterministic (the three runs of 2026-11-23 gave the counts of
+  2026-11-10, see `docs/evaluation.md`), so any difference is a change of the indexer that the
   table no longer describes.
 - `Wall time`, `Peak RSS` and `Graph on disk` must lie within `TOLERANCE` of
   the published value, in either direction: a table that understates the cost
@@ -47,10 +47,13 @@ ROOT = Path(__file__).resolve().parents[1]
 # nothing about this one.
 CORPUS_COMMIT = "69bf08e3"
 
-# Provisional: to be replaced by the run-to-run spread measured on the pinned
-# corpus and recorded in docs/evaluation.md before this check is relied on. It
-# must leave room for another machine class (a hosted CI runner). A move larger
-# than this is a change the table must record, not noise.
+# source: docs/evaluation.md, re-measurement of 2026-11-23 (three runs of the
+# `false` row, same machine class as the table): wall time 45 to 48 s against
+# the published 53 s (a 15 % drift between two sessions, 7 % between runs),
+# peak RSS 540 to 542 MiB against 533 (1.7 %), graph 115 MiB against 111
+# (3.6 %). About twice the largest drift, so that another machine class (a
+# hosted CI runner) is not read as a change. A move larger than this is a
+# change the table must record, not noise.
 TOLERANCE = 0.35
 
 # source: the `true` row took 747 s on 2026-11-10; four times that bounds a

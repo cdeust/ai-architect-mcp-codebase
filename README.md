@@ -502,7 +502,9 @@ on a 4-vCPU Linux x86_64 container:
 
 The optional full syntax tree is 94.9 % of the nodes, which is why it is off
 by default ([docs/configuration.md](docs/configuration.md#full-syntax-tree-full_ast)).
-These are single runs on one machine, not yet re-checked in CI. Tree-sitter
+These are single runs on one machine; the e2e job re-measures the
+`false` row on every pipeline run and fails when it leaves the table
+(`scripts/check_index_cost.py`). Tree-sitter
 extracts structure without a model, and `index_codebase` is incremental by
 default.
 The procedure and the other server-side measurements, with their dates, are
